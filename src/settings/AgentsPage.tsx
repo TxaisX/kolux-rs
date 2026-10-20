@@ -1,5 +1,6 @@
 // Settings > Agents (SET-027): which agents are switched on, the default one, and how each starts.
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { SearchFolds } from "./search";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { AgentInfo } from "../launch/PlusMenu";
@@ -11,6 +12,7 @@ import KeepAwakeCard from "../launch/KeepAwakeCard";
 import { useTeamsHost } from "../launch/teams";
 import { CAP_FIELD, capOn } from "../usage/meter";
 import { CACHE_LENGTH, CACHE_ON, cacheMinutes } from "../projects/cache";
+import { HOOKS_FIELD, hooksOn } from "../onboarding/hooksOn";
 
 const OPTIONS_FIELD = "agentOptions";
 const PERMISSIONS_FIELD = "agentPermissions";
@@ -53,9 +55,9 @@ export function AgentsPageView({ cap, onCap }: { cap: boolean; onCap: (on: boole
 
 // STAT-002: one switch for every agent's status hooks, on unless saved off. Rust takes Kolux's
 // entries out (or puts them back) when `agent_hooks_sync` runs after the save.
-export const HOOKS_FIELD = "agentStatusHooks";
-// T-152-gate: off until the user turns it on; that choice is the recorded approval to write hooks.
-export const hooksOn = (s: Record<string, unknown>) => s[HOOKS_FIELD] === true;
+// FIX-2: the key and the rule live in src/onboarding/hooksOn.ts (T-152-gate: off until the user turns it on;
+// that choice is the recorded approval to write hooks); re-exported so existing importers keep working.
+export { HOOKS_FIELD, hooksOn };
 
 // T-152-c (3): `agent_hooks_sync` answers with one {agent, done, error} per agent; the errors are
 // shown beside the switch so a refused install or a failed removal never stays silent.
@@ -80,6 +82,7 @@ export function HooksSwitch({ on, onSwitch, file, problems = [] }: { on: boolean
 
 export default function AgentsPage() {
   const { settings, error, save: write } = useSettings();
+  const found = useContext(SearchFolds); // SET-007: a search that matches a launch line opens its fold
   const [written, setWritten] = useState(0);
   const save = (patch: Record<string, unknown>) => write(patch).then(() => setWritten((n) => n + 1));
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
@@ -177,7 +180,7 @@ export default function AgentsPage() {
                 <span className="agent-name">{a.name}</span>
                 {a.id === def && on && <span className="conn-chip">default</span>}
               </label>
-              <details>
+              <details open={found?.has("how-it-starts") || undefined}>
                 <summary>How it starts</summary>
                 <code className="agent-line">{lines[a.id] ?? ""}</code>
                 <Draft label="Command" value={o.command ?? ""} placeholder={a.path ?? a.program} onSave={(v) => setOption(a.id, "command", v)} />

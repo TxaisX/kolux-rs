@@ -1,7 +1,59 @@
-import { expect, test } from "vitest";
-import { createElement } from "react";
+// There is no DOM test renderer in this repo, so the three React hooks the page uses are swapped for a
+// tiny runtime (state slots, effects that run when their deps change, a redraw while state is dirty),
+// the same way onboarding/useWizard.test.ts does it. The pure view tests below never call a hook.
+import { beforeEach, expect, test, vi } from "vitest";
+import { createElement, type ReactElement } from "react";
 import { renderToString } from "react-dom/server";
-import { asksAtAll, ASK_FIELD, OFF_FIELD, offIds, ruleOn, SafetyView, savedState, switchAll, switchRule, type RuleInfo } from "./SafetyPage";
+import SafetyPage, { asksAtAll, ASK_FIELD, OFF_FIELD, offIds, ruleOn, SafetyView, savedState, switchAll, switchRule, type RuleInfo } from "./SafetyPage";
+
+type Effect = { deps: unknown[] | undefined; cleanup?: () => void };
+const h = vi.hoisted(() => ({ slots: [] as unknown[], i: 0, effects: [] as Effect[], e: 0, queue: [] as (() => void)[], dirty: false }));
+const store = vi.hoisted(() => ({ file: {} as Record<string, unknown>, failSave: false, rules: [] as unknown[] }));
+
+vi.mock("react", async (orig) => {
+  const real = await orig<typeof import("react")>();
+  function useState<T>(init: T | (() => T)) {
+    const k = h.i++;
+    if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? (init as () => T)() : init;
+    const set = (v: T | ((x: T) => T)) => {
+      const next = typeof v === "function" ? (v as (x: T) => T)(h.slots[k] as T) : v;
+      if (!Object.is(next, h.slots[k])) (h.slots[k] = next), (h.dirty = true);
+    };
+    return [h.slots[k] as T, set] as const;
+  }
+  function useRef<T>(init: T) {
+    const k = h.i++;
+    if (!(k in h.slots)) h.slots[k] = { current: init };
+    return h.slots[k] as { current: T };
+  }
+  function useEffect(fn: () => void | (() => void), deps?: unknown[]) {
+    const k = h.e++;
+    const prev = h.effects[k];
+    if (prev && deps && prev.deps && deps.every((d, j) => Object.is(d, prev.deps![j]))) return;
+    h.queue.push(() => {
+      prev?.cleanup?.();
+      const c = fn();
+      h.effects[k] = { deps, cleanup: typeof c === "function" ? c : undefined };
+    });
+  }
+  const hooks = { useState, useRef, useEffect };
+  return { ...real, ...hooks, default: { ...real, ...hooks } };
+});
+// The saved file: what get_settings reads and what a save writes, unless the write is made to fail.
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (cmd: string) => {
+    if (cmd === "protected_rules") return Promise.resolve(store.rules);
+    if (cmd === "get_settings") return Promise.resolve({ ...store.file });
+    return Promise.reject(new Error(`unexpected ${cmd}`));
+  },
+}));
+vi.mock("./saveChanged", () => ({
+  saveChanged: (_old: unknown, next: Record<string, unknown>) => {
+    if (store.failSave) return Promise.reject(new Error("settings.json is read-only"));
+    Object.assign(store.file, next);
+    return Promise.resolve();
+  },
+}));
 
 // The seven rules as protected_rules lists them (the Rust catalog test proves each example asks).
 const RULES: RuleInfo[] = [
@@ -97,4 +149,64 @@ test("SAFE-015: after a save that failed, the page draws what is on disk, never 
   expect(await savedState(writing, () => Promise.reject(new Error("gone")), switchAll(false))).toBeNull();
   // A save that throws at once, before returning a promise, is treated the same way.
   expect(await savedState(() => { throw new Error("boom"); }, read, switchAll(false))).toEqual(disk);
+});
+
+// The page itself, drawn by the runtime above over a settings file the test controls.
+async function mountPage() {
+  let out!: ReactElement;
+  const draw = () => {
+    do {
+      h.dirty = false;
+      h.i = 0;
+      h.e = 0;
+      h.queue = [];
+      out = SafetyPage() as ReactElement;
+      for (const run of h.queue) run();
+    } while (h.dirty);
+  };
+  const settle = async () => {
+    for (let n = 0; n < 8; n++) {
+      await new Promise((r) => setTimeout(r, 0));
+      if (h.dirty) draw();
+    }
+  };
+  draw();
+  await settle();
+  const html = () => renderToString(out);
+  const view = () => ((out.props as { children: ReactElement[] }).children[0].props as { settings: Record<string, unknown>; save: (patch: Record<string, unknown>) => Promise<unknown> });
+  return { html, view, draw, settle };
+}
+
+beforeEach(() => {
+  h.slots = [];
+  h.effects = [];
+  store.file = {};
+  store.failSave = false;
+  store.rules = RULES;
+});
+
+test("SAFE-015 FIX-2: the page draws the saved settings, and after a save that failed no switch shows a state that is not on disk, not even while the next save is still running", async () => {
+  store.file = { [OFF_FIELD]: ["force-push"] };
+  const page = await mountPage();
+  expect(switchOf(page.html(), "Ask before protected actions")).toContain("checked");
+  expect(switchOf(page.html(), "Force-push to main")).not.toContain("checked");
+  // The master switch is flipped off and the write is refused: the page reads the file back and says why.
+  store.failSave = true;
+  await page.view().save(switchAll(false));
+  await page.settle();
+  expect(switchOf(page.html(), "Ask before protected actions")).toContain("checked");
+  expect(page.html()).toContain("settings.json is read-only");
+  // The next save is slow to land. While it runs the page still draws the file as it was last read,
+  // not the master switch the refused save left "off" in the settings hook.
+  store.failSave = false;
+  const running = page.view().save(switchRule(page.view().settings, "stripe", false));
+  page.draw();
+  expect(switchOf(page.html(), "Ask before protected actions"), "master switch while the next save runs").toContain("checked");
+  expect(switchOf(page.html(), "Force-push to main")).not.toContain("checked");
+  await running;
+  await page.settle();
+  // Once the new read lands the page shows the file: stripe is off, the master switch never was.
+  expect(switchOf(page.html(), "Stripe changes")).not.toContain("checked");
+  expect(switchOf(page.html(), "Ask before protected actions")).toContain("checked");
+  expect(store.file[OFF_FIELD]).toEqual(["force-push", "stripe"]);
 });

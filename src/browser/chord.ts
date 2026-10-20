@@ -6,8 +6,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 // by the page's script, not pressed: it must not move the keyboard or the focused pane.
 // Council FIX-4: `document.hasFocus()` is also false while the user is in another program, so the
 // app's window must hold the keyboard at the system level as well (`windowFocused`), and a page in
-// another split, which neither check can tell from a real press (T-272-d), moves focus at most
-// once a second per tab.
+// another split, which neither check can tell from a real press (T-272-d), takes the keyboard at
+// most once a second per tab.
+// Council FIX-5: only a chord that takes the keyboard (the address-bar chord) uses that allowance,
+// so a real back, reload or find right before a real Ctrl+L no longer eats it; the allowance is
+// timed with the monotonic clock, so a system clock set back cannot freeze a tab's chords.
 
 /// Chords that only act on the page itself; a page could do these to itself anyway.
 const PAGE_ONLY = new Set(["zoomIn", "zoomOut", "zoomReset", "back", "forward", "reload"]);
@@ -28,7 +31,7 @@ export function openerRefocus(front: boolean, appHasFocus: boolean, windowFocuse
   return !front && !appHasFocus && windowFocused;
 }
 
-/// The shortest time between two focus-moving chords from one tab.
+/// The shortest time between two keyboard-taking chords from one tab.
 export const CHORD_GAP_MS = 1000;
 
 /// Whether tab `id` may move focus at `now` (ms); an allowed one is recorded in `last`.
@@ -39,24 +42,34 @@ export function focusAllowed(last: Map<number, number>, id: number, now: number)
   return true;
 }
 
-/// A plan that would move focus is let through once a second per tab; past that it is treated as
-/// a chord the page's script sent (page-only actions still run).
+/// A plan that would take the keyboard is let through once a second per tab; past that it is
+/// treated as a chord the page's script sent. A plan that only focuses the pane (back, reload,
+/// find, zoom) is not limited and does not use the allowance: it never moves the keyboard.
 export function limitChord(what: string, plan: ChordPlan, last: Map<number, number>, id: number, now: number): ChordPlan {
-  if (!plan.focusPane && !plan.takeKeyboard) return plan;
+  if (!plan.takeKeyboard) return plan;
   return focusAllowed(last, id, now) ? plan : pageChord(what, true);
 }
 
 const lastFocus = new Map<number, number>();
 
-/// Whether the app's window holds the keyboard at the system level; false when it cannot be read.
+let focusReadFailed = false;
+
+/// Whether the app's window holds the keyboard at the system level; false when it cannot be read
+/// (fails closed), and the first such failure is logged so dropped chords leave a trace.
 export function windowHasFocus(): Promise<boolean> {
   return getCurrentWindow()
     .isFocused()
-    .catch(() => false);
+    .catch((e: unknown) => {
+      if (!focusReadFailed) {
+        focusReadFailed = true;
+        console.warn("browser: reading the app window's focus failed; page chords and opener refocus are refused until it works:", e);
+      }
+      return false;
+    });
 }
 
 /// The plan for a chord that just arrived from tab `id`, with every check above applied.
 export async function chordPlan(id: number, what: string): Promise<ChordPlan> {
   const appHasFocus = document.hasFocus();
-  return limitChord(what, pageChord(what, appHasFocus, await windowHasFocus()), lastFocus, id, Date.now());
+  return limitChord(what, pageChord(what, appHasFocus, await windowHasFocus()), lastFocus, id, performance.now());
 }

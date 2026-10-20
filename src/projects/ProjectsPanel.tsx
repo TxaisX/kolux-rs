@@ -16,17 +16,21 @@
 // ponytail: which rows are folded lasts until the window closes; nothing saves it.
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { projectDrop } from "../editor/desktopDrops";
 import CacheTimer from "./CacheTimer";
-import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, projectLabel, splitGitSaid, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
+import CleanupDialog from "./CleanupDialog";
+import KeptBranches from "./KeptBranches";
+import { addKept, type KeptBranch, type KeptItem } from "./cleanup";
 import CardLine from "../look/CardLine";
 import { HeaderBadge, HeaderColourPicker } from "../look/HeaderBadge";
 import { CardDetailsChooser } from "../look/CardDetailsChooser";
@@ -40,6 +44,7 @@ import { cardView, saveArgs, type SetupSuggestion } from "./setupSuggestion";
 import { cardProjectOf, newestOnly } from "./cardAsk";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
+import ScanRepos from "./ScanRepos";
 import { openKits } from "../kits/Kits";
 import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
@@ -48,6 +53,8 @@ import AutomationsRow from "./AutomationsRow";
 import SkillsRow from "./SkillsRow";
 import { chromeShown } from "../chrome/chromeItems";
 import { VOCAB } from "../terminal/status";
+import { workingWord } from "../status/working";
+import { onFinish, REFRESH_AFTER_MS, wantsRefresh } from "../status/finished";
 import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
@@ -58,6 +65,11 @@ import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
 import { issueCommand } from "../setup/IssueCommand";
 import { trustedSetup } from "../setup/TrustPrompt";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
+import { HEADER_ORDER_SETTING, MANUAL_ORDER_SETTING, dragStart, dropBefore, dropOutcome, edgeScroll, idsFrom, manualOrder, moveHeader, moveRows, siblingIds } from "./order";
+import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filtersFrom, filtersOn, rowShown, toggleProject } from "./filter";
+import { deletePlan, rowMenu, type MenuItem } from "./menu";
+import { commentBlocks, itemFromPaste, type Span } from "./details";
+import { FILE_MANAGER, loadTargets, openIn } from "../editor/openIn";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing" | "tasks";
@@ -139,6 +151,22 @@ type Props = {
 const NOT_BUILT = false;
 const RECENT_KEY = "kolux.composer.recentProjects";
 const ADD_ITEM = "+add";
+// PROJ-031: Kolux's sentence first; Git's own output stays one click away.
+function MessageNote({ kind, text }: { kind: string; text: string }) {
+  const { summary, git } = splitGitSaid(text);
+  return (
+    <div className={`note ${kind}`}>
+      {summary}
+      {git && (
+        <details>
+          <summary>Git's full output</summary>
+          <pre>{git}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 const readRecent = (): string[] => {
   try {
     const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
@@ -157,6 +185,10 @@ const noteRecent = (id: string) => {
 
 export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup, skillsOn = false, onSkills = () => {} }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
+  // PROJ-065: the right-click menu, PROJ-060: the details form, T-055: a parent deleted together with its children.
+  const [menu, setMenu] = useState<{ x: number; y: number; projectId: string; path: string; items: MenuItem[] } | null>(null);
+  const [detailsOf, setDetailsOf] = useState<{ path: string; name: string; item: string; comment: string; error?: string } | null>(null);
+  const [batch, setBatch] = useState<{ root: string; order: string[]; error?: string } | null>(null);
   // EDIT-041: coming from the Inbox the workspace rows can take seconds to list, so each render
   // looks for the selected row until it is there, then scrolls to it once.
   const revealed = useRef(0);
@@ -252,9 +284,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [setupSkip, setSetupSkip] = useState(false); // PROJ-033: the setup policy; the project's script runs unless skipped
   const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
   const [setupWait, setSetupWait] = useState(false);
+  const waitTouched = useRef(false); // the user clicked the wait box since the project last changed
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
@@ -265,11 +298,15 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
   const [groups, setGroups] = useState<Groups>(NO_GROUPS); // PROJ-014: project groups
   const [activity, setActivity] = useState<Record<string, number>>({}); // PROJ-051: path key -> last activity
+  const [cleanupFor, setCleanupFor] = useState<string | null>(null); // PROJ-080: project id whose cleanup dialog is open
+  const [kept, setKept] = useState<KeptItem[]>([]); // PROJ-073: branches that stayed when their workspaces went
   const [renaming, setRenaming] = useState<string | null>(null); // PROJ-059: the row being renamed
   const [renameText, setRenameText] = useState("");
   const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
   const [groupName, setGroupName] = useState("");
   const [groupParent, setGroupParent] = useState("");
+  const [scanRoot, setScanRoot] = useState<string | null>(null); // PROJ-012: the folder being scanned for repositories
+  const [dropProject, setDropProject] = useState<string | null>(null); // PROJ-008: the id being asked about
   const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
@@ -315,7 +352,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const fail = (err: unknown) => say("error", String(err));
 
   const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
+  const refreshSeq = useRef(0); // PROJ-068: an older refresh never replaces the result of a newer one
   const refreshWorktrees = useCallback(async (list: Project[]) => {
+    const seq = ++refreshSeq.current;
     const next: Record<string, Worktree[]> = {};
     const unseen: Record<string, Worktree[]> = {};
     for (const p of list) {
@@ -328,6 +367,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         say("warn", `Could not list the workspaces of ${p.name}, so the last known list stays: ${String(err)}`);
       }
     }
+    if (seq !== refreshSeq.current) return;
     scanned.current = next;
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
@@ -388,9 +428,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       if (Date.now() - st.at > STALE_MS && st.limited * 1000 < Date.now()) later(0);
     };
     window.addEventListener("focus", focus);
+    // STAT-038: an agent finishing in a listed workspace brings the next round forward, once per finish.
+    const off = onFinish((cwd) => wantsRefresh({ hidden: document.hidden, paths: pollPaths, cwd, limitedUntil: st.limited, now: Date.now() }) && later(REFRESH_AFTER_MS));
     return () => {
       dead = true;
       clearTimeout(timer);
+      off();
       window.removeEventListener("focus", focus);
     };
   }, [pollKey]);
@@ -442,6 +485,17 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     setPrDraft(null);
     setLinked((l) => (creating === null ? null : keepOnSwitch(l))); // SESS-038
   }, [creating]);
+  const waitPath = projects.find((x) => x.id === creating)?.path;
+  useEffect(() => {
+    // SET-033: the repository's own choice of whether the agent waits for setup starts the checkbox
+    waitTouched.current = false;
+    setSetupWait(false); // another repository's choice is not this one's while the read is out
+    if (!waitPath) return;
+    let live = true;
+    // a late reply never undoes a click: the box the user touched stays as they set it
+    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && !waitTouched.current && setSetupWait(s.wait)).catch(() => {});
+    return () => void (live = false);
+  }, [waitPath]);
   useEffect(() => {
     // SESS-036: the chosen project's own issues and pull requests matching the name, and a pasted
     // link resolved to its item (its title seeds the name). Lookups that fail for want of gh stay quiet.
@@ -540,6 +594,32 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       setBusy("");
     }
   };
+  // PROJ-005: the plain folder can also be opened as a folder project, with no Git.
+  const openAsFolder = async () => {
+    if (!startGit) return;
+    setBusy("adding");
+    try {
+      await added(await invoke<Project>("project_add_folder", { path: startGit.folder }), false);
+      setStartGit(null);
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy("");
+    }
+  };
+  // PROJ-008: the question, then the removal; its folders and files stay on disk.
+  const removeProject = async (p: Project) => {
+    try {
+      const gone = await invoke<{ name: string; path: string; ended: number }>("project_remove", { projectId: p.id });
+      onRemoved(gone.path);
+      setDropProject(null);
+      setSettingsFor(null);
+      say("ok", `${gone.name} is out of Kolux${gone.ended ? `; ${gone.ended} terminal${gone.ended === 1 ? "" : "s"} closed` : ""}. Its folder is still on disk`);
+      await reload();
+    } catch (err) {
+      fail(err);
+    }
+  };
   const startGitAndAdd = async (files: string[]) => {
     if (!startGit) return;
     setBusy("adding");
@@ -552,6 +632,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       setBusy("");
     }
   };
+
+  // EDIT-039: folders dropped from the desktop onto the project list are added one after another.
+  useEffect(() => {
+    projectDrop.add = (paths) => void paths.reduce((chain, dir) => chain.then(() => addPath(dir)), Promise.resolve());
+    return () => {
+      projectDrop.add = null;
+    };
+  });
 
   const browse = async () => {
     try {
@@ -766,7 +854,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const projectItems = (q: string): PickItem[] => {
     const hints = pathHints(projects);
     const r = rankProjects(projects, q, readRecent());
-    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: m.p.name, hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
+    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: projectLabel(m.p), hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
     return [...r.recent.map(item("Recent")), ...r.rest.map(item("Projects")), { key: ADD_ITEM, label: "Add project…" }];
   };
   const pickProject = (id: string) => {
@@ -890,7 +978,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
           {!setupSkip && setupWhere === "tab" && (
             <label className="check">
-              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => setSetupWait(e.target.checked)} />
+              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => ((waitTouched.current = true), setSetupWait(e.target.checked))} />
               Wait for setup to finish before the agent starts
             </label>
           )}
@@ -943,9 +1031,11 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     if (!c) return;
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      const kept = await invoke<KeptBranch | null>("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, keepBranch: c.keep });
+      if (kept) setKept((old) => addKept(old, [{ ...kept, projectId: c.projectId }]));
+      void invoke("editor_drafts_drop", { worktree: c.path }).catch(() => undefined); // EDIT-004: removing a worktree discards its drafts
       onRemoved(c.path);
-      say("ok", `removed ${c.branch} and its folder`);
+      say("ok", kept ? `removed ${c.branch}'s folder; kept the branch ${kept.branch}` : `removed ${c.branch} and its folder`);
       setConfirm(null);
       await reload();
     } catch (err) {
@@ -957,6 +1047,97 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       setBusy("");
     }
   };
+
+  // PROJ-065: right-click on a workspace row lists what can be done to it.
+  const openMenu = async (e: { preventDefault(): void; altKey: boolean; clientX: number; clientY: number }, p: Project, w: Worktree) => {
+    e.preventDefault();
+    const { altKey: alt, clientX: x, clientY: y } = e;
+    const [st, targets] = await Promise.all([
+      invoke<{ list: { id: string; label: string }[] }>("workspace_statuses", { paths: [w.path] }).catch(() => ({ list: [] })),
+      loadTargets().catch(() => []),
+    ]);
+    const deleting = busy === "removing" && confirm?.path === w.path;
+    setMenu({ x, y, projectId: p.id, path: w.path, items: rowMenu({ count: 1, isMain: w.isMain, asleep: isAsleep(w), deleting, platform: navigator.platform, alt, statuses: st.list, editors: targets.filter((t) => !t.files) }) });
+  };
+  // T-055: a workspace with children offers only to delete them all; a lone one follows the question setting.
+  const startDelete = async (p: Project, w: Worktree) => {
+    const now = await invoke<Record<string, unknown>>("get_settings");
+    const plan = deletePlan([w.path], (worktrees[p.id] ?? []).map((x) => ({ path: x.path, parent: x.parent })), asksBeforeDelete(now));
+    if (plan.withChildren) setBatch({ root: w.path, order: plan.order });
+    else await ask(p.id, w.path, worktreeLabel(w));
+  };
+  const labelOf = (path: string) => {
+    const w = Object.values(worktrees).flat().find((x) => same(x.path, path));
+    return w ? worktreeLabel(w) : path;
+  };
+  // Children first and the parent last; stops at the first one with something uncommitted, and says which.
+  const removeBatch = async () => {
+    const b = batch;
+    const p = b && projects.find((x) => (worktrees[x.id] ?? []).some((y) => y.path === b.root));
+    if (!b || !p) return;
+    setBusy("removing");
+    try {
+      for (const path of b.order) {
+        const check = await invoke<RemoveCheck>("workspace_remove_check", { projectId: p.id, path });
+        if (blocker(check) !== null || check.changes.length > 0) {
+          setBatch({ ...b, order: b.order.slice(b.order.indexOf(path)), error: `${labelOf(path)} has ${blocker(check) ?? "uncommitted changes"}; nothing after it was removed` });
+          return;
+        }
+        await invoke("workspace_remove", { projectId: p.id, path, force: false, stamp: check.stamp, keepBranch: false });
+        onRemoved(path);
+      }
+      say("ok", `removed ${b.order.length} workspaces, children first`);
+      setBatch(null);
+    } catch (err) {
+      setBatch({ ...b, error: String(err) });
+    } finally {
+      setBusy("");
+      await reload();
+    }
+  };
+  const runMenu = async (id: string) => {
+    const m = menu;
+    setMenu(null);
+    const p = m && projects.find((x) => x.id === m.projectId);
+    const w = m && (worktrees[m.projectId] ?? []).find((x) => x.path === m.path);
+    if (!m || !p || !w) return;
+    try {
+      if (id === "delete") await startDelete(p, w);
+      else if (id === "sleep") sleep(w);
+      else if (id === "wake") wake(w);
+      else if (id === "parent") setMoving(w.path);
+      else if (id === "details") {
+        const d = await invoke<{ name: string | null; item: string | null; comment: string }>("workspace_details_get", { path: w.path });
+        setDetailsOf({ path: w.path, name: d.name ?? "", item: d.item ?? "", comment: d.comment });
+      } else if (id.startsWith("status:")) {
+        await invoke("workspace_status_set", { path: w.path, status: id.slice(7) });
+        await reload();
+      } else if (id === "open:files") await openIn(w.path, FILE_MANAGER);
+      else if (id.startsWith("open:editor:")) await openIn(w.path, { label: "", command: id.slice(12) });
+      else if (id === "open:terminal") show(w);
+      else if (id === "dev:copy-path") await navigator.clipboard.writeText(w.path);
+      else if (id === "dev:copy-branch") await navigator.clipboard.writeText(w.branch ?? "");
+    } catch (err) {
+      fail(err);
+    }
+  };
+  // PROJ-060: saves the name, linked item and comment; a refused link says why and writes nothing.
+  const saveDetails = async () => {
+    if (!detailsOf) return;
+    try {
+      await invoke("workspace_details_save", { path: detailsOf.path, name: detailsOf.name, item: detailsOf.item, comment: detailsOf.comment });
+      setDetailsOf(null);
+      await reload();
+    } catch (err) {
+      setDetailsOf({ ...detailsOf, error: String(err) });
+    }
+  };
+  const spanView = (sp: Span, i: number) =>
+    sp.t === "text" ? <span key={i}>{sp.text}</span> : (
+      <button key={i} className="link" title={sp.href} onClick={() => void invoke("open_external", { url: sp.href }).catch(fail)}>
+        {sp.t === "image" ? `image: ${sp.alt}` : sp.text}
+      </button>
+    );
 
   // PROJ-042: hide or show one worktree; the poll shows the change, this just does not wait for it.
   // PROJ-048: the parents a workspace can move under, and the move itself. The picker closes
@@ -1186,6 +1367,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const liveIn = (w: Worktree) => sessions.filter((s) => s.running && s.cwd !== null && same(s.cwd, w.path));
   const liveCount = (w: Worktree) => {
     const n = liveIn(w).length;
+    // STAT-036: the agents working here come first ("2 working"); a sleeping workspace shows none and says sleeping beside its name.
+    const word = isAsleep(w) ? "" : workingWord(infoOf(w).working);
+    if (word) return <span className="count working" title={`${word}; split panes are counted apart`}>{word}</span>;
     return n > 0 ? <span className="count">{n}</span> : null;
   };
   const paneRows = (w: Worktree, depth = 0) =>
@@ -1211,7 +1395,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   type Entry = { p: Project; w: Worktree };
   const seenAt = (path: string) => activity[pathKey(path)] ?? 0;
   const order = (xs: Entry[]) =>
-    sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : sortBy === "activity" ? recentOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => seenAt(x.w.path)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry);
+    sortBy === "manual" ? manualOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => pathKey(x.w.path), idsFrom(settings[MANUAL_ORDER_SETTING])) : sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : sortBy === "activity" ? recentOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => seenAt(x.w.path)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry);
   // PROJ-051: under Recent the projects follow their latest workspace too, so a new one is first.
   const projectOrder = sortBy === "activity" ? recentOrder(projects, (p) => Math.max(seenAt(p.path), ...(worktrees[p.id] ?? []).map((w) => seenAt(w.path)))) : projects;
   // PROJ-046: pinned rows (and the workspaces made from them) sit in a section at the top, and
@@ -1226,7 +1410,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const asleep: string[] = Array.isArray(settings[SLEEP_SETTING]) ? (settings[SLEEP_SETTING] as unknown[]).filter((x): x is string => typeof x === "string") : [];
   const isAsleep = (w: Worktree) => !w.isMain && asleep.includes(pathKey(w.path));
   const showSleeping = showSleepingFrom(settings[SHOW_SLEEPING_SETTING]);
-  const hidden = (w: Worktree) => !showSleeping && isAsleep(w);
+  const filters = filtersFrom(settings);
+  const projectOf = (w: Worktree) => projects.find((p) => (worktrees[p.id] ?? []).some((x) => x.path === w.path))?.id ?? "";
+  // PROJ-052: hide-sleeping (the show-sleeping switch), the default-branch row and the project filter.
+  const hidden = (w: Worktree) => !rowShown(filters, { projectId: projectOf(w), isMain: w.isMain, branch: w.branch, asleep: asleep.includes(pathKey(w.path)) });
   const inList = (w: Worktree) => elsewhere(w) && !hidden(w); // the lane's listed(), renamed: main's listed is the worktree state
   function sleep(w: Worktree) {
     const next = asleepAfter(asleep, everyEntry.map((x) => x.w).filter((x) => !x.isMain), w.path, true);
@@ -1254,6 +1441,72 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       say("error", `${worktreeLabel(w)} was not renamed: ${String(err)}`);
     }
   }
+  // PROJ-016: a project or group header dragged among its siblings; the order is saved as a setting.
+  const dragged = useRef<{ kind: "header" | "row"; id: string } | null>(null);
+  const headerTree = groupBy === "project" ? groupTree(groups, projectOrder.filter((p) => filters.projects.length === 0 || filters.projects.includes(p.id)), sortBy === "activity" ? undefined : idsFrom(settings[HEADER_ORDER_SETTING])) : [];
+  const headerDrag = (id: string) => ({
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      e.stopPropagation();
+      dragged.current = { kind: "header", id };
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e: DragEvent) => {
+      const d = dragged.current;
+      if (d?.kind !== "header") return;
+      const sibs = siblingIds(headerTree, d.id);
+      if (sibs && sibs.includes(id) && id !== d.id) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    onDrop: (e: DragEvent) => {
+      const d = dragged.current;
+      dragged.current = null;
+      if (d?.kind !== "header") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const sibs = siblingIds(headerTree, d.id);
+      const r = e.currentTarget.getBoundingClientRect();
+      const before = sibs ? dropBefore(sibs, d.id, id, e.clientY < r.top + r.height / 2) : undefined;
+      if (sibs && before !== undefined) onSetting(HEADER_ORDER_SETTING, moveHeader(idsFrom(settings[HEADER_ORDER_SETTING]), sibs, d.id, before));
+    },
+    onDragEnd: () => {
+      dragged.current = null;
+    },
+  });
+  // PROJ-049: a workspace row dragged to a new place; the first drag keeps the order on screen as the Manual order.
+  const rowDrag = (w: Worktree) => ({
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      dragged.current = { kind: "row", id: pathKey(w.path) };
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e: DragEvent) => {
+      if (dragged.current?.kind === "row") e.preventDefault();
+    },
+    onDrop: (e: DragEvent) => {
+      const d = dragged.current;
+      dragged.current = null;
+      if (d?.kind !== "row") return;
+      e.preventDefault();
+      const rowEl = e.currentTarget.closest("[data-path]") as HTMLElement | null;
+      const list = e.currentTarget.closest(".sb-list");
+      if (!list) return;
+      const keys = [...new Set([...list.querySelectorAll("[data-path]")].map((n) => pathKey((n as HTMLElement).dataset.path ?? "")))];
+      const lane = (n: Element | null) => n?.closest("[data-group]")?.getAttribute("data-group") ?? "";
+      const fromEl = [...list.querySelectorAll("[data-path]")].find((n) => pathKey((n as HTMLElement).dataset.path ?? "") === d.id) ?? null;
+      if (dropOutcome(groupBy, sortBy, lane(fromEl), lane(rowEl)) === "status") return; // a status lane drop changes the status only (see kolux-rs-after.md)
+      const r = e.currentTarget.getBoundingClientRect();
+      const before = dropBefore(keys, d.id, pathKey(w.path), e.clientY < r.top + r.height / 2);
+      if (before === undefined) return;
+      onSetting(MANUAL_ORDER_SETTING, moveRows(dragStart(sortBy, idsFrom(settings[MANUAL_ORDER_SETTING]), keys), [d.id], before));
+      if (sortBy !== "manual") onSetting(SORT_SETTING, "manual");
+    },
+    onDragEnd: () => {
+      dragged.current = null;
+    },
+  });
   const togglePin = (w: Worktree) => onSetting(PIN_SETTING, isPinned(w) ? pins.filter((x) => pathKey(x) !== pathKey(w.path)) : [...pins, w.path]);
   const toggleFold = (title: string) => setFolded((f) => new Set(f.has(title) ? [...f].filter((t) => t !== title) : [...f, title]));
 
@@ -1270,7 +1523,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -1324,7 +1577,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </span>
           )}
           {pushTag(w)}
-          {groupBy !== "project" && <span className="hint">{p.name}</span>}
+          {groupBy !== "project" && <span className="hint">{projectLabel(p)}</span>}
           {liveCount(w)}
           {!asking && (
             <button
@@ -1404,6 +1657,69 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
         <CardLine shown={cardDetails.shown} facts={facts} depth={depth} />
         {paneRows(w, depth)}
+        {detailsOf?.path === w.path && !asking && (
+          <div className="sb-form" data-details={worktreeLabel(w)}>
+            <input className="field" aria-label="Name" placeholder="Name (blank uses the branch)" value={detailsOf.name} onChange={(e) => setDetailsOf({ ...detailsOf, name: e.target.value })} />
+            <input
+              className="field"
+              aria-label="Linked issue or pull request"
+              placeholder="Issue or pull request address, or #number"
+              value={detailsOf.item}
+              onChange={(e) => setDetailsOf({ ...detailsOf, item: e.target.value })}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData("text");
+                if (itemFromPaste(text) !== text.trim()) {
+                  e.preventDefault();
+                  setDetailsOf({ ...detailsOf, item: itemFromPaste(text) });
+                }
+              }}
+            />
+            <textarea className="field multi" aria-label="Comment" placeholder="Comment: # headings, [links](https://example.com) and ![images](https://example.com/a.png)" value={detailsOf.comment} onChange={(e) => setDetailsOf({ ...detailsOf, comment: e.target.value })} />
+            {commentBlocks(detailsOf.comment).map((b, i) => (
+              <div key={i} data-block={b.kind} style={b.kind === "heading" ? { fontWeight: 600 } : undefined}>
+                {b.spans.map(spanView)}
+              </div>
+            ))}
+            {detailsOf.error && (
+              <span className="note error" role="alert">
+                {detailsOf.error}
+              </span>
+            )}
+            <div className="btn-row">
+              <button className="btn" onClick={() => void saveDetails()}>
+                Save
+              </button>
+              <button className="btn" onClick={() => setDetailsOf(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {batch?.root === w.path && (
+          <div className="sb-form warn" data-delete-all={worktreeLabel(w)}>
+            <div>
+              Delete <b>{worktreeLabel(w)}</b> and the {batch.order.length - 1} workspace{batch.order.length === 2 ? "" : "s"} made from it? They go children first, the parent last, each with its folder and branch. Anything with uncommitted changes stops the rest.
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 16 }}>
+              {batch.order.map((d) => (
+                <li key={d}>{labelOf(d)}</li>
+              ))}
+            </ul>
+            {batch.error && (
+              <span className="note error" role="alert">
+                {batch.error}
+              </span>
+            )}
+            <div className="btn-row">
+              <button className="btn danger" onClick={() => void removeBatch()} disabled={busy !== ""}>
+                {busy === "removing" ? "Removing…" : "Delete all"}
+              </button>
+              <button className="btn" onClick={() => setBatch(null)}>
+                Keep
+              </button>
+            </div>
+          </div>
+        )}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>
             <Picker key={`move-${w.path}`} name="Move under" value={up ? worktreeLabel(up) : "No parent"} startOpen items={moveItems(p, w)} onPick={(k) => void move(p, w, k)} />
@@ -1437,6 +1753,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               <label className="del-force">
                 <input type="checkbox" checked={confirm.force} onChange={(e) => setConfirm({ ...confirm, force: e.target.checked })} />
                 Delete my changes too
+              </label>
+            )}
+            {!blocker(confirm.check) && (
+              <label className="del-force">
+                <input type="checkbox" checked={confirm.keep === true} onChange={(e) => setConfirm({ ...confirm, keep: e.target.checked })} />
+                Keep the branch
               </label>
             )}
             <div className="btn-row">
@@ -1475,10 +1797,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       const opening = creating === p.id;
       return (
         <div key={p.id}>
-          <div className="proj" title={p.path}>
+          <div className="proj" title={p.path} {...headerDrag(p.id)}>
             <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
-            <ProjectIcon value={icons[p.id]} name={p.name} />
-            <span className="name">{p.name}</span>
+            <ProjectIcon value={icons[p.id]} name={projectLabel(p)} />
+            <span className="name" title={p.displayName ? p.name : undefined}>{projectLabel(p)}</span>
             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
               <Gear />
             </button>
@@ -1518,6 +1840,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               <label>Header colour</label>
               <HeaderColourPicker settings={settings} kind="p" id={p.id} onSetting={onSetting} />
               <IconPicker value={icons[p.id]} name={p.name} onSet={(icon) => setIcon(p, icon)} onProblem={(text) => say("warn", text)} />
+              <button className="link" onClick={() => setCleanupFor(p.id)} title="Scan for workspaces that have gone quiet or are merged">
+                Clean up workspaces…
+              </button>
               <div className="btn-row">
                 <button className="btn" onClick={() => saveProject(p)}>
                   Save
@@ -1525,8 +1850,35 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <button className="btn" onClick={() => setSettingsFor(null)}>
                   Cancel
                 </button>
+                <button className="btn danger" data-remove-project onClick={() => setDropProject(dropProject === p.id ? null : p.id)}>
+                  Remove project
+                </button>
               </div>
+              {dropProject === p.id && (
+                <div className="note" role="alertdialog" aria-label="Remove project">
+                  <div>Remove {p.name} from Kolux? Its terminals close and its list entries, saved setup and remembered names are cleared. The folder and its files stay on disk.</div>
+                  <div className="btn-row">
+                    <button className="btn danger" data-remove-project-yes onClick={() => removeProject(p)}>
+                      Remove {p.name}
+                    </button>
+                    <button className="btn" onClick={() => setDropProject(null)}>
+                      Keep it
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
+          )}
+          {cleanupFor === p.id && (
+            <CleanupDialog
+              project={p}
+              onClose={() => setCleanupFor(null)}
+              onRemoved={(paths) => {
+                paths.forEach(onRemoved);
+                void reload();
+              }}
+              onKept={(items) => setKept((old) => addKept(old, items))}
+            />
           )}
           {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
             <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
@@ -1611,7 +1963,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       projectBlock(n.project)
     ) : (
       <div key={n.group.id} className="proj-group" data-project-group={n.group.id}>
-        <div className="sb-group-row">
+        <div className="sb-group-row" {...headerDrag(n.group.id)}>
           <button className="sb-group" aria-expanded={!folded.has(n.group.id)} onClick={() => toggleFold(n.group.id)}>
             <HeaderBadge colour={headerColourOf(settings, "g", n.group.id)} />
             {n.group.name}
@@ -1696,7 +2048,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
         </div>
 
-        <div className="sb-list">
+        <div
+          className="sb-list"
+          onDragOver={(e) => {
+            if (dragged.current === null) return;
+            const r = e.currentTarget.getBoundingClientRect();
+            e.currentTarget.scrollTop += edgeScroll(e.clientY, r.top, r.bottom);
+          }}
+        >
           {showAdd && (
             <div className="sb-form">
               <label>Add project</label>
@@ -1760,6 +2119,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <option value="smart">Smart: what needs you first</option>
                 <option value="name">Name</option>
                 <option value="activity">Recent: latest activity first</option>
+                <option value="manual">Manual: drag rows into your own order</option>
               </select>
               <label className="check">
                 <input type="checkbox" checked={hideAuto} onChange={(e) => onSetting(HIDE_AUTOMATION_SETTING, e.target.checked)} /> Hide workspaces made by automations
@@ -1772,6 +2132,29 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
                 Show sleeping workspaces
               </label>
+              <label className="check">
+                <input type="checkbox" aria-label="hide the default-branch rows" checked={filters.hideDefault} onChange={(e) => onSetting(FILTER_DEFAULT_SETTING, e.target.checked)} />
+                Hide the default-branch row
+              </label>
+              {projects.length > 1 && (
+                <div data-filter-projects>
+                  <label>Show only these projects</label>
+                  {projects.map((p) => (
+                    <label className="check" key={p.id}>
+                      <input
+                        type="checkbox"
+                        aria-label={`show ${p.name}`}
+                        checked={filters.projects.length === 0 || filters.projects.includes(p.id)}
+                        onChange={() => onSetting(FILTER_PROJECTS_SETTING, toggleProject(filters, projects.map((x) => x.id), p.id))}
+                      />
+                      {p.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <button className="btn" aria-label="clear filters" disabled={filtersOn(filters) === 0} onClick={() => CLEAR_FILTERS.forEach(([k, v]) => onSetting(k, v))}>
+                Clear filters{filtersOn(filters) > 0 ? ` (${filtersOn(filters)})` : ""}
+              </button>
               <CardDetailsChooser settings={settings} onSetting={onSetting} />
             </div>
           )}
@@ -1791,7 +2174,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 nestRows(order(everyEntry.filter((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w))).map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p: everyEntry.find((x) => x.w === r.w)?.p as Project, w: r.w }, r.depth, r.kids))}
             </div>
           )}
-          {groupBy === "project" && groupTree(groups, projectOrder).map(drawNode)}
+          {groupBy === "project" && headerTree.map(drawNode)}
 
           {/* PROJ-045: one list across projects, flat or under Status / Pull request headers that fold. */}
           {groupBy !== "project" && creating && nameField(projects.find((p) => p.id === creating) ?? null)}
@@ -1831,7 +2214,31 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               onRetry={() => void askCard()}
             />
           )}
-          {message && <div className={`note ${message.kind}`}>{message.text}</div>}
+          <KeptBranches items={kept} onChange={setKept} onSay={say} onDeleted={() => void reload()} />
+          {message && <MessageNote kind={message.kind} text={message.text} />}
+          {menu && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 49 }} onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+              <div role="menu" aria-label="Workspace" data-menu-for={menu.path} style={{ position: "fixed", left: menu.x, top: menu.y, zIndex: 50, minWidth: 180, padding: 4, display: "flex", flexDirection: "column", background: "var(--app-bg)", border: "1px solid var(--line-focus)", borderRadius: 8 }} onKeyDown={(e) => e.key === "Escape" && setMenu(null)}>
+                {menu.items.map((it) =>
+                  it.children ? (
+                    <div key={it.id} role="group" aria-label={it.label} style={{ display: "flex", flexDirection: "column" }}>
+                      <div style={{ padding: "4px 8px", color: "var(--fg-muted)", fontSize: 11 }}>{it.label}</div>
+                      {it.children.map((c) => (
+                        <button key={c.id} role="menuitem" disabled={it.disabled || c.disabled} style={{ textAlign: "left", padding: "4px 8px 4px 20px" }} onClick={() => void runMenu(c.id)}>
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <button key={it.id} role="menuitem" disabled={it.disabled} style={{ textAlign: "left", padding: "4px 8px", color: it.danger ? "#f0a07a" : undefined }} onClick={() => void runMenu(it.id)}>
+                      {it.label}
+                    </button>
+                  ),
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="sb-divider" />
@@ -1910,7 +2317,24 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
       </aside>
       {importing && <ImportSetup {...importing} busy={busy !== ""} onImport={importSetup} onClose={() => setImporting(null)} />}
-      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onCancel={() => setStartGit(null)} />}
+      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onFolder={openAsFolder} onScan={() => (setScanRoot(startGit.folder), setStartGit(null))} onCancel={() => setStartGit(null)} />}
+      {scanRoot !== null && (
+        <ScanRepos
+          root={scanRoot}
+          onClose={() => setScanRoot(null)}
+          onProblem={fail}
+          onDone={async (message, project) => {
+            setScanRoot(null);
+            setShowAdd(false);
+            say("ok", message);
+            await reload();
+            if (project) {
+              const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: project.id }), project.path);
+              if (open) (onSelect(open.path, open.branch), onAdded(open.path, open.branch));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

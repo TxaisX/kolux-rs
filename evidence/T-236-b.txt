@@ -1,0 +1,32 @@
+T-236-b (2026-10-19, lane/editor from 9c2affed, second piece): the explorer's name filter, dotfiles switch, refresh and collapse-all, and the desktop-drop router with its limits.
+
+BUILT (unit-tested, no app launch)
+- explorerView.ts: filterRows (a name filter keeps matching rows and the folders above them, tree order), withoutDotfiles,
+  hidesDotfiles / withDotfiles (a per-worktree list in localStorage key kolux.explorer.hideDotfiles, root keys lower-cased,
+  capped at 200). Explorer.tsx: a "Filter by name" box under the toolbar (Esc or x clears; a filter searches every loaded
+  folder, opening them in the view), toolbar buttons Refresh (reloads every shown folder), Collapse all, and Hide dotfiles
+  (on/off state kept per worktree), and a "No file name matches the filter." empty state.
+- desktopDrops.ts (EDIT-039): cleanPaths (repeated paths, either slash or case, and blanks dropped), refuseDrop (more than 50
+  files, or more than 1 GiB where a size is known, is refused with a message and nothing is done; the card gives no
+  numbers, so these are defaults), zoneOf / planDrop (a folder on the project list becomes a project, a file anywhere in
+  the editor area opens in the editor, terminals, kit inputs, dialogs and the explorer keep their own handlers),
+  projectDrop (the sidebar's hook) and useDesktopDrops (webview file-drop event only, so dragged text, web links and
+  moves inside the explorer never count). The explorer's own desktop-drop copy now uses the same file limit.
+READINGS (logs G:/Temp/editor-v3-logs/p1b-236-*.log)
+- tsc --noEmit exit 0 (with all 7 earlier patches and the 2 new ones applied); vitest src/editor 37 files, 238 tests
+  (new: explorerView 4 tests, desktopDrops 4).
+PATCHES: evidence/editor-T-236-b-App.tsx.patch (mounts useDesktopDrops(openFile, setToast)) and
+  evidence/editor-T-236-b-ProjectsPanel.tsx.patch (sets projectDrop.add while mounted, using addPath). Apply after the
+  T-132-b App patch (chain checked with git apply --check).
+LEFT (after list): the size check (needs a Rust size command); the git-ignored switch (needs Rust); live refresh by a
+  watcher; row menus (find in folder, open in terminal, add as project); Mod+Shift+F opening the right-sidebar Search tab
+  (T-224-b); opening a dropped file from outside every project (ACCT-055 keeps dropped paths from being read, so the
+  editor area refuses them with a message).
+LIVE PROOF PENDING (batched)
+ 1. Explorer: type part of a file name in the Filter box: only matching files show, with their folders above; Esc clears.
+ 2. Click Hide dotfiles: names starting with a dot disappear; reload the app: the choice stays for that worktree, and
+    another worktree keeps its own choice.
+ 3. Refresh reloads the tree after a file is made outside Kolux; Collapse all closes every folder.
+ 4. Drag a folder from the desktop onto the project list: it is added as a project. Drag 51 files onto the explorer or
+    editor area: a message says nothing was done.
+ 5. Drag a file from inside a project onto the editor area: it opens as a tab. Drag text or a web link: nothing happens.

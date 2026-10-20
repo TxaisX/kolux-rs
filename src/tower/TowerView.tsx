@@ -110,6 +110,9 @@ export default function TowerView({ rows, usage, now, onOpen, detached = false, 
               ) : (
                 <div className="none">No usage figures yet</div>
               )}
+              {/* T-548: whose figures these are, and the panes that are on another account (their figures are not read yet). */}
+              {u.forAccount !== undefined && u.figures && <div className="none">{`Figures for ${u.forAccount ?? "the system default"}`}</div>}
+              {!!u.elsewhere && <div className="none">{`${u.elsewhere} ${u.elsewhere === 1 ? "pane" : "panes"} on other accounts: not read yet`}</div>}
             </div>
           );
         })}

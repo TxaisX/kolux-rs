@@ -30,3 +30,16 @@ test("T-546-c: once wired, the main window's Tower offers its own window; the To
   expect(detached).toContain('class="tower detached"');
   expect(detached).toContain("Refresh");
 });
+
+test("T-548: a usage card says whose figures it shows and how many panes run on other accounts", () => {
+  const card = { agent: "codex", figures: { fiveHour: 5, weekly: null }, panes: 3, accounts: [{ account: "a", panes: 1 }, { account: "b", panes: 2 }], forAccount: "a", elsewhere: 2 };
+  const html = renderToString(createElement(TowerView, { rows: [], usage: [card], now: 0, onOpen: () => {} }));
+  expect(html).toContain("Figures for a");
+  expect(html).toContain("2 panes on other accounts: not read yet");
+  const none = renderToString(createElement(TowerView, { rows: [], usage: [{ ...card, figures: null, elsewhere: 3, panes: 3 }], now: 0, onOpen: () => {} }));
+  expect(none).toContain("3 panes on other accounts: not read yet");
+  // without the active accounts (the old call) the card says nothing about whose figures they are
+  const old = renderToString(createElement(TowerView, { rows: [], usage: [{ agent: "codex", figures: null, panes: 1, accounts: [{ account: null, panes: 1 }] }], now: 0, onOpen: () => {} }));
+  expect(old).not.toContain("Figures for");
+  expect(old).not.toContain("other accounts");
+});

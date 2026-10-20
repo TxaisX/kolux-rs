@@ -14,6 +14,8 @@ import { clampNumber, CURSORS, DEFAULT_SHELL_FIELD, FIELDS, LINE_HEIGHT, options
 import { currentTerminal, TERMINAL_EVENT } from "../theme";
 import { FontField } from "./AppearancePage";
 import { Segmented } from "./GeneralPage";
+import { InputCard, PowerShellCard } from "./InputCards";
+import { detectPlatform } from "../keys/keymap";
 import { readLook } from "./general";
 import TerminalImport from "./TerminalImport";
 import { useSettings } from "./useSettings";
@@ -22,6 +24,7 @@ import { useSettings } from "./useSettings";
 const SHELL_HISTORY_FIELD = "shellHistoryPerWorktree";
 type ShellInfo = { id: string; name: string };
 const onWindows = () => /Windows/.test(navigator.userAgent);
+const platform = detectPlatform();
 const SAMPLE = "\x1b[32m~/kolux\x1b[0m $ git status\r\nOn branch \x1b[36mmain\x1b[0m\r\n\x1b[1mbold\x1b[0m normal \x1b[33myellow\x1b[0m \x1b[31mred\x1b[0m \x1b[34mblue\x1b[0m\r\n=> != <= 0O 1lI\r\n$ ";
 
 /** SET-022: the sample is a real terminal that lives only while the page is open. */
@@ -167,6 +170,7 @@ export default function TerminalPage() {
         </section>
       )}
       {settings && <TerminalImport settings={settings} save={save} />}
+      {settings && <InputCard settings={settings} platform={platform} onSave={save} />}
       {settings && shells && (
         <section className="conn-card" data-section="shell">
           <h2 className="conn-name">Default shell</h2>
@@ -183,6 +187,7 @@ export default function TerminalPage() {
           <p className="conn-detail">Only the shells found on this computer are listed. Open terminals keep the shell they started with.</p>
         </section>
       )}
+      {settings && <PowerShellCard settings={settings} platform={platform} onSave={save} />}
       {settings && (
         <section className="conn-card" data-section="closing">
           <h2 className="conn-name">Closing terminals</h2>

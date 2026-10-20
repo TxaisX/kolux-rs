@@ -11,6 +11,7 @@ use crate::git::{Git, Worktree};
 use crate::names::safe_name;
 use crate::state::Store;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tauri::State;
@@ -27,6 +28,9 @@ pub struct Project {
     /// The ref new workspaces start from (PROJ-028); none means the default branch Git reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// SET-033: the name the sidebar shows instead of the folder's name; none shows the folder's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 /// A workspace just made (PROJ-028): the worktree, the ref it started from, and a note when
@@ -99,12 +103,12 @@ pub fn load_projects(store: &Store) -> Vec<Project> {
     store.get(PROJECTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
+pub(crate) fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
     store.set(PROJECTS_KEY, &serde_json::to_string(projects).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
-/// PROJ-015: takes projects out of Kolux's list; their folders on disk are not touched. (The
-/// rest of removing a project, PROJ-008, comes with T-214-b.)
+/// PROJ-015: takes projects out of Kolux's list; their folders on disk are not touched. The rest
+/// of removing a project (PROJ-008) is `folder_projects::project_remove`.
 pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -120,8 +124,21 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     if icons.len() != before {
         save_icons(store, &icons)?;
     }
+    // PROJ-005: a folder project's flag goes with it.
+    crate::folder_projects::unflag(store, ids)?;
     // PROJ-035: and so do its dismissed setup card and its saved local setup.
     crate::setup::prune_setup(store, ids, &gone)
+}
+
+/// PROJ-008: drops the retired suggested names kept for one workspaces folder.
+pub(crate) fn clear_retired_scope(store: &Store, scope: &str) -> Result<(), String> {
+    let mut all = retired_all(store);
+    let before = all.len();
+    all.retain(|r| r.scope != scope);
+    if all.len() == before {
+        return Ok(());
+    }
+    store.set(RETIRED_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
@@ -214,7 +231,7 @@ pub fn workspace_note_save(store: StoreState<'_>, path: String, text: String) ->
     save_workspace_note(&*store.lock().map_err(|e| e.to_string())?, &path, &text)
 }
 
-fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
+pub(crate) fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
     store.get(ORIGINS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
@@ -425,6 +442,7 @@ pub fn register_project(store: &Store, (top, main): (PathBuf, PathBuf)) -> Resul
     let project = Project {
         workspaces_dir: None,
         base: None,
+        display_name: None,
         id: format!("{}-{}", name.to_lowercase(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)),
         name,
         path: top.display().to_string(),
@@ -464,7 +482,7 @@ pub fn looks_secret(path: &str) -> bool {
 }
 
 /// GIT-061: only a full path to an existing folder that is not in a Git repository yet.
-fn plain_folder(folder: &Path) -> Result<(), String> {
+pub(crate) fn plain_folder(folder: &Path) -> Result<(), String> {
     if !folder.is_absolute() {
         return Err(format!("{} is not a full path; choose the folder itself", folder.display()));
     }
@@ -769,6 +787,51 @@ fn clear_failed_add(repo: &Path, dest: &Path, made: Option<&str>) {
     }
 }
 
+/// PROJ-031: what kind of problem a failed create was, so the message can say what to do.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CreateKind {
+    Stalled,
+    MissingBase,
+    NameInUse,
+    Permissions,
+    GitFailure,
+}
+
+pub fn create_kind(raw: &str) -> CreateKind {
+    let t = raw.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| t.contains(w));
+    if has(&["did not finish in"]) {
+        CreateKind::Stalled
+    } else if has(&["invalid reference", "not a valid object name", "unknown revision", "not a commit", "not a valid ref"]) {
+        CreateKind::MissingBase
+    } else if has(&["already exists", "already checked out", "already used by worktree", "is already registered"]) {
+        CreateKind::NameInUse
+    } else if has(&["permission denied", "access is denied", "operation not permitted", "read-only file system"]) {
+        CreateKind::Permissions
+    } else {
+        CreateKind::GitFailure
+    }
+}
+
+/// Separator the page splits on to show Git's own words in a details block.
+pub const GIT_SAID: &str = "\nGit said: ";
+
+/// PROJ-031: the failed create in Kolux's words (what kind of problem, what to do), followed by
+/// Git's full output after `GIT_SAID`. A cancelled create passes through unchanged.
+pub fn explain_create_error(raw: String) -> String {
+    if raw.starts_with(OVERTAKEN) {
+        return raw;
+    }
+    let (summary, next) = match create_kind(&raw) {
+        CreateKind::Stalled => return raw, // already in Kolux's words
+        CreateKind::MissingBase => ("The workspace could not start: the commit or branch it was to start from is missing.", "Pick another start point, or fetch the project and try again."),
+        CreateKind::NameInUse => ("The workspace could not be made: that name or branch is already in use.", "Choose a different name, or open the existing branch from the New workspace menu."),
+        CreateKind::Permissions => ("The workspace could not be made: Windows refused access to the folder.", "Check the workspaces folder is writable and that no program has it open, then try again."),
+        CreateKind::GitFailure => ("Git could not create the workspace.", "Try again; if it keeps failing, the details below say why."),
+    };
+    format!("{summary} {next}{GIT_SAID}{raw}")
+}
+
 /// `add` (a `git worktree add` into `dest`, creating branch `made` if any) under the retry
 /// policy: each failed try is cleared away first, and a cancel stops the waiting.
 pub fn add_retrying(repo: &Path, dest: &Path, made: Option<&str>, overtaken: &dyn Fn() -> bool, add: impl Fn() -> Result<(), String>) -> Result<(), String> {
@@ -801,7 +864,7 @@ pub fn create_workspace_until(git: &Git, place: &Place, project: &Project, typed
     if overtaken() {
         return Err(OVERTAKEN.to_string());
     }
-    let (from, note) = resolve_base(git, repo, project, start)?;
+    let (from, note) = resolve_base(git, repo, project, start).map_err(|e| format!("The workspace could not start: {e}."))?;
     let refreshed = refresh_base(git, repo, &from, place.refresh);
     // PROJ-021: a name taken by a branch (local or on a remote) or a folder gets a number.
     let (safe, dest) = (1..)
@@ -816,7 +879,7 @@ pub fn create_workspace_until(git: &Git, place: &Place, project: &Project, typed
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     let new_branch = format!("{}{safe}", place.prefix);
-    add_retrying(repo, &dest, Some(&new_branch), overtaken, || git.worktree_add(repo, &dest, &new_branch, &from))?;
+    add_retrying(repo, &dest, Some(&new_branch), overtaken, || git.worktree_add(repo, &dest, &new_branch, &from)).map_err(explain_create_error)?;
     let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().chain(refreshed).collect();
     warnings.extend(crate::include::bring_along(repo, &dest));
     if overtaken() {
@@ -1032,7 +1095,15 @@ pub fn create_fresh_workspace<S: std::ops::Deref<Target = Store>>(git: &Git, loc
 /// branch goes with the folder unless another worktree still has it checked out.
 #[cfg(test)]
 pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str, force: bool) -> Result<(), String> {
-    remove_worktree(git, project, worktree_path, force, false)
+    remove_worktree(git, project, worktree_path, force, false).map(|_| ())
+}
+
+/// A branch left behind when its workspace went, with the commit it pointed at then, so a later
+/// delete (`Git::delete_branch_if_at`) removes it only while it is still there.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Kept {
+    pub branch: String,
+    pub commit: String,
 }
 
 /// PROJ-030: a workspace opened on a branch that already existed keeps that branch when it goes.
@@ -1040,18 +1111,36 @@ pub fn keeps_branch(store: &Store, path: &str) -> bool {
     origin(store, path).is_some_and(|o| o["existingBranch"] == true)
 }
 
+/// PROJ-073: a branch left behind when its workspace went, with the commit it pointed at then.
+/// Deleting it later is refused once the branch has moved on from that commit.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptBranch {
+    pub branch: String,
+    pub commit: String,
+}
+
 /// `remove_workspace`, keeping the branch when `keep_branch`.
-pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<(), String> {
+pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<Option<Kept>, String> {
     let repo = Path::new(&project.path);
     let target = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(worktree_path))).ok_or_else(|| format!("{worktree_path} is not a worktree of {}", project.name))?;
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    if !force && git.dirty(Path::new(&target.path))? {
+    if !force && Path::new(&target.path).exists() && git.dirty(Path::new(&target.path))? {
         return Err(format!("{} has uncommitted changes", target.branch.as_deref().unwrap_or(worktree_path)));
     }
     crate::include::unlink_shared(repo, Path::new(&target.path));
-    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch)).map(|_| ())
+    let left = git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch))?;
+    // The branch stayed: because the user chose to keep it, or because another worktree has it.
+    Ok(match (target.branch, keep_branch, left) {
+        (Some(branch), true, _) => {
+            let commit = crate::git::run(&["rev-parse", "--verify", &format!("refs/heads/{branch}")], Some(repo))?;
+            Some(Kept { branch, commit })
+        }
+        (Some(branch), false, Some(commit)) => Some(Kept { branch, commit }),
+        _ => None,
+    })
 }
 
 /// PROJ-030: a workspace on a branch that exists already, locally or only on a remote (Git then
@@ -1083,7 +1172,8 @@ pub fn open_branch_workspace_until(git: &Git, place: &Place, project: &Project, 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    add_retrying(repo, &dest, None, overtaken, || crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo)).map(drop))?;
+    let limit = crate::git::add_timeout(std::env::var("KOLUX_WORKTREE_ADD_TIMEOUT_MS").ok().as_deref());
+    add_retrying(repo, &dest, None, overtaken, || crate::git::run_within(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo), limit).map(drop)).map_err(explain_create_error)?;
     let warnings = crate::include::bring_along(repo, &dest);
     if overtaken() {
         return Err(undo_create(git, repo, &dest, None));
@@ -1236,6 +1326,8 @@ pub struct RemoveCheck {
     pub nested: Vec<String>,
     /// What the workspace looked like when asked; a delete carrying another stamp is refused.
     pub stamp: String,
+    /// PROJ-072: the folder is already gone while Git still lists it; deleting only tidies the record.
+    pub missing: bool,
 }
 
 pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result<RemoveCheck, String> {
@@ -1244,12 +1336,14 @@ pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    let changes = git.status_lines(Path::new(&target.path))?;
+    // PROJ-072: a folder that is already gone has no changes to lose; deleting it is cleanup.
+    let missing = !Path::new(&target.path).exists();
+    let changes = if missing { Vec::new() } else { git.status_lines(Path::new(&target.path))? };
     let here = Path::new(&target.path);
     // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
     let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();
     let stamp = format!("{}|{}", target.head, changes.join("|"));
-    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp })
+    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp, missing })
 }
 
 /// Why a delete must not go ahead (PROJ-070), or `None` when it may: the workspace changed
@@ -1273,7 +1367,7 @@ pub fn removal_refused(now: &RemoveCheck, force: bool, asked: &str) -> Option<St
     None
 }
 
-fn find_project(store: &Store, id: &str) -> Result<Project, String> {
+pub(crate) fn find_project(store: &Store, id: &str) -> Result<Project, String> {
     load_projects(store).into_iter().find(|p| p.id == id).ok_or_else(|| "that project is no longer registered".to_string())
 }
 
@@ -1315,7 +1409,16 @@ pub async fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_
 /// async, so they run off the window's thread and typing never queues behind a slow git.
 /// ponytail: git still blocks one async worker while it runs; spawn_blocking if workers ever starve.
 fn scan(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<(Project, Vec<Worktree>), String> {
-    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, project_id)?;
+    let (project, folder) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let project = find_project(&store, project_id)?;
+        // PROJ-005: a folder project has its one folder workspace, until Git is started in it.
+        let folder = crate::folder_projects::folder_only(&store, &project);
+        (project, folder)
+    };
+    if let Some(only) = folder {
+        return Ok((project, vec![only]));
+    }
     let all = git.worktrees(Path::new(&project.path))?;
     Ok((project, all))
 }
@@ -1364,6 +1467,103 @@ pub fn rename(store: &Store, path: &str, name: &str) -> Result<String, String> {
 #[tauri::command]
 pub fn workspace_rename(store: StoreState<'_>, path: String, name: String) -> Result<String, String> {
     rename(&*store.lock().map_err(|e| e.to_string())?, &path, &name)
+}
+
+// ---- PROJ-060: a workspace's details: shown name, linked GitHub item, comment ---------------------
+
+/// The longest comment a workspace keeps.
+pub const COMMENT_MAX: usize = 8 * 1024;
+
+/// What the details form shows and saves.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Details {
+    /// The typed name; none means the branch names the row.
+    pub name: Option<String>,
+    /// The linked item as an address (or `#12` for a bare issue number); none when unlinked.
+    pub item: Option<String>,
+    pub comment: String,
+}
+
+/// A linked GitHub item: an issue (number, address if known) or a pull request (address).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ItemLink {
+    Issue(u64, Option<String>),
+    Pr(String),
+}
+
+/// What a pasted link-field text means: blank clears; an issue or pull request address on any host
+/// (an Enterprise address counts, `/files` and the like after the number are dropped); a bare
+/// number (with or without `#`) is an issue of the project's own repository. Anything else is refused.
+pub fn parse_item(text: &str) -> Result<Option<ItemLink>, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let bare = t.trim_start_matches('#');
+    if !bare.is_empty() && bare.chars().all(|c| c.is_ascii_digit()) {
+        return match bare.parse::<u64>() {
+            Ok(n) if n > 0 => Ok(Some(ItemLink::Issue(n, None))),
+            _ => Err("an issue number is 1 or more".into()),
+        };
+    }
+    let rest = t.strip_prefix("https://").or_else(|| t.strip_prefix("http://")).ok_or_else(|| format!("{t} is not an issue or pull request address or number"))?;
+    let parts: Vec<&str> = rest.split(['?', '#']).next().unwrap_or("").split('/').collect();
+    if parts.len() < 5 || parts[0].is_empty() || parts[1].is_empty() || parts[2].is_empty() {
+        return Err(format!("{t} is not an issue or pull request address or number"));
+    }
+    let n = parts[4].parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| format!("{t} has no issue or pull request number"))?;
+    let host = parts[0].to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    match parts[3].to_lowercase().as_str() {
+        "pull" => Ok(Some(ItemLink::Pr(format!("https://{host}/{}/{}/pull/{n}", parts[1], parts[2])))),
+        "issues" => Ok(Some(ItemLink::Issue(n, Some(format!("https://{host}/{}/{}/issues/{n}", parts[1], parts[2]))))),
+        _ => Err(format!("{t} is not an issue or pull request address")),
+    }
+}
+
+/// PROJ-060: what the details form starts with for the workspace at `path`.
+pub fn details_of(store: &Store, path: &str) -> Details {
+    let o = origin(store, path).unwrap_or_default();
+    let item = o["issueUrl"].as_str().or_else(|| o["pr"].as_str()).map(String::from).or_else(|| o["issue"].as_u64().map(|n| format!("#{n}")));
+    Details { name: load_names(store).get(&name_key(path)).and_then(|v| v.as_str()).map(String::from), item, comment: o["comment"].as_str().unwrap_or_default().to_string() }
+}
+
+/// PROJ-060: saves the details. A blank name goes back to the branch name; a blank link or comment
+/// clears it. A refused link or an over-long comment writes nothing at all.
+pub fn save_details(store: &Store, path: &str, name: &str, item: &str, comment: &str) -> Result<Details, String> {
+    let link = parse_item(item)?;
+    if comment.len() > COMMENT_MAX {
+        return Err(format!("the comment is {} KB; a comment holds at most {} KB", comment.len().div_ceil(1024), COMMENT_MAX / 1024));
+    }
+    let n = name.trim();
+    set_name(store, path, if n.is_empty() { None } else { Some(n) })?;
+    let mut o = origin(store, path).filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+    o["issue"] = serde_json::Value::Null;
+    o["issueUrl"] = serde_json::Value::Null;
+    o["pr"] = serde_json::Value::Null;
+    match link {
+        Some(ItemLink::Issue(num, url)) => {
+            o["issue"] = num.into();
+            o["issueUrl"] = url.map_or(serde_json::Value::Null, Into::into);
+        }
+        Some(ItemLink::Pr(url)) => o["pr"] = url.into(),
+        None => {}
+    }
+    let c = comment.trim();
+    o["comment"] = if c.is_empty() { serde_json::Value::Null } else { c.into() };
+    set_origin(store, path, Some(&o))?;
+    Ok(details_of(store, path))
+}
+
+#[tauri::command]
+pub fn workspace_details_get(store: StoreState<'_>, path: String) -> Result<Details, String> {
+    Ok(details_of(&*store.lock().map_err(|e| e.to_string())?, &path))
+}
+
+#[tauri::command]
+pub fn workspace_details_save(store: StoreState<'_>, path: String, name: String, item: String, comment: String) -> Result<Details, String> {
+    save_details(&*store.lock().map_err(|e| e.to_string())?, &path, &name, &item, &comment)
 }
 
 /// PROJ-053: putting workspaces to sleep ends their terminals; the folders and branches stay, and
@@ -1509,6 +1709,35 @@ pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: St
     Ok(project)
 }
 
+/// The longest display name kept, in characters.
+pub const DISPLAY_NAME_MAX: usize = 80;
+
+/// SET-033: what a typed display name becomes: control characters dropped, runs of spaces made one,
+/// ends trimmed, cut at `DISPLAY_NAME_MAX`; blank means no display name, so the folder's name shows.
+pub fn clean_display_name(raw: &str) -> Option<String> {
+    let kept: String = raw.chars().filter(|c| !c.is_control() || c.is_whitespace()).collect();
+    let one_line = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = one_line.chars().take(DISPLAY_NAME_MAX).collect();
+    Some(cut.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// SET-033: saves (or with a blank `raw` clears) the display name of project `id`. The folder, the
+/// base and every other field of the project stay as they are.
+pub fn set_display_name(store: &Store, id: &str, raw: &str) -> Result<Project, String> {
+    let mut projects = load_projects(store);
+    let project = projects.iter_mut().find(|p| p.id == id).ok_or("that project is no longer registered")?;
+    project.display_name = clean_display_name(raw);
+    let project = project.clone();
+    save_projects(store, &projects)?;
+    Ok(project)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // T-116-c-c: registered by the lib.rs hunk the coordinator applies
+pub fn project_display_name_set(store: StoreState<'_>, project_id: String, name: String) -> Result<Project, String> {
+    set_display_name(&*store.lock().map_err(|e| e.to_string())?, &project_id, &name)
+}
+
 #[tauri::command(async)]
 pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String) -> Result<RemoveCheck, String> {
     let project = {
@@ -1519,28 +1748,62 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 }
 
 /// PROJ-070: deletes the workspace only when the check made just now still matches `stamp` (what
-/// the question showed) and nothing refuses it; `force` loses uncommitted changes.
-#[tauri::command]
+/// the question showed) and nothing refuses it; `force` loses uncommitted changes. Async (T-033-e
+/// FIX-1): it joins the watch's reader threads and runs git, never on the window's thread.
+/// `keep_branch` is the remove form's choice; none means what the workspace's own record says.
+/// The branch that stayed, if any, comes back so it can be deleted later.
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String) -> Result<(), String> {
+pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String, keep_branch: Option<bool>) -> Result<Option<Kept>, String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
     };
-    if let Some(why) = removal_refused(&remove_check(&git, &project, &path)?, force, &stamp) {
+    remove_one(&git, &store, &terminals, &project, &path, force, &stamp, keep_branch)
+}
+
+/// One delete, as the command and the batch (PROJ-071) both run it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_branch: Option<bool>) -> Result<Option<Kept>, String> {
+    if let Some(why) = removal_refused(&remove_check(git, project, path)?, force, stamp) {
         return Err(why);
     }
     // ORCH-058: a shell still sitting in the folder would keep Windows from deleting it, so its
     // terminals end first; one that cannot be shown gone blocks unless the force box waives it.
-    let stopped = terminals.kill_under(Path::new(&path));
+    let stopped = terminals.kill_under(Path::new(path));
     if !force && !stopped.stuck.is_empty() {
         let n = stopped.stuck.len();
         return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
     }
-    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
-    remove_worktree(&git, &project, &path, force, keep)?;
+    // FIX-2 (T-033-e review): what to keep is decided first, so the one `?` that can return early
+    // runs before the watch ends; an early return after it would drop the handle below without
+    // telling the page.
+    let keep = keep_branch.unwrap_or(keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path));
+    // T-033-e: the Source Control watch on this folder ends first and its folder handles are
+    // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
+    let watch = crate::scm::watch::unwatch_root(Path::new(path));
+    let kept = match remove_worktree(git, project, path, force, keep) {
+        Ok(k) => k,
+        Err(e) => {
+            // FIX-1: the folder stays after all, so its panel is told to watch it again.
+            if let Some(w) = watch {
+                w.tell_page();
+            }
+            return Err(e);
+        }
+    };
     let store = store.lock().map_err(|e| e.to_string())?;
-    forget_workspace(&store, &path)
+    forget_workspace(&store, path)?;
+    Ok(kept)
+}
+
+/// The cleanup dialog's delete (T-113-b, T-162): `remove_one` by the workspace's own record, where
+/// `keep_anyway` keeps the branch as if the workspace had been opened on it (the dialog does this for a
+/// branch holding commits that are in no other branch). The kept branch comes back for the kept list.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn remove_now_keeping(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_anyway: bool) -> Result<Option<KeptBranch>, String> {
+    let kept = remove_one(git, store, terminals, project, path, force, stamp, keep_anyway.then_some(true))?;
+    Ok(kept.map(|k| KeptBranch { branch: k.branch, commit: k.commit }))
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
@@ -1649,7 +1912,7 @@ pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String], on_forgotten:
 }
 
 /// The `<git common dir>/worktrees/<id>` entry whose `gitdir` points into `path`, removed.
-fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
+pub(crate) fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
     let common = crate::git::run(&["rev-parse", "--git-common-dir"], Some(repo))?;
     let admin = repo.join(common.trim()).join("worktrees");
     for entry in std::fs::read_dir(&admin).map_err(|e| e.to_string())?.flatten() {
@@ -1668,17 +1931,23 @@ fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
 /// T-441-c: the worktrees among `all` that Kolux RS made itself, by the origin record it keeps for
 /// each one it creates (the same test as trust::made_by_kolux). Txais, 2026-10-13: "Only Kolux's
 /// own": a worktree made by Claude Code or any other tool is never forgotten, folder gone or not.
-fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Worktree>) -> Vec<Worktree> {
+pub(crate) fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Worktree>) -> Vec<Worktree> {
     all.into_iter().filter(|w| origins.contains_key(&name_key(&w.path))).collect()
 }
 
 /// The sweep over one project's worktrees: `forget_gone`, and what Kolux remembers about each one
 /// it forgets goes too, the same as when the user removes the workspace. The store is locked only
-/// for each forgotten path, never while Git works.
-fn sweep_gone(store: &Mutex<Store>, repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String> {
+/// for each forgotten path, never while Git works. When what Kolux remembers cannot be cleared (the
+/// store is locked up or a write failed) the line goes to the diagnostics log in `diag_dir`, so the
+/// leftover note or origin that a later worktree at the same path would inherit can be traced.
+fn sweep_gone(store: &Mutex<Store>, repo: &Path, all: &[Worktree], busy: &[String], diag_dir: Option<&Path>) -> Vec<String> {
     forget_gone(repo, all, busy, |path| {
-        if let Ok(store) = store.lock() {
-            let _ = forget_workspace(&store, path);
+        let cleared = match store.lock() {
+            Ok(store) => forget_workspace(&store, path),
+            Err(_) => Err("the store is locked up by a failed task".to_string()),
+        };
+        if let (Err(why), Some(dir)) = (cleared, diag_dir) {
+            crate::diag::write(dir, &format!("forgot the worktree {path} from Git but could not clear what Kolux remembers about it: {why}"));
         }
     })
 }
@@ -1693,18 +1962,52 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
             Err(_) => return,
         };
         let busy: Vec<String> = app.state::<crate::terminal::Terminals>().list().into_iter().filter_map(|(_, _, dir)| dir).collect();
-        let git = app.state::<Git>();
-        for p in projects {
-            let repo = Path::new(&p.path);
-            if let Ok(all) = git.worktrees(repo) {
-                for path in sweep_gone(&app.state::<Mutex<Store>>(), repo, &kolux_made(&origins, all), &busy) {
-                    if let Ok(dir) = app.path().app_data_dir() {
-                        crate::diag::write(&dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
-                    }
-                }
+        let dir = app.path().app_data_dir().ok();
+        // PROJ-074: trash folders a run left behind are cleared (this is off the startup path).
+        let folders = trash_folders(&app.state::<Mutex<Store>>(), &app.state::<Git>(), &projects, &origins);
+        for gone in folders.iter().flat_map(|f| crate::git::sweep_trash(f)) {
+            if let Some(dir) = dir.as_deref() {
+                crate::diag::write(dir, &format!("cleared the leftover trash folder {}", gone.display()));
+            }
+        }
+        for path in sweep_all_gone(&app.state::<Mutex<Store>>(), &app.state::<Git>(), &projects, &origins, &busy, dir.as_deref()) {
+            if let Some(dir) = dir.as_deref() {
+                crate::diag::write(dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
             }
         }
     });
+}
+
+/// PROJ-074: the folders a trash folder can sit in: each workspaces folder in use, and the parent
+/// of every workspace Kolux made. Only names the trash uses are ever touched inside them.
+pub(crate) fn trash_folders(store: &Mutex<Store>, git: &Git, projects: &[Project], origins: &serde_json::Map<String, serde_json::Value>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Ok(store) = store.lock() {
+        out.push(workspaces_dir(&store));
+        out.extend(used_dirs(&store).into_iter().map(PathBuf::from));
+    }
+    for p in projects {
+        out.extend(p.workspaces_dir.iter().map(PathBuf::from));
+        if let Ok(all) = git.worktrees(Path::new(&p.path)) {
+            out.extend(kolux_made(origins, all).iter().filter_map(|w| Path::new(&w.path).parent().map(Path::to_path_buf)));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The sweep `forget_gone_at_start` runs: for every project, the gone worktrees Kolux RS made and no
+/// session uses are forgotten. A project whose folder Git cannot read is skipped. Returns every path forgotten.
+fn sweep_all_gone(store: &Mutex<Store>, git: &Git, projects: &[Project], origins: &serde_json::Map<String, serde_json::Value>, busy: &[String], diag_dir: Option<&Path>) -> Vec<String> {
+    let mut forgotten = Vec::new();
+    for p in projects {
+        let repo = Path::new(&p.path);
+        if let Ok(all) = git.worktrees(repo) {
+            forgotten.extend(sweep_gone(store, repo, &kolux_made(origins, all), busy, diag_dir));
+        }
+    }
+    forgotten
 }
 
 // ---- PROJ-019: a project's icon, chosen by hand
@@ -1794,6 +2097,205 @@ pub fn project_icon_set(store: StoreState<'_>, project_id: String, icon: String)
     set_icon(&*store.lock().map_err(|e| e.to_string())?, &project_id, &icon)
 }
 
+// ---- PROJ-018: an icon found in the repository
+//
+// Places are tried in this order, the first hit wins: a small favicon inside the repository, icons
+// of desktop app bundles, a picture the package manifest names inside the repository, the icon
+// links the page source declares inside the repository, and last the avatar of the owner on the
+// hosting site. Only files inside the repository are read (never through a link or a `..`), and a
+// file over `AUTO_ICON_FILE_MAX` is passed over. FIX-4 (2026-10-19): a repository never makes the
+// app load a web address of its choosing. The manifest's web `icon`, its `homepage` favicon and
+// `https` icon links in the page source are not followed (T-302-c fetches them in Rust, behind
+// checks); the one address handed to the page is the owner's avatar on github.com, which the
+// content policy allows and nothing else. No hit gives the folder symbol.
+
+/// The most a file may take to be used as an icon: the biggest whole number of 3-byte groups whose
+/// data URL (base64 text plus the longest header, 40 characters) still fits `ICON_IMAGE_MAX`.
+/// `src/projects/projectIcon.ts` holds the same figure (49 122) and both are tested against it.
+pub const AUTO_ICON_FILE_MAX: u64 = ((ICON_IMAGE_MAX as u64 - 40) / 4) * 3;
+const FAVICON_DIRS: &[&str] = &["", "public", "static", "assets", "src", "app", "web", "www", "docs", "site"];
+const FAVICON_NAMES: &[&str] = &["favicon.ico", "favicon.png", "favicon.svg"];
+const BUNDLE_ICONS: &[&str] = &[
+    "src-tauri/icons/icon.png",
+    "src-tauri/icons/128x128.png",
+    "build/icon.png",
+    "build/icons/512x512.png",
+    "electron/icon.png",
+    "resources/icon.png",
+    "assets/icon.png",
+    "app-icon.png",
+    "icon.png",
+];
+const PAGE_FILES: &[&str] = &["index.html", "public/index.html", "src/index.html", "app/index.html", "static/index.html", "web/index.html"];
+const PAGE_READ_MAX: u64 = 256 * 1024;
+
+/// What a project shows when the repository holds an icon: a picture as a data URL (`image`), or the
+/// owner's avatar address on the hosting site (`avatar`, the only web address ever handed over).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AutoIcon {
+    pub kind: &'static str,
+    pub src: String,
+}
+
+/// The picture type of `bytes`, by what the file starts with (the name only decides for SVG).
+fn image_mime(bytes: &[u8], name: &str) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(&[0, 0, 1, 0]) {
+        Some("image/x-icon")
+    } else if name.to_ascii_lowercase().ends_with(".svg") && String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]).contains("<svg") {
+        Some("image/svg+xml")
+    } else {
+        None
+    }
+}
+
+/// The picture at `rel` inside `repo` as a data URL; nothing for a path that leaves the repository,
+/// goes through a link, is not a plain small picture file, or does not exist.
+fn repo_image(repo: &Path, rel: &str) -> Option<String> {
+    let rel = rel.split(['?', '#']).next().unwrap_or("").trim().trim_start_matches(['/', '\\']);
+    if rel.is_empty() || rel.contains(':') || rel.split(['/', '\\']).any(|p| p.is_empty() || p == ".." || p == ".") {
+        return None;
+    }
+    let path = rel.split(['/', '\\']).fold(repo.to_path_buf(), |p, part| p.join(part));
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() == 0 || meta.len() > AUTO_ICON_FILE_MAX {
+        return None;
+    }
+    // a folder on the way may be a link out of the repository
+    if !fs::canonicalize(&path).ok()?.starts_with(fs::canonicalize(repo).ok()?) {
+        return None;
+    }
+    let bytes = fs::read(&path).ok()?;
+    use base64::Engine as _;
+    let mime = image_mime(&bytes, rel)?;
+    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
+/// The text of the file at `rel` inside `repo` (at most `PAGE_READ_MAX` bytes), for a plain file only:
+/// nothing for a missing file, a link, or a file that a link on the way leads out of the repository.
+fn repo_text(repo: &Path, rel: &str) -> Option<String> {
+    let path = rel.split('/').fold(repo.to_path_buf(), |p, part| p.join(part));
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > PAGE_READ_MAX || !fs::canonicalize(&path).ok()?.starts_with(fs::canonicalize(repo).ok()?) {
+        return None;
+    }
+    fs::read_to_string(&path).ok()
+}
+
+/// The `href` of every icon link (`rel` holding "icon") in the page text.
+fn icon_links(page: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let lower = page.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find("<link") {
+        let start = from + at;
+        let end = lower[start..].find('>').map_or(lower.len(), |e| start + e);
+        let tag = &page[start..end];
+        let attr = |name: &str| {
+            let low = tag.to_ascii_lowercase();
+            let at = low.find(&format!("{name}="))?;
+            let rest = &tag[at + name.len() + 1..];
+            let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'');
+            match quote {
+                Some(q) => rest[1..].split(q).next().map(str::to_string),
+                None => rest.split(|c: char| c.is_whitespace() || c == '>').next().map(str::to_string),
+            }
+        };
+        if attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("icon")) {
+            found.extend(attr("href"));
+        }
+        from = end.max(start + 5);
+    }
+    found
+}
+
+/// (host, owner, repository) of a remote address on the forms Git accepts, host in lower case.
+fn remote_parts(url: &str) -> Option<(String, String, String)> {
+    let url = url.trim();
+    let path = if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).or_else(|| url.strip_prefix("ssh://")).or_else(|| url.strip_prefix("git://")) {
+        let (host, path) = rest.split_once('/')?;
+        (host.rsplit('@').next()?.split(':').next()?.to_string(), path.to_string())
+    } else {
+        let rest = url.split_once('@').map_or(url, |(_, r)| r);
+        let (host, path) = rest.split_once(':')?;
+        (host.to_string(), path.to_string())
+    };
+    let mut parts = path.1.trim_matches('/').split('/');
+    let (owner, repo) = (parts.next()?, parts.next()?);
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    let plain = |s: &str| !s.is_empty() && s.len() <= 100 && !s.chars().all(|c| c == '.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    (path.0.contains('.') && plain(owner) && plain(repo) && parts.next().is_none()).then(|| (path.0.to_ascii_lowercase(), owner.to_string(), repo.to_string()))
+}
+
+/// The avatar address of the repository's owner on the hosting site. A fork shows the upstream
+/// owner's avatar; a fork that was renamed (its name differs from upstream's) shows its own owner's.
+fn owner_avatar(origin: Option<&str>, upstream: Option<&str>) -> Option<String> {
+    let own = origin.and_then(remote_parts);
+    let up = upstream.and_then(remote_parts);
+    let chosen = match (&own, &up) {
+        (Some(o), Some(u)) if u.0 == o.0 && u.2.eq_ignore_ascii_case(&o.2) => u,
+        (Some(o), _) => o,
+        (None, Some(u)) => u,
+        (None, None) => return None,
+    };
+    (chosen.0 == "github.com").then(|| format!("https://github.com/{}.png", chosen.1))
+}
+
+/// The icon the repository at `repo` offers, trying the places in order; `None` means the folder symbol.
+pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
+    let image = |src: String| AutoIcon { kind: "image", src };
+    for dir in FAVICON_DIRS {
+        for name in FAVICON_NAMES {
+            let rel = if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") };
+            if let Some(src) = repo_image(repo, &rel) {
+                return Some(image(src));
+            }
+        }
+    }
+    if let Some(src) = BUNDLE_ICONS.iter().find_map(|rel| repo_image(repo, rel)) {
+        return Some(image(src));
+    }
+    // a web address in the manifest or the page source is never followed (FIX-4): `repo_image` refuses
+    // anything with a scheme, so only a path inside the repository can match
+    let manifest: Option<serde_json::Value> = repo_text(repo, "package.json").and_then(|t| serde_json::from_str(&t).ok());
+    if let Some(src) = manifest.as_ref().and_then(|m| m["icon"].as_str()).and_then(|rel| repo_image(repo, rel)) {
+        return Some(image(src));
+    }
+    for page in PAGE_FILES {
+        let Some(text) = repo_text(repo, page) else { continue };
+        let beside = page.rsplit_once('/').map_or("", |(d, _)| d);
+        for href in icon_links(&text) {
+            let from_root = href.starts_with('/');
+            let rel = if from_root || beside.is_empty() { href.clone() } else { format!("{beside}/{href}") };
+            if let Some(src) = repo_image(repo, &rel).or_else(|| from_root.then(|| repo_image(repo, &format!("public/{}", href.trim_start_matches('/')))).flatten()) {
+                return Some(image(src));
+            }
+        }
+    }
+    // Git looks in the parent folders for a repository; a folder inside another repository is not that
+    // repository, so its owner is not this project's owner (FIX-4). `--show-prefix` is empty at the top.
+    if !crate::git::run(&["rev-parse", "--show-prefix"], Some(repo)).is_ok_and(|p| p.is_empty()) {
+        return None;
+    }
+    let url = |name: &str| crate::git::run(&["remote", "get-url", name], Some(repo)).ok();
+    owner_avatar(url("origin").as_deref(), url("upstream").as_deref()).map(|src| AutoIcon { kind: "avatar", src })
+}
+
+/// The automatic icon of project `project_id` (PROJ-018). The store lock is released before any file or
+/// git work, and that work runs on the blocking pool so a panel asking for every row never stalls the async workers.
+#[tauri::command]
+pub async fn project_auto_icon(store: StoreState<'_>, project_id: String) -> Result<Option<AutoIcon>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    tauri::async_runtime::spawn_blocking(move || auto_icon(Path::new(&project.path))).await.map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1870,6 +2372,48 @@ mod tests {
         let kept: Vec<_> = fs::read_dir(&admin).unwrap().flatten().filter(|e| e.path().join("locked").exists()).collect();
         assert_eq!(kept.len(), 1, "the locked record under {} is still there", admin.display());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn set033_a_display_name_is_one_clean_line_or_nothing() {
+        assert_eq!(clean_display_name("  My   shop 	 app "), Some("My shop app".into()));
+        assert_eq!(clean_display_name("a[31mb
+c"), Some("a[31mb c".into()), "control characters drop, a line break is a space");
+        assert_eq!(clean_display_name("   
+	 "), None);
+        assert_eq!(clean_display_name(""), None);
+        let long = "x".repeat(200);
+        assert_eq!(clean_display_name(&long).unwrap().chars().count(), DISPLAY_NAME_MAX);
+        assert_eq!(clean_display_name("한글 이름"), Some("한글 이름".into()));
+    }
+
+    #[test]
+    fn set033_a_display_name_is_kept_beside_the_other_fields_and_survives_edits_and_a_re_add() {
+        let git = Git::detect().unwrap();
+        let profile = temp("setdn-profile");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("setdn-repo");
+        let p = add_project(&git, &store, &repo).unwrap();
+        assert_eq!(p.display_name, None);
+        let named = set_display_name(&store, &p.id, " Shop  front ").unwrap();
+        assert_eq!(named.display_name.as_deref(), Some("Shop front"));
+        assert_eq!((&named.name, &named.path), (&p.name, &p.path), "the folder name and path never change");
+        // the per-repository folder and base edits (project_set) keep it
+        let mut projects = load_projects(&store);
+        projects[0].base = Some("develop".into());
+        save_projects(&store, &projects).unwrap();
+        assert_eq!(load_projects(&store)[0].display_name.as_deref(), Some("Shop front"));
+        // adding the same repository again returns the saved record, name included
+        assert_eq!(add_project(&git, &store, &repo).unwrap().display_name.as_deref(), Some("Shop front"));
+        // an old record without the field still loads, and blank clears it
+        assert!(!serde_json::to_string(&p).unwrap().contains("displayName"));
+        let old: Project = serde_json::from_str(r#"{"id":"a","name":"a","path":"C:/a"}"#).unwrap();
+        assert_eq!(old.display_name, None);
+        assert_eq!(set_display_name(&store, &p.id, "  ").unwrap().display_name, None);
+        assert!(set_display_name(&store, "nope", "x").is_err());
+        drop(store);
+        let _ = fs::remove_dir_all(&profile);
+        let _ = fs::remove_dir_all(&repo);
     }
 
     #[test]
@@ -2187,6 +2731,145 @@ mod tests {
         }
     }
 
+    /// A project with two made workspaces ("one", "two") for the PROJ-068 / PROJ-072 tests.
+    fn project_with_workspaces(tag: &str) -> (Git, Store, Project, PathBuf, Vec<PathBuf>, Place) {
+        let git = Git::detect().unwrap();
+        let profile = temp(tag);
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo(&format!("{tag}-r"));
+        let root = temp(&format!("{tag}-root"));
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        for n in ["one", "two"] {
+            let made = create_workspace(&git, &place, &project, n, None).unwrap();
+            set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app" }))).unwrap();
+        }
+        (git, store, project, repo, vec![profile, root], place)
+    }
+
+    #[test]
+    fn proj072_a_folder_deleted_by_hand_is_cleaned_up_without_an_error() {
+        let (git, _store, project, repo, junk, place) = project_with_workspaces("gone072");
+        let dest = workspace_path(&place, &project, "one");
+        fs::remove_dir_all(&dest).unwrap();
+        assert!(git.worktrees(&repo).unwrap().iter().any(|w| name_key(&w.path) == name_key(&dest.to_string_lossy())), "Git still tracks it");
+        let check = remove_check(&git, &project, &dest.to_string_lossy()).unwrap();
+        assert!(check.missing && check.changes.is_empty(), "{check:?}");
+        assert_eq!(removal_refused(&check, false, &check.stamp), None);
+        remove_worktree(&git, &project, &dest.to_string_lossy(), false, false).unwrap();
+        let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
+        assert!(!left.iter().any(|p| p.ends_with("one")) && left.iter().any(|p| p.ends_with("two")), "{left:?}");
+        assert!(!git.branch_taken(&repo, "one"), "its branch went with it");
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj072_a_registration_git_still_reports_is_never_removed_underneath_it() {
+        let (git, _store, project, repo, junk, place) = project_with_workspaces("locked072");
+        let dest = workspace_path(&place, &project, "two");
+        git_in(&repo, &["worktree", "lock", "--reason", "on a stick", &dest.to_string_lossy()]);
+        fs::remove_dir_all(&dest).unwrap();
+        let err = remove_worktree(&git, &project, &dest.to_string_lossy(), true, false).unwrap_err();
+        assert!(err.contains("still lists"), "{err}");
+        assert!(git.worktrees(&repo).unwrap().iter().any(|w| name_key(&w.path) == name_key(&dest.to_string_lossy())), "the record is untouched");
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj072_a_too_long_path_failure_is_recognised_and_gits_other_failures_are_not() {
+        for e in ["error: unable to delete 'x': Filename too long", "fatal: cannot remove: Path too long", "File name too long"] {
+            assert!(crate::git::path_too_long(e), "{e}");
+        }
+        assert!(!crate::git::path_too_long("fatal: validation failed, cannot remove working tree: contains modified files"));
+        assert_eq!(crate::git::long_path(Path::new("relative/x")), PathBuf::from("relative/x"));
+        #[cfg(windows)]
+        assert!(crate::git::long_path(Path::new("C:/a/b")).to_string_lossy().starts_with(r"\\?\C:"));
+    }
+
+    #[test]
+    fn proj072_a_leftover_folder_after_git_let_go_is_cleaned_up() {
+        let (git, _store, project, repo, junk, place) = project_with_workspaces("left072");
+        let dest = workspace_path(&place, &project, "one");
+        // Locked files cannot be faked portably; a read-only-free stand-in: an ignored deep tree Git itself removes.
+        fs::create_dir_all(dest.join("a/b/c")).unwrap();
+        fs::write(dest.join("a/b/c/f.txt"), "x").unwrap();
+        fs::write(dest.join("stray.log"), "x").unwrap();
+        remove_worktree(&git, &project, &dest.to_string_lossy(), true, false).unwrap();
+        assert!(!dest.exists());
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj068_refreshing_twice_changes_no_row_and_names_and_parents_stay_with_their_workspace() {
+        let (git, store, project, repo, junk, place) = project_with_workspaces("rows068");
+        let (one, two) = (workspace_path(&place, &project, "one").to_string_lossy().into_owned(), workspace_path(&place, &project, "two").to_string_lossy().into_owned());
+        set_name(&store, &one, Some("Alpha")).unwrap();
+        set_parent(&store, &two, Some(&one)).unwrap();
+        let first = list_workspaces(&git, &store, &project).unwrap();
+        let second = list_workspaces(&git, &store, &project).unwrap();
+        assert_eq!(first, second, "nothing changed, so nothing moved");
+        let find = |all: &[Worktree], p: &str| all.iter().find(|w| name_key(&w.path) == name_key(p)).cloned().unwrap();
+        assert_eq!(find(&second, &one).name.as_deref(), Some("Alpha"));
+        assert_eq!(find(&second, &two).parent.as_deref().map(name_key), Some(name_key(&one)));
+        // A name change on one workspace leaves the other's record and the order alone.
+        set_name(&store, &one, Some("Beta")).unwrap();
+        let third = list_workspaces(&git, &store, &project).unwrap();
+        let order = |all: &[Worktree]| all.iter().map(|w| name_key(&w.path)).collect::<Vec<_>>();
+        assert_eq!(order(&second), order(&third));
+        assert_eq!(find(&third, &two).parent.as_deref().map(name_key), Some(name_key(&one)));
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj031_a_failed_create_says_what_kind_of_problem_it_was_and_keeps_gits_words() {
+        let said = |raw: &str| explain_create_error(raw.to_string());
+        for (raw, kind, word) in [
+            ("fatal: invalid reference: origin/gone", CreateKind::MissingBase, "missing"),
+            ("fatal: not a valid object name: 'x'", CreateKind::MissingBase, "missing"),
+            ("fatal: a branch named 'x' already exists", CreateKind::NameInUse, "already in use"),
+            ("fatal: 'x' is already checked out at 'C:/r'", CreateKind::NameInUse, "already in use"),
+            ("error: unable to create file: Permission denied", CreateKind::Permissions, "refused access"),
+            ("fatal: something odd", CreateKind::GitFailure, "Git could not"),
+        ] {
+            assert_eq!(create_kind(raw), kind, "{raw}");
+            let out = said(raw);
+            assert!(out.contains(word), "{out}");
+            assert!(out.ends_with(&format!("{GIT_SAID}{raw}")), "Git's full output rides along: {out}");
+        }
+        assert_eq!(said(OVERTAKEN), OVERTAKEN, "a cancel is not rewritten");
+        let stalled = "Git did not finish in 180 seconds, so Kolux stopped waiting.";
+        assert_eq!(said(stalled), stalled);
+    }
+
+    #[test]
+    fn proj031_opening_a_branch_that_is_already_checked_out_names_the_problem() {
+        let git = Git::detect().unwrap();
+        let profile = temp("explain");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("explain-r");
+        let root = temp("explain-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        git_in(&repo, &["branch", "kept"]);
+        open_branch_workspace_until(&git, &place, &project, "kept", None, &|| false).unwrap();
+        let err = open_branch_workspace_until(&git, &place, &project, "kept", Some("again"), &|| false).unwrap_err();
+        assert!(err.starts_with("The workspace could not be made: that name or branch is already in use."), "{err}");
+        assert!(err.contains(GIT_SAID), "{err}");
+        let err = create_workspace_until(&git, &place, &project, "x", Some("no-such-ref"), &|| false).unwrap_err();
+        assert!(err.starts_with("The workspace could not start: no-such-ref is not a branch"), "{err}");
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
     #[test]
     fn proj020_an_overtaken_create_is_cancelled_and_its_half_made_checkout_removed() {
         let git = Git::detect().unwrap();
@@ -2253,6 +2936,42 @@ mod tests {
         assert!(keeps_branch(&store, &made.worktree.path));
         remove_worktree(&git, &project, &made.worktree.path, false, keeps_branch(&store, &made.worktree.path)).unwrap();
         assert_eq!(rev(&repo, "feat/x"), tip, "the branch stays when the workspace goes");
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn a_branch_kept_at_removal_is_reported_and_deleted_later_only_while_it_has_not_moved() {
+        let git = Git::detect().unwrap();
+        let profile = temp("kept");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("kept-r");
+        let root = temp("kept-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let a = create_workspace(&git, &nested(&root), &project, "keep-me", None).unwrap();
+        let branch = a.worktree.branch.clone().unwrap();
+        let tip = rev(&repo, &branch);
+        // Keep chosen in the remove form: the folder goes, the branch stays, and we are told where it was.
+        let kept = remove_worktree(&git, &project, &a.worktree.path, false, true).unwrap().unwrap();
+        assert_eq!(kept, Kept { branch: branch.clone(), commit: tip.clone() });
+        assert!(git.delete_branch_if_at(Path::new(&project.path), &kept.branch, &kept.commit).unwrap(), "unmoved: deleted");
+        assert!(!branches(&repo).unwrap().contains(&branch));
+        // Without the choice the branch goes with the workspace and nothing is kept.
+        let b = create_workspace(&git, &nested(&root), &project, "drop-me", None).unwrap();
+        assert_eq!(remove_worktree(&git, &project, &b.worktree.path, false, false).unwrap(), None);
+        // A kept branch that moved on since is left alone.
+        let c = create_workspace(&git, &nested(&root), &project, "moved-on", None).unwrap();
+        let cb = c.worktree.branch.clone().unwrap();
+        let kept = remove_worktree(&git, &project, &c.worktree.path, false, true).unwrap().unwrap();
+        git_in(&repo, &["checkout", "-q", &cb]);
+        fs::write(repo.join("n.txt"), "n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-q", "-m", "more"]);
+        git_in(&repo, &["checkout", "-q", "main"]);
+        assert!(!git.delete_branch_if_at(Path::new(&project.path), &kept.branch, &kept.commit).unwrap(), "moved: left alone");
+        assert!(branches(&repo).unwrap().contains(&cb));
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
@@ -2577,7 +3296,7 @@ mod tests {
     fn proj024_only_suggested_names_are_retired_per_scope_ignoring_case_and_spaces() {
         let profile = temp("retire-profile");
         let store = Store::open(&profile).unwrap();
-        let (flat_a, flat_b) = (Project { id: "a".into(), name: "alpha".into(), path: "C:/alpha".into(), workspaces_dir: None, base: None }, Project { id: "b".into(), name: "beta".into(), path: "C:/beta".into(), workspaces_dir: None, base: None });
+        let (flat_a, flat_b) = (Project { id: "a".into(), name: "alpha".into(), path: "C:/alpha".into(), workspaces_dir: None, base: None, display_name: None }, Project { id: "b".into(), name: "beta".into(), path: "C:/beta".into(), workspaces_dir: None, base: None, display_name: None });
         let flat = Place { root: PathBuf::from("C:/ws"), flat: true, prefix: String::new(), prefix_warning: None, refresh: false };
         let nest = Place { root: PathBuf::from("C:/ws"), flat: false, prefix: String::new(), prefix_warning: None, refresh: false };
         let (fa, fb) = (retired_scope(&flat, &flat_a), retired_scope(&flat, &flat_b));
@@ -2726,7 +3445,7 @@ mod tests {
         }
         fs::remove_dir_all(&gone).unwrap();
         let all = git.worktrees(&repo).unwrap();
-        assert_eq!(sweep_gone(&store, &repo, &all, &[]), vec![gone_p.clone()]);
+        assert_eq!(sweep_gone(&store, &repo, &all, &[], None), vec![gone_p.clone()]);
         let s = store.lock().unwrap();
         // the swept workspace leaves no record, so a new one made at the same path starts clean
         assert!(!load_names(&s).contains_key(&name_key(&gone_p)), "typed name");
@@ -2743,6 +3462,115 @@ mod tests {
         assert!(load_origins(&s).contains_key(&name_key(&kept_p)));
         drop(s);
         drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Every key a workspace record can live under, for one path, read back as text.
+    fn record_of(store: &Store, path: &str) -> Vec<(String, Option<String>)> {
+        let note = format!("{NOTE_PREFIX}{}", name_key(path));
+        [NAMES_KEY, PARENTS_KEY, ORIGINS_KEY, RETIRED_KEY, LEGACY_KEY, note.as_str()]
+            .iter()
+            .map(|k| (k.to_string(), store.get(k).unwrap()))
+            .collect()
+    }
+
+    fn full_record(store: &Store, path: &str) {
+        set_name(store, path, Some("typed name")).unwrap();
+        set_parent(store, path, Some("C:/ws/parent")).unwrap();
+        save_workspace_note(store, path, "handoff text").unwrap();
+        set_origin(store, path, Some(&serde_json::json!({"issue": 7}))).unwrap();
+    }
+
+    #[test]
+    fn fix3_the_sweep_leaves_the_same_store_as_a_removal_by_the_user_on_a_twin_worktree() {
+        let base = temp("fix3-twin");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let creature = creature_name(&[], 5);
+        let folder = base.join("ws").join(&creature);
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", &creature]);
+        let path = folder.to_string_lossy().to_string();
+        // two stores hold the identical record for the same worktree; one is swept, one is removed by hand
+        let swept = Mutex::new(Store::open(&base.join("db-swept")).unwrap());
+        let removed = Store::open(&base.join("db-removed")).unwrap();
+        full_record(&swept.lock().unwrap(), &path);
+        full_record(&removed, &path);
+        // (the note carries its save time, so the twins differ there until the record is cleared)
+        let start = record_of(&swept.lock().unwrap(), &path);
+        assert_eq!(start[..3], record_of(&removed, &path)[..3], "names, parents and origins start equal");
+        assert!(start.iter().filter(|(k, _)| k != RETIRED_KEY && k != LEGACY_KEY).all(|(_, v)| v.is_some()), "{start:?}");
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        assert_eq!(sweep_gone(&swept, &repo, &all, &[], None), vec![path.clone()]);
+        forget_workspace(&removed, &path).unwrap();
+        let (a, b) = (record_of(&swept.lock().unwrap(), &path), record_of(&removed, &path));
+        assert_eq!(a, b, "the sweep and a removal leave the same keys behind");
+        assert!(a.iter().any(|(k, v)| k == RETIRED_KEY && v.is_some()), "and the comparison saw a retired name: {a:?}");
+        drop(swept);
+        drop(removed);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix3_a_busy_worktree_with_a_full_record_survives_the_sweep_though_its_folder_is_gone() {
+        let base = temp("fix3-busy");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let folder = base.join("ws").join("in-use");
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", "in-use"]);
+        let path = folder.to_string_lossy().to_string();
+        let store = Mutex::new(Store::open(&base.join("db")).unwrap());
+        full_record(&store.lock().unwrap(), &path);
+        let before = record_of(&store.lock().unwrap(), &path);
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        // a session still runs in a folder inside it, so the sweep must leave Git's record and ours alone
+        let busy = [folder.join("src").to_string_lossy().to_string()];
+        assert!(sweep_gone(&store, &repo, &all, &busy, None).is_empty());
+        assert_eq!(record_of(&store.lock().unwrap(), &path), before, "typed name, parent, note, origin and retired names untouched");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 2, "Git still lists it");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix3_a_record_that_cannot_be_cleared_is_written_to_the_diag_file() {
+        let base = temp("fix3-diag");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let folder = base.join("ws").join("gone-one");
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", "gone-one"]);
+        let path = folder.to_string_lossy().to_string();
+        let profile = base.join("profile");
+        let store = std::sync::Arc::new(Mutex::new(Store::open(&base.join("db")).unwrap()));
+        full_record(&store.lock().unwrap(), &path);
+        // a task that panicked holding the store leaves it poisoned: the record cannot be cleared
+        let held = store.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("a task that died holding the store");
+        })
+        .join();
+        assert!(store.lock().is_err(), "the store is poisoned");
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        // Git's record still goes; the failure is not dropped
+        assert_eq!(sweep_gone(&store, &repo, &all, &[], Some(&profile)), vec![path.clone()]);
+        let log = fs::read_to_string(profile.join("logs").join("kolux.log")).unwrap();
+        assert!(log.contains("could not clear what Kolux remembers") && log.contains("gone-one"), "{log}");
+        // and a sweep with nothing wrong writes nothing of the kind
+        let fine = Mutex::new(Store::open(&base.join("db2")).unwrap());
+        let folder2 = base.join("ws").join("gone-two");
+        git_in(&repo, &["worktree", "add", "-q", &folder2.to_string_lossy(), "-b", "gone-two"]);
+        fs::remove_dir_all(&folder2).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let profile2 = base.join("profile2");
+        assert_eq!(sweep_gone(&fine, &repo, &all, &[], Some(&profile2)).len(), 1);
+        assert!(!profile2.join("logs").join("kolux.log").exists());
+        drop(fine);
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -3160,5 +3988,313 @@ mod tests {
         assert_eq!(workspace_note(&store, "C:/ws/app/a"), Note::default());
         drop(store);
         fs::remove_dir_all(profile).unwrap();
+    }
+    // ---- T-302 / PROJ-018: an icon from the repository
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake-small-picture";
+
+    fn put(root: &Path, rel: &str, bytes: &[u8]) {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, bytes).unwrap();
+    }
+
+    fn src_of(i: Option<AutoIcon>, kind: &str) -> String {
+        let i = i.unwrap_or_else(|| panic!("an icon of kind {kind}"));
+        assert_eq!(i.kind, kind, "{i:?}");
+        i.src
+    }
+
+    #[test]
+    fn t302_a_small_favicon_in_the_repository_becomes_the_project_icon() {
+        let repo = temp("t302-fav");
+        put(&repo, "public/favicon.png", PNG);
+        // a later place never beats an earlier one
+        put(&repo, "icon.png", b"\x89PNG\r\n\x1a\nother");
+        let src = src_of(auto_icon(&repo), "image");
+        assert!(src.starts_with("data:image/png;base64,"), "{src}");
+        use base64::Engine as _;
+        let body = src.trim_start_matches("data:image/png;base64,");
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(body).unwrap(), PNG);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn t302_places_are_tried_in_the_order_the_card_gives() {
+        let repo = temp("t302-order");
+        // 4th: a link in the page source; 3rd: a picture the manifest names; 2nd: an app bundle
+        put(&repo, "index.html", b"<html><head><link rel=\"icon\" href=\"/img/page.png\"></head></html>");
+        put(&repo, "img/page.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"), "the page link is the last place before the avatar");
+        put(&repo, "package.json", br#"{"homepage":"https://example.org/site/","icon":"img/manifest.png"}"#);
+        put(&repo, "img/manifest.png", b"\x89PNG\r\n\x1a\nmanifest");
+        let manifest = src_of(auto_icon(&repo), "image");
+        assert!(manifest.starts_with("data:image/png"), "a picture the manifest names beats the page link");
+        use base64::Engine as _;
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(manifest.trim_start_matches("data:image/png;base64,")).unwrap(), b"\x89PNG\r\n\x1a\nmanifest");
+        put(&repo, "src-tauri/icons/icon.png", PNG);
+        let bundle = src_of(auto_icon(&repo), "image");
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(bundle.trim_start_matches("data:image/png;base64,")).unwrap(), PNG, "an app bundle icon beats the manifest's picture");
+        put(&repo, "favicon.ico", &[0, 0, 1, 0, 1, 0]);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/x-icon"), "a favicon in the repository beats a bundle");
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn t302_icon_links_in_the_page_source_are_followed_inside_the_repository_only() {
+        let repo = temp("t302-links");
+        put(&repo, "public/index.html", b"<link rel='shortcut icon' href='logo.png'><link rel=\"stylesheet\" href=\"a.css\">");
+        put(&repo, "public/logo.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        // a link that climbs out of the repository is not followed
+        let repo2 = temp("t302-links2");
+        // the picture sits where the link points: beside the repository, not in it
+        let outside = repo2.parent().unwrap().join(format!("t302-secret-{}.png", std::process::id()));
+        fs::write(&outside, PNG).unwrap();
+        let climb = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+        put(&repo2, "index.html", format!("<link rel=\"icon\" href=\"{climb}\"><link rel=\"icon\" href=\"C:/x/secret.png\">").as_bytes());
+        assert_eq!(auto_icon(&repo2), None);
+        assert_eq!(repo_image(&repo2, &climb), None);
+        assert_eq!(repo_image(&repo2, &climb.replace('/', "\\")), None);
+        // a web address that is not plain https is not used
+        put(&repo2, "index.html", b"<link rel=\"icon\" href=\"http://example.org/a.png\"><link rel=\"icon\" href=\"javascript:alert(1)\">");
+        assert_eq!(auto_icon(&repo2), None);
+        for d in [repo, repo2] {
+            let _ = fs::remove_dir_all(d);
+        }
+        let _ = fs::remove_file(outside);
+    }
+
+    #[test]
+    fn t302_a_file_that_is_too_large_or_not_a_picture_is_passed_over() {
+        let repo = temp("t302-big");
+        let mut big = PNG.to_vec();
+        big.resize(AUTO_ICON_FILE_MAX as usize + 1, 0);
+        put(&repo, "favicon.png", &big);
+        put(&repo, "public/favicon.ico", b"this is not a picture at all");
+        assert_eq!(auto_icon(&repo), None, "both are passed over");
+        // the next place is tried instead
+        put(&repo, "icon.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        // exactly at the limit still counts
+        let mut edge = PNG.to_vec();
+        edge.resize(AUTO_ICON_FILE_MAX as usize, 0);
+        let repo2 = temp("t302-edge");
+        put(&repo2, "favicon.png", &edge);
+        assert!(src_of(auto_icon(&repo2), "image").starts_with("data:image/png"));
+        // an SVG is told by its text
+        let repo3 = temp("t302-svg");
+        put(&repo3, "favicon.svg", b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        assert!(src_of(auto_icon(&repo3), "image").starts_with("data:image/svg+xml"));
+        for d in [repo, repo2, repo3] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn t302_no_icon_in_the_repository_shows_the_owners_avatar_or_the_folder_symbol() {
+        let repo = temp_repo("t302-avatar");
+        assert_eq!(auto_icon(&repo), None, "no remote: the folder symbol");
+        git_in(&repo, &["remote", "add", "origin", "https://github.com/octo/widget.git"]);
+        assert_eq!(src_of(auto_icon(&repo), "avatar"), "https://github.com/octo.png");
+        // a fork: the upstream owner's avatar wins
+        git_in(&repo, &["remote", "add", "upstream", "git@github.com:original/widget.git"]);
+        assert_eq!(src_of(auto_icon(&repo), "avatar"), "https://github.com/original.png");
+        // a fork that was renamed uses its own owner's avatar
+        git_in(&repo, &["remote", "set-url", "origin", "https://github.com/octo/widget-fork.git"]);
+        assert_eq!(src_of(auto_icon(&repo), "avatar"), "https://github.com/octo.png");
+        // a host without a known avatar address gives the folder symbol
+        git_in(&repo, &["remote", "remove", "upstream"]);
+        git_in(&repo, &["remote", "set-url", "origin", "https://git.example.org/octo/widget.git"]);
+        assert_eq!(auto_icon(&repo), None);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn t302_remote_addresses_are_read_on_every_form_git_accepts_and_odd_ones_refused() {
+        let want = Some(("github.com".to_string(), "o".to_string(), "r".to_string()));
+        for url in ["https://github.com/o/r.git", "https://user@github.com/o/r", "git@github.com:o/r.git", "ssh://git@github.com/o/r.git", "https://GitHub.com/o/r/"] {
+            assert_eq!(remote_parts(url), want, "{url}");
+        }
+        for url in ["", "https://github.com/o", "https://github.com/o/r/extra", "https://github.com/o%20x/r", "https://github.com/../r", "C:/some/folder"] {
+            assert_eq!(remote_parts(url), None, "{url}");
+        }
+        assert_eq!(owner_avatar(Some("https://github.com/a b/r"), None), None);
+    }
+
+    // ---- FIX-4 (review of a771196e): what a repository may make the page load
+
+    #[test]
+    fn fix4_no_web_address_chosen_by_a_repository_file_is_ever_handed_to_the_page() {
+        let repo = temp("fix4-nourl");
+        put(&repo, "package.json", br#"{"homepage":"https://tracker.example.org/","icon":"https://tracker.example.org/logo.png"}"#);
+        put(&repo, "index.html", b"<link rel=\"icon\" href=\"https://192.168.1.1/x.ico\"><link rel=\"icon\" href=\"https://localhost:8080/y.ico\">");
+        assert_eq!(auto_icon(&repo), None, "package.json and the page source name web addresses; none may be handed over");
+        // a local picture named beside them still works
+        put(&repo, "icon.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn fix4_only_the_hosting_sites_own_avatar_hosts_are_ever_returned() {
+        let repo = temp_repo("fix4-hosts");
+        git_in(&repo, &["remote", "add", "origin", "https://github.com/octo/widget.git"]);
+        let src = src_of(auto_icon(&repo), "avatar");
+        assert!(crate::github::avatar_ok(&src, "github.com"), "{src}");
+        for host in ["evil.example", "github.com.evil.example", "127.0.0.1", "localhost"] {
+            git_in(&repo, &["remote", "set-url", "origin", &format!("https://{host}/octo/widget.git")]);
+            assert_eq!(auto_icon(&repo), None, "{host}");
+        }
+        assert_eq!(owner_avatar(Some("https://github.com/o/r"), None).as_deref(), Some("https://github.com/o.png"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn fix4_the_largest_accepted_file_still_fits_the_frontend_limit() {
+        // the data URL a file makes is its base64 text plus the longest header (svg+xml)
+        let url_len = |bytes: u64| (bytes.div_ceil(3) * 4) as usize + "data:image/svg+xml;base64,".len();
+        assert!(url_len(AUTO_ICON_FILE_MAX) <= ICON_IMAGE_MAX, "a file of exactly AUTO_ICON_FILE_MAX bytes makes {} characters", url_len(AUTO_ICON_FILE_MAX));
+        assert!(url_len(AUTO_ICON_FILE_MAX + 3) + 14 > ICON_IMAGE_MAX, "the limit keeps the frontend's 40-character header budget and no less");
+        assert_eq!(AUTO_ICON_FILE_MAX, 49_122, "src/projects/projectIcon.ts AUTO_ICON_FILE_MAX is checked against this same figure");
+        let mut edge = b"<svg ".to_vec();
+        edge.resize(AUTO_ICON_FILE_MAX as usize, b' ');
+        let repo = temp("fix4-edge");
+        put(&repo, "favicon.svg", &edge);
+        let src = src_of(auto_icon(&repo), "image");
+        assert!(src.len() <= ICON_IMAGE_MAX, "{}", src.len());
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn fix4_the_launch_sweep_forgets_only_gone_worktrees_kolux_made_that_no_session_uses_in_every_project() {
+        // forget_gone_at_start gathers the projects, origins and busy folders, then runs this
+        let base = temp("fix4-launch");
+        let (a, b) = (base.join("a"), base.join("b"));
+        init_repo(&a);
+        init_repo(&b);
+        let git = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&base.join("db")).unwrap());
+        let add = |repo: &Path, name: &str| {
+            let folder = base.join("ws").join(name);
+            git_in(repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", name]);
+            folder
+        };
+        let (a_made, a_mine, a_busy, b_made) = (add(&a, "a-made"), add(&a, "a-by-hand"), add(&a, "a-busy"), add(&b, "b-made"));
+        let key = |p: &Path| p.to_string_lossy().to_string();
+        {
+            let s = store.lock().unwrap();
+            for p in [&a_made, &a_busy, &b_made] {
+                set_origin(&s, &key(p), Some(&serde_json::json!({"issue": 1}))).unwrap();
+            }
+        }
+        for p in [&a_made, &a_mine, &a_busy, &b_made] {
+            fs::remove_dir_all(p).unwrap();
+        }
+        let project = |id: &str, path: &Path| Project { id: id.into(), name: id.into(), path: key(path), workspaces_dir: None, base: None, display_name: None };
+        let projects = [project("gone-folder", &base.join("nowhere")), project("a", &a), project("b", &b)];
+        let origins = load_origins(&store.lock().unwrap());
+        let mut forgotten = sweep_all_gone(&store, &git, &projects, &origins, &[key(&a_busy)], None);
+        forgotten.sort();
+        let mut want = vec![key(&a_made), key(&b_made)];
+        want.sort();
+        assert_eq!(forgotten, want, "both projects are swept; a folder Git cannot read is skipped; one made by hand or in use stays");
+        let listed = |repo: &Path| git.worktrees(repo).unwrap().into_iter().map(|w| w.path).collect::<Vec<_>>();
+        assert_eq!(listed(&a).len(), 3, "main, the one made by hand and the busy one: {:?}", listed(&a));
+        assert_eq!(listed(&b).len(), 1);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A folder link from `link` to `target` (a junction on Windows, which needs no privilege).
+    fn link_dir(link: &Path, target: &Path) {
+        #[cfg(windows)]
+        let ok = Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap().status.success();
+        #[cfg(not(windows))]
+        let ok = std::os::unix::fs::symlink(target, link).is_ok();
+        assert!(ok, "could not link {} to {}", link.display(), target.display());
+    }
+
+    #[test]
+    fn fix4_a_page_reached_through_a_link_out_of_the_repository_is_not_read() {
+        let base = temp("fix4-link");
+        let repo = base.join("repo");
+        let outside = base.join("outside");
+        put(&repo, "logo.png", PNG);
+        put(&outside, "index.html", b"<link rel=\"icon\" href=\"/logo.png\">");
+        put(&outside, "package.json", br#"{"icon":"logo.png"}"#);
+        link_dir(&repo.join("public"), &outside);
+        assert_eq!(repo_text(&repo, "public/index.html"), None, "read through a link that leaves the repository");
+        assert_eq!(auto_icon(&repo), None, "the page outside the repository named logo.png; it must not be read at all");
+        // the same page inside the repository is read
+        put(&repo, "src/index.html", b"<link rel=\"icon\" href=\"/logo.png\">");
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        // a package.json that is itself outside through a link is not read either
+        let repo2 = base.join("repo2");
+        put(&repo2, "logo.png", PNG);
+        link_dir(&repo2.join("sub"), &outside);
+        assert_eq!(repo_text(&repo2, "sub/package.json"), None);
+        assert!(repo_text(&outside, "package.json").is_some(), "the same file read in place is fine");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix4_the_avatar_of_a_parent_repository_is_not_this_projects_avatar() {
+        let parent = temp_repo("fix4-parent");
+        git_in(&parent, &["remote", "add", "origin", "https://github.com/octo/dotfiles.git"]);
+        let inner = parent.join("notes").join("plain-folder");
+        fs::create_dir_all(&inner).unwrap();
+        assert_eq!(auto_icon(&inner), None, "a plain folder inside another repository has no owner of its own");
+        // the repository's own top folder still shows the owner
+        assert_eq!(src_of(auto_icon(&parent), "avatar"), "https://github.com/octo.png");
+        // a repository nested inside it with its own remote shows its own owner
+        let nested = parent.join("vendor").join("lib");
+        init_repo(&nested);
+        git_in(&nested, &["remote", "add", "origin", "https://github.com/other/lib.git"]);
+        assert_eq!(src_of(auto_icon(&nested), "avatar"), "https://github.com/other.png");
+        // a nested repository without a remote does not borrow the parent's
+        let bare = parent.join("vendor").join("bare");
+        init_repo(&bare);
+        assert_eq!(auto_icon(&bare), None);
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn proj060_a_pasted_github_address_becomes_the_linked_item_and_a_bad_one_changes_nothing() {
+        assert_eq!(parse_item("  ").unwrap(), None);
+        assert_eq!(parse_item("#12").unwrap(), Some(ItemLink::Issue(12, None)));
+        assert_eq!(parse_item("https://www.GitHub.com/acme/app/issues/34?x=1#top").unwrap(), Some(ItemLink::Issue(34, Some("https://github.com/acme/app/issues/34".into()))));
+        assert_eq!(parse_item("https://git.corp.example/acme/app/pull/9/files").unwrap(), Some(ItemLink::Pr("https://git.corp.example/acme/app/pull/9".into())));
+        assert!(parse_item("https://github.com/acme/app").is_err());
+        assert!(parse_item("https://github.com/acme/app/pull/0").is_err());
+        assert!(parse_item("not a link").is_err());
+        assert!(parse_item("0").is_err());
+        let profile = temp("proj060a");
+        let store = Store::open(&profile).unwrap();
+        let w = "C:\\ws\\one";
+        let d = save_details(&store, w, "Login page", "https://github.com/acme/app/pull/12", "## Plan\nsee [spec](https://example.com)").unwrap();
+        assert_eq!(d, Details { name: Some("Login page".into()), item: Some("https://github.com/acme/app/pull/12".into()), comment: "## Plan\nsee [spec](https://example.com)".into() });
+        assert_eq!(item_number(&origin(&store, w).unwrap()), Some(12), "the sidebar's number reads the linked pull request");
+        // a refused link writes nothing: the name and comment stay as saved
+        assert!(save_details(&store, w, "Changed", "nonsense", "other").is_err());
+        assert_eq!(details_of(&store, w), d);
+        drop(store);
+    }
+
+    #[test]
+    fn proj060_blank_fields_clear_and_an_issue_replaces_a_pull_request() {
+        let profile = temp("proj060b");
+        let store = Store::open(&profile).unwrap();
+        let w = "C:\\ws\\two";
+        save_details(&store, w, "Named", "https://github.com/acme/app/pull/12", "note").unwrap();
+        let d = save_details(&store, w, "  ", "https://github.com/acme/app/issues/5", "").unwrap();
+        assert_eq!(d, Details { name: None, item: Some("https://github.com/acme/app/issues/5".into()), comment: String::new() });
+        assert_eq!(item_number(&origin(&store, w).unwrap()), Some(5));
+        let d = save_details(&store, w, "", "", "").unwrap();
+        assert_eq!(d, Details::default());
+        assert_eq!(item_number(&origin(&store, w).unwrap()), None);
+        let long = "x".repeat(COMMENT_MAX + 1);
+        assert!(save_details(&store, w, "n", "", &long).is_err());
+        assert_eq!(details_of(&store, w).name, None, "an over-long comment writes nothing");
+        drop(store);
     }
 }

@@ -2,11 +2,12 @@
 // Rust side once at start (reload is explicit, COMPAT.md 4.1: no file watcher), resolves it with
 // the built-in defaults and hands the map to every component that shows or presses a shortcut.
 // Without a provider (tests, server rendering) the context holds this platform's defaults.
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { disabledAgents } from "../launch/agents";
 import { defaultsOnly, detectPlatform, labelOf, resolve, type Keymap } from "./keymap";
+import { SEEDED_FIELD, seedFirstLoad } from "./tabKeysSeed";
 
 export type KeybindingsFile = { path: string; value: unknown; created: boolean; error: string | null };
 
@@ -51,6 +52,19 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
       setFailure(String(e));
     }
   }, []);
+  // SET-015: the first read of an install that already had a file keeps its old tab-stepping pairing, once.
+  const seeding = useRef(false);
+  useEffect(() => {
+    if (!file || seeding.current) return;
+    seeding.current = true;
+    void seedFirstLoad(file, {
+      settings: () => invoke<Record<string, unknown>>("get_settings"),
+      mark: () => invoke("settings_patch", { set: { [SEEDED_FIELD]: true }, remove: [] }),
+      write: (id, chords) => save(id, chords),
+    }).catch(() => {
+      seeding.current = false; // tried again at the next read
+    });
+  }, [file, save]);
   // SET-010: the new-tab commands of agents switched off on the Agents page never clash.
   const [ignore, setIgnore] = useState<string[]>([]);
   useEffect(() => {

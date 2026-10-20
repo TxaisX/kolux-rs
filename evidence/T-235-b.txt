@@ -1,0 +1,41 @@
+
+T-235-b piece 2 (2026-10-19, lane/editor from 27a86891): diagrams and maths in the preview. T-235-b stays open:
+needs the mermaid and katex dependency (coordinator decision).
+
+BUILT
+- src/editor/diagrams.ts (new), no new npm dependency:
+  - Locked diagram host: drawDiagrams() swaps each mermaid code block in the preview for an iframe with an EMPTY
+    sandbox attribute (no scripts, no same-origin) whose page carries a policy of default-src 'none', inline styles and
+    data pictures only; the SVG is first cleaned (DOMPurify SVG profile, scripts, foreignObject, links, handlers
+    removed). The frame keeps the picture's proportions from its viewBox. A diagram that fails keeps its code block and
+    gets a one-line "Diagram could not be drawn" note.
+  - mermaidConfig(dark): strict security level, no HTML labels, theme "dark" with light-on-dark variables, "neutral"
+    for a light page.
+  - Maths: extractMath swaps $x$ (not money like "$5 and $10", not code spans or fences, not escaped dollars) and
+    $$ blocks (one line or many) for plain placeholders before the markdown parser sees them; restoreMath puts the
+    renderer's markup back, or the author's own text (escaped) when there is no renderer or the TeX is bad.
+  - Pluggable hook: setRenderers / getRenderers / watchRenderers, and loadRenderers() which imports
+    src/editor/diagramLibs.ts only if that file exists (import.meta.glob), so the app builds the same without it.
+- src/editor/PreviewPane.tsx: renders through renderNote (maths out, markdown, maths in), redraws when the renderers
+  arrive, and draws diagrams after each render. editor-extras.css: frame, error note, maths styles.
+- Without the libraries nothing changes for the reader: fences and dollar text show as written.
+
+TESTS: src/editor/diagrams.test.ts, 9 tests (locked page has no script and a no-network policy; frame sizing; strict
+  dark config; maths extraction rules incl. money, code, fences, unclosed block; TeX with underscores survives the
+  parser; fallback text is escaped; hook notifies and loadRenderers is quiet when the file is absent).
+READINGS: vitest src/editor 45 files, 287 tests passed (v3-t235-b.log); vitest src/chat + src/terminal 64 files, 596
+  tests passed (v3-t235-c.log, they import renderMarkdown from PreviewPane); tsc --noEmit 0 (v3-t235-tsc.log).
+  No Rust. cleanSvg and drawDiagrams touch the real DOM, so they are covered by the live proof only.
+
+FOR THE COORDINATOR (shared file, not applied here)
+- evidence/editor-T-235-b-package.json.patch: adds katex 0.16.11 and mermaid 11.4.1 (exact pins; both MIT) and
+  @types/katex 0.16.7 (dev). Then `pnpm install` (lockfile), `node scripts/license-check.mjs` (mermaid pulls many
+  transitive packages: check that none falls outside the allowed list), and save
+  evidence/editor-T-235-b-diagramLibs.ts.txt as src/editor/diagramLibs.ts. Run tsc on the patched tree.
+
+LIVE PROOF PENDING (batched), after the dependency is in
+1. Open a note holding a ```mermaid flowchart fence in preview: it shows as a drawn diagram on a dark background;
+   right-click shows an iframe, and a diagram with a click directive or a script label runs nothing.
+2. A bad diagram shows its code plus "Diagram could not be drawn". "$E=mc^2$" and a $$ block render as maths;
+   "costs $5 and $10" stays text.
+STILL OPEN IN T-235-b: diagrams and maths in the rich view, image viewer, PDF viewer, CI check tab (unchanged).

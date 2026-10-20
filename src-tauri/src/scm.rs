@@ -9,6 +9,9 @@ use crate::git::{command, native, run, Git};
 
 #[path = "scm_watch.rs"]
 pub mod watch;
+// GIT-018 / GIT-020 / GIT-022 (T-228-d): the writer agents, branch naming and review text.
+#[path = "scm_writers.rs"]
+pub mod writers;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
@@ -244,10 +247,16 @@ pub struct Summary {
     pub files: u32,
     /// GIT-011: those files, the first `COMMITTED_CAP` of them.
     pub committed: Vec<Change>,
+    /// GIT-011: the branch touched more files than `LINES_FILE_CAP`, so its lines were not counted
+    /// (the totals read zero and the window says so).
+    pub lines_skipped: bool,
 }
 
 /// GIT-011: the most committed files sent to the window; the count stays whole.
 const COMMITTED_CAP: usize = 1000;
+
+/// GIT-011: a branch touching more files than this gets no line totals; counting them would stall the panel.
+pub const LINES_FILE_CAP: u32 = 20_000;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Kind {
@@ -323,6 +332,11 @@ fn clash_of(code: Option<i32>, out: &str, err: &str) -> Clash {
 /// `upstream` is on and there is one, else the default branch. Lines count the commits since the
 /// branch parted from that ref, so the ref's own new commits show only as "behind".
 pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<Summary, String> {
+    summary_capped(worktree, pinned, upstream, LINES_FILE_CAP)
+}
+
+/// `summary` with the file count past which line totals are given up on.
+pub fn summary_capped(worktree: &Path, pinned: Option<&str>, upstream: bool, lines_cap: u32) -> Result<Summary, String> {
     let st = status(worktree)?;
     let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && run(&["rev-parse", "--verify", "-q", &format!("{p}^{{commit}}")], Some(worktree)).is_ok());
     let against = pinned.map(String::from).or(if upstream { st.upstream.clone() } else { None }).or(st.base.clone()).ok_or("no base branch to compare with")?;
@@ -336,6 +350,10 @@ pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<
     s.committed = name_status(&run(&["diff", "--name-status", "-M", "-z", &range], Some(worktree))?);
     s.files = s.committed.len() as u32;
     s.committed.truncate(COMMITTED_CAP);
+    if s.files > lines_cap {
+        s.lines_skipped = true;
+        return Ok(s);
+    }
     for line in run(&["diff", "--numstat", "--no-renames", "-z", &range], Some(worktree))?.split('\0').filter(|l| !l.is_empty()) {
         let mut f = line.splitn(3, '\t');
         let (Some(a), Some(r), Some(path)) = (f.next(), f.next(), f.next()) else { continue };
@@ -487,7 +505,7 @@ pub struct Pr {
 }
 
 /// What every lookup asks gh for.
-const PR_FIELDS: &str = "number,url,state,title,headRefName,isDraft";
+pub(crate) const PR_FIELDS: &str = "number,url,state,title,headRefName,isDraft";
 
 /// The GitHub CLI, which carries the user's sign-in and works with GitHub Enterprise Server too.
 /// GIT-060: a GitHub (or GitHub Enterprise) repository named by a remote. `api` is the REST
@@ -918,7 +936,9 @@ fn check_outcome(v: &serde_json::Value) -> &'static str {
         return "running";
     }
     match word("conclusion").as_str() {
-        "SUCCESS" | "NEUTRAL" => "passed",
+        "SUCCESS" => "passed",
+        // GIT-029: a neutral check is not counted as passed.
+        "NEUTRAL" => "neutral",
         "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
         "SKIPPED" | "STALE" => "skipped",
         "CANCELLED" => "cancelled",
@@ -1174,24 +1194,65 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&s
     Ok(message)
 }
 
+/// GIT-017 (T-227-d): files with an unresolved conflict, by path. Their staged text is clash markers, so it never goes into a message prompt.
+pub fn conflicted_files(dir: &Path) -> Vec<String> {
+    run(&["diff", "--name-only", "--diff-filter=U", "-z"], Some(dir)).map(|t| t.split(' ').filter(|n| !n.is_empty()).map(String::from).collect()).unwrap_or_default()
+}
+
+/// GIT-017 (T-227-d): the note that opens the diff when conflicted files were left out of it.
+pub fn conflict_note(files: &[String]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<&str> = files.iter().take(20).map(String::as_str).collect();
+    let more = if files.len() > shown.len() { format!(" and {} more", files.len() - shown.len()) } else { String::new() };
+    format!("Note: {} with unresolved conflicts left out of this diff, so do not describe them: {}{more}
+
+", if files.len() == 1 { "1 file".to_string() } else { format!("{} files", files.len()) }, shown.join(", "))
+}
+
+/// GIT-017 (T-227-d): the staged diff for a message, conflicted files excluded, with the note about them (empty when none).
+pub fn message_diff(dir: &Path) -> Result<(String, String), String> {
+    let left_out = conflicted_files(dir);
+    let mut args: Vec<String> = ["diff", "--cached", "--no-color", "--no-ext-diff"].iter().map(|a| a.to_string()).collect();
+    if !left_out.is_empty() {
+        args.push("--".into());
+        args.push(".".into());
+        args.extend(left_out.iter().map(|f| format!(":(exclude,literal){f}")));
+    }
+    let diff = run(&args.iter().map(String::as_str).collect::<Vec<_>>(), Some(dir))?;
+    if diff.trim().is_empty() {
+        return Err(if left_out.is_empty() { "Nothing is staged to describe".into() } else { "Only files with unresolved conflicts are staged: resolve them first".into() });
+    }
+    Ok((conflict_note(&left_out), diff))
+}
+
+/// GIT-017 (T-227-d): the whole prompt for `diff` (after `note`) kept within `room` bytes, for a writer that takes it on the command line; `None` room keeps the usual budget.
+pub fn fit_prompt(note: &str, diff: &str, instructions: &str, room: Option<usize>) -> String {
+    let build = |budget: usize| message_prompt(&format!("{note}{}", trim_diff(diff, budget)), instructions);
+    let Some(room) = room else { return build(MESSAGE_BUDGET) };
+    let mut budget = MESSAGE_BUDGET.min(room.saturating_sub(message_prompt(note, instructions).len()));
+    let mut text = build(budget);
+    while text.len() > room && budget > 200 {
+        budget = budget * 4 / 5;
+        text = build(budget);
+    }
+    text
+}
+
 /// GIT-017 / GIT-018: a commit message for what is staged in `worktree`, written by Claude Code, or
 /// by the user's own `command` when one is set, following their `instructions`.
-// ponytail: Claude Code with its default writing model; choosing another agent, a model or an effort
-// is T-228-d's.
 #[tauri::command]
-pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>) -> Result<String, String> {
+pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
-        let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
-        if diff.is_empty() {
-            return Err("Nothing is staged to describe".into());
-        }
+        let (note, diff) = message_diff(dir)?;
         // Development builds only: KOLUX_DEV_WRITER names a stand-in agent for live proofs (as KOLUX_DEV_GH).
         #[cfg(debug_assertions)]
         let stand_in = std::env::var_os("KOLUX_DEV_WRITER").map(std::path::PathBuf::from);
         #[cfg(not(debug_assertions))]
         let stand_in: Option<std::path::PathBuf> = None;
-        let prompt = message_prompt(&trim_diff(&diff, MESSAGE_BUDGET), instructions.as_deref().unwrap_or(""));
+        let prompt = fit_prompt(&note, &diff, instructions.as_deref().unwrap_or(""), None);
         let limit = std::time::Duration::from_secs(180);
         if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
             let words = split_command(&line);
@@ -1199,8 +1260,23 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
             let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
             return write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit);
         }
-        let program = stand_in.or_else(|| crate::agents::find_program("claude")).ok_or("Claude Code was not found on this computer")?;
-        write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)
+        let id = agent.as_deref().filter(|a| !a.is_empty()).unwrap_or("claude");
+        if id == "claude" {
+            if let Some(program) = stand_in {
+                let inv = writers::invocation(writers::spec("claude").ok_or("no writer")?, model.as_deref(), effort.as_deref(), &prompt);
+                return write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit);
+            }
+        }
+        let spec = writers::spec(id).ok_or_else(|| format!("unknown writer {id}"))?;
+        let program = writers::program_of(spec).ok_or_else(|| format!("{} was not found on this computer", spec.name))?;
+        // An agent that takes the prompt as an argument gets a diff cut to fit the command line.
+        let prompt = if spec.prompt_in_args {
+            fit_prompt(&note, &diff, instructions.as_deref().unwrap_or(""), Some(writers::arg_limit(&program)))
+        } else {
+            prompt
+        };
+        let inv = writers::invocation(spec, model.as_deref(), effort.as_deref(), &prompt);
+        write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1781,7 +1857,7 @@ pub struct MergeInfo {
 const MERGE_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed pullRequest(number:$number){state isDraft mergeable mergeStateStatus reviewDecision isInMergeQueue isMergeQueueEnabled autoMergeRequest{mergeMethod} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}";
 
 /// `host`, `owner`, `repo` and the number of a pull request link.
-fn pr_parts(url: &str) -> Option<(String, String, String, u64)> {
+pub(crate) fn pr_parts(url: &str) -> Option<(String, String, String, u64)> {
     let clean = pr_url_in(url.trim())?;
     let parts: Vec<&str> = clean.strip_prefix("https://")?.split('/').collect();
     Some((parts[0].into(), parts[1].into(), parts[2].into(), parts[4].parse().ok()?))
@@ -2385,11 +2461,16 @@ pub async fn scm_base_sides(worktree: String, path: String, since: String) -> Re
 }
 
 /// GIT-001 (T-033-b): starts or joins the watch of the worktree holding `path`; its status arrives
-/// as the `scm-status-<id>` event, the same shape `scm_status` returns.
+/// as the `scm-status-<id>` event, the same shape `scm_status` returns. FIX-1 (T-033-e review): a
+/// watch that ends on its own says so as `scm-watch-ended-<id>`, and the page subscribes again.
 #[tauri::command]
 pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::WatchStart, String> {
     use tauri::{Emitter, Manager};
     let dir = app.path().app_data_dir().ok();
+    let ended = {
+        let app = app.clone();
+        std::sync::Arc::new(move |id: u64| drop(app.emit(&format!("scm-watch-ended-{id}"), ()))) as watch::Ended
+    };
     let sink = move |id: u64| {
         let (app, event) = (app.clone(), format!("scm-status-{id}"));
         std::sync::Arc::new(move |st: &Status| drop(app.emit(&event, st))) as std::sync::Arc<dyn Fn(&Status) + Send + Sync>
@@ -2399,7 +2480,7 @@ pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::Wat
             crate::diag::write(d, line);
         }
     });
-    watch::watch(Path::new(&path), sink, log)
+    watch::watch_with(Path::new(&path), sink, ended, log)
 }
 
 #[tauri::command]
@@ -2897,6 +2978,15 @@ mod tests {
         // A PR without checks, or mergeable, reads as none and no conflict.
         let bare = checks_from(r#"{"number":3,"url":"https://github.com/o/r/pull/3","state":"OPEN","mergeable":"MERGEABLE","statusCheckRollup":[]}"#).unwrap();
         assert!(!bare.conflict && bare.checks.is_empty());
+    }
+
+    #[test]
+    fn a_neutral_check_is_not_counted_as_passed_and_one_needing_action_is_failing() {
+        // GIT-029
+        let run = |c: &str| check_outcome(&serde_json::json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":c}));
+        assert_eq!(run("NEUTRAL"), "neutral");
+        assert_eq!(run("ACTION_REQUIRED"), "failed");
+        assert_eq!(run("SUCCESS"), "passed");
     }
 
     #[test]
@@ -3496,6 +3586,20 @@ mod tests {
     }
 
     #[test]
+    fn git011_an_enormous_branch_gives_up_on_line_totals_but_still_counts_its_files() {
+        let repo = temp_repo("summary-huge");
+        run(&["checkout", "-q", "-b", "feat"], Some(&repo)).unwrap();
+        for n in 0..3 {
+            commit_file(&repo, &format!("f{n}.txt"), "a\nb\n");
+        }
+        let all = summary_capped(&repo, None, false, 3).unwrap();
+        assert_eq!((all.files, all.lines_skipped, all.source.added), (3, false, 6));
+        let big = summary_capped(&repo, None, false, 2).unwrap();
+        assert_eq!((big.files, big.lines_skipped, big.source.added), (3, true, 0), "past the cap the files are counted and the lines are not");
+        assert_eq!(big.committed.len(), 3);
+    }
+
+    #[test]
     fn git011_the_branch_row_counts_files_against_the_base_and_lists_the_committed_ones() {
         let repo = temp_repo("git011");
         run(&["checkout", "-q", "-b", "feat"], Some(&repo)).unwrap();
@@ -3521,6 +3625,47 @@ mod tests {
         names.sort();
         assert_eq!(names, ["README.md", "a.txt"]);
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git017_d_conflicted_files_stay_out_of_the_message_diff_with_a_note() {
+        let repo = temp_repo("git017d");
+        run(&["checkout", "-q", "-b", "other"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "theirs
+");
+        run(&["checkout", "-q", "main"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "ours
+");
+        assert!(run(&["merge", "other"], Some(&repo)).is_err());
+        assert_eq!(conflicted_files(&repo), ["README.md"]);
+        // Only the conflicted file is staged: nothing to describe, and it says why.
+        assert!(message_diff(&repo).unwrap_err().contains("unresolved conflicts"));
+        fs::write(repo.join("fresh.txt"), "new work
+").unwrap();
+        run(&["add", "fresh.txt"], Some(&repo)).unwrap();
+        let (note, diff) = message_diff(&repo).unwrap();
+        assert!(note.starts_with("Note: 1 file with unresolved conflicts left out") && note.contains("README.md"));
+        assert!(diff.contains("fresh.txt") && !diff.contains("README.md") && !diff.contains("<<<<<<<"));
+        // Without a conflict there is no note.
+        run(&["merge", "--abort"], Some(&repo)).unwrap();
+        fs::write(repo.join("fresh.txt"), "new work
+").unwrap();
+        run(&["add", "fresh.txt"], Some(&repo)).unwrap();
+        let (note, _) = message_diff(&repo).unwrap();
+        assert_eq!(note, "");
+        assert!(conflict_note(&(0..25).map(|n| format!("f{n}")).collect::<Vec<_>>()).contains("and 5 more"));
+    }
+
+    #[test]
+    fn git017_d_a_command_line_writer_gets_a_prompt_that_fits_and_keeps_the_note() {
+        let diff = format!("diff --git a/a b/a
+{}", "+line of change
+".repeat(3000));
+        let note = conflict_note(&["x.txt".to_string()]);
+        let fits = fit_prompt(&note, &diff, "use the imperative", Some(6_500));
+        assert!(fits.len() <= 6_500 && fits.contains("x.txt") && fits.contains("use the imperative"));
+        let roomy = fit_prompt(&note, &diff, "", None);
+        assert!(roomy.len() > 20_000 && roomy.len() < 40_000);
     }
 
     #[test]

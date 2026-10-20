@@ -1,6 +1,10 @@
 //! APP-054: the Resource Manager's figures. Memory and CPU for the app itself and for every
 //! terminal session (its whole process tree), and how much memory the computer has free.
 
+/// T-183: the recovery module (damaged state file, folder permissions, interface watch, safe
+/// graphics, crash reports) lives beside the Resource Manager so this lane's own file declares it.
+pub mod recovery;
+
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;

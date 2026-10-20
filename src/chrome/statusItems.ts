@@ -7,6 +7,7 @@ export const STATUS_ITEMS = [
   { id: "terminals", label: "Terminals running" },
   { id: "agents", label: "Agents running" },
   { id: "awake", label: "Keep awake" },
+  { id: "ports", label: "Ports" },
 ] as const;
 export type StatusItem = (typeof STATUS_ITEMS)[number]["id"];
 export const FIELDS = { visible: "statusBarVisible", hidden: "statusBarHidden" } as const;

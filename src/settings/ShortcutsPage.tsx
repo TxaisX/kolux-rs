@@ -2,13 +2,15 @@
 // grouped by area with its keys, badges, a clash hint, the filters and the search (SET-008, SET-010),
 // and on each row the recorder: click a chord to replace it, Add for another, x to remove one,
 // Disable and Reset (SET-009). Every change is written to the file at once.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { inTerminal, POLICIES, POLICY_FIELD, readPolicy } from "../keys/terminalPolicy";
 import { useSettings } from "./useSettings";
 import { useKeymap } from "../keys/KeymapContext";
 import { useNativeChords } from "../chrome/useChrome";
 import { editChords, recordKey, recording, removeChord } from "../keys/record";
+import { createDoubleTap, recordDoubleTap } from "../keys/doubleTap";
+import { layoutNotes } from "../keys/helpNotes";
 import { Segmented } from "./GeneralPage";
 import { AREAS, FILTERS, MAX_QUERY, filterRows, shortcutRows, type Filter, type Row } from "./shortcutRows";
 
@@ -26,16 +28,19 @@ export default function ShortcutsPage() {
   const native = useNativeChords();
   const rows = useMemo(() => shortcutRows(keymap, native), [keymap, native]);
   const shown = filterRows(rows, filter, query);
+  const taps = useRef(createDoubleTap()); // SET-009: a modifier tapped twice is recorded as its own kind of shortcut
 
   // While recording, every key press belongs to the recorder: the window's shortcuts stand
   // aside (`recording.on`) and Esc ends recording instead of closing Settings.
   useEffect(() => {
     if (!rec) return;
     recording.on = true;
+    taps.current.reset();
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const got = recordKey(e, keymap.platform, rec.id);
+      const tapped = recordDoubleTap(taps.current, e, e.timeStamp);
+      const got = tapped ? { chord: tapped } : recordKey(e, keymap.platform, rec.id);
       if (got === null) return;
       if ("refused" in got) return setNote(got.refused);
       setRec(null);
@@ -93,6 +98,14 @@ export default function ShortcutsPage() {
           </button>
         </div>
       </section>
+      <section className="conn-card" data-section="layout-notes">
+        <h2 className="conn-name">Keyboard layouts</h2>
+        {layoutNotes(keymap.platform).map((n) => (
+          <p key={n} className="conn-detail">
+            {n}
+          </p>
+        ))}
+      </section>
       <section className="conn-card" data-section="terminal-first">
         <h2 className="conn-name">Shortcuts in terminals</h2>
         <p className="conn-detail">
@@ -123,7 +136,7 @@ export default function ShortcutsPage() {
                         <td>
                           {r.title}
                           {r.hint && <p className="keys-hint">{r.hint}</p>}
-                          {at >= 0 && <p className="keys-hint">{note ?? "Press the new keys. Esc keeps what was there."}</p>}
+                          {at >= 0 && <p className="keys-hint">{note ?? "Press the new keys, or tap one modifier twice. Esc keeps what was there."}</p>}
                         </td>
                         <td>
                           {r.labels.map((l, i) => (

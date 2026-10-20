@@ -45,10 +45,20 @@ test("GIT-017: a generation fills only the box of the worktree that began it, an
 
 test("GIT-018: the commit-message writer is Claude Code by default, can be a custom command or off", async () => {
   const { writerOf, WRITER_KEY, WRITER_COMMAND_KEY, WRITER_INSTRUCTIONS_KEY } = await import("./generate");
-  expect(writerOf({})).toEqual({ mode: "claude", command: null, instructions: "" });
-  expect(writerOf({ [WRITER_KEY]: "custom", [WRITER_COMMAND_KEY]: "  tool {prompt} ", [WRITER_INSTRUCTIONS_KEY]: "Be brief" })).toEqual({ mode: "custom", command: "tool {prompt}", instructions: "Be brief" });
+  expect(writerOf({})).toEqual({ mode: "agent", agent: "claude", model: null, effort: null, command: null, instructions: "" });
+  expect(writerOf({ [WRITER_KEY]: "custom", [WRITER_COMMAND_KEY]: "  tool {prompt} ", [WRITER_INSTRUCTIONS_KEY]: "Be brief" })).toMatchObject({ mode: "custom", command: "tool {prompt}", instructions: "Be brief" });
   // A custom choice with no command is not usable, so nothing is offered.
   expect(writerOf({ [WRITER_KEY]: "custom", [WRITER_COMMAND_KEY]: " " }).mode).toBe("off");
   expect(writerOf({ [WRITER_KEY]: "off" }).mode).toBe("off");
-  expect(writerOf({ [WRITER_KEY]: 7 }).mode).toBe("claude");
+  expect(writerOf({ [WRITER_KEY]: 7 })).toMatchObject({ mode: "agent", agent: "claude" });
+});
+
+test("GIT-018 (T-228-d): another agent, a model and an effort are chosen by their settings; an unknown agent falls back to Claude Code", async () => {
+  const { writerOf, writerArgs, WRITER_KEY, WRITER_MODEL_KEY, WRITER_EFFORT_KEY } = await import("./generate");
+  const w = writerOf({ [WRITER_KEY]: "codex", [WRITER_MODEL_KEY]: " gpt-x ", [WRITER_EFFORT_KEY]: "high" });
+  expect(w).toMatchObject({ mode: "agent", agent: "codex", model: "gpt-x", effort: "high" });
+  expect(writerArgs(w)).toEqual({ agent: "codex", model: "gpt-x", effort: "high" });
+  expect(writerOf({ [WRITER_KEY]: "nobody-knows" })).toMatchObject({ agent: "claude", model: null });
+  expect(writerOf({ [WRITER_KEY]: "kimi", [WRITER_MODEL_KEY]: "   " }).model).toBeNull();
+  expect(writerArgs(writerOf({ [WRITER_KEY]: "off" }))).toEqual({});
 });

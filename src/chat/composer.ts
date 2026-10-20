@@ -113,6 +113,11 @@ export function pasteSteps(raw: string, clearLine = false): Step[] {
 }
 
 const queues = new Map<number, Promise<unknown>>();
+const epochs = new Map<number, number>();
+/** CHAT-018: the stop count of a terminal; a send that began under an older count is cancelled. */
+export const epochOf = (terminal: number) => epochs.get(terminal) ?? 0;
+/** CHAT-018: cancels every send to a terminal that has not typed its Enter yet (queued or mid-way); Stop calls this before its interrupt goes out. */
+export const cancelQueued = (terminal: number) => void epochs.set(terminal, epochOf(terminal) + 1);
 /** CHAT-020: sends to one terminal run one after another, in the order they were made. */
 export function enqueue<T>(terminal: number, job: () => Promise<T>): Promise<T> {
   const run = (queues.get(terminal) ?? Promise.resolve()).then(job, job);

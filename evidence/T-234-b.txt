@@ -1,0 +1,49 @@
+
+PIECE 4 (2026-10-19, lane/editor from 9c4a66e4): EDIT-014 link rules + Mod-click. T-234-b stays open.
+BUILT
+- src/editor/noteLinks.ts: splitAnchor (#L10, #L10C5, :10:5; a drive letter is never a line), slugOf / headingSlugs /
+  headingLine (GitHub slugs, repeats numbered, code fences skipped), resolveLink (web, here, file with preview vs
+  editor tab, either slash, file:// with localhost and server names, other schemes do nothing), wikiLinks / wikiTarget /
+  wikiMatches (a name that fits two files is flagged) / wikiSuggest.
+- src/editor/linkClicks.ts: followClick (Mod+click; Shift = system browser for web links; plain click never navigates),
+  headingEl. Wired into PreviewPane (worktree + onLink props) and the rich view's host (onLink prop).
+READINGS: tsc exit 0 (p1-234b-tsc2.log, all three App patches applied locally); vitest src/editor 34 files 222 passed
+  (p1-234b-vitest.log): noteLinks.test.ts 14, linkClicks.test.ts 6.
+PATCH: editor-T-234-b-App.tsx.patch (followLink; onLink on EditorPane; worktree + onLink on PreviewPane). Apply after the
+  T-177 and T-222-c App patches (checked in that chain).
+LIVE PROOF PENDING (batched): in a preview, Ctrl+click https link: opens a Kolux browser tab; Ctrl+Shift+click: system
+  browser. Click a link to b.md: opens as a preview tab; to x.ts#L10: editor tab with line 10 in view; to #heading: scrolls.
+  The same in the rich view of a note. A plain click does nothing in both.
+STILL OPEN IN T-234-b: slash menu, tables, lists, code blocks, collapsible sections, spelling, the [[ popup (wikiSuggest is
+  ready), hover bubble, add-link shortcut, source-view [[note]] underline (wikiLinks is ready), missing-file toast, images.
+
+PIECE 5 (2026-10-19, lane/editor from 27a86891): EDIT-010 slash menu, EDIT-011 tables, list keys. T-234-b stays open.
+BUILT
+- src/editor/richTable.ts (new): table nodes for the rich view (kolux-table, kolux-table-row, kolux-table-cell; no extra
+  package), the markdown TABLE transformer (an unchanged row exports its original text; an edited row is rewritten as
+  "| a | b |", cell text is raw markdown), Tab / Shift+Tab (Tab in the last cell adds a row), Enter (next row, a new row
+  from the last one), Backspace in an empty body row removes it, add row above/below, add column left/right (one edit =
+  one undo step), delete row (the header row always stays), delete column (the last column removes the table),
+  single-line paste into a cell, runTableAction / watchTable for the menu.
+- src/editor/slashMenu.ts (new): slashQuery (slash at line start or after a space, never inside a word or path),
+  matchSlash (label prefix, other names, contains), runSlash (heading 1-3, bullet, numbered, task list, quote, code,
+  table, mermaid fence, $$ maths block, 12 emoji), createSlash (arrows, Enter, Tab pick, Escape closes and stays shut
+  until the text changes). Collapsible section is not offered: the rich view refuses HTML.
+- src/editor/richFormat.ts registerListKeys: Tab / Shift+Tab indent and outdent a list item.
+- src/editor/SlashPanel.tsx (new): draws the slash menu next to the caret and a table button bar while the caret is in a
+  table. EditorPane.tsx and markdown.ts (mountRich onSlash, pickSlash) wire it. Styles in editor-extras.css.
+- markdown.ts: tables are no longer a refused feature (LIMITS entry removed), markdown.test.ts updated.
+TESTS: richTable.test.ts 11, slashMenu.test.ts 9 (matching, each entry's output, open menu keys, list Enter / Tab /
+  Shift+Tab / Enter on an empty item), markdown.test.ts.
+READINGS: vitest run src/editor: 44 files, 278 tests passed (v3-t234-b.log); tsc --noEmit exit 0 (v3-t234-tsc.log).
+  No Rust, no shared file, no patch.
+LIVE PROOF PENDING (batched)
+1. Open a .md note in rich view, type "/" on an empty line: the menu lists everything; type "todo": Task list is first;
+   Enter makes a checklist. "/table" inserts a 3 by 3 table; Tab walks the cells, Tab in the last cell adds a row;
+   Backspace in an empty body row removes it; the button bar below adds or removes rows and columns; Ctrl+Z undoes a
+   column in one step. Switch to source view: the table is plain pipes.
+2. In a bullet list put the caret in the second item and press Tab: it nests; Shift+Tab brings it back; Enter on an
+   empty item ends the list.
+STILL OPEN IN T-234-b: collapsible sections, hover controls and context menu for tables, code-block language label and
+  plain-text choice, spelling setting, [[ popup, hover bubble, link shortcut, missing-file toast, images, source [[note]]
+  underline.

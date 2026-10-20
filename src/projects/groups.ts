@@ -2,6 +2,7 @@
 // tree the sidebar draws: groups first, each holding its sub-groups then its projects, and the
 // projects in no group after them. Empty groups still show.
 import type { Project } from "./model";
+import { inSavedOrder } from "./order";
 
 export type Group = { id: string; name: string; parent: string | null };
 export type Groups = { groups: Group[]; members: Record<string, string>; rev: number };
@@ -9,7 +10,8 @@ export type Node = { kind: "group"; group: Group; children: Node[]; count: numbe
 
 export const NO_GROUPS: Groups = { groups: [], members: {}, rev: 0 };
 
-export function groupTree(g: Groups, projects: Project[]): Node[] {
+/** PROJ-016: with a saved header order, every level follows it; headers without a place come last, groups before projects, by name. */
+export function groupTree(g: Groups, projects: Project[], order?: string[]): Node[] {
   const known = new Set(g.groups.map((x) => x.id));
   const at = (parent: string | null): Node[] => {
     const groups: Node[] = g.groups
@@ -23,7 +25,8 @@ export function groupTree(g: Groups, projects: Project[]): Node[] {
       const home = g.members[p.id];
       return parent === null ? !home || !known.has(home) : home === parent;
     });
-    return [...groups, ...loose.map((project): Node => ({ kind: "project", project }))];
+    const all = [...groups, ...loose.map((project): Node => ({ kind: "project", project }))];
+    return order ? inSavedOrder(all, (n) => (n.kind === "group" ? n.group.id : n.project.id), order, (n) => (n.kind === "group" ? n.group.name : n.project.name), (n) => (n.kind === "group" ? 0 : 1)) : all;
   };
   return at(null);
 }
