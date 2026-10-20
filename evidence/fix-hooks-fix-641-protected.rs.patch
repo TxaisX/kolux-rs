@@ -1,0 +1,659 @@
+diff --git a/src-tauri/src/protected.rs b/src-tauri/src/protected.rs
+index 8458de35..38e74217 100644
+--- a/src-tauri/src/protected.rs
++++ b/src-tauri/src/protected.rs
+@@ -708,6 +708,7 @@ pub fn mask(text: &str) -> String {
+     let t = header_values(&t);
+     let t = json_values(&t);
+     let t = piped_passwords(&t);
++    let t = secure_strings(&t);
+     let t = secret_flags(&t);
+     let t = labelled_values(&t);
+     env_lines(&t)
+@@ -933,6 +934,8 @@ fn segment_start(head: &str) -> usize {
+             }
+         } else if c == b'\n' {
+             hard = p + 1;
++        } else if c == b'&' && ((p > 0 && matches!(b[p - 1], b'>' | b'<')) || b.get(p + 1) == Some(&b'>')) {
++            // A redirect (`2>&1`, `&>file`), not a separator.
+         } else if matches!(c, b'`' | b')') {
+             // The closer of the nearest opener of its kind that stood inside the same quotes.
+             let opener = if c == b'`' { b'`' } else { b'(' };
+@@ -941,7 +944,9 @@ fn segment_start(head: &str) -> usize {
+                 seps.truncate(frames[k].1);
+                 hard = frames[k].2;
+                 frames.truncate(k);
+-            } else if c == b'`' {
++            } else if c == b'`' && (top != Some(b'\'') || opens_quote(&b[p + 1..], b'`', b'\'')) {
++                // Inside single quotes a backtick opens a command only when another one closes it
++                // before the quote does (`'a`b'` is text).
+                 frames.push((b'`', seps.len(), hard, here));
+                 hard = p + 1;
+             }
+@@ -1142,7 +1147,8 @@ fn runs(words: &[Word], is: impl Fn(&str) -> bool) -> bool {
+ /// Programs that take their password attached to a short flag (`-pSecret`). That flag is read as a
+ /// password only for them: elsewhere `-p` words are ordinary (`find -print`, `gcc -pthread`).
+ fn takes_attached_password(word: &str) -> bool {
+-    word.starts_with("mysql") || word.starts_with("mariadb") || matches!(word, "7z" | "7za" | "7zr" | "7zz" | "rar" | "unrar" | "sshpass")
++    // A file name (`mysql.log`) is no program.
++    (!word.contains('.') && (word.starts_with("mysql") || word.starts_with("mariadb"))) || matches!(word, "7z" | "7za" | "7zr" | "7zz" | "rar" | "unrar" | "sshpass")
+ }
+ 
+ /// Whether a setting, variable or flag name holds a secret. A flag also hides a value that names
+@@ -1168,13 +1174,32 @@ fn secretish(name: &str, flag: bool) -> bool {
+ /// (`curl -u a:b; ls` keeps its `;`, or a second mask would read `ls` as curl's next word).
+ const COMMAND_END: &[u8] = b";|&";
+ 
+-/// The value that begins `rest`: a quoted one (also `\"..\"` inside a quoted command) to its
+-/// closing quote, or a bare one to the next space, quote or any byte in `stops`. 0 when none.
++/// The value that begins `rest`: a quoted one (also `\"..\"` inside a quoted command, and the shell's
++/// `$'..'` and `$".."`) to its closing quote and on through the text stuck to it (`'my pass'-x` is one
++/// word), or a bare one to the next space, quote or any byte in `stops`. 0 when none.
+ fn value_span(rest: &str, stops: &[u8]) -> usize {
+     let b = rest.as_bytes();
+     let skip = usize::from(b.first() == Some(&b'\\') && matches!(b.get(1), Some(b'"' | b'\'')));
+-    match b.get(skip) {
+-        Some(q @ (b'"' | b'\'')) => rest[skip + 1..].find(*q as char).map_or(rest.len(), |k| skip + 1 + k + 1),
++    // `$'..'` honours a backslash before its closing quote (`$'it\'s'`); the dollar is part of the value.
++    let ansi = skip == 0 && b.first() == Some(&b'$') && matches!(b.get(1), Some(b'"' | b'\''));
++    let open = skip + usize::from(ansi);
++    match b.get(open) {
++        Some(q @ (b'"' | b'\'')) => {
++            let close = if ansi {
++                let mut p = open + 1;
++                while p < b.len() && b[p] != *q {
++                    p += if b[p] == b'\\' { 2 } else { 1 };
++                }
++                (p < b.len()).then_some(p)
++            } else {
++                rest[open + 1..].find(*q as char).map(|k| open + 1 + k)
++            };
++            let Some(close) = close else { return rest.len() };
++            // Text stuck to the closing quote belongs to the word, not a quote or a bracket (the quote
++            // may close the command around it). Inside a quoted command (`\"..\"`) a backslash ends it too.
++            let tail = run(&rest[close + 1..], |c| !(c.is_ascii_whitespace() || matches!(c, b'"' | b'\'' | b'`' | b'(' | b')') || stops.contains(&c) || (skip > 0 && c == b'\\')));
++            close + 1 + tail
++        }
+         _ => run(rest, |c| !(c.is_ascii_whitespace() || matches!(c, b'"' | b'\'' | b'`') || stops.contains(&c))),
+     }
+ }
+@@ -1192,12 +1217,16 @@ fn already_as(value: &str, refs: bool) -> bool {
+     let single = value.trim_start_matches('\\').starts_with('\'');
+     let v = value.trim_matches(|c| matches!(c, '"' | '\'' | '\\'));
+     let reference = refs && !single && v.strip_prefix('$').and_then(|r| r.bytes().next()).is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b'{' | b'('));
+-    v.is_empty() || v == HIDDEN || reference || STRIPE_PREFIXES.iter().any(|p| v.strip_prefix(p).is_some_and(|r| r.starts_with("....")))
++    // `[hidden]` with a bracket or other punctuation stuck to it (`'pw')`, `\'pw'$(x`) is a hidden value
++    // that `value_span` stopped short of, not a new one.
++    let hidden = v.strip_prefix(HIDDEN).is_some_and(|r| r.is_empty() || r.starts_with(|c: char| !c.is_alphanumeric() && !matches!(c, '"' | '\'')));
++    v.is_empty() || hidden || reference || STRIPE_PREFIXES.iter().any(|p| v.strip_prefix(p).is_some_and(|r| r.starts_with("....")))
+ }
+ 
+ /// `--password hunter2` and `--token abc` (a space before the value; `--token=abc` is the labelled
+-/// pass), curl's `-u user:password`, sshpass's `-p secret`, and a short password flag with the value
+-/// attached, `-pS3cret`, for the programs that take one (MySQL and MariaDB clients, 7z, rar, sshpass).
++/// pass), also with one dash (`-Password hunter2`, a PowerShell parameter), curl's `-u user:password`,
++/// sshpass's `-p secret`, and a short password flag with the value attached, `-pS3cret`, for the programs
++/// that take one (MySQL and MariaDB clients, 7z, rar, sshpass).
+ fn secret_flags(t: &str) -> String {
+     scan(t, |t, i| {
+         let prev = if i == 0 { b' ' } else { t.as_bytes()[i - 1] };
+@@ -1234,31 +1263,44 @@ fn secret_flags(t: &str) -> String {
+                 }
+             }
+         }
+-        if let Some(flag) = rest.strip_prefix("--") {
+-            let n = run(flag, key_char);
+-            if n == 0 || !secretish(&flag[..n], true) {
+-                return None;
+-            }
+-            let after = &flag[n..];
+-            let gap = run(after, |b| b == b' ' || b == b'\t');
+-            if gap == 0 {
+-                return None;
+-            }
+-            let value = &after[gap..];
+-            let len = value_span(value, COMMAND_END);
+-            if len == 0 || value.starts_with('-') || already(&value[..len]) {
+-                return None;
++        if !rest.starts_with("--") {
++            if let Some(tail) = rest.strip_prefix("-p") {
++                let len = value_span(tail, COMMAND_END);
++                let value = &tail[..len];
++                let program = runs(&words_before(t, i), takes_attached_password);
++                if program && !value.is_empty() && !value.starts_with('-') && !value.starts_with('=') && !already(value) {
++                    return Some((i + 2 + len, format!("-p{HIDDEN}")));
++                }
+             }
+-            return Some((i + 2 + n + gap + len, format!("--{}{}{HIDDEN}", &flag[..n], &after[..gap])));
+         }
+-        let tail = rest.strip_prefix("-p")?;
+-        let len = value_span(tail, COMMAND_END);
+-        let value = &tail[..len];
+-        let program = runs(&words_before(t, i), takes_attached_password);
+-        (program && !value.is_empty() && !value.starts_with('-') && !value.starts_with('=') && !already(value)).then(|| (i + 2 + len, format!("-p{HIDDEN}")))
++        flag_value(rest).map(|(len, shown)| (i + len, shown))
+     })
+ }
+ 
++/// A flag at the start of `rest` (`--name` or `-Name`) whose name says it holds a secret, a space and its
++/// value: how many bytes they take and what they become (`--password [hidden]`). None when the name is
++/// no secret, the value is missing, hidden already or another flag.
++fn flag_value(rest: &str) -> Option<(usize, String)> {
++    let dashes = if rest.starts_with("--") { 2 } else if rest.starts_with('-') && rest.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic) { 1 } else { return None };
++    let flag = &rest[dashes..];
++    let n = run(flag, key_char);
++    if n == 0 || !secretish(&flag[..n], true) {
++        return None;
++    }
++    let after = &flag[n..];
++    let gap = run(after, |b| b == b' ' || b == b'\t');
++    if gap == 0 {
++        return None;
++    }
++    let value = &after[gap..];
++    let len = value_span(value, COMMAND_END);
++    // A redirect after a switch (`gh auth login --with-token < token.txt`) is no value of the flag.
++    if len == 0 || value.starts_with(['-', '<', '>']) || already(&value[..len]) {
++        return None;
++    }
++    Some((dashes + n + gap + len, format!("{}{}{}{HIDDEN}", &rest[..dashes], &flag[..n], &after[..gap])))
++}
++
+ /// The password that `echo` or `printf` (or PowerShell's `Write-Output` / `write`, or one quoted literal) pipes into a command
+ /// that reads one from its input: `sudo -S` (`--stdin`, also inside a cluster such as `-nS`), also behind
+ /// wrappers and launchers (`env FOO=1 sudo -S`, `ssh host sudo -S`), or any command with `--password-stdin`
+@@ -1269,12 +1311,18 @@ fn piped_passwords(t: &str) -> String {
+     let b = t.as_bytes();
+     let mut spans: Vec<(usize, usize)> = Vec::new();
+     for i in (0..b.len()).filter(|&i| b[i] == b'|' && b.get(i + 1) != Some(&b'|') && (i == 0 || b[i - 1] != b'|')) {
+-        let Some((from, to)) = echoed_value(t, i, &words_before(t, i)).filter(|&(from, to)| from < to && !already(&t[from..to])) else { continue };
+-        let (start, end) = right_side(t, i);
+-        if reads_stdin_password(&words_in(t, start, end)) {
++        let left = words_before(t, i);
++        let found = echoed_value(t, i, &left).or_else(|| brace_group_echo(t, i, &left));
++        let Some((from, to)) = found.filter(|&(from, to)| from < to && !already_words(&t[from..to])) else { continue };
++        if reaches_password_reader(t, i) {
+             spans.push((from, to));
+         }
+     }
++    for (p, _) in t.match_indices("<<") {
++        if let Some(body) = here_document_body(t, p) {
++            spans.push(body);
++        }
++    }
+     for (p, _) in t.match_indices("<<<") {
+         if !reads_stdin_password(&words_before(t, p)) {
+             continue;
+@@ -1302,6 +1350,102 @@ fn piped_passwords(t: &str) -> String {
+     out
+ }
+ 
++/// Whether the pipe at byte `i` feeds a command that reads a password from its input, also through
++/// filters (`echo pw | cat | sudo -S ls`). A command passed over must have its quotes closed, else the
++/// pipe sits inside a quoted word (`echo "a|b" | sudo -S ls`) and does not feed what follows.
++fn reaches_password_reader(t: &str, i: usize) -> bool {
++    let b = t.as_bytes();
++    let mut pipe = i;
++    for _ in 0..8 {
++        let (start, end) = right_side(t, pipe);
++        if reads_stdin_password(&words_in(t, start, end)) || quoted_rest_reads(t, start, end) {
++            return true;
++        }
++        let stage = &t[start..end];
++        let next_is_pipe = b.get(end) == Some(&b'|') && b.get(end + 1) != Some(&b'|');
++        if !next_is_pipe || stage.matches('"').count() % 2 == 1 || stage.matches('\'').count() % 2 == 1 {
++            return false;
++        }
++        pipe = end;
++    }
++    false
++}
++
++/// When the command `t[start..end]` that a pipe feeds was cut at a separator inside its own open quote
++/// (`ssh host "ls; sudo -S x"`), whether one of the commands after that separator, up to where the
++/// quote closes, reads a password from its input: they all share the launcher's input.
++fn quoted_rest_reads(t: &str, start: usize, end: usize) -> bool {
++    let b = t.as_bytes();
++    // Only a quote that a launcher or a shell opens holds a command (`echo "a|b" | ..` closes a quote instead).
++    let Some(open) = unclosed_quote(&t[start..end]).map(|k| start + k) else { return false };
++    let words = words_in(t, start, open);
++    let runs_command = match command_index(&words) {
++        None => words.iter().any(|w| SHELLS.contains(&w.name.as_str())),
++        Some(k) => LAUNCHERS.contains(&words[k].name.as_str()) || SHELLS.contains(&words[k].name.as_str()),
++    };
++    if !runs_command {
++        return false;
++    }
++    let mut e = end;
++    for _ in 0..16 {
++        if e >= b.len() || unclosed_quote(&t[start..e]).is_none() {
++            return false;
++        }
++        let mut s = e;
++        while s < b.len() && matches!(b[s], b';' | b'|' | b'&' | b'\n') {
++            s += 1;
++        }
++        let (from, to) = right_side(t, s - 1);
++        if reads_stdin_password(&words_in(t, from, to)) {
++            return true;
++        }
++        e = to.max(s);
++    }
++    false
++}
++
++/// The body of the here-document that the `<<` at byte `p` opens, as byte offsets, when the command before
++/// it reads a password from its input: the lines after the one that holds `<<` up to the line that is
++/// the delimiter (to the end of the text when none comes), without the line breaks at either end. `<<<`
++/// is a here-string, and a body that is hidden already or only variable references is left alone.
++fn here_document_body(t: &str, p: usize) -> Option<(usize, usize)> {
++    let b = t.as_bytes();
++    if (p > 0 && b[p - 1] == b'<') || b.get(p + 2) == Some(&b'<') {
++        return None;
++    }
++    let dash = b.get(p + 2) == Some(&b'-');
++    let mut q = p + 2 + usize::from(dash);
++    q += run(&t[q..], |c| c == b' ' || c == b'\t');
++    let len = run(&t[q..], |c| !(c.is_ascii_whitespace() || matches!(c, b';' | b'|' | b'&' | b'<' | b'>' | b'(' | b')')));
++    let delimiter: String = t[q..q + len].chars().filter(|c| !matches!(c, '"' | '\'' | '\\')).collect();
++    // The command reads a password itself, or pipes the document on to one (`cat <<EOF | sudo -S ls`).
++    let line_end = t[q + len..].find('\n').map_or(t.len(), |k| q + len + k);
++    let piped = (q + len..line_end).any(|k| b[k] == b'|' && b.get(k + 1) != Some(&b'|') && b[k - 1] != b'|' && reaches_password_reader(t, k));
++    if delimiter.is_empty() || !(piped || reads_stdin_password(&words_before(t, p))) {
++        return None;
++    }
++    let body = q + len + t[q + len..].find('\n')? + 1;
++    let mut line = body;
++    let mut stop = None;
++    loop {
++        let end = t[line..].find('\n').map_or(t.len(), |k| line + k);
++        let text = t[line..end].trim_end_matches('\r');
++        if (if dash { text.trim_start_matches('\t') } else { text }) == delimiter {
++            // The line break before the delimiter (and the carriage return before it) stays.
++            let at = line - 1;
++            stop = Some(if at > body && b[at - 1] == b'\r' { at - 1 } else { at });
++            break;
++        }
++        if end >= t.len() {
++            break;
++        }
++        line = end + 1;
++    }
++    let stop = stop.unwrap_or(body + t[body..].trim_end_matches(['\r', '\n']).len());
++    let hidden = stop <= body || t[body..stop].lines().all(|l| l.trim().is_empty() || already(l.trim()));
++    (!hidden).then_some((body, stop))
++}
++
+ /// Words that write their arguments to the pipe: `echo`, `printf`, PowerShell's `Write-Output` and `write`.
+ fn writes_text(name: &str) -> bool {
+     matches!(name, "echo" | "printf" | "write-output" | "write")
+@@ -1344,8 +1488,10 @@ fn echoed_value(t: &str, i: usize, left: &[Word]) -> Option<(usize, usize)> {
+     Some((from, from + t[from..to].trim_end().len()))
+ }
+ 
+-/// Where the arguments of an `echo` that begin at `from` end, no later than `to`: at a `;`, `&` or
++/// Where the arguments of an `echo` that begin at `from` end, no later than `to`: at a `;`, `&`, `|` or
+ /// line break outside quotes, or at a `)` that closes nothing opened in the arguments (`(echo pw) | ..`).
++/// The `|` matters when the pipe that was found is the outer one of a quoted command that holds a pipe
++/// of its own (`ssh host "echo pw | sudo -S x" | sudo -S y`): both pipes then hide the same word.
+ fn span_end(t: &str, from: usize, to: usize) -> usize {
+     let b = t.as_bytes();
+     let (mut depth, mut quote, mut p) = (0usize, None::<u8>, from);
+@@ -1355,11 +1501,13 @@ fn span_end(t: &str, from: usize, to: usize) -> usize {
+             (_, b'\\') => p += 1,
+             (Some(q), _) if c == q => quote = None,
+             (Some(_), _) => {}
++            // A redirect of the echo's own output (`2>&1`, `>/dev/null`, `&>log`) is no part of the value.
++            (None, _) if (p == from || b[p - 1].is_ascii_whitespace()) && redirect_at(&b[p..to]) => return p,
+             (None, b'"' | b'\'') => quote = Some(c),
+             (None, b'(') => depth += 1,
+             (None, b')') if depth == 0 => return p,
+             (None, b')') => depth -= 1,
+-            (None, b';' | b'&' | b'\n') => return p,
++            (None, b';' | b'&' | b'|' | b'\n') => return p,
+             _ => {}
+         }
+         p += 1;
+@@ -1367,11 +1515,85 @@ fn span_end(t: &str, from: usize, to: usize) -> usize {
+     to
+ }
+ 
++/// Whether a word that begins `w` is a redirect: optional file-descriptor digits then `>` or `<`, or `&>`.
++fn redirect_at(w: &[u8]) -> bool {
++    let digits = w.iter().take_while(|c| c.is_ascii_digit()).count();
++    matches!(w.get(digits), Some(b'>' | b'<')) || w.starts_with(b"&>")
++}
++
++/// `already` for the arguments of an `echo`, word by word: `$(date) pw` still holds a typed password,
++/// while `$PASS` or `"$(cat pw.txt)"` is a reference only. Words split at white space outside quotes
++/// and brackets.
++fn already_words(v: &str) -> bool {
++    let b = v.as_bytes();
++    let (mut depth, mut quote, mut start, mut p) = (0usize, None::<u8>, 0, 0);
++    let mut words = Vec::new();
++    while p < b.len() {
++        match (quote, b[p]) {
++            (_, b'\\') => p += 1,
++            (Some(q), c) if c == q => quote = None,
++            (Some(_), _) => {}
++            (None, c @ (b'"' | b'\'')) => quote = Some(c),
++            (None, b'(') => depth += 1,
++            (None, b')') => depth = depth.saturating_sub(1),
++            (None, b' ' | b'\t') if depth == 0 => {
++                words.push(&v[start..p]);
++                start = p + 1;
++            }
++            _ => {}
++        }
++        p += 1;
++    }
++    words.push(&v[start.min(v.len())..]);
++    words.into_iter().filter(|w| !w.is_empty()).all(already)
++}
++
++/// The value an `echo` inside a brace group carries when the group's `}` is all there is before the pipe
++/// at byte `i` (`{ echo pw; } | sudo -S ls`): the echo just before the `;` or line break that ends it.
++fn brace_group_echo(t: &str, i: usize, left: &[Word]) -> Option<(usize, usize)> {
++    if left.len() != 1 || left[0].raw != "}" {
++        return None;
++    }
++    let j = segment_start(&t[..i]).checked_sub(1)?;
++    matches!(t.as_bytes()[j], b';' | b'\n').then(|| echoed_value(t, j, &words_before(t, j))).flatten()
++}
++
+ /// When the command before the pipe at byte `i` is one quoted literal (`"S3cret" | docker login ..`), where
+-/// the literal, quotes included, begins and ends.
++/// the literal, quotes included, begins and ends. Also when the pipe is inside the quoted command of a
++/// shell or a launcher and the literal opens that command (`powershell -Command "'S3cret' | .."`).
+ fn quoted_literal(t: &str, i: usize) -> Option<(usize, usize)> {
+     let start = segment_start(&t[..i]);
+-    let seg = &t[start..i];
++    literal_in(t, start, i).or_else(|| {
++        let open = start + unclosed_quote(&t[start..i])?;
++        let words = words_in(t, start, open);
++        let runs_command = match command_index(&words) {
++            None => words.iter().any(|w| SHELLS.contains(&w.name.as_str())),
++            Some(k) => LAUNCHERS.contains(&words[k].name.as_str()),
++        };
++        if runs_command { literal_in(t, open + 1, i) } else { None }
++    })
++}
++
++/// Where the quote that is still open at the end of `seg` begins (a backslash hides the byte after it,
++/// except inside single quotes).
++fn unclosed_quote(seg: &str) -> Option<usize> {
++    let b = seg.as_bytes();
++    let (mut open, mut p) = (None::<(u8, usize)>, 0);
++    while p < b.len() {
++        match (open, b[p]) {
++            (Some((b'\'', _)), b'\'') | (Some((b'"', _)), b'"') => open = None,
++            (Some((b'"', _)) | None, b'\\') => p += 1,
++            (None, c @ (b'"' | b'\'')) => open = Some((c, p)),
++            _ => {}
++        }
++        p += 1;
++    }
++    open.map(|(_, at)| at)
++}
++
++/// The quoted literal that makes up all of `t[start..end]` (white space aside), quotes included.
++fn literal_in(t: &str, start: usize, end: usize) -> Option<(usize, usize)> {
++    let seg = &t[start..end];
+     let body = seg.trim();
+     let q = *body.as_bytes().first().filter(|c| matches!(c, b'"' | b'\''))?;
+     let inner = body.as_bytes().get(1..body.len().checked_sub(1)?)?;
+@@ -1450,10 +1672,11 @@ fn is_wrapper_value(wrapper: &str, name: &str) -> bool {
+     duration || (wrapper == "cmd" && matches!(name, "c" | "k"))
+ }
+ 
+-/// Whether the command these words make reads a password from its input: `--password-stdin`, or a `sudo`
+-/// (see `reached_sudo`) with `-S` / `--stdin` among its options.
++/// Whether the command these words make reads a password from its input: `--password-stdin`,
++/// `--with-token` (`gh auth login`), a `sudo` (see `reached_sudo`) with `-S` / `--stdin` among its
++/// options, or PowerShell's `ConvertTo-SecureString -AsPlainText`.
+ fn reads_stdin_password(words: &[Word]) -> bool {
+-    if words.iter().any(|w| w.raw == "--password-stdin") {
++    if words.iter().any(|w| w.raw == "--password-stdin" || w.raw == "--with-token") || (words.iter().any(|w| w.name == "convertto-securestring") && words.iter().any(|w| w.name == "-asplaintext")) {
+         return true;
+     }
+     let Some(s) = reached_sudo(words) else { return false };
+@@ -1558,21 +1781,68 @@ fn json_values(t: &str) -> String {
+     })
+ }
+ 
+-/// `NAME=value` where the name says it holds a secret.
++/// `NAME=value` where the name says it holds a secret. A PowerShell variable (`$password = 'pw'`) may
++/// have white space on both sides of the `=`.
+ fn labelled_values(t: &str) -> String {
+     scan(t, |t, i| {
+         if t.as_bytes()[i] != b'=' {
+             return None;
+         }
+         let before = &t.as_bytes()[..i];
+-        let start = before.iter().rposition(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))).map_or(0, |p| p + 1);
+-        let name = &t[start..i];
+-        if name.len() < 2 || !secretish(name, name.starts_with('-')) {
++        let space = before.iter().rev().take_while(|b| matches!(b, b' ' | b'\t')).count();
++        let end = i - space;
++        let start = before[..end].iter().rposition(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))).map_or(0, |p| p + 1);
++        let name = &t[start..end];
++        let variable = start > 0 && before[start - 1] == b'$';
++        if name.len() < 2 || (space > 0 && !variable) || !secretish(name, name.starts_with('-')) {
+             return None;
+         }
+         let rest = &t[i + 1..];
+-        let len = value_span(rest, b"&;,)");
+-        (len > 0 && !already(&rest[..len])).then(|| (i + 1 + len, format!("={HIDDEN}")))
++        let gap = if variable { run(rest, |b| b == b' ' || b == b'\t') } else { 0 };
++        let len = value_span(&rest[gap..], if variable { b"&;,)|".as_slice() } else { b"&;,)".as_slice() });
++        (len > 0 && !already(&rest[gap..gap + len])).then(|| (i + 1 + gap + len, format!("={}{HIDDEN}", &rest[..gap])))
++    })
++}
++
++/// What PowerShell's `ConvertTo-SecureString` is given to turn into a secure string, when `-AsPlainText`
++/// is among its arguments: every argument that is no parameter and no reference, to the end of the
++/// command (`ConvertTo-SecureString 'pw' -AsPlainText -Force`, `-String 'pw'`). More than one is hidden so
++/// that a second run finds nothing left to hide.
++fn secure_strings(t: &str) -> String {
++    const CMDLET: &str = "convertto-securestring";
++    scan(t, |t, i| {
++        let rest = t.get(i..)?;
++        let head = rest.get(..CMDLET.len())?;
++        if !head.eq_ignore_ascii_case(CMDLET) || (i > 0 && key_char(t.as_bytes()[i - 1])) || rest.as_bytes().get(CMDLET.len()).is_some_and(|b| key_char(*b)) {
++            return None;
++        }
++        let line_end = rest.find('\n').map_or(t.len(), |k| i + k);
++        let end = span_end(t, i, line_end);
++        let (mut p, mut plain, mut out, mut changed) = (i + CMDLET.len(), false, t[i..i + CMDLET.len()].to_string(), false);
++        while p < end {
++            let gap = run(&t[p..end], |b| b == b' ' || b == b'\t');
++            out.push_str(&t[p..p + gap]);
++            p += gap;
++            if p >= end {
++                break;
++            }
++            let flag = t.as_bytes()[p] == b'-';
++            let len = if flag { run(&t[p..end], |b| !b.is_ascii_whitespace()) } else { value_span(&t[p..end], b"") };
++            if len == 0 {
++                break;
++            }
++            let word = &t[p..p + len];
++            plain |= flag && word.eq_ignore_ascii_case("-AsPlainText");
++            if flag || already(word) {
++                out.push_str(word);
++            } else {
++                out.push_str(HIDDEN);
++                changed = true;
++            }
++            p += len;
++        }
++        out.push_str(&t[p..end]);
++        (plain && changed).then_some((end, out))
+     })
+ }
+ 
+@@ -2239,7 +2509,7 @@ mod tests {
+             ("docker login -u bob --password-stdin <<< S3cret", "docker login -u bob --password-stdin <<< [hidden]"),
+             ("sudo --stdin ls <<< \"my pass\"", "sudo --stdin ls <<< [hidden]"),
+             ("sudo -nS ls <<<pw", "sudo -nS ls <<<[hidden]"),
+-            ("sudo -S ls <<< 'my pass'-x", "sudo -S ls <<< [hidden]-x"),
++            ("sudo -S ls <<< 'my pass'-x", "sudo -S ls <<< [hidden]"),
+             ("ssh host sudo -S x <<< pw", "ssh host sudo -S x <<< [hidden]"),
+             ("env FOO=1 sudo -S ls <<< pw && ls", "env FOO=1 sudo -S ls <<< [hidden] && ls"),
+             ("\"S3cret\" | docker login -u bob --password-stdin", "[hidden] | docker login -u bob --password-stdin"),
+@@ -2289,4 +2559,155 @@ mod tests {
+             assert_eq!(masked(c), c, "{c}");
+         }
+     }
++
++    /// The mask of `raw`, which must not change when it is masked again (SAFE-019). Asserted in the
++    /// test itself so that the failing input is named.
++    fn stable(raw: &str) -> String {
++        let once = mask(raw);
++        let twice = mask(&once);
++        assert_eq!(twice, once, "a second mask changed {raw:?}");
++        once
++    }
++
++    /// FIX-6 item 2 (stand-in review FIX-SOON 1): the hidden echo stops at a `|` outside quotes, so a
++    /// wrapped `echo pw | sudo -S x` that is itself piped into another reader is hidden once and a
++    /// second mask changes nothing.
++    #[test]
++    fn safe019_a_wrapped_echo_piped_again_is_hidden_once_and_stays_that_way() {
++        for (raw, shown) in [
++            ("ssh host \"echo pw | sudo -S x\" | sudo -S y", "ssh host \"echo [hidden] | sudo -S x\" | sudo -S y"),
++            ("bash -c \"echo pw | sudo -S x\" | sudo -S y", "bash -c \"echo [hidden] | sudo -S x\" | sudo -S y"),
++            ("ssh host 'echo pw | sudo -S x' | sudo -S y", "ssh host 'echo [hidden] | sudo -S x' | sudo -S y"),
++            ("echo \"a|b\" | sudo -S ls", "echo [hidden] | sudo -S ls"),
++        ] {
++            assert_eq!(stable(raw), shown, "{raw}");
++        }
++    }
++
++    /// FIX-6 item 3 (stand-in review FIX-SOON 2): `$'..'` is one quoted value after `<<<`, the body of a
++    /// here-document is hidden when the command reads a password from its input, and a quoted literal
++    /// that opens a shell's or a launcher's quoted command is the value of the pipe inside it.
++    #[test]
++    fn safe019_ansi_c_here_strings_here_documents_and_literals_in_a_shell_command_are_hidden() {
++        for (raw, shown) in [
++            ("sudo -S ls <<< $'S3cret\\n'", "sudo -S ls <<< [hidden]"),
++            ("docker login --password-stdin <<< $'pw word'", "docker login --password-stdin <<< [hidden]"),
++            ("sudo -S ls <<< $'it\\'s'", "sudo -S ls <<< [hidden]"),
++            ("sudo -S ls <<EOF\nS3cret\nEOF", "sudo -S ls <<EOF\n[hidden]\nEOF"),
++            ("docker login -u bob --password-stdin <<EOF\nS3cret\nEOF\nls", "docker login -u bob --password-stdin <<EOF\n[hidden]\nEOF\nls"),
++            ("sudo -S ls <<-EOF\n\tS3cret\n\tEOF", "sudo -S ls <<-EOF\n[hidden]\n\tEOF"),
++            ("sudo -S ls <<'EOF'\nS3cret\nmore\nEOF", "sudo -S ls <<'EOF'\n[hidden]\nEOF"),
++            ("sudo -S ls << \"END\"\nS3cret\nEND\n", "sudo -S ls << \"END\"\n[hidden]\nEND\n"),
++            ("sudo -S ls <<EOF\r\nS3cret\r\nEOF\r\n", "sudo -S ls <<EOF\r\n[hidden]\r\nEOF\r\n"),
++            ("sudo -S ls <<EOF\nS3cret", "sudo -S ls <<EOF\n[hidden]"),
++            ("env FOO=1 sudo -S ls <<EOF\npw\nEOF", "env FOO=1 sudo -S ls <<EOF\n[hidden]\nEOF"),
++            ("powershell -Command \"'S3cret' | docker login --password-stdin\"", "powershell -Command \"[hidden] | docker login --password-stdin\""),
++            ("bash -c \"'pw' | sudo -S ls\"", "bash -c \"[hidden] | sudo -S ls\""),
++            ("bash -c '\"pw\" | sudo -S ls'", "bash -c '[hidden] | sudo -S ls'"),
++            ("ssh host \"'pw' | sudo -S ls\"", "ssh host \"[hidden] | sudo -S ls\""),
++        ] {
++            assert_eq!(stable(raw), shown, "{raw}");
++        }
++        for c in [
++            "cat <<EOF\nS3cret\nEOF",
++            "sudo ls <<EOF\nhello\nEOF",
++            "sudo -S ls <<EOF\nEOF",
++            "sudo -S ls <<EOF\n$SUDO_PW\nEOF",
++            "docker login --password-stdin <<EOF\n$PW\nEOF",
++            "sudo -S ls <<< $SUDO_PW",
++            "powershell -Command \"'hi' | grep h\"",
++            "bash -c \"'hi' | cat\"",
++            "ssh host \"'hi' | grep h\"",
++        ] {
++            assert_eq!(stable(c), c, "{c}");
++        }
++    }
++
++    /// FIX-6 item 4 (stand-in review FIX-SOON 3): PowerShell variables assigned with spaces round the `=`,
++    /// the text `ConvertTo-SecureString` turns into a secure string, and single-dash parameters that
++    /// sound secret.
++    #[test]
++    fn safe019_powershell_assignments_secure_strings_and_single_dash_secret_parameters_are_hidden() {
++        for (raw, shown) in [
++            ("$password = 'S3cret'; $password | docker login -u bob --password-stdin", "$password = [hidden]; $password | docker login -u bob --password-stdin"),
++            ("$Token = \"abc def\"", "$Token = [hidden]"),
++            ("$secret ='x'", "$secret =[hidden]"),
++            ("$apiKey\t=\tabc123", "$apiKey\t=\t[hidden]"),
++            ("ConvertTo-SecureString 'S3cret' -AsPlainText -Force", "ConvertTo-SecureString [hidden] -AsPlainText -Force"),
++            ("ConvertTo-SecureString -String \"my pass\" -AsPlainText -Force", "ConvertTo-SecureString -String [hidden] -AsPlainText -Force"),
++            ("ConvertTo-SecureString -AsPlainText -Force 'pw'", "ConvertTo-SecureString -AsPlainText -Force [hidden]"),
++            ("$s = convertto-securestring S3cret -asplaintext -force; $c = New-Object PSCredential('bob', $s)", "$s = convertto-securestring [hidden] -asplaintext -force; $c = New-Object PSCredential('bob', $s)"),
++            ("$s = (ConvertTo-SecureString 'pw' -AsPlainText -Force)", "$s = (ConvertTo-SecureString [hidden] -AsPlainText -Force)"),
++            ("'S3cret' | ConvertTo-SecureString -AsPlainText -Force", "[hidden] | ConvertTo-SecureString -AsPlainText -Force"),
++            ("Connect-Thing -Server x -Password S3cret", "Connect-Thing -Server x -Password [hidden]"),
++            ("Invoke-Thing -Token 'abc 123' -Name y", "Invoke-Thing -Token [hidden] -Name y"),
++            ("tool -passphrase hunter2", "tool -passphrase [hidden]"),
++        ] {
++            assert_eq!(stable(raw), shown, "{raw}");
++        }
++        for c in [
++            "$path = 'C:\\x'",
++            "$count = 3",
++            "$password = $env:PW",
++            "$password = $null",
++            "$token_count = 5",
++            "ConvertFrom-SecureString $s",
++            "ConvertTo-SecureString $enc",
++            "ConvertTo-SecureString $env:PW -AsPlainText -Force",
++            "ConvertTo-SecureString 'abc' -Key $k",
++            "'abc' | ConvertTo-SecureString",
++            "Get-Thing -Path C:\\x -Name y",
++            "Connect-Thing -Password $pw -Server x",
++            "Connect-Thing -PasswordFile C:\\x -Server y",
++            "gcc -pthread -O2 x.c",
++        ] {
++            assert_eq!(stable(c), c, "{c}");
++        }
++    }
++
++    /// FIX-6 item 5 (stand-in review AFTER 1 and 3): a quoted value goes on through the text stuck to it,
++    /// and a pipe that goes on through a filter still reaches the password reader.
++    #[test]
++    fn safe019_a_quoted_value_continues_through_adjacent_text_and_chained_pipes_reach_the_reader() {
++        for (raw, shown) in [
++            ("sudo -S ls <<< \"a b\"c", "sudo -S ls <<< [hidden]"),
++            ("tool --password 'a b'x y", "tool --password [hidden] y"),
++            ("API_TOKEN=\"abc\"def ls", "API_TOKEN=[hidden] ls"),
++            ("bash -c \"tool --token 'abc'\" more", "bash -c \"tool --token [hidden]\" more"),
++            ("bash -c 'tool --token \"abc\"' more", "bash -c 'tool --token [hidden]' more"),
++            ("echo pw | cat | sudo -S ls", "echo [hidden] | cat | sudo -S ls"),
++            ("echo pw | tee /dev/null | sudo -S ls", "echo [hidden] | tee /dev/null | sudo -S ls"),
++            ("echo pw |& cat |& docker login --password-stdin", "echo [hidden] |& cat |& docker login --password-stdin"),
++            ("echo pw | cat |\n sudo -S ls", "echo [hidden] | cat |\n sudo -S ls"),
++        ] {
++            assert_eq!(stable(raw), shown, "{raw}");
++        }
++        for c in ["echo pw | cat | tee out", "echo hi | cat || sudo -S ls", "echo hi | cat; sudo -S ls", "echo hi | cat\nsudo -S ls", "cat f | cat | sudo -S ls"] {
++            assert_eq!(stable(c), c, "{c}");
++        }
++    }
++
++    /// After-list row 641: a password piped into a reader through a redirect, a brace group, a `$(..)`
++    /// beside it, a lone backtick in single quotes, a launcher whose quoted command reaches `sudo -S`
++    /// after a separator, a here-document piped on, and `gh auth login --with-token` are all hidden.
++    #[test]
++    fn safe019_row641_pipe_reader_leaks_are_hidden() {
++        for (c, want) in [
++            ("echo ghp_abc | gh auth login --with-token", "echo [hidden] | gh auth login --with-token"),
++            ("echo pw 2>&1 | sudo -S ls", "echo [hidden] 2>&1 | sudo -S ls"),
++            ("echo pw &>/dev/null | sudo -S ls", "echo [hidden] &>/dev/null | sudo -S ls"),
++            ("{ echo pw; } | sudo -S ls", "{ echo [hidden]; } | sudo -S ls"),
++            ("echo $(date) pw | sudo -S ls", "echo [hidden] | sudo -S ls"),
++            ("echo pw | ssh host \"ls; sudo -S x\"", "echo [hidden] | ssh host \"ls; sudo -S x\""),
++            ("echo pw | ssh host \"ls && sudo -S x\"", "echo [hidden] | ssh host \"ls && sudo -S x\""),
++            ("echo 'a`b' | sudo -S ls", "echo [hidden] | sudo -S ls"),
++            ("cat <<EOF | sudo -S ls\nhunter2\nEOF", "cat <<EOF | sudo -S ls\n[hidden]\nEOF"),
++        ] {
++            assert_eq!(stable(c), want, "{c}");
++        }
++        // Nothing typed, a reader nowhere in reach, or a quoted separator that ends the launcher's command.
++        for c in ["echo $PASS | sudo -S ls", "echo $(cat pw.txt) | sudo -S ls", "echo pw 2>&1 | grep x", "{ echo hi; } | cat", "cat <<EOF | grep x\nhello\nEOF", "echo pw | ssh host \"ls; cat\"", "echo 'a`b' | cat", "gh auth login --with-token < token.txt", "cp mysql.log /bak -pr"] {
++            assert_eq!(stable(c), c, "{c}");
++        }
++    }
+ }
