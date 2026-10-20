@@ -631,6 +631,18 @@ pub fn gate(_command: &str, page_no: Option<u32>, worktree: Option<&str>, tabs: 
     pick_tab(tabs, page_no, worktree).map_err(|m| Fail { code: "not_found", message: m, data: json!({ "hint": "open a browser tab in the worktree (Ctrl+T, Browser) or name one with --page <n>" }) })
 }
 
+/// after-list 91: `--page <n>` names a page the app has opened whose pane has not reported it yet
+/// (a tab opened a moment ago). When the page exists, it counts as open: it joins the list as an
+/// unplaced tab (no worktree, not on screen), so only an explicit `--page` can pick it.
+pub fn reported_or_open(mut tabs: Vec<super::Tab>, page_no: Option<u32>, exists: impl Fn(u32) -> bool) -> Vec<super::Tab> {
+    if let Some(n) = page_no {
+        if !tabs.iter().any(|t| t.id == n) && exists(n) {
+            tabs.push(super::Tab { id: n, worktree: None, shown: false, seen: 0, url: String::new(), title: String::new() });
+        }
+    }
+    tabs
+}
+
 /// Upload: the files are read here and carried into the page as bytes (a page cannot open a path).
 fn files_of(list: &str) -> Result<Vec<Value>, Fail> {
     let mut out = Vec::new();
@@ -826,7 +838,7 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
         // The clipboard is the machine's, not a page's: no tab is needed.
         return clipboard(short(&req.command), a["text"].as_str());
     }
-    let id = gate(&req.command, page_no, worktree, &tabs())?;
+    let id = gate(&req.command, page_no, worktree, &reported_or_open(tabs(), page_no, super::page_exists))?;
     let cmd = short(&req.command);
     let limit = text("limit").and_then(|n| n.parse::<usize>().ok()).unwrap_or(LOG_DEFAULT);
     let set = |f: &dyn Fn(&mut Map<String, Value>)| with_emu(id, |e| f(&mut e.state));
@@ -1152,6 +1164,12 @@ pub fn holder_of(req: &Request) -> String {
     given.map(str::to_string).or_else(|| req.pane.as_ref().map(|p| p.handle.clone()).filter(|h| !h.is_empty())).unwrap_or_else(|| "cli".into())
 }
 
+/// after-list 732: a lease whose holder terminal has closed is freed before any lease is taken
+/// or listed, so a closed terminal never keeps a placement from the next holder.
+fn free_gone_leases() {
+    super::lease::with(|t| t.free_gone(super::terminal_live));
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -1227,6 +1245,7 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
             // T-312-b (ORCH-061): a page placed under a lease needs the lease first.
             let lease = text("lease");
             let who = holder_of(req);
+            free_gone_leases();
             let took = match &lease {
                 Some(l) => super::lease::with(|t| t.acquire(l, &who, now_ms())).map_err(|m| Fail::new("blocked", m))?,
                 None => false,
@@ -1270,6 +1289,7 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
             json!({ "page": id, "destructive": true, "summary": format!("page {id} closed") })
         }
         "browser.tab-lease" => {
+            free_gone_leases();
             let l = text("lease").unwrap_or_default();
             let who = holder_of(req);
             let took = super::lease::with(|t| t.acquire(&l, &who, now_ms())).map_err(|m| Fail::new("blocked", m))?;
@@ -1291,6 +1311,7 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
             json!({ "lease": l, "holder": who, "closed": pages, "destructive": !pages.is_empty(), "summary": format!("placement {l} released; {} page(s) closed", pages.len()) })
         }
         "browser.tab-leases" => {
+            free_gone_leases();
             let open: Vec<u32> = tabs().iter().map(|t| t.id).collect();
             let rows = super::lease::with(|t| {
                 t.prune(&open);
@@ -1672,6 +1693,20 @@ mod tests {
         assert_eq!(gate("browser.snapshot", Some(7), None, &[]).unwrap_err().message, "browser tab 7 is not open");
         let tabs = [super::super::Tab { id: 3, worktree: Some("G:/Temp/wt".into()), shown: true, seen: 1, url: String::new(), title: String::new() }];
         assert_eq!(gate("browser.snapshot", None, Some("G:/Temp/wt"), &tabs).unwrap(), 3);
+    }
+
+    #[test]
+    fn a_page_opened_a_moment_ago_answers_to_page_before_its_pane_reports_it() {
+        let reported = vec![super::super::Tab { id: 3, worktree: Some("G:/Temp/wt".into()), shown: true, seen: 1, url: String::new(), title: String::new() }];
+        // Page 8 exists in the engine but its pane has not reported it: --page 8 reaches it.
+        let list = reported_or_open(reported.clone(), Some(8), |n| n == 8);
+        assert_eq!(gate("browser.snapshot", Some(8), None, &list).unwrap(), 8);
+        // It is never picked without --page: the worktree pick still finds the reported tab.
+        assert_eq!(gate("browser.snapshot", None, Some("G:/Temp/wt"), &list).unwrap(), 3);
+        // A page that does not exist is still refused, and a reported one is not doubled.
+        let none = reported_or_open(reported.clone(), Some(9), |n| n == 8);
+        assert_eq!(gate("browser.snapshot", Some(9), None, &none).unwrap_err().message, "browser tab 9 is not open");
+        assert_eq!(reported_or_open(reported, Some(3), |_| true).len(), 1);
     }
 
     #[test]

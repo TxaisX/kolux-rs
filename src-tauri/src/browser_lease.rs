@@ -80,6 +80,19 @@ impl Leases {
         }
     }
 
+    /// after-list 732: frees every lease whose holder is a Kolux terminal (`term-<n>`) that `live`
+    /// says is gone, so a closed terminal never keeps a placement from the next holder. A named
+    /// `--holder` or the plain command line cannot be judged and is left alone. The freed leases'
+    /// pages stay open as ordinary tabs (coordinator default: no page vanishes behind the user's
+    /// back); their placements are returned.
+    pub fn free_gone(&mut self, live: impl Fn(&str) -> bool) -> Vec<String> {
+        let gone: Vec<String> = self.by_place.iter().filter(|(_, l)| terminal_holder(&l.holder) && !live(&l.holder)).map(|(p, _)| p.clone()).collect();
+        for p in &gone {
+            self.by_place.remove(p);
+        }
+        gone
+    }
+
     /// The placement a page was opened under, if any.
     pub fn place_of(&self, page: u32) -> Option<&str> {
         self.by_place.iter().find(|(_, l)| l.pages.contains(&page)).map(|(p, _)| p.as_str())
@@ -89,6 +102,11 @@ impl Leases {
     pub fn rows(&self) -> Vec<Value> {
         self.by_place.iter().map(|(p, l)| json!({ "lease": p, "holder": l.holder, "pages": l.pages, "since": l.since })).collect()
     }
+}
+
+/// A holder named after a Kolux terminal (`term-<n>`, what a call from inside one gets).
+fn terminal_holder(h: &str) -> bool {
+    h.strip_prefix("term-").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 static LEASES: LazyLock<Mutex<Leases>> = LazyLock::new(Default::default);
@@ -144,6 +162,27 @@ mod tests {
         l.add_page("x", "a", 2).unwrap();
         l.prune(&[2]);
         assert_eq!(l.rows()[0]["pages"], json!([2]));
+    }
+
+    #[test]
+    fn a_lease_whose_holder_terminal_closed_is_freed_for_the_next_holder() {
+        let mut l = Leases::default();
+        l.acquire("review", "term-4", 1).unwrap();
+        l.add_page("review", "term-4", 9).unwrap();
+        l.acquire("docs", "term-5", 1).unwrap();
+        l.acquire("named", "planner", 1).unwrap();
+        l.acquire("plain", "cli", 1).unwrap();
+        l.acquire("odd", "term-", 1).unwrap();
+        // term-4 closed; term-5 still runs. Names that are not terminals are never judged.
+        let freed = l.free_gone(|h| h == "term-5");
+        assert_eq!(freed, vec!["review".to_string()]);
+        assert_eq!(l.acquire("review", "term-7", 2), Ok(true));
+        assert!(l.acquire("docs", "term-7", 2).unwrap_err().contains("held by term-5"));
+        assert!(l.acquire("named", "x", 2).is_err());
+        assert!(l.acquire("plain", "x", 2).is_err());
+        assert!(l.acquire("odd", "x", 2).is_err());
+        // Nothing gone: nothing freed.
+        assert!(l.free_gone(|_| true).is_empty());
     }
 
     #[test]

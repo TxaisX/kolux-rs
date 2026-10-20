@@ -964,6 +964,12 @@ fn app_origin(app: &AppHandle) -> Option<Url> {
 fn view(app: &AppHandle, id: u32) -> Result<Webview, String> {
     app.get_webview(&label(id)).ok_or_else(|| format!("browser tab {id} is not open"))
 }
+/// after-list 91: does page `id` exist in the engine (opened, whether or not its pane has reported
+/// it yet)? False before the app is known.
+pub fn page_exists(id: u32) -> bool {
+    driver().ok().and_then(|d| d(Act::Exists(id)).ok()).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
 
 fn err(e: tauri::Error) -> String {
     e.to_string()
@@ -1586,6 +1592,10 @@ pub enum Act<'a> {
     /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
     SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
     /// T-251 (CLI-047): one DevTools call on the page's engine (a picture of the page).
+    /// after-list 91: does this page exist in the engine (opened, reported or not)?
+    Exists(u32),
+    /// after-list 732: is this handle an open Kolux terminal?
+    TerminalLive(&'a str),
     DevTools(u32, &'a str, String),
     /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
     Pdf(u32, &'a str),
@@ -1679,6 +1689,11 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
         }
         Act::DevTools(id, method, params) => {
             let text = engine::devtools(&view(app, id)?, method, params, CAPTURE_WAIT)?;
+        Act::Exists(id) => Ok(serde_json::Value::Bool(view(app, id).is_ok())),
+        Act::TerminalLive(handle) => {
+            use tauri::Manager;
+            Ok(serde_json::Value::Bool(app.try_state::<crate::terminal::Terminals>().is_none_or(|t| t.live(handle))))
+        }
             serde_json::from_str(&text).map_err(|_| "the page's engine answered with something that is not JSON".to_string())
         }
         Act::Pdf(id, path) => engine::print_pdf(&view(app, id)?, path, CAPTURE_WAIT).map(serde_json::Value::Bool),
@@ -1711,6 +1726,13 @@ pub fn relayout(id: u32, zoom: Option<f64>) -> Result<(), String> {
 
 /// `kolux tab switch|create|close`, `tab profile ...`: the front end is told and acts.
 pub fn tell(event: &str, payload: serde_json::Value) -> Result<(), String> {
+/// after-list 732: is `handle` an open Kolux terminal? Before the app is known (no tab opened
+/// yet) every holder counts as live, so nothing is freed on a guess.
+pub fn terminal_live(handle: &str) -> bool {
+    // Through the driver, so the command line's code never links the window toolkit itself.
+    driver().ok().and_then(|d| d(Act::TerminalLive(handle)).ok()).and_then(|v| v.as_bool()).unwrap_or(true)
+}
+
     driver()?(Act::Emit(event, payload)).map(|_| ())
 }
 
