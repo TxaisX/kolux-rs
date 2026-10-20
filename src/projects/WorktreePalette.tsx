@@ -13,6 +13,7 @@ import type { AgentState } from "./rows";
 import type { Badge } from "../terminal/tabs";
 import { VOCAB } from "../terminal/status";
 import { StatusGlyph } from "../chrome/icons";
+import { capRows, moreLabel, moreTitle, restoreFocus } from "../shell/paletteCaps";
 
 /** A row the window supplies: its section, what it shows, and what Enter does. `parent` is the
  * project a row belongs to (matched after the row's own text), `dir` the folder it stands for
@@ -224,6 +225,12 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
     return () => clearInterval(t);
   }, []);
   const [chips, setChips] = useState<Chip[]>(() => scope.map((value) => ({ field: "repo", value })));
+  // VIEW-039: 20 rows a section, 20 more at a time; focus goes back to where the palette was opened from.
+  const [extra, setExtra] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    return () => queueMicrotask(() => void restoreFocus(prev, (s) => document.querySelector<HTMLElement>(s)));
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -238,11 +245,15 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
   }, [projects]);
 
   const typed = query.trim() !== "";
-  const rows = useMemo(() => {
-    const pasted = onItem ? pastedItems(query, linked ?? {}, hosts ?? ["github.com"], (d) => Object.values(lists).flat().find((w) => sameDir(w.path, d)), onItem, onWorktree) : [];
-    const found = paletteRows(chipFilter(withRepos([...items, ...worktreeItems(projects, lists, typed, prOf, onWorktree, atOf)], lists), chips), query, recent, hasWorktree);
-    return [...pasted.map((p): Row => ({ ...p, spans: [], off: false })), ...found];
-  }, [items, projects, lists, query, chips, hasWorktree, linked, hosts, onItem]);
+  const pasted = useMemo(
+    () => (onItem ? pastedItems(query, linked ?? {}, hosts ?? ["github.com"], (d) => Object.values(lists).flat().find((w) => sameDir(w.path, d)), onItem, onWorktree) : []).map((p): Row => ({ ...p, spans: [], off: false })),
+    [query, linked, hosts, lists, onItem],
+  );
+  const { shown: found, more } = useMemo(
+    () => capRows(paletteRows(chipFilter(withRepos([...items, ...worktreeItems(projects, lists, typed, prOf, onWorktree, atOf)], lists), chips), query, recent, hasWorktree), extra),
+    [items, projects, lists, query, chips, hasWorktree, extra],
+  );
+  const rows = useMemo(() => [...pasted, ...found], [pasted, found]);
   const create = typed ? query.trim() : null;
   const item = create ? workItem(create) : null;
   const repoChips = chips.filter((c) => c.field === "repo");
@@ -260,6 +271,7 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
   const setText = (v: string) => {
     if (v.length > MAX_QUERY) return setRefused(true);
     setRefused(false);
+    setExtra({});
     setQuery(v);
     setAt(workItem(v) && !(onItem && githubItem(v, hosts ?? ["github.com"])) ? Infinity : 0);
   };
@@ -339,6 +351,11 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
                   )}
                   {r.off && <span className="reason">needs an open worktree</span>}
                 </button>
+                {(i === rows.length - 1 || rows[i + 1].section !== r.section) && (more[r.section] ?? 0) > 0 && (
+                  <button className="menu-item palette-more" title={moreTitle(more[r.section])} onClick={() => setExtra({ ...extra, [r.section]: (extra[r.section] ?? 0) + 1 })}>
+                    {moreLabel(more[r.section])}
+                  </button>
+                )}
               </Fragment>
             );
           })}

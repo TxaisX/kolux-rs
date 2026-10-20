@@ -6,6 +6,8 @@ import type { ITerminalOptions } from "@xterm/xterm";
 import { monoFont, SPAN } from "../theme";
 import { fontStack } from "../settings/fonts";
 import { applyInput } from "./inputWire";
+import { drawOptions } from "../shell/termDraw";
+import { applyLinkState } from "../shell/linkAsk";
 
 export const FIELDS = {
   size: "terminalFontSize",
@@ -43,7 +45,7 @@ export type TerminalText = {
   lineHeight: number;
   cursor: Cursor;
   blink: boolean;
-  /** Minimum contrast on: text is kept at least 4.5:1 against its background. */
+  /** Minimum contrast on (the default, TERM-102): text is kept at least 4.5:1 against its background. */
   contrast: boolean;
   scrollback: number;
   scroll: number;
@@ -73,7 +75,7 @@ export function readText(s: Record<string, unknown>, onWindows = windows()): Ter
     lineHeight: clampNumber(s[FIELDS.lineHeight], LINE_HEIGHT.min, LINE_HEIGHT.max, LINE_HEIGHT.start, 0.05),
     cursor: pick(s[FIELDS.cursor], CURSORS, "block"),
     blink: s[FIELDS.blink] !== false,
-    contrast: s[FIELDS.contrast] === true,
+    contrast: s[FIELDS.contrast] !== false, // TERM-102: on unless switched off
     // An older setting saved as a string of rows is read as rows.
     scrollback: clampNumber(s[FIELDS.scrollback], SCROLLBACK.min, SCROLLBACK.max, SCROLLBACK.start),
     scroll: clampNumber(s[FIELDS.scroll], 0.1, 5, 1.15, 0.1), // TERM-089: normal wheel speed 1.15
@@ -95,6 +97,7 @@ export const optionsOf = (t: TerminalText): ITerminalOptions => ({
   lineHeight: t.lineHeight,
   cursorStyle: t.cursor,
   cursorBlink: t.blink,
+  ...drawOptions(t.cursor), // TERM-101 hollow block only when unfocused, TERM-104 glyphs kept in their cells
   minimumContrastRatio: t.contrast ? 4.5 : 1,
   scrollback: t.scrollback,
   scrollSensitivity: t.scroll,
@@ -109,6 +112,7 @@ export const TEXT_EVENT = "kolux-terminal-text";
 export function applyText(s: Record<string, unknown> | null | undefined): void {
   current = readText(s ?? {});
   applyInput(s); // T-247-d: the input preferences ride the same settings reads
+  applyLinkState(s); // TERM-135: where terminal links open, and whether that was asked
   if (typeof window !== "undefined") window.dispatchEvent(new Event(TEXT_EVENT));
 }
 

@@ -1,17 +1,19 @@
 // TERM-049 (T-102-c): Tab Color. A small palette, a colour per tab key kept in window state (like
 // pinned tabs, not saved with the layout), and the menu rows that pick one. Pure.
+import type { CSSProperties } from "react";
 export type TabColor = { id: string; label: string; css: string };
 
-/** Eight picks plus "none"; css values are theme-safe mid tones read against both backgrounds. */
+/** TERM-133: nine colours plus "none" (ten choices), in the card order; css values are theme-safe mid tones read against both backgrounds. */
 export const TAB_COLORS: readonly TabColor[] = [
+  { id: "blue", label: "Blue", css: "#3e7bd9" },
+  { id: "purple", label: "Purple", css: "#8e5cd6" },
+  { id: "pink", label: "Pink", css: "#d6579b" },
   { id: "red", label: "Red", css: "#e5534b" },
   { id: "orange", label: "Orange", css: "#e08a3c" },
   { id: "yellow", label: "Yellow", css: "#c9a227" },
   { id: "green", label: "Green", css: "#46a758" },
   { id: "teal", label: "Teal", css: "#2ba5a5" },
-  { id: "blue", label: "Blue", css: "#3e7bd9" },
-  { id: "purple", label: "Purple", css: "#8e5cd6" },
-  { id: "pink", label: "Pink", css: "#d6579b" },
+  { id: "grey", label: "Grey", css: "#8b8f98" },
 ];
 
 export type TabColors = Record<number, string>;
@@ -32,10 +34,11 @@ export function setTabColor(colors: TabColors, key: number, id: string | null): 
 /** Drop the entries of tabs that closed. */
 export const forgetColors = (colors: TabColors, gone: number[]): TabColors => Object.fromEntries(Object.entries(colors).filter(([k]) => !gone.includes(Number(k))));
 
-/** The tab's marker style: a bar in the colour above the tab, nothing for none. */
-export const tabStyle = (colors: TabColors, key: number): { boxShadow: string } | undefined => {
+/** TERM-133: the tab's small coloured dot: the colour goes to the tab as --tab-dot and shell.css draws the dot
+ *  before the title; nothing for none, and the terminal's own colours are untouched. */
+export const tabStyle = (colors: TabColors, key: number): CSSProperties | undefined => {
   const c = colorOf(colors, key);
-  return c ? { boxShadow: `inset 0 2px 0 ${c.css}` } : undefined;
+  return c ? ({ "--tab-dot": c.css } as CSSProperties) : undefined;
 };
 
 export type TabMenuEntry =

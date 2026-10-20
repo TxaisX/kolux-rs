@@ -62,6 +62,8 @@ import { findIn, linesOf, nearestFrom, placeMatches, searchLater, segments, step
 import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
+import { copyOnSelect } from "../shell/inputExtras";
+import { askLink } from "../shell/linkAsk";
 import { handlesIn } from "./tabs";
 import { markShell, runningOf, shellInAgentPane } from "./remove";
 import { registerTurnSource, xtermSource } from "./turnRead";
@@ -187,6 +189,8 @@ type Props = {
   dragCell?: { onStart: () => void; onEnd: () => void };
   /** TERM-035: Equalize in the pane menu; given only while the grid holds more than one pane. */
   onEqualize?: () => void;
+  /** TERM-016: Move to Tab in the pane menu. */
+  onMoveToTab?: () => void;
   /** TERM-013: the grid's expand: `on` while this pane's cell fills the grid; `can` is false for a lone classic pane. */
   expand?: { on: boolean; can: boolean; toggle: () => void };
   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
@@ -222,7 +226,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -469,6 +473,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       const door = clickTarget(f, e, keys.current.platform === "darwin", o.linksOpenInKolux && !!o.onOpenLink);
       if (door === null) return;
       const said = (err: unknown) => setFlash(explainError(String(err)));
+      // TERM-135: the first plain web click asks where links open (Shift or Alt with the modifier already names it)
+      if (f.kind === "url" && askLink(f.target, e.shiftKey || e.altKey, (to) => (to === "kolux" && o.onOpenLink ? o.onOpenLink(f.target) : void invoke("open_external", { url: f.target }).catch(said)))) return;
       if (door === "kolux") o.onOpenLink?.(f.target);
       else if (door === "system") invoke("open_external", { url: f.target }).catch(said);
       else {
@@ -1007,8 +1013,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     };
     window.addEventListener(INPUT_EVENT, refeel);
     // SET-025: copy on select, and right-click paste (the menu stays away while it is on).
+    // TERM-066: a clipboard that refuses says so once per drag, not once per movement.
+    const copier = copyOnSelect((text) => navigator.clipboard?.writeText(text), setFlash);
     const selected = term.onSelectionChange(() => {
-      if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+      if (currentText().copyOnSelect) copier(term.hasSelection() ? term.getSelection() : "");
     });
     // TERM-070: the menu and chord paste read the clipboard themselves; no text (or an unreadable clipboard) tries the image.
     const pasteApi = () =>
@@ -1588,6 +1596,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             agentActions: onReviewPlan ? [{ id: "reviewPlan", name: "Review plan", title: "Read the plan, comment on it, then approve or ask for changes", run: onReviewPlan }] : [],
             onSplit,
             onEqualize,
+            onMoveToTab,
             onExpand,
             onSetTitle: onRename && (() => setNaming(true)),
             hasTitle: custom,

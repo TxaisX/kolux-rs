@@ -122,6 +122,8 @@ export const actions: Action[] = [
   // T-239 (BROW-019): bound again now that the window reopens a closed browser tab (browser/pages.ts;
   // T-164-b adds terminal tabs through src/terminal/closedTabs.ts). T-543-b had shipped it unbound.
   a("tab.reopenClosed", "Reopen closed tab", "tabs", ["Mod+Shift+T"]),
+  // T-305 (TERM-053): the tab search box (src/shell/TabSearch.tsx).
+  a("tab.search", "Search open tabs", "tabs", ["Mod+Shift+K"], { terminalSafe: true, keywords: ["find tab", "switch tab"] }),
   a("tab.nextSameType", "Next tab (same type)", "tabs", ["Mod+Alt+BracketRight"], { terminalSafe: true }),
   a("tab.previousSameType", "Previous tab (same type)", "tabs", ["Mod+Alt+BracketLeft"], { terminalSafe: true }),
   a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),
@@ -154,7 +156,7 @@ export const actions: Action[] = [
   a("fileExplorer.delete", "Delete file", "explorer", ["Delete"], { darwin: ["Delete", "Mod+Backspace"] }),
   a("settings.search", "Search Settings", "settings", ["Mod+F"]),
   a("terminal.copySelection", "Copy terminal selection", "terminal", ["Ctrl+Shift+C", "Ctrl+C"], { terminalSafe: true }),
-  a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"]),
+  a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"], { darwin: ["Mod+A"] }),
   a("terminal.paste", "Paste into terminal", "terminal", ["Ctrl+V", "Ctrl+Shift+V", "Shift+Insert"], { terminalSafe: true }),
   a("terminal.search", "Search active pane", "terminal", ["Mod+F"]),
   a("terminal.clear", "Clear active pane", "terminal", ["Mod+K"], { keywords: ["cls", "clear screen"] }),

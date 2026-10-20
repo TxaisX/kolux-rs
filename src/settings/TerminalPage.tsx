@@ -19,6 +19,8 @@ import { detectPlatform } from "../keys/keymap";
 import { readLook } from "./general";
 import TerminalImport from "./TerminalImport";
 import { useSettings } from "./useSettings";
+import { DENSITIES, DENSITY_FIELD, readDensity } from "../shell/paneChrome";
+import { KOLUX_FIELD, switchPatch } from "../shell/linkAsk";
 
 /** TERM-119: on unless switched off; the app reads the same field when it starts a shell. */
 const SHELL_HISTORY_FIELD = "shellHistoryPerWorktree";
@@ -144,6 +146,10 @@ export default function TerminalPage() {
           </div>
           <Switch label="Blinking cursor" checked={text.blink} onChange={(on) => save({ [FIELDS.blink]: on })} />
           <Switch label="Minimum contrast: keep text readable on any colour scheme" checked={text.contrast} onChange={(on) => save({ [FIELDS.contrast]: on })} />
+          <div className="look-select">
+            <span>Pane headers</span>
+            <Segmented label="Pane headers" options={DENSITIES.map((d) => ({ id: d, label: d[0].toUpperCase() + d.slice(1) }))} value={readDensity(settings)} onPick={(d) => save({ [DENSITY_FIELD]: d })} />
+          </div>
         </section>
       )}
       {text && (
@@ -160,6 +166,13 @@ export default function TerminalPage() {
               <p className="conn-detail">The up arrow in bash, zsh and fish then shows the commands run in that worktree only. Command Prompt and PowerShell are left as they are, and a history file you set yourself is kept. Applies to terminals opened after the change.</p>
             </>
           )}
+        </section>
+      )}
+      {text && (
+        <section className="conn-card" data-section="links">
+          <h2 className="conn-name">Links</h2>
+          <Switch label="Open web links from the terminal in the Kolux browser" checked={settings?.[KOLUX_FIELD] === true} onChange={(on) => save(switchPatch(on))} />
+          <p className="conn-detail">Off opens them in your system browser. Hold Shift with Ctrl (Cmd on macOS) and click to use the system browser for a single link. Turning this switch yourself also stops the first-click question.</p>
         </section>
       )}
       {text && (

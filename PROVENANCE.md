@@ -929,6 +929,13 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · shell T-146-e · spec/05 VIEW-009/VIEW-014, spec/01 PROJ-083; React docs (react.dev) and Tauri 2 docs (v2.tauri.app: invoke); this tree's own src/projects/space.ts, deleting.ts, bulk.rs, FloorView.tsx; no outside code
 > 2026-10-20 · shell T-258 · spec/03 TERM-056, spec/04 STAT-035 rules; React docs (react.dev); this tree's own App.tsx tabName, chrome/Tip.tsx; no outside code
 > 2026-10-20 · shell T-285 · spec/17 SET-042/SET-060/SET-062, spec/19 APP-054 rules; React docs (react.dev); this tree's own src/status/manage.tsx, ResourceManager.tsx, terminal.rs kill; no outside code
+> 2026-10-20 · shell T-267 · spec/03 TERM-011/026/057/102 rules; MDN (developer.mozilla.org: ::-webkit-scrollbar, wheel event), xterm.js docs (xtermjs.org: minimumContrastRatio); this tree's own styles.css, theme.ts, text.ts; no outside code
+> 2026-10-20 · shell T-310 · spec/05 VIEW-039/072/106/113/117/118 rules; MDN (developer.mozilla.org: hover media feature, WebGL debug renderer info), React docs (react.dev); this tree's own WorktreePalette.tsx, LineNotes.tsx, EditorPane.tsx, menu.rs, recovery.rs; no outside code
+> 2026-10-20 · shell T-252 · spec/03 TERM-008/016 rules; this tree's own grid.ts, rearrange.ts, tabSplit.ts, PaneMenu.tsx; no outside code
+> 2026-10-20 · shell T-305 · spec/03 TERM-018/053/062/066/067/072 rules; this tree's own TerminalPane.tsx, floating/panel.ts, keys/actions.ts, newTabEntry.ts; no outside code
+> 2026-10-20 · shell T-308 · spec/03 TERM-101/104/121/133/135 rules; xterm.js typings in node_modules (cursorInactiveStyle, rescaleOverlappingGlyphs, unicode provider); this tree's own text.ts, tabColor.ts, ProjectsPanel setup tab, TerminalPane.tsx openFound; no outside code
+> 2026-10-20 · shell T-302-b · spec/01 PROJ-009/018/029/043/054/058 rules; this tree's own src/projects headers/jump/selection/outsideCard/baseHint/projectIcon and ProjectsPanel.tsx; no outside code
+> 2026-10-20 · shell T-280-b · spec/03 SET-038 autosave rule; this tree's own src/settings/editorPrefs.ts; no outside code
 > 2026-10-20 · T-546-b · this tree's own TopBar, actions and tower files; no outside source
 > 2026-10-20 · T-550 · this tree's UsagePill, SettingsPage and the user guide; no outside source
 > 2026-10-20 · T-546-c · this tree's tower files and capabilities; no outside source
@@ -966,3 +973,6 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · tasks T-164-b · spec/03 TERM-047 as given in the PLAN card; this tree's own closedTabs.ts, browser/pages.ts and the path_kind command; no outside code
 > 2026-10-20 · tasks T-281 · spec GIT-012, GIT-045, GIT-048, GIT-070 as given in the brief; git documentation for check-ignore, config (core.longpaths, GIT_CONFIG_COUNT) and gitignore (git-scm.com/docs/git-check-ignore, git-scm.com/docs/git-config, git-scm.com/docs/gitignore); GitHub REST documentation for requested reviewers and labels (docs.github.com/rest); this tree's own git.rs, scm.rs, procs.rs, edits.ts, prModel.ts and ghHealth.ts; no outside code
 > 2026-10-20 · orchestration T-255 · spec/08 ORCH-042 and COMPAT ORCH-042 as given in the brief; Claude Code public docs, agent teams page (code.claude.com/docs/en/agent-teams: display modes, teammateMode, split panes need tmux or iTerm2); tmux public manual (man.openbsd.org/tmux.1: split-window, send-keys, display-message, list-panes, kill-pane, respawn-pane, -V, FORMATS); this tree's own src/launch/teams.ts (agentTeamsMode), cli.rs terminal split/close events; no outside code
+> 2026-10-20 · shell T-305 rest · spec/03 TERM-053 as given in the brief; this tree's own src/shell/inputExtras.ts, projects/WorktreePalette.tsx and keys/actions.ts; no outside code
+> 2026-10-20 · shell T-310 rest · spec/03 VIEW-106, VIEW-113, VIEW-072 as given in the brief; this tree's own src/shell/about.ts, mdPrefs.ts, editor/EditorPane.tsx, editor/frontMatter.ts, src-tauri/src/menu.rs; no outside code
+> 2026-10-20 · shell T-280-b custom sound · this tree's src/settings/notifications.ts and the brief; no outside code

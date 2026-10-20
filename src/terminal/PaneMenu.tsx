@@ -33,6 +33,8 @@ export type MenuContext = {
   onSplit?: (dir: "right" | "down") => void;
   /** Given only when the grid is split into more than one pane. */
   onEqualize?: () => void;
+  /** TERM-016: given when the pane has a neighbouring cell to fold into as a tab. */
+  onMoveToTab?: () => void;
   onExpand?: () => void;
   onSetTitle?: () => void;
   /** Clear Title appears only when the pane has a title of its own. */
@@ -61,6 +63,7 @@ export function paneMenuItems(c: MenuContext): MenuItem[] {
   add(2, "splitRight", "Split Right", split && (() => split("right")), { key: "terminal.splitRight" });
   add(2, "splitDown", "Split Down", split && (() => split("down")), { key: "terminal.splitDown" });
   add(2, "equalize", "Equalize", c.onEqualize, { key: "terminal.equalizePaneSizes", title: "Gives every pane in the grid the same size" });
+  add(2, "moveToTab", "Move to Tab", c.onMoveToTab, { title: "Moves this pane into the tab strip of the pane beside it; the program keeps running" });
   add(2, "expand", c.expanded ? "Collapse" : "Expand", c.canExpand ? c.onExpand : undefined, { key: "terminal.expandPane" });
   add(3, "setTitle", "Set Title…", c.onSetTitle, { key: "terminal.setTitle" });
   add(3, "clearTitle", "Clear Title", c.hasTitle ? c.onClearTitle : undefined, { key: "terminal.clearPaneTitle" });

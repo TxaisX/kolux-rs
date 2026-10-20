@@ -204,7 +204,8 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
     // Report Crash joins this list with the crash report card (T-183): until then it would open nothing.
     let mut help = vec![item("help.explore", "Explore Kolux"), item("help.gettingStarted", "Getting Started")];
     if os != Os::Mac {
-        help.extend([Node::Sep, Node::Stock(Stock::About), item("help.checkUpdates", "Check for Updates")]);
+        // VIEW-106: About is the app's own panel (Safe Graphics Mode, GPU status), opened by the page; macOS keeps the stock About in its app menu.
+        help.extend([Node::Sep, item("help.about", "About Kolux RS"), item("help.checkUpdates", "Check for Updates")]);
     }
     bar.push(Node::Sub { label: "Help", items: help });
     bar
@@ -611,8 +612,8 @@ mod tests {
         for os in [Os::Windows, Os::Linux] {
             let bar = spec(os, &state("terminals"));
             let help = sub(&bar, "Help");
-            assert_eq!(ids(help), ["help.explore", "help.gettingStarted", "help.checkUpdates"], "{os:?}");
-            assert!(help.contains(&Node::Stock(Stock::About)));
+            assert_eq!(ids(help), ["help.explore", "help.gettingStarted", "help.about", "help.checkUpdates"], "{os:?}");
+            assert!(!help.contains(&Node::Stock(Stock::About)), "VIEW-106: the page draws About, not the stock dialog");
         }
         // macOS: About and Check for Updates are in the app menu, Help keeps the two page items.
         let mac = spec(Os::Mac, &state("terminals"));

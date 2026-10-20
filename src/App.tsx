@@ -36,6 +36,7 @@ import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestio
 import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
 import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode, type Switcher } from "./terminal/tabCycle";
 import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
+import { moveToTab, tidyWeights } from "./shell/tidy";
 import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
 import { forgetView } from "./terminal/viewKeep";
 import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
@@ -51,6 +52,11 @@ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } 
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
 import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
 import FolderRenameAsk from "./projects/FolderRenameAsk";
+import AboutPanel from "./shell/AboutPanel";
+import { ABOUT_MENU_ID, openAbout } from "./shell/about";
+import LinkAskHost from "./shell/LinkAskDialog";
+import TabSearch from "./shell/TabSearch";
+import { openTabSearch, tabSearchCommand } from "./shell/findTab";
 import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
@@ -162,10 +168,12 @@ import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
+import { installTapReset } from "./shell/inputExtras";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
 import { useAppSettings } from "./settings/useAppSettings";
+import { applyDensity, installTabWheel } from "./shell/paneChrome";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
 import { useChrome, useMenuBar } from "./chrome/useChrome";
 import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
@@ -274,6 +282,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     recentTabs.current = [focused, ...recentTabs.current.filter((k) => k !== focused)].slice(0, 50);
   }, [focused]);
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
+  // TERM-062: a half-finished double tap is forgotten when the window loses focus.
+  useEffect(() => installTapReset(), []);
   const [activeDir, setActiveDir] = useState<string | null>(layout?.activeDir ?? null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   // ACCT-064: the managed Codex accounts and the active one, so panes left on another are asked.
@@ -321,6 +331,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
   const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
   const { settings, setSettings, settingsRead, setSettingsRead, classic } = useAppSettings(initial);
+  // TERM-026 pane header density from the saved setting; TERM-057 the wheel over the tab strip scrolls it sideways.
+  useEffect(() => void applyDensity(settings), [settings]);
+  useEffect(() => installTabWheel(), []);
   // SESS-018: on the New look a new session is chosen on a full-page sheet over the workspace,
   // held here rather than in the grid; Classic keeps the chooser pane (SESS-019).
   const [sheet, setSheet] = useState<Pane | null>(null);
@@ -499,6 +512,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     else if (ed && "field" in ed) document.execCommand(ed.field);
     else if (ed) focusedTerminalEdit.current?.(ed.terminal);
     else if (id === "zoom.in" || id === "zoom.out" || id === "zoom.reset") void stepZoom(id.slice(5) as ZoomStep).catch(() => {});
+    else if (id === ABOUT_MENU_ID) openAbout(); // VIEW-106
     else if (id === "app.settings") {
       setSettingsAt((a) => ({ target: null, n: a.n }));
       setSettingsOpen(true);
@@ -857,6 +871,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           openPane(k); // EDIT-041: the same jump as Open in Code
           break;
         }
+        case "tab.search": // TERM-053
+          openTabSearch();
+          break;
         case "terminal.setTitle":
         case "terminal.clearPaneTitle":
         case "tab.rename": {
@@ -1498,6 +1515,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
     ...paletteRows(accountSwitcher.groups, switchAccount), // T-548: Switch Claude to ...
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
+    tabSearchCommand(() => openTabSearch()), // TERM-053
     { section: "Quick actions", label: "New session", run: () => addChooser() },
     // VIEW-042: actions on the worktree in front, not runnable while none is open
     { section: "Quick actions", label: "Source control for this workspace", needs: "worktree", run: () => showRight("scm") },
@@ -2062,13 +2080,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const weightKey = (axis: "col" | "row") => `${activeDir ?? ""}|${axis}|${axis === "col" ? gridCols : gridRows}`;
   const weightsOf = (axis: "col" | "row") => weights[weightKey(axis)] ?? Array<number>(axis === "col" ? gridCols : gridRows).fill(1);
   // TERM-035: Equalize drops the dragged weights of this folder's grid, so every column and row is the same size again.
-  const equalizePanes = () =>
-    setWeights((w) => {
-      const next = { ...w };
-      delete next[weightKey("col")];
-      delete next[weightKey("row")];
-      return next;
-    });
+  // TERM-008: Equalize also tidies: every dragged size of this folder goes, whatever the pane count was when it was dragged.
+  const equalizePanes = () => setWeights((w) => tidyWeights(w, activeDir ?? null));
+  // TERM-016: Move to Tab folds a pane into the cell beside it; only its group changes, so the session and its run stay.
+  const moveOutToTab = (key: number) => {
+    const r = moveToTab(panes, key);
+    if (!r) return;
+    setPanes(r.panes);
+    setActiveTab((m) => ({ ...m, [r.group]: key }));
+    setFocused(key);
+  };
   const gapUnder = (g: HTMLElement, x: number, y: number) => {
     const rects = [...g.querySelectorAll<HTMLElement>(":scope > .cell:not([hidden])")].map((c) => c.getBoundingClientRect());
     const cols = tracks(rects, "x");
@@ -2360,6 +2381,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         uiZoom={zoomFactor()}
         onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
+        <AboutPanel />
         {palette && (
           <WorktreePalette
             projects={projects}
@@ -2416,6 +2438,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             setRefresh((n) => n + 1);
           }}
         />
+        <LinkAskHost />
+        <TabSearch tabs={() => paletteItems().filter((i) => i.section === "Open tabs")} />
         {guard.dialog}
         {quitAsk && (
           <Ask
@@ -3080,6 +3104,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     onSplit={(dir) => splitPane(p.key, dir)}
                     dragCell={!board && showsDragHandle(shown.length) ? { onStart: () => (dragging.current = { cell: groupOf(p) }), onEnd: () => (dragging.current = null, setDropHint(null)) } : undefined}
                     onEqualize={terminals && gridCount > 1 ? equalizePanes : undefined}
+                    onMoveToTab={terminals && gridCount > 1 && moveToTab(panes, p.key) ? () => moveOutToTab(p.key) : undefined}
                     expand={board ? undefined : { on: zoomed === groupOf(p), can: canExpand(shown.length, classic), toggle: () => expandPane(p.key) }}
                     title={p.title || nameOf(names, p.cwd)}
                     custom={!!p.title}
