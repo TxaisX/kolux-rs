@@ -44,6 +44,7 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod lifecycle;
 mod menu;
 mod bulk;
 mod names;
@@ -199,7 +200,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(move |app| tools::guarded_setup(app, &windows, |app| {
+        .setup(move |app| {
+            // T-182 (APP-001): one copy at a time. A second launch hands its request to the running
+            // copy, brings its window forward and exits before any window (or WebView2 profile) is touched.
+            lifecycle::claim_or_forward(app);
+            tools::guarded_setup(app, &windows, |app| {
             // APP-053: everything the app starts from here on ends with it; outside its own job (a job the
             // launcher owns without breakaway, say) the children would outlive a crash, so that is logged.
             let job_ok = procs::app_job_start();
@@ -369,7 +374,8 @@ pub fn run() {
                 }
             });
             Ok(())
-        }))
+        })
+        })
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
         // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
         .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
@@ -390,8 +396,18 @@ pub fn run() {
             // The window is gone: no shell may outlive it.
             // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
             // the Tower window goes with the main one, so it never keeps the app running on its own.
+            // T-182 (APP-006): the page decides whether closing needs a question; a page that never
+            // answers (frozen or crashed) is closed for after lifecycle::ASK_LIMIT.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    lifecycle::close_requested(window);
+                }
+            }
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
+                    // T-182 (APP-006): quitting always finishes; a final save or exit wait that hangs
+                    // past lifecycle::quit_deadline() is cut short.
+                    lifecycle::quit_watchdog(window.app_handle());
                     window.state::<Terminals>().kill_all();
                     // T-033-e: no git watch outlives the window either (nothing is waited for here).
                     scm::watch::unwatch_all();
@@ -746,6 +762,8 @@ pub fn run() {
             update::update_check,
             update::update_download,
             update::update_restart,
+            lifecycle::close_alive,
+            lifecycle::app_restart,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
@@ -758,36 +776,8 @@ pub fn run() {
                 // the deadline leaves, so a stalled profile drive caps the wait and never freezes the
                 // quit. Settings need no step: every change is already on disk (APP-048).
                 final_save::begin();
-                let seal = |app: tauri::AppHandle, files: fn(&Store, &std::path::Path) -> Vec<(std::path::PathBuf, std::path::PathBuf)>| {
-                    move || {
-                        if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
-                            let pairs = files(&store, &profile);
-                            drop(store);
-                            let _ = secrets::save_changed(&pairs, &profile);
-                        }
-                    }
-                };
-                let (a1, a2) = (app.clone(), app.clone());
-                let report = final_save::run(
-                    final_save::QUIT_DEADLINE,
-                    vec![
-                        // USAGE-011: open turns end and the counts are written; no batched save follows.
-                        final_save::step("activity counts", move || activity::save(&a1.state::<Mutex<Store>>(), true)),
-                        // STAT-037: the agents still mid-task are recorded before their terminals end.
-                        final_save::step("agent status", move || {
-                            if let Ok(store) = a2.state::<Mutex<Store>>().lock() {
-                                hooks::agent_hooks::saved::at_quit(&store);
-                            }
-                        }),
-                        // ACCT-015: no sign-in or install keeps running after Kolux quits.
-                        final_save::step("sign-ins cancelled", || {
-                            claude_key::cancel_all(std::time::Duration::from_secs(2));
-                        }),
-                        // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's.
-                        final_save::step("codex sign-in sealed", seal(app.clone(), codex_accounts::sign_in_files)),
-                        final_save::step("claude sign-in sealed", seal(app.clone(), claude_accounts::sign_in_files)),
-                    ],
-                );
+                // T-182 (APP-011): the same steps make the save point a restart waits for.
+                let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
                 if let Ok(dir) = app.path().app_data_dir() {
                     diag::write(&dir, &report.line());
                 }
