@@ -10,6 +10,8 @@ import { useSettings } from "../settings/useSettings";
 import { probeSetup } from "../settings/setupProbe";
 import Tours from "./Tours";
 import CliSetup, { useCliCaps } from "./CliSetup";
+import Demo from "./Demo";
+import StarPrompt from "./StarPrompt";
 import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel, StopSetup } from "./StepPanels";
 import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
 import { guideOpenChanged } from "./actions";
@@ -278,6 +280,7 @@ function Explore({ onClose }: { onClose: () => void }) {
           )}
           <h3>{stop.title}</h3>
           <p>{stop.caption}</p>
+          <Demo stop={stop.id} />
           <StopSetup stop={stop.id} taskSource={gh} />
           <div className="btn-row">
             <span className="spacer" />
@@ -444,6 +447,7 @@ export default function Guides() {
       {explore && <Explore onClose={() => setExplore(false)} />}
       <StartupTip />
       <Tours />
+      <StarPrompt />
     </>
   );
 }

@@ -870,3 +870,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · repo T-227-d (rest) · spec/11 GIT-017 as given in the brief; git documentation for pathspec exclude (git-scm.com/docs/gitglossary); this tree's own scm.rs; no outside code
 > 2026-10-20 · onboarding T-244-b · spec/16 ONB-017/ONB-028 as given in the brief; this tree's own cli_register.rs, skills installer and TerminalPane; no outside source
 > 2026-10-20 · onboarding T-245-b · spec/16 ONB-032/ONB-033 as given in the brief; this tree's own tour.ts, Tours.tsx, FloatingLayer.tsx, BrowserPane.tsx and App.tsx board markup; no outside source
+> 2026-10-20 · onboarding T-322-b · ONB-025/037/038 and ONB 029 rest are designed from the spec and the repo's own keymap; gh api user/starred/{owner}/{name} (GitHub REST docs, public: PUT to star, 204 starred, 404 not)

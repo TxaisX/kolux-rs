@@ -1,0 +1,21 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 479f1466..bbf6bc36 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -61,6 +61,7 @@ mod prompt_scan;
+ mod scm;
+ mod pr_review;
+ mod skills;
++mod star;
+ mod pasted_image;
+ mod pr_checkout;
+ mod pty;
+@@ -613,6 +614,8 @@ pub fn run() {
+             onboarding::tours_get,
+             onboarding::onboarding_reopen,
+             onboarding::onboarding_milestone,
++            star::star_info,
++            star::star_put,
+             files::file_read,
+             files::file_write,
+             files::file_stamps,
