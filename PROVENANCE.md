@@ -882,3 +882,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · watch T-275 · spec/04 STAT-031 as given in the brief; this tree own src/status/useAgentStatus.ts and status.rs; no outside source
 > 2026-10-19 · watch T-259 · spec/04 STAT-036 as given in the brief; no outside source
 > 2026-10-19 · watch T-309-b · spec/04 STAT-038 as given in the brief; no outside source
+> 2026-10-20 · T-546-b · this tree's own TopBar, actions and tower files; no outside source
