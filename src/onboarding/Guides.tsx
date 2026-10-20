@@ -7,6 +7,7 @@ import { useKeymap } from "../keys/KeymapContext";
 import { defaultsOnly, labelOf } from "../keys/keymap";
 import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
+import { probeSetup } from "../settings/setupProbe";
 import Tours from "./Tours";
 import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel, StopSetup } from "./StepPanels";
 import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
@@ -45,7 +46,7 @@ async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Par
   if (git.length >= 2 && !twoBefore) markGuide("tried", TWO_REPOS).catch(() => {});
   put({ workspaces: lists.filter((l): l is Place[] => l !== null), gitProjects: Math.max(git.length, twoBefore ? 2 : 0) });
   const ticket = check.begin();
-  const found = await Promise.all(git.map((p) => invoke<unknown>("workspace_setup", { path: p.path }).then((l) => l !== null, () => false)));
+  const found = await Promise.all(git.map((p) => probeSetup(p.path, false))); // the page's own read: no trust question, no refusal to misread
   check.settle(ticket, found.some(Boolean));
   await gh;
   return found.some(Boolean);

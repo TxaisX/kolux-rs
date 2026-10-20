@@ -1259,60 +1259,35 @@ fn secret_flags(t: &str) -> String {
     })
 }
 
-/// The password that `echo` or `printf` pipes into a command that reads one from its input:
-/// `sudo -S` (`--stdin`, also inside a cluster such as `-nS`) or any command with `--password-stdin`
-/// (`docker login`). The argument of `echo` / `printf` goes (`echo -n pw | sudo -S ..` becomes
-/// `echo -n [hidden] | sudo -S ..`), except a variable reference such as `"$SUDO_PW"`.
+/// The password that `echo` or `printf` (or PowerShell's `Write-Output` / `write`, or one quoted literal) pipes into a command
+/// that reads one from its input: `sudo -S` (`--stdin`, also inside a cluster such as `-nS`), also behind
+/// wrappers and launchers (`env FOO=1 sudo -S`, `ssh host sudo -S`), or any command with `--password-stdin`
+/// (`docker login`). The word after `<<<` goes for such a command too. The argument of `echo` /
+/// `printf` goes (`echo -n pw | sudo -S ..` becomes `echo -n [hidden] | sudo -S ..`), up to a `;`, `&`,
+/// line break or unbalanced `)`, except a variable reference such as `"$SUDO_PW"`.
 fn piped_passwords(t: &str) -> String {
     let b = t.as_bytes();
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for i in (0..b.len()).filter(|&i| b[i] == b'|' && b.get(i + 1) != Some(&b'|') && (i == 0 || b[i - 1] != b'|')) {
-        let left = words_before(t, i);
-        let Some(k) = command_index(&left).filter(|&k| matches!(left[k].name.as_str(), "echo" | "printf")) else { continue };
-        let echo = left[k].name == "echo";
-        // The arguments of the command: echo's own flags (`-n`, `-e`) stay.
-        let mut from = left[k].end;
-        loop {
-            let rest = &t[from..i];
-            let skipped = rest.len() - rest.trim_start().len();
-            let word = rest.split_whitespace().next().unwrap_or("");
-            if echo && word.len() > 1 && word.starts_with('-') && word[1..].bytes().all(|c| c.is_ascii_alphabetic()) {
-                from += skipped + word.len();
-            } else {
-                from += skipped;
-                break;
-            }
-        }
-        let mut to = from + t[from..i].trim_end().len();
-        // A quote that only closes the line around the command (`bash -c "echo pw | sudo -S .."`) stays.
-        if let Some(q) = t[from..to].chars().next_back().filter(|c| matches!(c, '"' | '\'')) {
-            if t[from..to].matches(q).count() % 2 == 1 {
-                to -= 1;
-            }
-        }
-        if from >= to || already(&t[from..to]) {
-            continue;
-        }
-        let rest = &t[i + 1..];
-        let end = rest.find([';', '|', '&', '\n']).unwrap_or(rest.len());
-        let right = words_in(t, i + 1, i + 1 + end);
-        let first = right.iter().position(|w| !(w.name.contains('=') && !w.name.starts_with('-')));
-        let sudo_stdin = first.is_some_and(|j| {
-            right[j].name == "sudo" && {
-                let mut m = j + 1;
-                let mut found = false;
-                while m < right.len() && right[m].raw.starts_with('-') {
-                    let r = right[m].raw.as_str();
-                    found |= r == "--stdin" || (!r.starts_with("--") && r.contains('S'));
-                    m += 1 + usize::from(takes_value("sudo", r));
-                }
-                found
-            }
-        });
-        if sudo_stdin || right.iter().any(|w| w.raw == "--password-stdin") {
+        let Some((from, to)) = echoed_value(t, i, &words_before(t, i)).filter(|&(from, to)| from < to && !already(&t[from..to])) else { continue };
+        let (start, end) = right_side(t, i);
+        if reads_stdin_password(&words_in(t, start, end)) {
             spans.push((from, to));
         }
     }
+    for (p, _) in t.match_indices("<<<") {
+        if !reads_stdin_password(&words_before(t, p)) {
+            continue;
+        }
+        let after = &t[p + 3..];
+        let gap = run(after, |c| c == b' ' || c == b'\t');
+        let len = value_span(&after[gap..], COMMAND_END);
+        // A value that begins with the mark is hidden already (a quoted word cut off right before more text).
+        if len > 0 && !after[gap..].starts_with(HIDDEN) && !already(&after[gap..gap + len]) {
+            spans.push((p + 3 + gap, p + 3 + gap + len));
+        }
+    }
+    spans.sort_unstable();
     let mut out = String::with_capacity(t.len());
     let mut last = 0;
     for (from, to) in spans {
@@ -1325,6 +1300,171 @@ fn piped_passwords(t: &str) -> String {
     }
     out.push_str(&t[last..]);
     out
+}
+
+/// Words that write their arguments to the pipe: `echo`, `printf`, PowerShell's `Write-Output` and `write`.
+fn writes_text(name: &str) -> bool {
+    matches!(name, "echo" | "printf" | "write-output" | "write")
+}
+
+/// The text a pipe at byte `i` carries, when it is typed in the command: the arguments of the `echo`
+/// (or `printf`, ..) that is the command word, or that a launcher runs (`ssh host "echo pw | .."`), or one
+/// quoted literal that makes up the whole command (`"S3cret" | docker login ..`). `left` is
+/// `words_before(t, i)`. As byte offsets of `t`; echo's own flags (`-n`, `-e`) stay out.
+fn echoed_value(t: &str, i: usize, left: &[Word]) -> Option<(usize, usize)> {
+    let k = command_index(left);
+    let at = k.and_then(|k| {
+        if writes_text(&left[k].name) {
+            return Some(k);
+        }
+        let launcher = LAUNCHERS.contains(&left[k].name.as_str());
+        launcher.then(|| (k + 1..left.len()).find(|&m| !left[m].folder && writes_text(&left[m].name))).flatten()
+    });
+    let Some(m) = at else { return quoted_literal(t, i) };
+    let mut from = left[m].end;
+    loop {
+        let rest = &t[from..i];
+        let skipped = rest.len() - rest.trim_start().len();
+        let word = rest.split_whitespace().next().unwrap_or("");
+        if left[m].name == "echo" && word.len() > 1 && word.starts_with('-') && word[1..].bytes().all(|c| c.is_ascii_alphabetic()) {
+            from += skipped + word.len();
+        } else {
+            from += skipped;
+            break;
+        }
+    }
+    let mut to = from + t[from..i].trim_end().len();
+    // A quote that only closes the line around the command (`bash -c "echo pw | sudo -S .."`) stays.
+    if let Some(q) = t[from..to].chars().next_back().filter(|c| matches!(c, '"' | '\'')) {
+        if t[from..to].matches(q).count() % 2 == 1 {
+            to -= 1;
+        }
+    }
+    let to = span_end(t, from, to);
+    Some((from, from + t[from..to].trim_end().len()))
+}
+
+/// Where the arguments of an `echo` that begin at `from` end, no later than `to`: at a `;`, `&` or
+/// line break outside quotes, or at a `)` that closes nothing opened in the arguments (`(echo pw) | ..`).
+fn span_end(t: &str, from: usize, to: usize) -> usize {
+    let b = t.as_bytes();
+    let (mut depth, mut quote, mut p) = (0usize, None::<u8>, from);
+    while p < to {
+        let c = b[p];
+        match (quote, c) {
+            (_, b'\\') => p += 1,
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(c),
+            (None, b'(') => depth += 1,
+            (None, b')') if depth == 0 => return p,
+            (None, b')') => depth -= 1,
+            (None, b';' | b'&' | b'\n') => return p,
+            _ => {}
+        }
+        p += 1;
+    }
+    to
+}
+
+/// When the command before the pipe at byte `i` is one quoted literal (`"S3cret" | docker login ..`), where
+/// the literal, quotes included, begins and ends.
+fn quoted_literal(t: &str, i: usize) -> Option<(usize, usize)> {
+    let start = segment_start(&t[..i]);
+    let seg = &t[start..i];
+    let body = seg.trim();
+    let q = *body.as_bytes().first().filter(|c| matches!(c, b'"' | b'\''))?;
+    let inner = body.as_bytes().get(1..body.len().checked_sub(1)?)?;
+    if body.len() < 2 || body.as_bytes()[body.len() - 1] != q {
+        return None;
+    }
+    let mut p = 0;
+    while p < inner.len() {
+        match inner[p] {
+            b'\\' if q == b'"' => p += 1,
+            c if c == q => return None,
+            _ => {}
+        }
+        p += 1;
+    }
+    let from = start + seg.len() - seg.trim_start().len();
+    Some((from, from + body.len()))
+}
+
+/// The command that a pipe at byte `i` feeds: from after the pipe (and a `&` of `|&`, white space, line
+/// breaks and backslash-newlines) to the next `;`, `|`, `&` or line break that does not continue the line.
+fn right_side(t: &str, i: usize) -> (usize, usize) {
+    let b = t.as_bytes();
+    let join = |p: usize| match (b.get(p), b.get(p + 1), b.get(p + 2)) {
+        (Some(b'\\'), Some(b'\n'), _) => 2,
+        (Some(b'\\'), Some(b'\r'), Some(b'\n')) => 3,
+        _ => 0,
+    };
+    let mut s = i + 1 + usize::from(b.get(i + 1) == Some(&b'&'));
+    while s < b.len() {
+        match b[s] {
+            b' ' | b'\t' | b'\r' | b'\n' => s += 1,
+            _ if join(s) > 0 => s += join(s),
+            _ => break,
+        }
+    }
+    let mut e = s;
+    while e < b.len() {
+        match b[e] {
+            b';' | b'|' | b'&' | b'\n' => break,
+            _ if join(e) > 0 => e += join(e),
+            _ => e += 1,
+        }
+    }
+    (s, e)
+}
+
+/// The index of the `sudo` that these words run: reached through wrappers (`env FOO=1`, `nohup`,
+/// `command`) and through a launcher, whose own arguments (`ssh -p 22 host`) can be anything.
+fn reached_sudo(words: &[Word]) -> Option<usize> {
+    let (mut wrapper, mut launched, mut k) = (None::<&str>, false, 0);
+    while k < words.len() {
+        let name = words[k].name.as_str();
+        k += 1;
+        if name == "sudo" && !words[k - 1].folder {
+            return Some(k - 1);
+        }
+        if PASS_THROUGH.contains(&name) {
+            wrapper = Some(name);
+        } else if LAUNCHERS.contains(&name) {
+            (launched, wrapper) = (true, None);
+        } else if launched || (name.contains('=') && !name.starts_with('-')) {
+            continue;
+        } else if let Some(wrap) = wrapper.filter(|_| name.starts_with('-')) {
+            k += usize::from(!SHELLS.contains(&wrap) && takes_value(wrap, &words[k - 1].raw));
+        } else if !wrapper.is_some_and(|wrap| is_wrapper_value(wrap, name)) {
+            return None;
+        }
+    }
+    None
+}
+
+/// A word that a wrapper takes for its own: a duration (`timeout 5`) or the `/c` of `cmd`.
+fn is_wrapper_value(wrapper: &str, name: &str) -> bool {
+    let duration = name.as_bytes().first().is_some_and(u8::is_ascii_digit) && name.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b's' | b'm' | b'h' | b'd'));
+    duration || (wrapper == "cmd" && matches!(name, "c" | "k"))
+}
+
+/// Whether the command these words make reads a password from its input: `--password-stdin`, or a `sudo`
+/// (see `reached_sudo`) with `-S` / `--stdin` among its options.
+fn reads_stdin_password(words: &[Word]) -> bool {
+    if words.iter().any(|w| w.raw == "--password-stdin") {
+        return true;
+    }
+    let Some(s) = reached_sudo(words) else { return false };
+    let mut m = s + 1;
+    let mut found = false;
+    while m < words.len() && words[m].raw.starts_with('-') {
+        let r = words[m].raw.as_str();
+        found |= r == "--stdin" || (!r.starts_with("--") && r.contains('S'));
+        m += 1 + usize::from(takes_value("sudo", r));
+    }
+    found
 }
 
 /// A header written `Name: value` (a curl `-H` argument, a raw request): `Authorization` and
@@ -1911,7 +2051,6 @@ mod tests {
             ("sudo -n mysql -pS3cret", "sudo -n mysql -p[hidden]"),
             ("sudo -i mysql -pS3cret db", "sudo -i mysql -p[hidden] db"),
             ("sudo -s mysql -pS3cret", "sudo -s mysql -p[hidden]"),
-            ("echo pw | sudo -S mysql -pS3cret", "echo [hidden] | sudo -S mysql -p[hidden]"),
             ("env -i mysql -pS3cret", "env -i mysql -p[hidden]"),
             ("sudo -n curl -u admin:hunter2 https://x", "sudo -n curl -u [hidden] https://x"),
             ("sudo --user root mysql -pS3cret", "sudo --user root mysql -p[hidden]"),
@@ -2051,5 +2190,103 @@ mod tests {
         }
         // A separator outside the quote still ends the command.
         assert_eq!(masked("mysql -e 'a \"b'; find . -perm 644"), "mysql -e 'a \"b'; find . -perm 644");
+    }
+
+    /// FIX-5 item 2 (stand-in review FIX-SOON 1): the echoed password is found when a launcher or a
+    /// shell wraps the left side (`ssh host "echo pw | sudo -S .."`), and `sudo -S` is found behind
+    /// wrappers and launchers on the right (`echo pw | ssh host sudo -S x`, `| env FOO=1 sudo -S`).
+    #[test]
+    fn safe019_a_password_echoed_through_a_launcher_or_into_one_is_hidden() {
+        for (raw, shown) in [
+            ("ssh host \"echo hunter2 | sudo -S systemctl restart x\"", "ssh host \"echo [hidden] | sudo -S systemctl restart x\""),
+            ("wsl bash -c \"echo pw | sudo -S apt update\"", "wsl bash -c \"echo [hidden] | sudo -S apt update\""),
+            ("docker exec c sh -c \"echo pw | sudo -S ls\"", "docker exec c sh -c \"echo [hidden] | sudo -S ls\""),
+            ("ssh host 'echo \"my pass\" | sudo -S ls'", "ssh host 'echo [hidden] | sudo -S ls'"),
+            ("su -c \"printf pw | sudo -S ls\"", "su -c \"printf [hidden] | sudo -S ls\""),
+            ("echo pw | wsl sudo -S apt update", "echo [hidden] | wsl sudo -S apt update"),
+            ("echo pw | ssh host sudo -S x", "echo [hidden] | ssh host sudo -S x"),
+            ("echo pw | ssh -p 22 host sudo -nS x", "echo [hidden] | ssh -p 22 host sudo -nS x"),
+            ("echo pw | docker exec -i c sudo --stdin ls", "echo [hidden] | docker exec -i c sudo --stdin ls"),
+            ("echo pw | env FOO=1 sudo -S ls", "echo [hidden] | env FOO=1 sudo -S ls"),
+            ("echo pw | env -u FOO sudo -S ls", "echo [hidden] | env -u FOO sudo -S ls"),
+            ("echo pw | nohup sudo -S ls", "echo [hidden] | nohup sudo -S ls"),
+            ("echo pw | command sudo -S ls", "echo [hidden] | command sudo -S ls"),
+            ("echo pw | ssh host docker login --password-stdin", "echo [hidden] | ssh host docker login --password-stdin"),
+            ("ssh host \"echo pw | sudo -S x\" && ls", "ssh host \"echo [hidden] | sudo -S x\" && ls"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        for c in [
+            "ssh host \"echo hi | grep x\"",
+            "echo hi | ssh host ls",
+            "echo hi | env FOO=1 ls",
+            "echo hi | wsl cat",
+            "ssh host \"echo \\\"$SUDO_PW\\\" | sudo -S ls\"",
+            "ssh host ls | sudo -S tee out",
+            "echo pw | ssh host ls -S",
+        ] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-5 item 3 (stand-in review FIX-SOON 2): the word after `<<<` is hidden when the command
+    /// reads a password from its input, `Write-Output` and `write` count as `echo`, and a quoted
+    /// literal before the `|` is the value.
+    #[test]
+    fn safe019_a_here_string_or_powershell_literal_password_is_hidden() {
+        for (raw, shown) in [
+            ("sudo -S apt update <<< hunter2", "sudo -S apt update <<< [hidden]"),
+            ("docker login -u bob --password-stdin <<< S3cret", "docker login -u bob --password-stdin <<< [hidden]"),
+            ("sudo --stdin ls <<< \"my pass\"", "sudo --stdin ls <<< [hidden]"),
+            ("sudo -nS ls <<<pw", "sudo -nS ls <<<[hidden]"),
+            ("sudo -S ls <<< 'my pass'-x", "sudo -S ls <<< [hidden]-x"),
+            ("ssh host sudo -S x <<< pw", "ssh host sudo -S x <<< [hidden]"),
+            ("env FOO=1 sudo -S ls <<< pw && ls", "env FOO=1 sudo -S ls <<< [hidden] && ls"),
+            ("\"S3cret\" | docker login -u bob --password-stdin", "[hidden] | docker login -u bob --password-stdin"),
+            ("'S3cret' | sudo -S ls", "[hidden] | sudo -S ls"),
+            ("cd x; \"my pass\" | sudo -S ls", "cd x; [hidden] | sudo -S ls"),
+            ("Write-Output S3cret | docker login -u bob --password-stdin", "Write-Output [hidden] | docker login -u bob --password-stdin"),
+            ("Write-Output \"my pass\" | docker login --password-stdin", "Write-Output [hidden] | docker login --password-stdin"),
+            ("write pw | sudo -S ls", "write [hidden] | sudo -S ls"),
+            ("WRITE-OUTPUT pw | sudo -S ls", "WRITE-OUTPUT [hidden] | sudo -S ls"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        for c in [
+            "cat f <<< x",
+            "sudo ls <<< x",
+            "sudo -S ls <<< \"$SUDO_PW\"",
+            "docker login --password-stdin <<< $PW",
+            "\"$env:PW\" | docker login --password-stdin",
+            "\"hello\" | docker login --username bob",
+            "'hello' | grep h",
+            "Write-Output hi | docker login --username bob",
+        ] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-5 item 4 (stand-in review AFTER 1-2): the hidden echo span ends at `;`, `&`, a line break or
+    /// an unbalanced `)` (a `;` inside quotes does not end it), `|&` is a pipe, and the right side goes on
+    /// past a line break that follows the `|` or a trailing backslash.
+    #[test]
+    fn safe019_the_hidden_echo_ends_at_the_command_and_the_pipe_may_continue_on_the_next_line() {
+        for (raw, shown) in [
+            ("(echo pw) | sudo -S ls", "(echo [hidden]) | sudo -S ls"),
+            ("(echo start; make) | sudo -S tee log", "(echo [hidden]; make) | sudo -S tee log"),
+            ("echo \"a;b\" | sudo -S ls", "echo [hidden] | sudo -S ls"),
+            ("echo pw; echo x | sudo -S ls", "echo pw; echo [hidden] | sudo -S ls"),
+            ("echo pw |& sudo -S ls", "echo [hidden] |& sudo -S ls"),
+            ("echo pw |\nsudo -S ls", "echo [hidden] |\nsudo -S ls"),
+            ("echo pw |\r\nsudo -S ls", "echo [hidden] |\r\nsudo -S ls"),
+            ("echo pw | \\\nsudo -S ls", "echo [hidden] | \\\nsudo -S ls"),
+            ("echo pw | sudo \\\n  -S ls", "echo [hidden] | sudo \\\n  -S ls"),
+            ("echo pw | sudo -S ls |\n tee out", "echo [hidden] | sudo -S ls |\n tee out"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        for c in ["(echo a) | cat", "echo pw |\nls", "echo pw |\n\nsudo ls", "echo pw ;\nsudo -S ls", "echo pw |\n"] {
+            assert_eq!(masked(c), c, "{c}");
+        }
     }
 }

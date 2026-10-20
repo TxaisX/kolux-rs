@@ -6,6 +6,7 @@ mod awake;
 mod capture;
 mod chat;
 mod chat_tools;
+mod clipboard;
 mod browser;
 mod cap;
 pub mod cli;
@@ -594,6 +595,9 @@ pub fn run() {
             fsops::fs_copy,
             fsops::fs_move,
             fsops::clip_write,
+            clipboard::clip_copy_text,
+            clipboard::clip_copy_files,
+            clipboard::feedback_facts,
             diag::diag_bundle,
             diag::diag_review,
             diag::diag_review_discard,

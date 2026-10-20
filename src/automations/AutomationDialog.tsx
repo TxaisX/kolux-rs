@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { folderName, type Project, type Worktree } from "../projects/model";
 import { defaultForm, findNext, GRACE, PRECHECK, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
+import { probeSetup } from "../settings/setupProbe";
 import { clampBox, cronWords, fieldNames, from12, nudge, templates, to12, toPreset, weekdayNames, type Template } from "./timetable";
 
 type Props = {
@@ -152,9 +153,8 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     setHasSetup(null);
     if (!projectPath) return;
     let live = true;
-    invoke<unknown>("workspace_setup", { path: projectPath })
-      .then((line) => live && setHasSetup(line !== null))
-      .catch(() => live && setHasSetup(true));
+    // asks the page's own read (no trust question, nothing started); a failed read keeps the option
+    void probeSetup(projectPath, true).then((has) => live && setHasSetup(has));
     return () => {
       live = false;
     };

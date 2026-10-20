@@ -252,6 +252,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [setupSkip, setSetupSkip] = useState(false); // PROJ-033: the setup policy; the project's script runs unless skipped
   const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
   const [setupWait, setSetupWait] = useState(false);
+  const waitTouched = useRef(false); // the user clicked the wait box since the project last changed
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
@@ -445,9 +446,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const waitPath = projects.find((x) => x.id === creating)?.path;
   useEffect(() => {
     // SET-033: the repository's own choice of whether the agent waits for setup starts the checkbox
+    waitTouched.current = false;
+    setSetupWait(false); // another repository's choice is not this one's while the read is out
     if (!waitPath) return;
     let live = true;
-    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && setSetupWait(s.wait)).catch(() => {});
+    // a late reply never undoes a click: the box the user touched stays as they set it
+    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && !waitTouched.current && setSetupWait(s.wait)).catch(() => {});
     return () => void (live = false);
   }, [waitPath]);
   useEffect(() => {
@@ -898,7 +902,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
           {!setupSkip && setupWhere === "tab" && (
             <label className="check">
-              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => setSetupWait(e.target.checked)} />
+              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => ((waitTouched.current = true), setSetupWait(e.target.checked))} />
               Wait for setup to finish before the agent starts
             </label>
           )}
