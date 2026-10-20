@@ -67,6 +67,7 @@ mod prompt_scan;
 mod scm;
 mod pr_review;
 mod skills;
+mod star;
 mod pasted_image;
 mod pr_checkout;
 mod pty;
@@ -81,6 +82,7 @@ mod shell_history;
 mod skill_delete;
 mod state;
 mod status;
+mod term_import;
 mod sysmem;
 mod terminal;
 #[cfg(test)]
@@ -441,6 +443,9 @@ pub fn run() {
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
+            term_import::term_import_ghostty,
+            term_import::term_import_ghostty_theme,
+            term_import::term_import_warp,
             resources::resources,
             sessions::claude_workspace_sessions,
             terminal::terminal_spawn,
@@ -691,6 +696,8 @@ pub fn run() {
             onboarding::tours_get,
             onboarding::onboarding_reopen,
             onboarding::onboarding_milestone,
+            star::star_info,
+            star::star_put,
             files::file_read,
             files::file_write,
             files::file_stamps,
