@@ -18,6 +18,8 @@ import { sessionLabel } from "../agents/rail";
 import { NO_TERMINAL_NOTE, boxSend, hearStates, holdReading, stopPane, writeTerminal } from "./send";
 import { answerCard, askOf, cardOf, dismissAsk, hearAsks, subscribeAsk } from "./ask";
 import { PermissionCard } from "./PermissionCard";
+import { QuestionCard } from "./QuestionCard";
+import { answerSteps, closeQuestion, openQuestion, sendAnswer, type Pick } from "./question";
 import { BrowserChoice, ChatText, LinkContext, type LinkHost } from "./ChatText";
 import { printedPaths } from "./chatLinks";
 import { ChatReader, NOTHING, watchHidden, type Seen } from "./reading";
@@ -58,6 +60,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   useEffect(() => void hearStates(listen).catch(() => {}), []);
   // CHAT-023: every pane's permission prompts are counted for the whole window; the card redraws when this pane's record moves.
   const [, setAsked] = useState(0);
+  const [, setAskedAgain] = useState(0); // CHAT-022: redraws after a question card is dismissed
   useEffect(() => void hearAsks(listen).catch(() => {}), []);
   useEffect(() => subscribeAsk(() => setAsked((n) => n + 1)), []);
 
@@ -139,6 +142,26 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       (r) => setNote(r === "gone" ? GONE_NOTE : r === "no-terminal" ? NO_TERMINAL_NOTE : null),
       () => setNote(CANNOT_STOP_NOTE),
     );
+  };
+  // CHAT-022: the agent's multiple-choice question as a card; its answer is typed in as the option numbers (question.ts).
+  const waiting = stateOf ? stateOf(key) === "waiting" : hookState === undefined ? undefined : hookState === "waiting";
+  const asking = agent === "claude" || agent === "openclaude" || agent === "codex" ? openQuestion(items, waiting) : null;
+  const askId = useRef<string | undefined>(undefined);
+  askId.current = asking?.id;
+  const [typing, setTyping] = useState<{ id: string; cancel: () => void } | null>(null);
+  useEffect(() => setTyping(null), [key]);
+  const submitQuestion = (picks: Pick[]) => {
+    if (!asking) return;
+    const steps = answerSteps(asking.questions, picks);
+    if (steps.length === 0) return setNote("That answer cannot be typed from here. Answer in the terminal.");
+    const run = sendAnswer(key, asking, steps, { terminalOf, stateOf, write: writeTerminal, current: () => askId.current });
+    if (run.cancel) setTyping({ id: asking.id, cancel: run.cancel });
+    run.done.then((r) => {
+      setTyping(null);
+      if (r === "no-terminal") return setNote(NO_TERMINAL_NOTE);
+      if (r === "sent") return void (closeQuestion(asking.sig), setNote(null));
+      setNote("The answer was stopped part way. Look at the terminal.");
+    });
   };
   // CHAT-025: links in the agent's replies. Only files the agent printed recently open.
   const [menu, setMenu] = useState<{ url: string; at: { x: number; y: number } } | null>(null);
@@ -231,6 +254,16 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       )}
       {target && <div className="chat-target" role="status">{target}</div>}
       {card && <PermissionCard card={card} onAllow={() => answer("approve")} onDeny={() => answer("deny")} onReview={opener?.onReview ? () => opener.onReview?.(key, card.plan ?? "", !!card.planCut) : undefined} onDismiss={() => dismissAsk(key, card.drawnAt)} />}
+      {asking && (
+        <QuestionCard
+          key={asking.id}
+          card={asking}
+          sending={typing?.id === asking.id}
+          onSubmit={submitQuestion}
+          onCancel={() => typing?.cancel()}
+          onDismiss={() => (closeQuestion(asking.sig), setAskedAgain((n) => n + 1))}
+        />
+      )}
       {menu && <BrowserChoice url={menu.url} at={menu.at} onPick={pickBrowser} onClose={() => setMenu(null)} />}
       <Composer ref={box} paneKey={pane.key} live={terminalOf(key) !== undefined} blocked={held} note={note ?? undefined} onSend={send} working={open} onStop={stop} />
       {full && (

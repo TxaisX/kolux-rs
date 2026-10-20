@@ -44,6 +44,58 @@ pub struct Tool {
     pub diffs: Option<Vec<FileDiff>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<u64>,
+    /// CHAT 022: the questions of an ask-the-user call, with their options (present only for those tools).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub questions: Option<Vec<Question>>,
+}
+
+/// One question an agent put to the user (CHAT 022).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    pub question: String,
+    pub header: String,
+    /// More than one option may be picked.
+    pub multi: bool,
+    pub options: Vec<Choice>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Choice {
+    pub label: String,
+    pub description: String,
+}
+
+/// The questions in an ask-the-user call's input: `questions` with `question`, `header`, `options` (`label`,
+/// `description`) and `multiSelect` (Claude Code's AskUserQuestion, documented in the Agent SDK's user-input page;
+/// Codex's request_user_input takes the same shape in the hook code). A question without text is left out.
+pub fn questions_of(input: &Value) -> Vec<Question> {
+    input
+        .get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|q| !s(q, "question").trim().is_empty())
+        .map(|q| Question {
+            question: s(q, "question").trim().to_string(),
+            header: short(s(q, "header")),
+            multi: q.get("multiSelect").and_then(Value::as_bool) == Some(true),
+            options: q
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|o| if let Some(label) = o.as_str() { Choice { label: label.to_string(), description: String::new() } } else { Choice { label: short(s(o, "label")), description: short(s(o, "description")) } })
+                .filter(|c| !c.label.is_empty())
+                .collect(),
+        })
+        .collect()
+}
+
+/// An ask-the-user call as a row: its first question stands for it, the questions ride along for the card.
+fn asking(call: &str, name: &str, input: &Value) -> Tool {
+    let questions = questions_of(input);
+    Tool { questions: Some(questions.clone()), ..tool(call, name, "other", questions.first().map(|q| short(&q.question)).unwrap_or_default()) }
 }
 
 /// One file's part of an edit (CHAT-014).
@@ -279,6 +331,7 @@ pub fn claude_step(call: &str, name: &str, input: &Value) -> Step {
             return Step::Plan { text: checklist(todos.iter().map(|t| (s(t, "content"), s(t, "status")))), per_turn: true };
         }
         "ExitPlanMode" => return Step::Plan { text: s(input, "plan").to_string(), per_turn: false },
+        "AskUserQuestion" => asking(call, name, input),
         _ => match name.strip_prefix("mcp__").and_then(|r| r.split_once("__")) {
             Some((server, t)) => Tool { server: Some(server.to_string()), ..tool(call, t, "mcp", first_text(input)) },
             None => tool(call, name, "other", first_text(input)),
@@ -343,6 +396,7 @@ pub fn codex_step(call: &str, name: &str, args: &str) -> Step {
         }
         "view_image" => tool(call, name, "read", base(s(&input, "path"))),
         "web_search" => tool(call, name, "web", short(s(&input, "query"))),
+        "request_user_input" => asking(call, name, &input),
         _ => match name.split_once("__") {
             Some((server, t)) => Tool { server: Some(server.to_string()), ..tool(call, t, "mcp", first_text(&input)) },
             None => tool(call, name, "other", first_text(&input)),
@@ -428,5 +482,28 @@ mod tests {
         assert!(!codex_output(&json!("Exit code: 0\nWall time: 1s\nOutput:\nok")).1);
         assert!(codex_output(&json!("Exit code: 1\nOutput:\nerr")).1);
         assert_eq!(cap("abcdef".into(), 3), "abc\n… 3 more characters");
+    }
+
+    #[test]
+    fn chat022_an_ask_call_carries_its_questions_and_options() {
+        let input = json!({ "questions": [
+            { "question": " Which framework? ", "header": "Framework", "multiSelect": false, "options": [{ "label": "React", "description": "UI library" }, { "label": "Vue", "description": "" }, { "description": "no label" }] },
+            { "question": "Which checks?", "header": "Checks", "multiSelect": true, "options": ["lint", "test"] },
+            { "question": "  ", "options": [] },
+        ] });
+        let Step::Tool(t) = claude_step("c1", "AskUserQuestion", &input) else { panic!("a tool row") };
+        assert_eq!((t.group, t.preview.as_str(), t.name.as_str()), ("other", "Which framework?", "AskUserQuestion"));
+        let qs = t.questions.expect("questions ride on the row");
+        assert_eq!(qs.len(), 2, "a question without text is left out");
+        assert_eq!((qs[0].question.as_str(), qs[0].header.as_str(), qs[0].multi), ("Which framework?", "Framework", false));
+        assert_eq!(qs[0].options, vec![Choice { label: "React".into(), description: "UI library".into() }, Choice { label: "Vue".into(), description: String::new() }], "an option without a label is dropped");
+        assert!(qs[1].multi);
+        assert_eq!(qs[1].options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["lint", "test"]);
+        // Codex asks through request_user_input, arguments as JSON text
+        let Step::Tool(c) = codex_step("c2", "request_user_input", &input.to_string()) else { panic!("a tool row") };
+        assert_eq!(c.questions.map(|q| q.len()), Some(2));
+        // other tools carry no questions
+        let Step::Tool(r) = claude_step("c3", "Read", &json!({ "file_path": "a.rs" })) else { panic!("a tool row") };
+        assert!(r.questions.is_none());
     }
 }

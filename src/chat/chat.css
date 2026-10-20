@@ -141,3 +141,9 @@
 .chat-file-change { flex: none; font-size: 11px; color: var(--fg-muted); }
 .chat-files .chat-hand { flex: none; }
 .chat-files .chat-hand-note { max-width: none; margin-top: 4px; }
+.chat-question-step { font-size: 11px; color: var(--fg-muted); margin-left: auto; }
+.chat-question-text { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-question-options { display: flex; flex-direction: column; gap: 4px; }
+.chat-question-option { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; }
+.chat-question-option small { color: var(--fg-muted); }
+.chat-question-other { margin-top: 6px; width: 100%; box-sizing: border-box; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--chip-bg); color: var(--fg); font: inherit; }

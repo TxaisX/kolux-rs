@@ -1,0 +1,21 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 34172b00..292d046e 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -163,6 +163,7 @@ import { useTeamsHost, withTeams } from "./launch/teams";
+ import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
+ import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt } from "./chat/kitPrompt";
+ import { KitPromptNotices } from "./chat/KitNotice";
++import { editChatBox } from "./chat/menuEdit";
+ import PlanSheet from "./terminal/PlanSheet";
+ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
+ 
+@@ -465,6 +466,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // APP-009 / T-248-a: the menu mirrors the screen, the look, the chrome switches and the shortcuts;
+   // a menu click the page carries out runs the same code as its shortcut.
+   useMenuBar(menuBarState(settings, screen, (id) => keymap.bindings.get(id)?.chords, classic), (id) => {
++    // CHAT-017: with the chat's message box on screen, Select All and Paste act on it (menuEdit.ts); anything else falls through.
++    if ((id === "edit.selectAll" || id === "edit.paste") && editChatBox(id === "edit.paste" ? "paste" : "selectAll", document as never, () => navigator.clipboard.readText())) return;
+     const flip = menuSettingFlip(settings, id);
+     const to = menuScreen(id);
+     const el = document.activeElement;
