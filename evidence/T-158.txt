@@ -1,0 +1,52 @@
+T-158 · browser lane · 2026-10-20 · lane/browser from b93b698d · built by Claude Opus 5.5 (standing in for Fable)
+
+STATUS: left open. Built: popup windows (origin strip in the title bar, linked to the tab, close with it), the local
+certificate-trust rules (engine hook pending), the Google cookie filter's advice and key rule, and the scrub of
+grabbed page details. Open: the certificate approval's engine side and the passkey account chooser.
+
+WHAT WAS BUILT
+- src-tauri/src/browser_popup.rs (new): strip (origin alone, no path/query/sign-in; trimmed from the left to 48
+  characters; plain http to another computer = "Not secure", http to localhost / 127.x / ::1 counts as secure);
+  title bar = strip, then " — " and the page title; route: a window.open with a size -> small linked window, without
+  a size -> tab (as before), before the opener's first finished load -> system browser; Links registry (tab -> popup
+  labels, ready set); open() builds the popup with tauri's window_features (the opener's engine, so profile and
+  policies are inherited and window.opener is kept), refuses unsafe navigations with the tab's own allowed() gate,
+  keeps the title bar on the current origin, refuses the popup's own new windows; close_for() closes a tab's popups.
+- src-tauri/src/browser.rs: on_new_window routes allowed requests (family allowance and on-screen rule unchanged);
+  first finished load marks the tab ready; browser_close closes the tab's popups; the element picker's computed
+  styles are the fixed 16 properties.
+- src-tauri/src/browser_certs.rs (new): Trust: approval only for https on this computer, per host+port, only while
+  a challenge for that site is pending in that tab, bound to the certificate fingerprint (a different bad
+  certificate is refused again), revocable, forgotten when the tab goes. Not wired: WebView2's
+  server-certificate-error event is reachable only through the webview2-com crate as a direct dependency, which this
+  wave may not add. Until then the overlay offers no approval and every address keeps strict checks.
+- src-tauri/src/browser_cookies.rs: needs_key() (a decryption key only when a kept row is encrypted, so Google rows
+  alone never ask). The installed-browser import itself stays held for Txais (T-240).
+- src/browser/cookies.ts (new) + BrowserPane.tsx: the toast gives Google advice only when Google rows were left out;
+  the import button's tooltip says Google cookies are left out.
+- src/browser/scrub.ts (new) + annotate.ts: every pick is scrubbed before it reaches the tray or the message: safe
+  attributes + aria-* only, the fixed 16 styles, secret shapes masked as [masked] (keys, tokens, JWTs, private key
+  blocks, long hex, long mixed-case-and-digit runs), query and fragment stripped from addresses, javascript:/data:/
+  file:/vbscript: links removed, broken captures thrown away; the message's page address is bare too.
+
+READINGS (logs under G:/Temp/browser-v3-logs/)
+- cargo build: build exit 0 (t158b-build.log)
+- cargo clippy --all-targets -D warnings: clippy exit 0 (t158b-clippy.log); with all four pending lib.rs patches
+  applied (T-238-b, T-159, T-240, T-283): clippy exit 0 (t158-clippy-patched.log), lib.rs reverted
+- cargo test browser: 127 passed; 0 failed (t158b-cargo-test.log), new: 6 brow015_*, 4 brow024_*,
+  brow029_no_decryption_key_is_asked_for_google_rows_alone
+- tsc --noEmit: exit 0; vitest src/browser: 19 files, 93 tests passed (t158-vitest.log), new: scrub.test.ts (7),
+  cookies.test.ts (2)
+- privacy-audit app070 x2 red: pre-existing reqwest/TcpStream counts in browser.rs, browser_downloads.rs,
+  browser_ports.rs (not touched by this task; known red)
+
+LIVE PROOF PENDING (batched)
+1. Start a sign-in with GitHub from a site that opens a sized popup: a small window opens, its title bar reads
+   "https://github.com — <page title>", the sign-in finishes, the popup closes, the tab is signed in.
+2. In that popup, follow a link to a page with a long path and query: the title bar still shows the origin only.
+3. Open a sized popup from an http://example.com page: "Not secure · http://..."; from http://localhost:3000: no mark.
+4. Close the opener tab while its popup is open: the popup closes too.
+5. Grab an input whose attributes hold a token, and a link whose address carries ?key=: the message shows [masked]
+   and the address without its query. Grab a paragraph of prose: nothing is masked.
+6. Import a cookie file holding google.com rows: the toast names them and says to sign in to Google in the pane;
+   a file with no Google rows: no Google words.

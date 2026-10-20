@@ -930,3 +930,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · T-546-b · this tree's own TopBar, actions and tower files; no outside source
 > 2026-10-20 · T-550 · this tree's UsagePill, SettingsPage and the user guide; no outside source
 > 2026-10-20 · T-546-c · this tree's tower files and capabilities; no outside source
+> 2026-10-20 · browser T-158 · rules from the BROW-015, BROW-024, BROW-029, BROW-031 and BROW-036 cards (spec/13-browser-computer.md); this tree's own browser.rs, browser_cookies.rs, annotate.ts, BrowserPane.tsx; tauri 2.12 public docs for WebviewWindowBuilder::window_features, on_new_window (NewWindowResponse::Create) and on_document_title_changed; public token formats documented by GitHub, Slack, AWS, Google and the JWT spec (RFC 7519); no outside code

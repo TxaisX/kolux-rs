@@ -47,6 +47,13 @@ pub mod holder;
 pub mod wake;
 #[path = "browser_helpers.rs"]
 pub mod helpers;
+// T-158: BROW-015 sized popups open in a small linked window whose title bar is the origin strip;
+// BROW-024 the local dev-server certificate rules (the engine hook waits for the WebView2 event).
+#[path = "browser_popup.rs"]
+pub mod popup;
+#[allow(dead_code)] // T-158: answered by the engine's certificate event once that is reachable.
+#[path = "browser_certs.rs"]
+pub mod certs;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -996,7 +1003,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         .zoom_hotkeys_enabled(false)
         .initialization_script(CHORD_SCRIPT)
         // BROW-014: a link or script asking for a new window becomes another Kolux tab, in front.
-        .on_new_window(move |url, _| {
+        .on_new_window(move |url, features| {
             // T-159 (BROW-040): a document preview's popups and script-opened windows are blocked;
             // an outside address is offered to the user once, with its full address.
             if let Some(v) = preview::navigating(id, url.as_str()) {
@@ -1010,7 +1017,23 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             let (now, shown) = (Instant::now(), is_shown(id));
             let family = families().of(id);
             match new_window(&url, window_dev.as_ref(), &family, shown, now) {
-                Some((url, front)) => {
+                Some((link, front)) => {
+                    // T-158 (BROW-015): a sized window.open is a popup window linked to this tab;
+                    // before the tab's page finished a load it goes to the system browser.
+                    match popup::route(features.size().is_some(), popup::is_ready(id)) {
+                        popup::Route::Window => {
+                            if let Some(window) = popup::open(&window_app, id, &url, features, window_dev.clone()) {
+                                return NewWindowResponse::Create { window };
+                            }
+                            return NewWindowResponse::Deny;
+                        }
+                        popup::Route::System => {
+                            let _ = crate::artifacts::open_external(link);
+                            return NewWindowResponse::Deny;
+                        }
+                        popup::Route::Tab => {}
+                    }
+                    let url = link;
                     families().promise(id, &url, now);
                     let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 }
@@ -1095,6 +1118,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 history::noted_load(id, payload.url().as_str()); // T-238-b (BROW-004)
                 session::noted_load(id, payload.url().as_str()); // T-179 (BROW-020)
                 preview::rendered(id); // T-159 (BROW-040): agent tools may drive a preview now
+                popup::mark_ready(id); // T-158 (BROW-015): its sized popups get their own window now
             } else {
                 preview::loading(id, payload.url().as_str()); // T-159: a preview address fences the tab
             }
@@ -1345,6 +1369,7 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     history::forget_tab(id);
     session::forget(id); // T-179: a closed tab does not come back after a restart
     preview::forget(id); // T-159
+    popup::close_for(&app, id); // T-158 (BROW-015): a tab's popups close with it
     view(&app, id)?.close().map_err(err)
 }
 
@@ -1677,7 +1702,7 @@ const path=e=>{ const out=[]; let n=e; while(n&&n.nodeType===1&&out.length<8){ o
 const react=e=>{ const k=Object.keys(e).find(k=>k.startsWith('__reactFiber$')||k.startsWith('__reactInternalInstance$')); if(!k) return {}; let f=e[k]; const chain=[]; let src=null;
  while(f&&chain.length<6){ const t=f.type; if(t&&typeof t!=='string'){ const nm=t.displayName||t.name||(t.render&&(t.render.displayName||t.render.name)); if(nm) chain.push(nm); } if(!src&&f._debugSource) src=f._debugSource.fileName+':'+f._debugSource.lineNumber; f=f.return; }
  return {component:chain.length?chain.join(' < '):undefined,source:src||undefined}; };
-const styles=e=>{ const s=getComputedStyle(e); const out={}; for(const k of ['color','background-color','font-size','font-family','font-weight','padding','margin','border','display']){ const v=s.getPropertyValue(k); if(v&&v!=='none'&&v!=='normal'&&v!=='0px') out[k]=v; } return out; };
+const styles=e=>{ const s=getComputedStyle(e); const out={}; for(const k of ['color','background-color','font-size','font-family','font-weight','line-height','padding','margin','border','border-radius','display','position','width','height','opacity','z-index']){ const v=s.getPropertyValue(k); if(v&&v!=='none'&&v!=='normal'&&v!=='0px') out[k]=v; } return out; };
 const hints=e=>{ const out={}; for(const a of e.attributes){ if(a.name.startsWith('data-')||a.name.startsWith('aria-')||a.name==='role'||a.name==='name'||a.name==='href'||a.name==='type'||a.name==='class') out[a.name]=a.value.slice(0,200); } return out; };
 A.move=ev=>{ const e=ev.target; if(!(e instanceof Element)||e===box){ return; } const r=e.getBoundingClientRect(); box.style.display='block'; box.style.left=r.left+'px'; box.style.top=r.top+'px'; box.style.width=r.width+'px'; box.style.height=r.height+'px'; };
 A.click=ev=>{ ev.preventDefault(); ev.stopImmediatePropagation(); const e=ev.target; if(!(e instanceof Element)) return; const r=e.getBoundingClientRect(); const rx=react(e);

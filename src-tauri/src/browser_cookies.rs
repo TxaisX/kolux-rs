@@ -129,6 +129,14 @@ pub fn google_family(domain: &str) -> bool {
     }
 }
 
+/// T-158 (BROW-029): an import from an installed browser asks for that browser's decryption key
+/// only when a row it keeps is encrypted, so Google rows (dropped first) never cause the question.
+/// The installed-browser import itself waits for Txais (PLAN T-240).
+#[allow(dead_code)]
+pub fn needs_key<'a>(rows: impl IntoIterator<Item = (&'a str, bool)>) -> bool {
+    rows.into_iter().any(|(domain, encrypted)| encrypted && !google_family(domain))
+}
+
 /// The entry as the engine takes it; without an expiry the cookie lasts the session.
 pub fn cookie_of(e: &Entry) -> Cookie<'static> {
     let mut b = Cookie::build((e.name.clone(), e.value.clone())).domain(e.domain.clone()).path(e.path.clone()).secure(e.secure).http_only(e.http_only);
@@ -244,5 +252,14 @@ mod tests {
         let (entries, _) = parse(text, NOW).unwrap();
         let sites = by_site(&entries);
         assert_eq!(sites.iter().map(|(d, l)| (*d, l.len())).collect::<Vec<_>>(), vec![("b.test", 2), ("a.test", 1)]);
+    }
+
+    #[test]
+    fn brow029_no_decryption_key_is_asked_for_google_rows_alone() {
+        assert!(!needs_key([(".google.com", true), ("accounts.google.co.uk", true), ("github.com", false)]));
+        assert!(needs_key([(".google.com", true), ("github.com", true)]));
+        assert!(needs_key([(".youtube.com", true)]), "YouTube still comes across");
+        assert!(needs_key([("google.com.evil.io", true)]), "a lookalike is not Google");
+        assert!(!needs_key(std::iter::empty()));
     }
 }

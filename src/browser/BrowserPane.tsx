@@ -25,6 +25,7 @@ import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
+import { type CookieReport, cookieReportText, GOOGLE_NOTE } from "./cookies";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
 import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
@@ -46,8 +47,7 @@ export const openDetail = (d: OpenInBrowser): { url: string; title?: string } =>
 type Preview = { folder: string; file: string; path: string; granted: boolean };
 /** T-240 (BROW-034): the Viewport Size menu; the names are the compat list's, the sizes live in browser_cli.rs DEVICES. */
 export const VIEWPORTS = ["Default", "Mobile S", "Mobile M", "Mobile L", "Tablet", "Laptop", "Laptop L", "Desktop"] as const;
-/** T-240 (BROW-028): what a cookie import reports. */
-type CookieReport = { imported: number; sites: number; skipped: number; google: number; reasons: string[] };
+
 
 /** T-241 (BROW-044): `kolux tab create` asks the window for a tab; one listener for the whole
  * window, started by the first pane, so a tab opens once however many panes there are. */
@@ -538,10 +538,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (typeof picked !== "string") return;
     try {
       const r = await invoke<CookieReport>("browser_cookies_import", { id, path: picked });
-      const parts = [`${r.imported} cookie${r.imported === 1 ? "" : "s"} for ${r.sites} site${r.sites === 1 ? "" : "s"} imported`];
-      if (r.skipped) parts.push(`${r.skipped} skipped (${r.reasons.join("; ")})`);
-      if (r.google) parts.push(`${r.google} Google sign-in cookie${r.google === 1 ? "" : "s"} left out`);
-      setNote(parts.join("; "));
+      setNote(cookieReportText(r)); // T-158 (BROW-029): Google advice only when Google rows were left out
     } catch (err) {
       setNote(String(err));
     }
@@ -697,7 +694,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             ))}
           </select>
           {/* T-240 (BROW-028): cookies from a JSON list file go into this tab's profile. */}
-          <button className="ib cookies" onClick={importCookies} title="Import cookies from a file (JSON list)" aria-label="Import cookies">
+          <button className="ib cookies" onClick={importCookies} title={`Import cookies from a file (JSON list). ${GOOGLE_NOTE}`} aria-label="Import cookies">
             <Globe size={12} />
           </button>
           {/* BROW-037: pick elements in the page and write notes on them for an agent. */}
