@@ -115,9 +115,14 @@ export function switcherLabel(groups: Group[], agent: string, id: string): strin
   const choices = groups.find((g) => g.provider === agent)?.choices ?? [];
   const at = choices.find((c) => c.id === id);
   if (!at) return id;
-  // FIX-2: two accounts of one provider that read the same get the last four characters of their id,
-  // so the Tower never shows two cards or rows under one name. The pill menu keeps the plain label.
-  return choices.some((c) => c !== at && c.label === at.label) ? `${at.label} (${id.slice(-4)})` : at.label;
+  // FIX-2/FIX-3: two accounts of one provider that read the same get the shortest tail of their id (four
+  // characters or more) that no other account of that name ends with, so the Tower never shows two cards or
+  // rows under one name even when the ids share their last four. The pill menu keeps the plain label.
+  const rivals = choices.filter((c) => c !== at && c.id !== null && c.label === at.label).map((c) => c.id as string);
+  if (rivals.length === 0) return at.label;
+  let n = Math.min(4, id.length);
+  while (n < id.length && rivals.some((r) => r.endsWith(id.slice(-n)))) n += 1;
+  return `${at.label} (${id.slice(-n)})`;
 }
 
 /** FIX-1: a switch from a shortcut or the palette, with pick's error words shown as a notice

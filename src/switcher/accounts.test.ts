@@ -211,6 +211,23 @@ describe("switcherLabel", () => {
     expect(switcherLabel(twins, "claude", "c-cc33")).toBe("me@example.com");
     expect(switcherLabel(twins, "codex", "x-dd44")).toBe("work@example.com");
   });
+  // FIX-3 (review AFTER 1): ids that share their last four characters still read differently.
+  it("uses the shortest tail of the id that no same-name account shares, at least four characters", () => {
+    const same = groupsOf(
+      claude({ accounts: [{ id: "c-aa-9z9z", email: "work@example.com", organization: null, stale: false }, { id: "c-bb-9z9z", email: "work@example.com", organization: null, stale: false }, { id: "c-cc-1234", email: "work@example.com", organization: null, stale: false }], active: "c-aa-9z9z" }),
+      null,
+    );
+    const a = switcherLabel(same, "claude", "c-aa-9z9z");
+    const b = switcherLabel(same, "claude", "c-bb-9z9z");
+    expect(a).toBe("work@example.com (a-9z9z)");
+    expect(b).toBe("work@example.com (b-9z9z)");
+    expect(switcherLabel(same, "claude", "c-cc-1234")).toBe("work@example.com (1234)");
+  });
+  it("keeps a whole id that is shorter than four characters, and never reuses a label for two accounts", () => {
+    const short = groupsOf(claude({ accounts: [{ id: "a1", email: "w@example.com", organization: null, stale: false }, { id: "b2", email: "w@example.com", organization: null, stale: false }], active: "a1" }), null);
+    expect(switcherLabel(short, "claude", "a1")).toBe("w@example.com (a1)");
+    expect(switcherLabel(short, "claude", "b2")).toBe("w@example.com (b2)");
+  });
 });
 
 // FIX-1 (FIX-SOON 2): a failed shortcut or palette switch is told to the person, not dropped.
