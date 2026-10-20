@@ -44,6 +44,13 @@ describe("fold (CHAT-013..CHAT-016)", () => {
     expect([summary.children.map((c) => c.state), summary.verdict]).toEqual([["completed", "failed"], "failed"]);
   });
 
+  it("a finished subagent carries its token count into the roster row; a running one has none", () => {
+    const agent = (id: string, t: Partial<Tool>) => tool(id, 10, { group: "agent", name: "reviewer", preview: id, ...t });
+    const v = fold([user("u", 0), agent("x", { done: true, tokens: 12_300 }), agent("y", {})], true);
+    const row = v.find((x) => x.row === "roster") as { children: { tokens?: number }[] };
+    expect(row.children.map((c) => c.tokens)).toEqual([12_300, undefined]);
+  });
+
   it("children left running from an earlier app run are unverifiable; an interrupt stops them", () => {
     const rows = [user("u", 0), tool("x", 1, { group: "agent" })];
     const restored = fold(rows, false).find((v) => v.row === "roster") as { children: { state: string }[] };

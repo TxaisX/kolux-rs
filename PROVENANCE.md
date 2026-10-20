@@ -1018,3 +1018,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · look T-302-c (web places of the project icon card) · no new outside sources: the guarded icon client, address rules and lookup are Kolux RS code already in browser.rs; URL host parsing per the url crate behaviour already used there
 > 2026-10-20 · look T-266-b (PROJ-062 ports and task on the workspace card hover) · no new outside sources: Kolux RS own ports.rs scan and Worktree.number
 > 2026-10-20 · skills T-292-b (SKILL-025/027, VIEW-100 skill half) · spec/15 and spec/05 cards only; this tree's own T-196-b event shape; no outside source
+> 2026-10-20 · chat T-326-b (CHAT-015 subagent token count) · spec/14 card only; the token figure is read from the result line field Claude Code writes in its own transcript (public file format of the tool); no other outside source

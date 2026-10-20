@@ -370,7 +370,14 @@ impl Parser {
                 };
                 let out = tag_body(&out, "tool_use_error").map(str::to_string).unwrap_or(out);
                 let failed = b.get("is_error").and_then(Value::as_bool) == Some(true);
-                changed.extend(self.result(str_at(b, "tool_use_id").unwrap_or(""), out, failed, at));
+                let done = self.result(str_at(b, "tool_use_id").unwrap_or(""), out, failed, at);
+                // CHAT-015: a subagent's finished Task call reports what the run cost in tokens.
+                if let (Some(id), Some(n)) = (done.as_ref(), v.pointer("/toolUseResult/totalTokens").and_then(Value::as_u64)) {
+                    if let Some(tool) = self.index.get(id).and_then(|i| self.items[*i].tool.as_mut()).filter(|t| t.group == "agent") {
+                        tool.tokens = Some(n);
+                    }
+                }
+                changed.extend(done);
             }
             if texts.is_empty() && images.is_empty() {
                 return changed;
@@ -1127,6 +1134,26 @@ mod tests {
         assert_eq!(p.items()[1].kind, "thought");
         assert_eq!(p.items()[3].kind, "command");
         assert_eq!(p.items()[0].at, Some(1_772_359_200_000));
+    }
+
+    #[test]
+    fn chat015_a_finished_subagent_call_carries_its_token_count_and_other_tools_do_not() {
+        let mut p = Parser::new(Format::Claude);
+        feed(&mut p, &[
+            user("u1", json!("review it")),
+            reply("m1", "a1", json!({ "type": "tool_use", "id": "t1", "name": "Task", "input": { "description": "Check", "subagent_type": "reviewer" } }), Some("tool_use")),
+            reply("m1", "a2", json!({ "type": "tool_use", "id": "t2", "name": "Bash", "input": { "command": "ls" } }), Some("tool_use")),
+        ]);
+        assert_eq!(p.items()[1].tool.as_ref().unwrap().tokens, None, "no count while the run is going");
+        let mut with = |call: &str, uuid: &str| {
+            let mut line = user(uuid, json!([{ "type": "tool_result", "tool_use_id": call, "content": "ok", "is_error": false }]));
+            line["toolUseResult"] = json!({ "totalTokens": 12345, "totalDurationMs": 4000 });
+            p.feed(&line.to_string());
+        };
+        with("t1", "r1");
+        with("t2", "r2");
+        assert_eq!(p.items()[1].tool.as_ref().unwrap().tokens, Some(12345));
+        assert_eq!(p.items()[2].tool.as_ref().unwrap().tokens, None, "only a subagent call reports tokens");
     }
 
     #[test]
