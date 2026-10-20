@@ -35,12 +35,16 @@ function nativeHits(chords: string[], native: readonly NativeChord[]): NativeCho
   return native.filter((n) => chords.some((c) => same(c, n.chord)));
 }
 
+/** Commands in the keymap with no handler anywhere yet (browser Hard Reload and Grab Page Element). */
+const NOT_ROUTED = new Set(["browser.hardReload", "browser.grabElement"]);
+
 /** `native`: the chords the system menu owns (menu_sync reports them; none outside macOS). */
 export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): Row[] {
   const p = map.platform;
   const title = (id: string) => map.bindings.get(id)?.action.title ?? id;
   // T-239 (BROW-019): Reopen closed tab is offered again now that the window reopens closed browser tabs (T-543-b had hidden it).
-  return [...map.bindings.values()].map(({ action, chords, custom, dropped }) => {
+  // T-164-b: a command nothing runs yet is not offered; drop an id from NOT_ROUTED when its handler lands.
+  return [...map.bindings.values()].filter(({ action }) => !NOT_ROUTED.has(action.id)).map(({ action, chords, custom, dropped }) => {
     const defaults = defaultsFor(action, p);
     const disabled = custom && chords.length === 0 && defaults.length > 0;
     const modified = custom && chords.join() !== defaults.join();
