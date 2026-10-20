@@ -529,9 +529,20 @@ fn skip(store: &Store, id: &str, trigger: &str, cause: &str, detail: &str) -> Re
     patch_run(store, run["id"].as_str().unwrap_or_default(), json!({ "status": "skipped", "cause": cause, "detail": detail }))
 }
 
+/// CLI-028: the host that owns an automation. Every automation made here is owned by this
+/// computer (no `ownerHost` saved); one saved with another host's name came from a Kolux that had
+/// hosts, and this one has none.
+pub const LOCAL_HOST: &str = "local";
+pub fn owner_of(a: &Value) -> &str {
+    a["ownerHost"].as_str().map(str::trim).filter(|h| !h.is_empty()).unwrap_or(LOCAL_HOST)
+}
+
 /// AUTO-022: what keeps an automation from running, as `(cause, reason)`, or none when it is
 /// ready. The reason names the project, the worktree or the account that needs signing in.
 fn problem(store: &Store, a: &Value) -> Option<(&'static str, String)> {
+    if owner_of(a) != LOCAL_HOST {
+        return Some(("unavailable", format!("its host {} is not part of this Kolux, so nothing here can run it", owner_of(a))));
+    }
     let Some(project) = projects::load_projects(store).into_iter().find(|p| a["projectId"] == p.id.as_str()) else {
         return Some(("unavailable", "its project is no longer in Kolux".into()));
     };
