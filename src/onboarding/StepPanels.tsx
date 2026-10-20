@@ -14,7 +14,8 @@ import {
 } from "./actions";
 import { markGuide, type GuideRecord, type Place } from "./guide";
 import { replayTour } from "./tour";
-import { awakeToggle, stopCard, writerBack } from "./stopCards";
+import { awakeToggle, stopCard, STOP_SKILLS, writerBack } from "./stopCards";
+import { SkillStop, UsageStop } from "./LiveStopCards";
 import { AWAKE_KEY, HOOKS_OFF_HELP } from "../launch/KeepAwakeCard";
 import { WRITER_INSTRUCTIONS_KEY, WRITER_KEY } from "../scm/generate";
 import { integrationSteps, readSeenCached, restale, taskSummary, UNSEEN, type Seen } from "./integrations";
@@ -263,16 +264,19 @@ export function IntegrationsPanel({ onCheck }: { onCheck: () => void }) {
   );
 }
 
-/** ONB-024: the setup an Explore Kolux stop carries, right on the stop. The skill command cards
- *  (orchestration, browser) show without a terminal; the inline terminal is T-244-b's. */
+/** ONB-024: the setup an Explore Kolux stop carries, right on the stop. Usage and the skill stops
+ *  (orchestration, browser) read live facts, so they are their own components (LiveStopCards.tsx). */
 export function StopSetup({ stop, taskSource }: { stop: string; taskSource: boolean | null }) {
   const { settings, save } = useSettings();
   // The writer mode the switch had before it was turned off, so turning it on again puts that back.
   const before = useRef<string | null>(null);
   // The settings cards draw nothing until the saved settings have arrived (stopCard), so a switch or box
   // is never built from a guessed default and written back over what is saved.
+  if (stop === "usage") return <UsageStop />;
+  if (STOP_SKILLS[stop]) return <SkillStop stop={stop} />;
   const card = stopCard(stop, { taskSource, settings });
   if (!card) return null;
+  if (card.kind !== "provider" && card.kind !== "awake" && card.kind !== "writer") return null;
   if (card.kind === "provider") {
     return (
       <p className="guide-note" data-card="provider" data-connected={card.connected}>
