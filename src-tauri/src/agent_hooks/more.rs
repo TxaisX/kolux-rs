@@ -391,8 +391,16 @@ fn inspect_copilot(file: &Path) -> (&'static str, Option<String>) {
     }
 }
 
+/// After-list row 481: neither Cursor nor Factory documents the shell its hook commands run in on
+/// Windows. A plain path (letters, digits, `/ : . - _`) is written bare, which cmd, POSIX shells and
+/// PowerShell all run; any other path keeps double quotes, which cmd and POSIX shells run
+/// (coordinator default; Txais may overrule).
 fn quoted(path: &str) -> String {
-    format!("\"{path}\"")
+    if !path.is_empty() && path.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b':' | b'.' | b'-' | b'_')) {
+        path.to_string()
+    } else {
+        format!("\"{path}\"")
+    }
 }
 
 pub fn cursor_file(home: &Path) -> PathBuf {
