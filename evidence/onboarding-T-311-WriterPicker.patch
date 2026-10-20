@@ -1,0 +1,49 @@
+diff --git a/src/scm/WriterPicker.tsx b/src/scm/WriterPicker.tsx
+index 260a4bc8..4de9d146 100644
+--- a/src/scm/WriterPicker.tsx
++++ b/src/scm/WriterPicker.tsx
+@@ -3,6 +3,7 @@
+ import { useEffect, useState } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+ import { WRITER_COMMAND_KEY, WRITER_EFFORT_KEY, WRITER_KEY, writerName, writerOf } from "./generate";
++import { listFor, rememberPatch, rememberedLists, sourceNote } from "../settings/writerModels";
+ import { agentChoices, agentPatch, effortsFor, modelMode, modelPatch, pickerHint, type WriterOptions } from "./writerPick";
+ 
+ type Props = { settings: Record<string, unknown>; save: (patch: Record<string, unknown>) => unknown };
+@@ -11,7 +12,7 @@ export default function WriterPicker({ settings, save }: Props) {
+   const writer = writerOf(settings);
+   const stored = settings[WRITER_KEY];
+   const [installed, setInstalled] = useState<Set<string> | null>(null);
+-  const [options, setOptions] = useState<WriterOptions | null>(null);
++  const [raw, setOptions] = useState<WriterOptions | null>(null);
+   useEffect(() => {
+     invoke<{ id: string; installed: boolean }[]>("agent_list").then(
+       (l) => setInstalled(new Set(l.filter((a) => a.installed).map((a) => a.id))),
+@@ -31,6 +32,15 @@ export default function WriterPicker({ settings, save }: Props) {
+       live = false;
+     };
+   }, [agent]);
++  // ACCT-033: the installed tool's list when it answers, else the list it gave last time, else a built-in one.
++  const shown = raw === null ? null : listFor(raw, rememberedLists(settings));
++  const options = shown === null ? null : shown.options;
++  const note = shown !== null && raw !== null && raw.installed && shown.source !== "installed" ? sourceNote(shown.source, raw.name) : null;
++  useEffect(() => {
++    const p = raw === null ? null : rememberPatch(raw, rememberedLists(settings));
++    if (p !== null) void save(p);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [raw]);
+   const efforts = effortsFor(options, writer.model);
+   const mode = modelMode(options);
+   return (
+@@ -88,9 +98,9 @@ export default function WriterPicker({ settings, save }: Props) {
+               </select>
+             </div>
+           )}
+-          {pickerHint(options) && (
++          {(note ?? pickerHint(options)) && (
+             <p className="conn-detail" data-writer-hint>
+-              {pickerHint(options)}
++              {note ?? pickerHint(options)}
+             </p>
+           )}
+         </>

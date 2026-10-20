@@ -930,3 +930,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · onboarding T-208-c · spec/16 ONB-007/ONB-008/ONB-010 rules as given in the brief; this tree's own onboarding.rs; no outside source
 > 2026-10-20 · onboarding T-322-c · spec/16 ONB-042/ONB-015 rules and spec/05 VIEW-102 as given in the brief; this tree's own features.ts, guide.ts, Guides.tsx, App.tsx, board, tasks, automations, skills; no outside source
 > 2026-10-20 · onboarding T-181 · spec/17 SET-035/SET-036 rules as given in the brief; this tree's own useSettings, secrets.rs, import.rs, terminal text.ts and schemes.ts; no outside source
+> 2026-10-20 · onboarding T-311 · spec/07 ACCT-030/033/057/058/062 rules as given in the brief; this tree's own search.ts, scm_writers.rs, WriterPicker.tsx, TasksPage.tsx, pr_review.rs, languages.ts; no outside source

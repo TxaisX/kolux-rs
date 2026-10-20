@@ -12,6 +12,8 @@ import WriterPicker from "../scm/WriterPicker";
 import { autoBranchOn, autoBranchPatch } from "../scm/autoBranch";
 import SetupPolicyRow from "./SetupPolicyRow";
 import { useDraft } from "./useDraft";
+import { REVIEW_BOTS_KEY } from "../scm/review";
+import { botsText, parseBots } from "./reviewBots";
 
 const REFRESH_FIELD = "refreshBaseFirst";
 /** SET-031 / PROJ-039: branches are renamed after the work; on unless saved as false. */
@@ -32,6 +34,12 @@ type ViewProps = {
 };
 
 const modeOf = (s: Record<string, unknown>) => (typeof s.branchPrefix === "string" ? s.branchPrefix : "user");
+
+/** ACCT-058: the review authors to show as bots, a draft that saves like the other text fields. */
+function BotsField({ value, onSave }: { value: string; onSave: (text: string) => Promise<unknown> }) {
+  const { props } = useDraft(value, onSave);
+  return <input aria-label="review bot authors" className="field" maxLength={600} placeholder="e.g. reviewbot, ci-helper" {...props} />;
+}
 
 /** SET-036: the commit message instructions, a draft that saves after a pause, on leaving the field and when the page closes. */
 function InstructionsField({ value, onSave }: { value: string; onSave: (text: string) => Promise<unknown> }) {
@@ -128,6 +136,11 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
         <WriterPicker settings={settings} save={save} />
         <InstructionsField value={String(settings[WRITER_INSTRUCTIONS_KEY] ?? "")} onSave={(text) => Promise.resolve(save({ [WRITER_INSTRUCTIONS_KEY]: text }))} />
         <p className="conn-detail">The spark button beside the commit message asks for a message describing what is staged.</p>
+      </section>
+      <section className="conn-card" data-section="review-bots">
+        <h2 className="conn-name">Review bots</h2>
+        <BotsField value={botsText(settings[REVIEW_BOTS_KEY])} onSave={(text) => Promise.resolve(save({ [REVIEW_BOTS_KEY]: parseBots(text) }))} />
+        <p className="conn-detail">Authors of review comments to mark as bots, besides the ones GitHub already marks. Separate names with commas; capital letters do not matter.</p>
       </section>
       <section className="conn-card" data-section="gh-budget">
         <h2 className="conn-name">GitHub API budget</h2>
