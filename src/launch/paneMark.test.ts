@@ -78,6 +78,10 @@ test("FIX-3: the real catalogue ids take the mark of the program their Command n
   expect(markFor("claude", "pwsh")).toBe("claude");
   expect(markFor("codex", "claude")).toBe("codex");
   expect(markFor("claude-agent-teams", "x")).toBe("claude");
+  // T-335-b: Copilot and Cursor carry their own marks without driving the Claude-only pane logic.
+  expect(markFor("copilot", "pwsh")).toBe("copilot");
+  expect(markFor("cursor", "pwsh")).toBe("cursor");
+  expect(markFor("openclaude", "pwsh")).toBe("shell");
   expect(markForViaMenu).toBe(markFor);
 });
 

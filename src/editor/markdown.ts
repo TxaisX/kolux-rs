@@ -120,7 +120,7 @@ export type WikiOpts = { files: () => string[]; notePath: string; show: (v: Wiki
 
 /** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user;
  * `onRefuse` shows the toast for a paste past the limit (EDIT-008). */
-export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void, onRefuse: (text: string) => void = () => {}, onSlash: (v: SlashView | null) => void = () => {}, wikiOpts?: WikiOpts): Rich {
+export function mountRich(el: HTMLElement, md: string, onEdit: (md: string, prev: string) => void, onRefuse: (text: string) => void = () => {}, onSlash: (v: SlashView | null) => void = () => {}, wikiOpts?: WikiOpts): Rich {
   const editor = createEditor({ namespace: "kolux-md", nodes: NODES, onError: fail, theme: THEME });
   editor.setRootElement(el);
   let last = "";
@@ -142,8 +142,9 @@ export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => v
       if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return; // the caret moved, nothing more
       const now = editorState.read(() => $convertToMarkdownString(MD));
       if (now === last) return;
+      const prev = last;
       last = now;
-      if (!tags.has("kolux-load")) onEdit(now);
+      if (!tags.has("kolux-load")) onEdit(now, prev);
     }),
   );
   const show = (text: string) =>

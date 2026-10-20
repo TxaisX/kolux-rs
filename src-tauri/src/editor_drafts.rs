@@ -75,40 +75,70 @@ fn clear(all: &mut All, worktree: &str, path: &str) {
 }
 
 /// EDIT-032: a moved file's draft follows it to the new path; a moved folder takes the drafts under it.
+/// Row 135: a tab with no worktree keeps its draft under the file's own folder, so a draft whose
+/// key is its file's folder (outside the worktree being renamed in) moves to the new folder too.
 fn rename(all: &mut All, worktree: &str, from: &str, to: &str) {
-    let Some(files) = all.get_mut(&key(worktree)) else { return };
     let f = key(from);
     let under = format!("{f}/");
-    let hit: Vec<String> = files.keys().filter(|k| **k == f || k.starts_with(&under)).cloned().collect();
-    for k in hit {
-        if let Some(mut d) = files.remove(&k) {
+    let named = key(worktree);
+    let mut moved: Vec<(String, Draft)> = Vec::new();
+    for (wt, files) in all.iter_mut() {
+        let hit: Vec<String> = files.keys().filter(|k| **k == f || k.starts_with(&under)).cloned().collect();
+        for k in hit {
+            let Some(mut d) = files.remove(&k) else { continue };
+            let rootless = *wt != named && *wt == folder(&k);
             let tail = d.path.chars().skip(from.chars().count()).collect::<String>();
             d.path = format!("{}{}", to.trim_end_matches(['/', '\\']), tail);
-            files.insert(key(&d.path), d);
+            moved.push((if rootless { folder(&key(&d.path)) } else { wt.clone() }, d));
         }
     }
+    for (wt, d) in moved {
+        all.entry(wt).or_default().insert(key(&d.path), d);
+    }
+    all.retain(|_, files| !files.is_empty());
+}
+
+/// The folder part of a file key.
+fn folder(k: &str) -> String {
+    k.rsplit_once('/').map(|(dir, _)| dir.to_string()).unwrap_or_default()
 }
 
 fn load(store: &Store<'_>) -> All {
     parse(store.lock().ok().and_then(|s| s.get(KEY).ok().flatten()))
 }
 
-fn save(store: &Store<'_>, all: &All) -> Result<(), String> {
-    store.lock().map_err(|_| "the state store is busy".to_string())?.set(KEY, &render(all)).map_err(|e| e.to_string())
+/// After-list row 132: every change to the drafts reads, changes and writes them under this one
+/// lock, so two commands running at once (two tabs typing) can never both read the old list and
+/// have the later write drop the other tab's draft.
+static ONE: Mutex<()> = Mutex::new(());
+
+/// Load, change, save as one step (row 132); `read` and `write` are the stored text.
+fn update_with(read: impl FnOnce() -> Option<String>, write: impl FnOnce(String) -> Result<(), String>, change: impl FnOnce(&mut All) -> Result<(), String>) -> Result<(), String> {
+    let _one = ONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut all = parse(read());
+    change(&mut all)?;
+    write(render(&all))
+}
+
+fn update(store: &Store<'_>, change: impl FnOnce(&mut All) -> Result<(), String>) -> Result<(), String> {
+    update_with(
+        || store.lock().ok().and_then(|s| s.get(KEY).ok().flatten()),
+        |raw| store.lock().map_err(|_| "the state store is busy".to_string())?.set(KEY, &raw).map_err(|e| e.to_string()),
+        change,
+    )
 }
 
 #[tauri::command(async)]
 pub fn editor_draft_set(store: Store<'_>, worktree: String, path: String, text: String, base: String) -> Result<(), String> {
-    let mut all = load(&store);
-    set(&mut all, &worktree, Draft { path, text, base })?;
-    save(&store, &all)
+    update(&store, |all| set(all, &worktree, Draft { path, text, base }))
 }
 
 #[tauri::command(async)]
 pub fn editor_draft_clear(store: Store<'_>, worktree: String, path: String) -> Result<(), String> {
-    let mut all = load(&store);
-    clear(&mut all, &worktree, &path);
-    save(&store, &all)
+    update(&store, |all| {
+        clear(all, &worktree, &path);
+        Ok(())
+    })
 }
 
 /// The drafts of one worktree, for the tabs it reopens.
@@ -120,16 +150,18 @@ pub fn editor_drafts_get(store: Store<'_>, worktree: String) -> Vec<Draft> {
 /// Removing a worktree discards its drafts.
 #[tauri::command(async)]
 pub fn editor_drafts_drop(store: Store<'_>, worktree: String) -> Result<(), String> {
-    let mut all = load(&store);
-    all.remove(&key(&worktree));
-    save(&store, &all)
+    update(&store, |all| {
+        all.remove(&key(&worktree));
+        Ok(())
+    })
 }
 
 #[tauri::command(async)]
 pub fn editor_draft_rename(store: Store<'_>, worktree: String, from: String, to: String) -> Result<(), String> {
-    let mut all = load(&store);
-    rename(&mut all, &worktree, &from, &to);
-    save(&store, &all)
+    update(&store, |all| {
+        rename(all, &worktree, &from, &to);
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -196,6 +228,61 @@ mod tests {
         assert_eq!(all["c:/w"]["c:/w/old/docs/a.md"].path, "C:/w/old/docs/a.md");
         assert!(all["c:/w"].contains_key("c:/w/docs2/b.md"));
         assert_eq!(all["c:/w"].len(), 2);
+    }
+
+    #[test]
+    fn row132_drafts_written_by_many_commands_at_once_are_all_kept() {
+        // A shared stored text standing in for the state store; each read and write yields so the
+        // threads interleave the way two tabs' draft commands do.
+        let stored: std::sync::Arc<Mutex<Option<String>>> = std::sync::Arc::new(Mutex::new(None));
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let stored = stored.clone();
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        update_with(
+                            || {
+                                let got = stored.lock().unwrap().clone();
+                                std::thread::yield_now();
+                                got
+                            },
+                            |raw| {
+                                std::thread::yield_now();
+                                *stored.lock().unwrap() = Some(raw);
+                                Ok(())
+                            },
+                            |all| set(all, "C:/w", d(&format!("C:/w/t{t}-{i}.md"), "typed")),
+                        )
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        threads.into_iter().for_each(|h| h.join().unwrap());
+        let all = parse(stored.lock().unwrap().clone());
+        assert_eq!(all["c:/w"].len(), 8 * 25);
+    }
+
+    #[test]
+    fn row135_a_rootless_tabs_draft_follows_its_file_to_the_new_folder() {
+        let mut all = All::new();
+        // A tab opened with no worktree keeps its draft under the file's folder.
+        set(&mut all, r"C:\loose", d(r"C:\loose\a.md", "typed")).unwrap();
+        set(&mut all, "C:/w", d("C:/w/b.md", "b")).unwrap();
+        rename(&mut all, "C:/w", r"C:\loose\a.md", "C:/loose/sub/a2.md");
+        assert!(!all.contains_key("c:/loose"), "the old folder keeps no orphan: {all:?}");
+        assert_eq!(all["c:/loose/sub"]["c:/loose/sub/a2.md"].text, "typed");
+        // A draft inside the worktree being renamed in stays under that worktree.
+        rename(&mut all, "C:/w", "C:/w/b.md", "C:/w/deep/b.md");
+        assert_eq!(all["c:/w"]["c:/w/deep/b.md"].text, "b");
+    }
+
+    #[test]
+    fn row132_a_refused_change_writes_nothing() {
+        let mut wrote = false;
+        let got = update_with(|| None, |_| { wrote = true; Ok(()) }, |all| set(all, "C:/w", d("C:/w/big.txt", &"x".repeat(MAX_DRAFT + 1))));
+        assert!(got.is_err());
+        assert!(!wrote);
     }
 
     #[test]

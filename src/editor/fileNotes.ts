@@ -38,14 +38,37 @@ export function useRepoless(dir: string | null): boolean {
   useEffect(() => {
     set(false);
     if (dir === null) return;
-    let alive = true;
-    invoke("scm_status", { worktree: dir }).then(
-      () => alive && set(false),
-      (err) => alive && set(repolessError(String(err))),
-    );
-    return () => {
-      alive = false;
-    };
+    return watchRepoless(() => invoke("scm_status", { worktree: dir }), set, window);
   }, [dir]);
   return repoless;
+}
+
+/** Row 27: asks once whether the folder is outside Git; while it is, asks again when the window
+ *  gets the focus back and every `every` ms, so a folder that gains Git (git init in a terminal)
+ *  leaves the "no repo" state without a folder change. A folder in Git is not asked again. */
+export function watchRepoless(ask: () => Promise<unknown>, set: (repoless: boolean) => void, target: Pick<Window, "addEventListener" | "removeEventListener">, every = 15_000): () => void {
+  let alive = true;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const again = () => void check();
+  const quiet = () => {
+    if (timer !== undefined) clearInterval(timer);
+    timer = undefined;
+    target.removeEventListener("focus", again);
+  };
+  const check = () =>
+    ask().then(
+      () => alive && (set(false), quiet()),
+      (err) => {
+        if (!alive) return;
+        const r = repolessError(String(err));
+        set(r);
+        if (!r) quiet();
+        else if (timer === undefined) (timer = setInterval(again, every)), target.addEventListener("focus", again);
+      },
+    );
+  void check();
+  return () => {
+    alive = false;
+    quiet();
+  };
 }

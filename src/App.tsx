@@ -81,6 +81,7 @@ import AgentStartHost from "./agentstart/AgentStartHost";
 import ChecksPanel from "./scm/ChecksPanel";
 import PreviewPane from "./editor/PreviewPane";
 import type { Action } from "./editor/noteLinks";
+import { missingFileToast } from "./editor/linkClicks";
 import TemplatePicker from "./editor/TemplatePicker";
 import ReviewNotes from "./editor/ReviewNotes";
 import { copiers } from "./editor/EditorPane";
@@ -1118,7 +1119,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // notes inside the worktree as previews, anything else as an editor tab at its line.
   const followLink = (a: Action, shift: boolean) => {
     if (a.kind === "web") return shift ? void invoke("open_external", { url: a.url }).catch((err) => setToast(String(err))) : openInBrowser(a.url);
-    if (a.kind === "file") return a.how === "preview" ? openPreview(a.path) : openFile(a.path, a.line);
+    // EDIT-014: a link to a file that is not there shows a toast instead of an empty tab
+    if (a.kind === "file") return void missingFileToast(a.path, (ps) => invoke<unknown[]>("file_stamps", { paths: ps })).then((gone) => (gone ? setToast(gone) : a.how === "preview" ? openPreview(a.path) : openFile(a.path, a.line)));
   };
 
   // EDIT-027: a changed file's diff opens as a tab beside the focused pane; its staged and

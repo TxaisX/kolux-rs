@@ -43,6 +43,8 @@ export type Tool = {
   endedAt?: number;
   /** CHAT-022: the questions of an ask-the-user call. */
   questions?: Question[];
+  /** CHAT-015: the tokens a subagent's run used, once its result says. */
+  tokens?: number;
 };
 
 /** CHAT-028: a file the agent wrote in a turn. */
@@ -76,7 +78,7 @@ export function writtenFiles(tools: readonly ChatItem[], limit = WRITTEN_LIMIT, 
 /** CHAT-015: a subagent's state; later in this list is worse, and the worst decides the row. */
 export const CHILD_STATES = ["completed", "idle", "working", "stopped", "unverifiable", "failed"] as const;
 export type ChildState = (typeof CHILD_STATES)[number];
-export type Child = { id: string; name: string; label: string; state: ChildState; at?: number; endedAt?: number };
+export type Child = { id: string; name: string; label: string; state: ChildState; at?: number; endedAt?: number; tokens?: number };
 
 export type View =
   | Row
@@ -175,7 +177,7 @@ export function fold(rows: Row[], open: boolean, cwd: string | null = null): Vie
     view.children = items.map((r) => {
       const tool = r.tool!;
       const state: ChildState = tool.done ? (tool.failed ? "failed" : "completed") : t.interrupted ? "stopped" : live && t === turn ? "working" : "unverifiable";
-      return { id: r.id, name: tool.name, label: tool.preview, state, at: r.at, endedAt: tool.endedAt };
+      return { id: r.id, name: tool.name, label: tool.preview, state, at: r.at, endedAt: tool.endedAt, tokens: tool.tokens };
     });
     view.verdict = worst(view.children.map((c) => c.state));
   }

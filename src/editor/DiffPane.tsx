@@ -22,7 +22,9 @@ import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
-import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
+import { attach, baseName, detach, heldOf, isDirty, opening, relay, replaceAll, subscribe, textOf, type Held } from "./buffers";
+import { confirmed } from "./fileMoved";
+import { keepUnsaved, keptToast } from "./unsavedCopy";
 import { copiers, editors, look, saveFile, StaleNotice } from "./EditorPane";
 import { contextText, oldSideContext } from "./copyContext";
 import { editedText, notesOn, shortPath, sideOf, where, type LineNote, type Side } from "./diffNotes";
@@ -189,6 +191,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   const [stale, setStale] = useState(false); // EDIT-003 (T-073-c): the last save was refused, the file moved on
   const views = useRef<{ a: EditorView | null; b: EditorView } | null>(null);
   const shown = useRef<Sides | null>(null); // the sides the views were last given
+  const held = useRef<Held | null>(null); // row 131: unsaved text kept while the views are built again
   const report = useRef({ onDirty, onToast });
   report.current = { onDirty, onToast };
   const front = useRef(!hidden);
@@ -263,7 +266,11 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   useEffect(() => {
     if (!ready || !host.current) return;
     const s = shown.current ?? sides!;
-    const modified = (!staged && textOf(path)) || s.modified;
+    // Row 131: the right side starts from a twin's text, the unsaved text this tab held before it
+    // was built again, or text carried by a move (checked against the disk at the new place).
+    const o = staged ? null : opening(path, s.modified, held.current);
+    held.current = null;
+    const modified = o ? o.text : s.modified;
     shown.current = { original: s.original, modified: s.modified };
     const common: Extension[] = [basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.current.of([]), wrap ? EditorView.lineWrapping : []];
     const count = (st: EditorState) => setChanges(getChunks(st)?.chunks.length ?? 0);
@@ -292,13 +299,35 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
     a?.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     b.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     count(b.state);
-    if (!staged) attach(path, b, s.modified);
+    if (o) {
+      attach(path, b, o.base);
+      if (o.keep === undefined) confirmed(path);
+      else {
+        const keep = o.keep;
+        const name = baseName(path);
+        void keepUnsaved(path, keep).then(
+          (kept) => {
+            // The copy is written: the tab shows the disk, unless the user typed meanwhile.
+            if (textOf(path) === keep) replaceAll(path, s.modified);
+            report.current.onToast?.(keptToast(name, kept));
+            confirmed(path);
+          },
+          (err) => {
+            report.current.onToast?.(keptToast(name, null, err));
+            confirmed(path);
+          },
+        );
+      }
+    }
     languageFor(baseName(path))
       ?.load()
       .then((support) => [a, b].forEach((v) => v?.dispatch({ effects: lang.current.reconfigure(support) })))
       .catch(() => undefined);
     return () => {
-      if (!staged) detach(path, b);
+      if (!staged) {
+        held.current = heldOf(path);
+        detach(path, b);
+      }
       views.current = null;
       if (merge) merge.destroy();
       else b.destroy();

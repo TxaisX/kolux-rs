@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { attach, detach, hashOf, type View } from "./buffers";
-import { createDrafts, restoreFrom, type Draft, type DraftIo } from "./drafts";
+import { createDrafts, flushOnLeave, restoreFrom, type Draft, type DraftIo } from "./drafts";
 
 // EDIT-004 (T-177): unsaved text is kept as a draft, brought back unsaved, and never written into the file.
 const P = "C:/w/drafts-note.md";
@@ -111,5 +111,29 @@ describe("keeping drafts tidy", () => {
     r.d.edited(W, P);
     await r.run();
     expect(new Set(r.calls)).toEqual(new Set(["set"]));
+  });
+});
+
+describe("row 135: the last moment of typing reaches the draft", () => {
+  it("flushAll writes a draft still waiting for typing to stop", async () => {
+    const r = rig();
+    open(P, "disk\n", "disk\nlast words\n");
+    r.d.edited(W, P);
+    expect(r.store.size).toBe(0);
+    await r.d.flushAll();
+    expect(r.store.get(P)?.text).toBe("disk\nlast words\n");
+    expect(r.d.pending(W, P)).toBe(false);
+  });
+
+  it("the window losing focus, hiding or unloading flushes; after unhooking it does not", () => {
+    const t = new EventTarget();
+    let n = 0;
+    const off = flushOnLeave(t as unknown as Window, () => n++);
+    t.dispatchEvent(new Event("blur"));
+    t.dispatchEvent(new Event("pagehide"));
+    expect(n).toBe(2);
+    off();
+    t.dispatchEvent(new Event("blur"));
+    expect(n).toBe(2);
   });
 });
