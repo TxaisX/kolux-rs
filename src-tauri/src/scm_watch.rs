@@ -54,6 +54,9 @@ pub const SKIP: [&str; 4] = ["target", "node_modules", "dist", ".venv"];
 #[derive(Debug, Default)]
 pub struct Ignores {
     known: std::collections::HashMap<String, bool>,
+    /// Tests: how often the answers were forgotten (each forget costs one `git check-ignore` later).
+    #[cfg(test)]
+    pub forgets: usize,
 }
 
 impl Ignores {
@@ -82,6 +85,10 @@ impl Ignores {
     /// The ignore rules changed: every answer is stale.
     pub fn forget(&mut self) {
         self.known.clear();
+        #[cfg(test)]
+        {
+            self.forgets += 1;
+        }
     }
 }
 
@@ -463,10 +470,30 @@ pub fn watch(path: &Path, sink: impl Fn(u64) -> Sink, log: Log) -> Result<WatchS
 /// Starts (or joins) the watch of the worktree holding `path`; `ended` is told its id if it ends
 /// on its own (FIX-1).
 pub fn watch_with(path: &Path, sink: impl Fn(u64) -> Sink, ended: Ended, log: Log) -> Result<WatchStart, String> {
+    let gen = generation();
     let p = places(path)?;
+    watch_in(gen, p, sink, ended, log)
+}
+
+/// FIX-2 (review AFTER 5): the page generation; `unwatch_all` (a reload, the window going) moves
+/// it on, and a watch call that read the old one before asking git is refused instead of inserting
+/// or joining a watch the new page never releases.
+static GENERATION: AtomicU64 = AtomicU64::new(1);
+
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::SeqCst)
+}
+
+/// Starts or joins the watch of `p` for a call that read generation `gen` before asking git.
+fn watch_in(gen: u64, p: Places, sink: impl Fn(u64) -> Sink, ended: Ended, log: Log) -> Result<WatchStart, String> {
     let k = key(&p.root.to_string_lossy());
     let worktree = p.root.to_string_lossy().to_string();
     let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
+    // Under the same lock `unwatch_all` moves the generation on, so a call from before it is seen
+    // here for sure, and refused before any reader starts.
+    if generation() != gen {
+        return Err("the page was torn down while its watch was starting".into());
+    }
     if let Some(w) = all.get_mut(&k) {
         w.refs += 1;
         return Ok(WatchStart { id: w.id, worktree, watching: w.watching.load(Ordering::Relaxed) });
@@ -581,9 +608,15 @@ pub fn unwatch_root(root: &Path) -> Option<Stopped> {
 /// T-033-e: the window is gone (closed, or its page torn down): every watch ends at once, none is
 /// waited for (this is called from the window's own thread). Returns how many were open.
 /// Its callers are in lib.rs (since MERGE 169): the main window's Destroyed handler, and
-/// `on_page_load` when the main page starts loading (a reload destroys no window).
+/// `on_page_load` when the main page starts loading (a reload destroys no window). FIX-2 (review
+/// AFTER 5): it also moves the page generation on, so a watch call the old page started and that
+/// finishes after this is refused.
 pub fn unwatch_all() -> usize {
-    let all: Vec<Watch> = std::mem::take(&mut *WATCHES.lock().unwrap_or_else(|e| e.into_inner())).into_values().collect();
+    let all: Vec<Watch> = {
+        let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
+        GENERATION.fetch_add(1, Ordering::SeqCst);
+        std::mem::take(&mut *all).into_values().collect()
+    };
     IGNORES.lock().unwrap_or_else(|e| e.into_inner()).clear();
     for w in &all {
         w.halt();
@@ -682,6 +715,10 @@ impl Schedule {
 fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, send: Sink, log: Log, watching: Arc<AtomicBool>, ended: Ended) {
     let mut sched = Schedule::new(Instant::now(), GAP);
     let mut said_overflow = false;
+    // FIX-2 (review AFTER 7): an overflow may have dropped a rule-file edit, so the remembered
+    // ignore answers are forgotten; once, at the catch-up read, however many overflows the storm
+    // brought (each forget costs a `git check-ignore` on the next change under a remembered folder).
+    let mut forget_at_read = false;
     loop {
         let wait = sched.wait(Instant::now(), mode.tick());
         match rx.recv_timeout(wait) {
@@ -694,9 +731,7 @@ fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Si
                     said_overflow = true;
                     log(&format!("source control: too many changes at once under {}; read again, still watching", root.display()));
                 }
-                // FIX-1: a rule-file edit may be among the dropped records, so the remembered
-                // ignore answers are forgotten (asked again from the next change on).
-                ignores_of(root).lock().unwrap_or_else(|e| e.into_inner()).forget();
+                forget_at_read = true;
                 sched.change(Instant::now());
             }
             Ok(Signal::Broken(why)) => {
@@ -719,6 +754,10 @@ fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Si
             if !root.is_dir() {
                 return gone(id, root, &log, &ended);
             }
+            if forget_at_read {
+                forget_at_read = false;
+                ignores_of(root).lock().unwrap_or_else(|e| e.into_inner()).forget();
+            }
             #[cfg(test)]
             STARTS.lock().unwrap_or_else(|e| e.into_inner()).push((root.to_path_buf(), now));
             if let Ok(st) = crate::scm::status(root) {
@@ -730,7 +769,9 @@ fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Si
 
 /// T-033-e: the worktree folder is gone (removed from outside, or by git): the watch ends instead
 /// of reading a missing folder every 4 s for the rest of the session. Said once in the log, and
-/// the page is told (FIX-1): a folder that is only briefly unreadable gets watched again.
+/// the page is told (FIX-1), which watches again at once and then, while git still answers from
+/// another folder or not at all, tries again with backoff (FIX-2, 1 s / 4 s / 15 s / every 30 s
+/// while its panel is open): a folder that is only briefly unreadable gets watched again.
 fn gone(id: u64, root: &Path, log: &Log, ended: &Ended) {
     let w = {
         let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
@@ -783,13 +824,22 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
             let mut buf = vec![0u32; buf_words]; // DWORD-aligned as the call needs
             let bytes = buf.len() * 4;
             let broke = |why: String| drop(tx.send(Signal::Broken(why)));
+            // FIX-2 (review AFTER 6): the kernel writes into the OVERLAPPED while a read is pending,
+            // so it lives in an UnsafeCell and is only ever reached through this raw pointer; no
+            // reference to it exists while a read is outstanding.
+            let ov_cell: Box<std::cell::UnsafeCell<OVERLAPPED>> = Box::new(std::cell::UnsafeCell::new(unsafe { std::mem::zeroed() }));
+            let ov: *mut OVERLAPPED = ov_cell.get();
             loop {
-                let mut ov: OVERLAPPED = unsafe { std::mem::zeroed() };
-                ov.hEvent = ev.0;
+                // SAFETY: no read is pending here (the first turn, or the previous read completed or
+                // was cancelled and waited for below); the cell outlives the thread's loop.
+                unsafe {
+                    ov.write(std::mem::zeroed());
+                    (*ov).hEvent = ev.0;
+                    ResetEvent(ev.0);
+                }
                 // SAFETY: the buffer and the OVERLAPPED stay put until the read completes or is
                 // cancelled below, both before this iteration ends.
-                unsafe { ResetEvent(ev.0) };
-                let ok = unsafe { ReadDirectoryChangesW(h.0, buf.as_mut_ptr().cast(), bytes as u32, i32::from(recursive), filter, std::ptr::null_mut(), &mut ov, None) };
+                let ok = unsafe { ReadDirectoryChangesW(h.0, buf.as_mut_ptr().cast(), bytes as u32, i32::from(recursive), filter, std::ptr::null_mut(), ov, None) };
                 if ok == 0 {
                     return broke(format!("{label}: the change read failed (error {})", unsafe { GetLastError() }));
                 }
@@ -798,8 +848,8 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                 // into `buf`, so every return first cancels the read and waits for it to end.
                 let settle = |n: &mut u32| unsafe {
                     // SAFETY: cancels our pending read, then waits for it to finish with the buffer.
-                    CancelIoEx(h.0, &ov);
-                    GetOverlappedResult(h.0, &ov, n, 1);
+                    CancelIoEx(h.0, ov);
+                    GetOverlappedResult(h.0, ov, n, 1);
                 };
                 loop {
                     // SAFETY: waits on our own read event and, when there is one, the watch's stop event.
@@ -823,7 +873,7 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                     }
                 }
                 // SAFETY: the read has signalled; collects its byte count.
-                if unsafe { GetOverlappedResult(h.0, &ov, &mut n, 0) } == 0 {
+                if unsafe { GetOverlappedResult(h.0, ov, &mut n, 0) } == 0 {
                     let e = unsafe { GetLastError() };
                     if e == ERROR_NOTIFY_ENUM_DIR {
                         // T-033-e: the buffer overflowed. Windows dropped the records but keeps the
@@ -1622,5 +1672,63 @@ mod tests {
         unwatch(w2_again.id);
         let _ = std::fs::remove_dir_all(&linked);
         let _ = std::fs::remove_dir_all(&linked2);
+    }
+
+    /// FIX-2 (review AFTER 5): a watch call the old page made just before a reload can finish after
+    /// the reload's `unwatch_all`; it must neither insert nor join a watch nobody will release.
+    #[cfg(windows)]
+    #[test]
+    fn fix2_a_watch_started_before_a_reload_is_refused_after_it() {
+        let _live = live();
+        let dir = repo("reload-gen");
+        let sink = |_: u64| Arc::new(|_: &crate::scm::Status| {}) as Sink;
+        let quiet = || Arc::new(|_: &str| {}) as Log;
+        let nobody = || Arc::new(|_: u64| {}) as Ended;
+        // The old page's call read the generation and asked git; the reload came in between.
+        let before = generation();
+        let p = places(&dir).unwrap();
+        let _ = unwatch_all();
+        let late = watch_in(before, p, sink, nobody(), quiet());
+        assert!(late.is_err(), "a watch started before the reload must be refused: {late:?}");
+        assert_eq!(open_count(), 0, "nothing was inserted");
+        // The new page watches as ever; an old call that would have joined its watch is refused too,
+        // so the page's one release ends the watch.
+        let w = watch(&dir, sink, quiet()).unwrap();
+        let join = watch_in(before, places(&dir).unwrap(), sink, nobody(), quiet());
+        assert!(join.is_err(), "a join from before the reload must be refused: {join:?}");
+        unwatch(w.id);
+        assert_eq!(open_count(), 0, "one release ended it: no leaked ref");
+        // A call from after the reload joins as ever.
+        let w = watch(&dir, sink, quiet()).unwrap();
+        let again = watch_in(generation(), places(&dir).unwrap(), sink, nobody(), quiet()).unwrap();
+        assert_eq!(again.id, w.id);
+        unwatch(again.id);
+        unwatch(w.id);
+        assert_eq!(open_count(), 0);
+    }
+
+    /// FIX-2 (review AFTER 7): a storm of overflows forgets the remembered ignore answers once, at
+    /// the one catch-up read, not once per overflow (each forget costs a `git check-ignore` on the
+    /// next change under a remembered folder, which counts against T-033-d).
+    #[cfg(windows)]
+    #[test]
+    fn fix2_an_overflow_storm_forgets_the_ignore_answers_once_per_catch_up_read() {
+        let _live = live();
+        let dir = repo("overflow-forget");
+        let w = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let root = places(&dir).unwrap().root;
+        let ig = ignores_of(&root);
+        let forgets0 = ig.lock().unwrap().forgets;
+        ig.lock().unwrap().known.insert("src".into(), true);
+        let at = Instant::now();
+        for _ in 0..5 {
+            assert!(overflow_watch(w.id));
+        }
+        let starts = || STARTS.lock().unwrap().iter().filter(|(r, t)| *t >= at && same_dir(r, &dir)).count();
+        assert!(until(Duration::from_secs(10), || starts() >= 1), "one catch-up read");
+        assert!(until(Duration::from_secs(5), || !ig.lock().unwrap().known.contains_key("src")), "the catch-up read forgot the answers");
+        assert_eq!(ig.lock().unwrap().forgets - forgets0, 1, "five overflows, one catch-up read, one forget");
+        unwatch(w.id);
     }
 }

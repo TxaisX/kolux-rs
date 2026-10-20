@@ -266,7 +266,62 @@ describe("FIX-2: the close and the next read", () => {
     expect(b.reads).toHaveLength(1);
     expect(ids(b.reader.seen)).toEqual(["a", "b"]); // the kept view stays up the whole time
   });
-  it("the kept conversation is not replaced by a delta read that raced the close", async () => {
+  // FIX-3 (stand-in review of 0538a66b, item 3): the stub answers like the transcript does. A read that reaches it while the
+  // close is still out is served by the follower about to be dropped, so it gets a delta holding only the newest message; a
+  // read after the close gets the whole conversation from the top. The test fails the moment a read is taken early.
+  it("a read is never taken while the close is out: the stub would answer it with a delta", async () => {
+    let closeOut = false;
+    const early: number[] = [];
+    let taken = 0;
+    let release = () => {};
+    const closing = new ChatReader({
+      pane: 1,
+      session: 10,
+      hidden: false,
+      read: () => Promise.resolve(ready([item("a"), item("b")], { reset: true })),
+      close: () =>
+        new Promise<void>((done) => {
+          closeOut = true;
+          release = () => {
+            closeOut = false;
+            done();
+          };
+        }),
+      onChange: () => {},
+      timers: { set: () => 0, clear: () => {} },
+    });
+    await later();
+    closing.hide();
+    const seen: Seen[] = [];
+    const next = new ChatReader({
+      pane: 1,
+      session: 10,
+      hidden: false,
+      read: async () => {
+        taken++;
+        if (closeOut) {
+          early.push(taken);
+          return ready([item("c")], { reset: false });
+        }
+        return ready([item("a"), item("b"), item("c")], { reset: true });
+      },
+      close: () => {},
+      onChange: (s) => seen.push(s),
+      timers: { set: () => 0, clear: () => {} },
+    });
+    for (let i = 0; i < 5; i++) await later();
+    expect(closeOut).toBe(true);
+    expect(taken).toBe(0);
+    expect(early).toEqual([]);
+    release();
+    await later();
+    await later();
+    expect(early).toEqual([]);
+    expect(taken).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(ids(next.seen)).toEqual(["a", "b", "c"]);
+  });
+  it("the first snapshot after the close becomes the view in place of the kept one", async () => {
     const a = manual();
     a.reads[0].ok(ready([item("a"), item("b")], { reset: true }));
     await later();

@@ -105,6 +105,8 @@ export function createSeenReader(now: () => number = Date.now) {
   const run = async (call: Call, force: boolean, mine: number): Promise<Seen> => {
     const { seen, offline } = await look(call);
     // A newer read began while this one ran (a Re-check, or a read after this one failed): its answer stands for this caller too.
+    // The wait is bounded in Rust (scm.rs: scm_gh_account stops gh at GH_ACCOUNT_LIMIT, 5 s; scm_gh_budget at GH_LIMIT, 30 s), so a hung gh ends in a failed answer, never a guide that waits for good (FIX-4).
+    // An older good answer is dropped when the newest read is an offline failure with nothing kept to cover it: latest wins, and a not-good answer is never kept (FIX-2).
     if (mine !== latest && newest) return newest;
     if (offline && !force && kept?.seen.token === "ok" && kept.seen.account === seen.account) {
       kept = { at: now(), seen: kept.seen };

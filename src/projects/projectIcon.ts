@@ -12,12 +12,21 @@ const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "imag
 
 export type IconView = { kind: "emoji"; emoji: string } | { kind: "icon"; name: string } | { kind: "image"; src: string } | { kind: "auto"; letter: string };
 
-/** PROJ-018: what the repository offers as an icon (see `auto_icon` on the Rust side): a picture as a
- *  data URL, or a web address the page loads itself (a picture on the web, or the owner's avatar). */
-const AUTO_TYPES = ["png", "jpeg", "gif", "webp", "svg+xml", "x-icon"];
-export type AutoIcon = { kind: "image" | "remote" | "avatar"; src: string };
+/** The most a picture file found in a repository may take; the data URL it makes (base64 plus the longest
+ *  header, 40 characters) still fits `ICON_IMAGE_MAX`. The same figure as AUTO_ICON_FILE_MAX in projects.rs. */
+export const AUTO_ICON_FILE_MAX = Math.floor((ICON_IMAGE_MAX - 40) / 4) * 3;
 
-/** A found icon that is safe to draw: a small picture data URL, or a plain https address. Anything else is no icon. */
+/** PROJ-018: what the repository offers as an icon (see `auto_icon` on the Rust side): a picture as a
+ *  data URL, or the owner's avatar address on the hosting site. No other web address is ever drawn (FIX-4:
+ *  a repository must not make the app contact a site it names). */
+const AUTO_TYPES = ["png", "jpeg", "gif", "webp", "svg+xml", "x-icon"];
+export type AutoIcon = { kind: "image" | "avatar"; src: string };
+
+/** The hosting sites' own avatar addresses (GIT-053: github.com's avatar address and the host it redirects
+ *  to); the content policy in tauri.conf.json allows exactly these two hosts for pictures. */
+const AVATAR_PREFIXES = ["https://github.com/", "https://avatars.githubusercontent.com/"];
+
+/** A found icon that is safe to draw: a small picture data URL, or an avatar address on a known host. Anything else is no icon. */
 export function autoIconView(auto: AutoIcon | null | undefined): IconView | null {
   if (!auto || typeof auto.src !== "string") return null;
   const { kind, src } = auto;
@@ -26,9 +35,9 @@ export function autoIconView(auto: AutoIcon | null | undefined): IconView | null
     const at = src.indexOf(";base64,");
     const type = src.startsWith("data:image/") && at > 0 ? src.slice("data:image/".length, at) : "";
     ok = AUTO_TYPES.includes(type) && src.length <= ICON_IMAGE_MAX && /^[A-Za-z0-9+/=]+$/.test(src.slice(at + ";base64,".length));
-  } else if (kind === "remote" || kind === "avatar") {
-    // plain https only: no quotes, spaces, angle brackets or backslashes
-    ok = src.startsWith("https://") && src.length <= 2048 && !/[\s"'<>\\]/.test(src);
+  } else if (kind === "avatar") {
+    // a known avatar host, no login (@); no quotes, spaces, angle brackets or backslashes
+    ok = AVATAR_PREFIXES.some((p) => src.startsWith(p)) && src.length <= 2048 && !/[\s"'<>\\@]/.test(src);
   }
   return ok ? { kind: "image", src } : null;
 }

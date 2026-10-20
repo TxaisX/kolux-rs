@@ -3,7 +3,9 @@
 // into the workspace's agent as one message and marks them sent.
 import { useState } from "react";
 import { Close, Trash } from "../chrome/icons";
-import { noteBlocks, notesByFile, shortPath, type LineNote } from "../editor/diffNotes";
+import { lineLabel, noteBlocks, notesByFile, shortPath, type LineNote } from "../editor/diffNotes";
+import { emptyNotesHint } from "../editor/fileNotes";
+import { useLabel } from "../keys/KeymapContext";
 
 type Props = {
   dir: string;
@@ -13,9 +15,12 @@ type Props = {
   onClearSent: () => void;
   /** Sends every note; the promise gives the reason when nothing was sent. */
   onSend: () => Promise<string | null>;
+  /** GIT-041: the workspace's folder is not a Git repository, so notes sit on a file's lines. */
+  repoless?: boolean;
 };
 
-export default function LineNotes({ dir, notes, onOpen, onDrop: drop, onClearSent, onSend }: Props) {
+export default function LineNotes({ dir, notes, onOpen, onDrop: drop, onClearSent, onSend, repoless = false }: Props) {
+  const addKey = useLabel("editor.addReviewNote").join("+");
   const [open, setOpen] = useState(true);
   const [sending, setSending] = useState(false);
   const [said, setSaid] = useState<{ text: string; bad: boolean } | null>(null);
@@ -44,7 +49,7 @@ export default function LineNotes({ dir, notes, onOpen, onDrop: drop, onClearSen
         {notes.length > 0 && <span className="count">{notes.length}</span>}
       </summary>
       {notes.length === 0 ? (
-        <div className="sb-hint">No review notes yet. In a diff, hover a line and click the plus, or select lines and press Ctrl+Shift+A.</div>
+        <div className="sb-hint">{emptyNotesHint(repoless, addKey)}</div>
       ) : (
         <>
           <div className="btn-row">
@@ -75,8 +80,8 @@ export default function LineNotes({ dir, notes, onOpen, onDrop: drop, onClearSen
               </div>
               {ns.map((n) => (
                 <div key={n.id} className="scm-note" data-note={n.id}>
-                  <button className="scm-note-open" title="Open the diff at this note" onClick={() => onOpen(n)}>
-                    <span className="line">{n.end && n.end !== n.line ? `${n.line}-${n.end}` : n.line}</span>
+                  <button className="scm-note-open" title={repoless ? "Open the file at this note" : "Open the diff at this note"} onClick={() => onOpen(n)}>
+                    <span className="line">{lineLabel(n)}</span>
                     <span className="text">{n.text}</span>
                     {n.sent && <span className="sent">sent</span>}
                   </button>
