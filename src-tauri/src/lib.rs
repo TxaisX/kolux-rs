@@ -54,9 +54,14 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
+// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
+// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
+#[allow(dead_code)]
+mod protected_custom;
 mod ports;
 mod resources;
 mod projects;
+mod prompt_answer;
 mod prompt_scan;
 mod scm;
 mod pr_review;
@@ -70,6 +75,7 @@ mod schedule;
 mod resume;
 mod secrets;
 mod sessions;
+mod shell_marks;
 mod shell_history;
 mod skill_delete;
 mod state;
@@ -181,8 +187,13 @@ pub fn run() {
     // failure into a plain native message instead of a panic.
     let mut context = tauri::generate_context!();
     let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
+    // T-183 (APP-043): after repeated graphics crashes a saved flag puts every window in safe graphics.
+    let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
     for w in &mut context.config_mut().app.windows {
         w.create = false;
+        if safe {
+            w.additional_browser_args = Some(resources::recovery::safe_args(w.additional_browser_args.as_deref()));
+        }
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -200,9 +211,34 @@ pub fn run() {
             // The config homes this process resolved (defaults included), so a launch that inherited another
             // app's environment shows up in the log.
             diag::write(&dir, &format!("kolux-rs: config: CLAUDE_CONFIG_DIR={} CODEX_HOME={}", hooks::claude_settings_file().parent().map(|d| d.display().to_string()).unwrap_or_default(), trust::codex_config_file().parent().map(|d| d.display().to_string()).unwrap_or_default()));
+            // T-183 (APP-039): a previous run that left no clean exit becomes a crash record.
+            resources::recovery::startup_scan(&dir);
+            // T-183 (APP-021): the profile folder must take a write and every install file must read; a
+            // per-user install is repaired with icacls, anything else is only named.
+            let perms = resources::recovery::startup_check_here(&dir);
+            for p in &perms.repaired {
+                diag::write(&dir, &format!("permissions repaired: {} (APP-021)", p.display()));
+            }
+            let perm_problem = perms.problem();
+            if let Some(p) = &perm_problem {
+                diag::write(&dir, &format!("{p} (APP-021)"));
+            }
+            app.manage(resources::recovery::Perms(perms));
+            app.manage(resources::recovery::Graphics(Mutex::new(resources::recovery::Burst::default())));
+            // T-183 (APP-049): a damaged state.db is set aside and the last good copy restored before the
+            // store opens; one that cannot be set aside leaves saving frozen on a scratch store.
+            let prep = resources::recovery::prepare_state(&dir, &resources::recovery::frozen_dir());
+            for n in &prep.notes {
+                diag::write(&dir, n);
+            }
+            if prep.backup_worthwhile() {
+                if let Err(e) = resources::recovery::backup_state(&dir) {
+                    diag::write(&dir, &format!("the last good copy of state.db could not be refreshed: {e} (APP-049)"));
+                }
+            }
             #[cfg(debug_assertions)]
             dev_inject()?;
-            let store = Store::open(&dir)?;
+            let store = Store::open(&prep.open_dir)?;
             // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
             // lock or a lock that cannot be opened is logged; the latter still recovers).
             skill_delete::startup_recover(&dir);
@@ -214,6 +250,8 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            // T-183 (APP-042): the interface watch; RecoveryMount's heartbeat feeds it.
+            resources::recovery::watch_start(app.handle().clone(), perm_problem);
             // TERM-122: the keep-awake watcher reads the saved choice every tick, and counts a
             // working pane only while its terminal is still running.
             {
@@ -256,6 +294,10 @@ pub fn run() {
             let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
             app.manage(fence);
             app.manage(token_usage::Flights::default());
+            // ORCH-034: the orchestration store is brought up to today's layout before anything reads it.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                orchestration::upgrade::at_start(&store);
+            }
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
@@ -377,6 +419,9 @@ pub fn run() {
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
             protected::protected_rules,
+            protected_custom::protected_rule_check,
+            protected_custom::protected_attempts,
+            protected_custom::protected_attempts_clear,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -458,6 +503,8 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
+            projects::workspace_rename_after_work,
+            projects::workspace_mark_suggested,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             projects::git_first_commit_preview,
@@ -474,6 +521,8 @@ pub fn run() {
             agents::inventory::session_tabs,
             orchestration::task_reset,
             orchestration::worker_labels,
+            prompt_answer::prompt_read,
+            prompt_answer::prompt_answer,
             prompt_scan::prompt_scan,
             prompt_scan::prompt_scan_restored,
             prompt_scan::prompt_scan_pruned,
@@ -499,6 +548,8 @@ pub fn run() {
             scm::scm_prs_poll,
             scm::scm_commit_message,
             scm::scm_commit_message_stop,
+            scm::writers::scm_writer_options,
+            scm::writers::scm_name_branch,
             scm::scm_task_detail,
             scm::scm_repo_labels,
             github::github_repo_parent,
@@ -509,6 +560,18 @@ pub fn run() {
             github::github_issue_state,
             github::github_issue_comment,
             github::github_issue_create,
+            github::pull_requests::pr_page,
+            github::pull_requests::pr_files,
+            github::pull_requests::pr_file_patch,
+            github::pull_requests::pr_checks,
+            github::pull_requests::pr_threads,
+            github::pull_requests::pr_set_state,
+            github::pull_requests::pr_rerun,
+            github::pull_requests::pr_reviewers,
+            github::pull_requests::pr_assignees,
+            github::pull_requests::pr_react,
+            github::pull_requests::pr_reply,
+            github::pull_requests::pr_merge,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
@@ -538,6 +601,7 @@ pub fn run() {
             browser::browser_annotate,
             browser::preview::browser_preview,
             browser::preview::browser_preview_of,
+            browser::ports::browser_dev_ports,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
@@ -662,7 +726,19 @@ pub fn run() {
             cli::cli_register::cli_register_state,
             cli::cli_register::cli_register,
             cli::cli_register::cli_unregister,
+            cli::file_cli::cli_file_window,
+            cli::file_cli::cli_file_result,
             diag::diag_bundle,
+            resources::recovery::ui_heartbeat,
+            resources::recovery::graphics_crash_noted,
+            resources::recovery::graphics_keep_running,
+            resources::recovery::graphics_restart_safe,
+            resources::recovery::graphics_launch_choice,
+            resources::recovery::graphics_choose,
+            resources::recovery::crash_pending,
+            resources::recovery::crash_latest,
+            resources::recovery::crash_dismiss,
+            resources::recovery::crash_details,
             diag::diag_review,
             diag::diag_review_discard,
             update::update_status,

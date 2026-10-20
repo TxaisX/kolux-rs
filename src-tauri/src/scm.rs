@@ -9,6 +9,9 @@ use crate::git::{command, native, run, Git};
 
 #[path = "scm_watch.rs"]
 pub mod watch;
+// GIT-018 / GIT-020 / GIT-022 (T-228-d): the writer agents, branch naming and review text.
+#[path = "scm_writers.rs"]
+pub mod writers;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
@@ -576,7 +579,7 @@ pub fn github_repo(url: &str, ssh_config: &str) -> Option<GhRepo> {
 }
 
 /// The user's SSH config text, empty when there is none.
-fn ssh_config() -> String {
+pub(crate) fn ssh_config() -> String {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
     home.and_then(|h| std::fs::read_to_string(Path::new(&h).join(".ssh").join("config")).ok()).unwrap_or_default()
 }
@@ -1191,24 +1194,65 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&s
     Ok(message)
 }
 
+/// GIT-017 (T-227-d): files with an unresolved conflict, by path. Their staged text is clash markers, so it never goes into a message prompt.
+pub fn conflicted_files(dir: &Path) -> Vec<String> {
+    run(&["diff", "--name-only", "--diff-filter=U", "-z"], Some(dir)).map(|t| t.split(' ').filter(|n| !n.is_empty()).map(String::from).collect()).unwrap_or_default()
+}
+
+/// GIT-017 (T-227-d): the note that opens the diff when conflicted files were left out of it.
+pub fn conflict_note(files: &[String]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<&str> = files.iter().take(20).map(String::as_str).collect();
+    let more = if files.len() > shown.len() { format!(" and {} more", files.len() - shown.len()) } else { String::new() };
+    format!("Note: {} with unresolved conflicts left out of this diff, so do not describe them: {}{more}
+
+", if files.len() == 1 { "1 file".to_string() } else { format!("{} files", files.len()) }, shown.join(", "))
+}
+
+/// GIT-017 (T-227-d): the staged diff for a message, conflicted files excluded, with the note about them (empty when none).
+pub fn message_diff(dir: &Path) -> Result<(String, String), String> {
+    let left_out = conflicted_files(dir);
+    let mut args: Vec<String> = ["diff", "--cached", "--no-color", "--no-ext-diff"].iter().map(|a| a.to_string()).collect();
+    if !left_out.is_empty() {
+        args.push("--".into());
+        args.push(".".into());
+        args.extend(left_out.iter().map(|f| format!(":(exclude,literal){f}")));
+    }
+    let diff = run(&args.iter().map(String::as_str).collect::<Vec<_>>(), Some(dir))?;
+    if diff.trim().is_empty() {
+        return Err(if left_out.is_empty() { "Nothing is staged to describe".into() } else { "Only files with unresolved conflicts are staged: resolve them first".into() });
+    }
+    Ok((conflict_note(&left_out), diff))
+}
+
+/// GIT-017 (T-227-d): the whole prompt for `diff` (after `note`) kept within `room` bytes, for a writer that takes it on the command line; `None` room keeps the usual budget.
+pub fn fit_prompt(note: &str, diff: &str, instructions: &str, room: Option<usize>) -> String {
+    let build = |budget: usize| message_prompt(&format!("{note}{}", trim_diff(diff, budget)), instructions);
+    let Some(room) = room else { return build(MESSAGE_BUDGET) };
+    let mut budget = MESSAGE_BUDGET.min(room.saturating_sub(message_prompt(note, instructions).len()));
+    let mut text = build(budget);
+    while text.len() > room && budget > 200 {
+        budget = budget * 4 / 5;
+        text = build(budget);
+    }
+    text
+}
+
 /// GIT-017 / GIT-018: a commit message for what is staged in `worktree`, written by Claude Code, or
 /// by the user's own `command` when one is set, following their `instructions`.
-// ponytail: Claude Code with its default writing model; choosing another agent, a model or an effort
-// is T-228-d's.
 #[tauri::command]
-pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>) -> Result<String, String> {
+pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
-        let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
-        if diff.is_empty() {
-            return Err("Nothing is staged to describe".into());
-        }
+        let (note, diff) = message_diff(dir)?;
         // Development builds only: KOLUX_DEV_WRITER names a stand-in agent for live proofs (as KOLUX_DEV_GH).
         #[cfg(debug_assertions)]
         let stand_in = std::env::var_os("KOLUX_DEV_WRITER").map(std::path::PathBuf::from);
         #[cfg(not(debug_assertions))]
         let stand_in: Option<std::path::PathBuf> = None;
-        let prompt = message_prompt(&trim_diff(&diff, MESSAGE_BUDGET), instructions.as_deref().unwrap_or(""));
+        let prompt = fit_prompt(&note, &diff, instructions.as_deref().unwrap_or(""), None);
         let limit = std::time::Duration::from_secs(180);
         if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
             let words = split_command(&line);
@@ -1216,8 +1260,23 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
             let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
             return write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit);
         }
-        let program = stand_in.or_else(|| crate::agents::find_program("claude")).ok_or("Claude Code was not found on this computer")?;
-        write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)
+        let id = agent.as_deref().filter(|a| !a.is_empty()).unwrap_or("claude");
+        if id == "claude" {
+            if let Some(program) = stand_in {
+                let inv = writers::invocation(writers::spec("claude").ok_or("no writer")?, model.as_deref(), effort.as_deref(), &prompt);
+                return write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit);
+            }
+        }
+        let spec = writers::spec(id).ok_or_else(|| format!("unknown writer {id}"))?;
+        let program = writers::program_of(spec).ok_or_else(|| format!("{} was not found on this computer", spec.name))?;
+        // An agent that takes the prompt as an argument gets a diff cut to fit the command line.
+        let prompt = if spec.prompt_in_args {
+            fit_prompt(&note, &diff, instructions.as_deref().unwrap_or(""), Some(writers::arg_limit(&program)))
+        } else {
+            prompt
+        };
+        let inv = writers::invocation(spec, model.as_deref(), effort.as_deref(), &prompt);
+        write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1315,12 +1374,54 @@ pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPo
     out
 }
 
+/// T-085-d (AUTO-004): the number-to-node-id table of `gh pr list --json number,id`.
+fn open_ids(text: &str) -> std::collections::HashMap<u64, String> {
+    serde_json::from_str::<Vec<serde_json::Value>>(text).unwrap_or_default().iter().filter_map(|v| Some((v["number"].as_u64()?, v["id"].as_str()?.to_string()))).collect()
+}
+
+/// T-085-d (AUTO-004): the checks word (GIT-043's `checks_of`) of every open pull request found by a
+/// poll round, by workspace path, for the "checks failed" automation trigger. One `gh pr list` per
+/// GitHub project and one GraphQL call per host; a failed read leaves that project's folders out,
+/// which the trigger reads as "no news".
+pub fn polled_checks(gh: &Path, polled: &[PolledPr]) -> std::collections::HashMap<String, String> {
+    let config = ssh_config();
+    // Per project: its host, the first folder (gh runs there) and each open pull request wanted.
+    type Wanted = Vec<(String, u64)>;
+    let mut groups: Vec<(String, String, Wanted)> = Vec::new();
+    for p in polled.iter().filter(|p| p.error.is_none()) {
+        let Some(pr) = p.pr.as_ref().filter(|pr| pr.state.eq_ignore_ascii_case("open")) else { continue };
+        let Some(g) = run(&["remote", "get-url", "origin"], Some(Path::new(&p.path))).ok().and_then(|u| github_repo(&u, &config)) else { continue };
+        match groups.iter_mut().find(|(k, _, _)| *k == g.key) {
+            Some((_, _, list)) => list.push((p.path.clone(), pr.number)),
+            None => groups.push((g.key.clone(), g.host.clone(), vec![(p.path.clone(), pr.number)])),
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    for (_, host, list) in groups {
+        let Ok(text) = gh_run(gh, Path::new(&list[0].0), &["pr", "list", "--state", "open", "--limit", "100", "--json", "number,id"], None) else { continue };
+        let ids = open_ids(&text);
+        let wanted: Vec<String> = list.iter().filter_map(|(_, n)| ids.get(n).cloned()).collect();
+        let words = checks_of(gh, &host, &wanted);
+        for (path, n) in list {
+            if let Some(w) = ids.get(&n).and_then(|id| words.get(id)) {
+                out.insert(path, w.clone());
+            }
+        }
+    }
+    out
+}
+
 #[tauri::command]
 pub async fn scm_prs_poll(app: tauri::AppHandle, items: Vec<PollItem>) -> Result<PrPoll, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let out = prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400));
+        let gh = gh_program()?;
+        let out = prs_poll(&gh, &items, std::time::Duration::from_millis(400));
         // AUTO-004: each round is what pull-request-opened automations listen to.
         crate::automations::on_poll(&app, &out.prs);
+        // AUTO-004 (T-085-d): checks are looked up only while a checks-failed automation is on.
+        if crate::automations::listens(&app, "checks-failed") {
+            crate::automations::on_checks(&app, &out.prs, &polled_checks(&gh, &out.prs));
+        }
         Ok(out)
     })
     .await
@@ -1509,6 +1610,71 @@ pub struct TaskPage {
     pub total: u64,
     pub deepest: u64,
     pub items: Vec<Task>,
+    /// GIT-045: repositories GitHub refused to search (gone, renamed, no access); the others still list.
+    pub failed: Vec<RepoFail>,
+}
+
+/// GIT-045: one repository of a multi-repository list that could not be searched, and why.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RepoFail {
+    pub repo: String,
+    pub error: String,
+}
+
+/// What one search answered: its total and its items with their node ids.
+type Hits = (u64, Vec<(Task, String)>);
+/// A repository-by-repository retry costs one search call each; past this many the list fails as one.
+const SPLIT_MAX: usize = 20;
+
+/// GIT-045: GitHub's refusal of a search because of the repositories in it (gone, renamed or no access), not
+/// because of the account, the limit or the network: those would fail every repository alike.
+fn repo_trouble(e: &str) -> bool {
+    let t = e.to_lowercase();
+    t.contains("cannot be searched") || t.contains("validation failed") || t.contains("http 422")
+}
+
+/// GIT-045: runs a search; when GitHub refuses it because of one of its `repo:` words, each repository is
+/// searched alone, the ones that work are kept and the ones that do not are named in `failed`.
+fn search_split(q: &str, one: &mut dyn FnMut(&str) -> Result<Hits, String>, failed: &mut Vec<RepoFail>) -> Result<Hits, String> {
+    let e = match one(q) {
+        Ok(h) => return Ok(h),
+        Err(e) => e,
+    };
+    let (repos, rest): (Vec<&str>, Vec<&str>) = q.split_whitespace().partition(|w| w.starts_with("repo:"));
+    if repos.len() < 2 || repos.len() > SPLIT_MAX || !repo_trouble(&e) {
+        return Err(e);
+    }
+    let rest = rest.join(" ");
+    let (mut total, mut items, mut bad, mut first) = (0, Vec::new(), 0, None);
+    for r in &repos {
+        match one(&format!("{rest} {r}")) {
+            Ok((n, mut got)) => {
+                total += n;
+                items.append(&mut got);
+            }
+            Err(e2) => {
+                bad += 1;
+                let name = r.trim_start_matches("repo:");
+                if !failed.iter().any(|f| f.repo == name) {
+                    failed.push(RepoFail { repo: name.into(), error: e2.clone() });
+                }
+                first.get_or_insert(e2);
+            }
+        }
+    }
+    match first {
+        Some(e) if bad == repos.len() => Err(e),
+        _ => Ok((total, items)),
+    }
+}
+
+/// GIT-043: one GitHub search, one page.
+fn search_once(gh: &Path, host: &str, q: &str, page: u32) -> Result<Hits, String> {
+    let (q, per, pg) = (format!("q={q}"), format!("per_page={TASKS_PER_PAGE}"), format!("page={page}"));
+    let args = ["api", "search/issues", "--hostname", host, "-X", "GET", "-f", &q, "-f", "sort=updated", "-f", "order=desc", "-f", &per, "-f", &pg];
+    let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    Ok((v["total_count"].as_u64().unwrap_or(0), v["items"].as_array().into_iter().flatten().filter_map(task_from).collect()))
 }
 
 pub const TASKS_PER_PAGE: u32 = 25;
@@ -1580,14 +1746,10 @@ pub fn tasks_search(gh: &Path, host: &str, queries: &[String], page: u32) -> Res
     let mut out = TaskPage::default();
     let mut ids = Vec::new();
     for q in queries {
-        let (q, per, pg) = (format!("q={q}"), format!("per_page={TASKS_PER_PAGE}"), format!("page={page}"));
-        let args = ["api", "search/issues", "--hostname", host, "-X", "GET", "-f", &q, "-f", "sort=updated", "-f", "order=desc", "-f", &per, "-f", &pg];
-        let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
-        let total = v["total_count"].as_u64().unwrap_or(0);
+        let (total, hits) = search_split(q, &mut |q| search_once(gh, host, q, page), &mut out.failed)?;
         out.total += total;
         out.deepest = out.deepest.max(total);
-        for (t, id) in v["items"].as_array().into_iter().flatten().filter_map(task_from) {
+        for (t, id) in hits {
             if out.items.iter().all(|x| x.url != t.url) {
                 if t.kind == "pr" {
                     ids.push(id);
@@ -3569,6 +3731,47 @@ mod tests {
     }
 
     #[test]
+    fn git017_d_conflicted_files_stay_out_of_the_message_diff_with_a_note() {
+        let repo = temp_repo("git017d");
+        run(&["checkout", "-q", "-b", "other"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "theirs
+");
+        run(&["checkout", "-q", "main"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "ours
+");
+        assert!(run(&["merge", "other"], Some(&repo)).is_err());
+        assert_eq!(conflicted_files(&repo), ["README.md"]);
+        // Only the conflicted file is staged: nothing to describe, and it says why.
+        assert!(message_diff(&repo).unwrap_err().contains("unresolved conflicts"));
+        fs::write(repo.join("fresh.txt"), "new work
+").unwrap();
+        run(&["add", "fresh.txt"], Some(&repo)).unwrap();
+        let (note, diff) = message_diff(&repo).unwrap();
+        assert!(note.starts_with("Note: 1 file with unresolved conflicts left out") && note.contains("README.md"));
+        assert!(diff.contains("fresh.txt") && !diff.contains("README.md") && !diff.contains("<<<<<<<"));
+        // Without a conflict there is no note.
+        run(&["merge", "--abort"], Some(&repo)).unwrap();
+        fs::write(repo.join("fresh.txt"), "new work
+").unwrap();
+        run(&["add", "fresh.txt"], Some(&repo)).unwrap();
+        let (note, _) = message_diff(&repo).unwrap();
+        assert_eq!(note, "");
+        assert!(conflict_note(&(0..25).map(|n| format!("f{n}")).collect::<Vec<_>>()).contains("and 5 more"));
+    }
+
+    #[test]
+    fn git017_d_a_command_line_writer_gets_a_prompt_that_fits_and_keeps_the_note() {
+        let diff = format!("diff --git a/a b/a
+{}", "+line of change
+".repeat(3000));
+        let note = conflict_note(&["x.txt".to_string()]);
+        let fits = fit_prompt(&note, &diff, "use the imperative", Some(6_500));
+        assert!(fits.len() <= 6_500 && fits.contains("x.txt") && fits.contains("use the imperative"));
+        let roomy = fit_prompt(&note, &diff, "", None);
+        assert!(roomy.len() > 20_000 && roomy.len() < 40_000);
+    }
+
+    #[test]
     fn git015_conflicts_name_their_clash_and_abort_puts_the_repository_back() {
         let repo = temp_repo("git015");
         run(&["checkout", "-q", "-b", "other"], Some(&repo)).unwrap();
@@ -3654,6 +3857,121 @@ mod tests {
         assert_eq!(store.settings()["uiLook"], "new");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn hit(repo: &str, n: u64) -> (Task, String) {
+        let task = Task { kind: "issue".into(), number: n, title: format!("{repo} issue"), url: format!("https://github.com/{repo}/issues/{n}"), repo: repo.into(), state: "open".into(), draft: false, labels: vec![], assignees: vec![], updated: "2026-10-10T08:00:00Z".into(), checks: None };
+        (task, String::new())
+    }
+
+    #[test]
+    fn git045_one_refused_repository_does_not_blank_the_others() {
+        let refuse = "github.com: gh: Validation Failed (HTTP 422): The listed users and repositories cannot be searched either because the resources do not exist or you do not have permission to view them.";
+        let asked = std::cell::RefCell::new(Vec::<String>::new());
+        let mut one = |q: &str| -> Result<Hits, String> {
+            asked.borrow_mut().push(q.to_string());
+            if q.contains("repo:gone/x") && q.contains("repo:o/a") || q.contains("repo:gone/x") && q.contains("repo:o/b") {
+                Err(refuse.into())
+            } else if q.contains("repo:gone/x") {
+                Err("github.com: gh: Not Found (HTTP 404)".into())
+            } else if q.contains("repo:o/a") && !q.contains("repo:o/b") {
+                Ok((3, vec![hit("o/a", 1)]))
+            } else if q.contains("repo:o/b") && !q.contains("repo:o/a") {
+                Ok((2, vec![hit("o/b", 2)]))
+            } else {
+                Err(refuse.into())
+            }
+        };
+        let mut failed = Vec::new();
+        let got = search_split("is:open repo:o/a repo:gone/x repo:o/b", &mut one, &mut failed).unwrap();
+        assert_eq!(got.0, 5);
+        assert_eq!(got.1.iter().map(|h| h.0.repo.as_str()).collect::<Vec<_>>(), vec!["o/a", "o/b"]);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].repo, "gone/x");
+        assert!(failed[0].error.contains("404"), "{:?}", failed);
+        // the whole query once, then each repository alone with the other words kept
+        assert_eq!(*asked.borrow(), ["is:open repo:o/a repo:gone/x repo:o/b", "is:open repo:o/a", "is:open repo:gone/x", "is:open repo:o/b"]);
+        // asked again for the other kind of item, the same repository is named once
+        let _ = search_split("is:pr repo:o/a repo:gone/x", &mut one, &mut failed).unwrap();
+        assert_eq!(failed.len(), 1);
+    }
+
+    #[test]
+    fn git045_nothing_is_split_for_trouble_that_is_not_about_a_repository() {
+        for said in ["github.com: API rate limit exceeded", "github.com: Sign in to GitHub first: run gh auth login", "gh did not answer within 30 seconds; try again in a moment"] {
+            let mut calls = 0;
+            let mut failed = Vec::new();
+            let mut one = |_: &str| -> Result<Hits, String> {
+                calls += 1;
+                Err(said.into())
+            };
+            assert_eq!(search_split("is:open repo:o/a repo:o/b", &mut one, &mut failed).unwrap_err(), said);
+            assert_eq!(calls, 1, "{said}");
+            assert!(failed.is_empty());
+        }
+        // one repository alone has nothing to split
+        let mut calls = 0;
+        let mut one = |_: &str| -> Result<Hits, String> {
+            calls += 1;
+            Err("Validation Failed (HTTP 422)".into())
+        };
+        assert!(search_split("is:open repo:o/a", &mut one, &mut Vec::new()).is_err());
+        assert_eq!(calls, 1);
+        // every repository refused: the list fails as one, with the first reason
+        let mut one = |_: &str| -> Result<Hits, String> { Err("Validation Failed (HTTP 422)".into()) };
+        let mut failed = Vec::new();
+        assert!(search_split("is:open repo:o/a repo:o/b", &mut one, &mut failed).is_err());
+        assert_eq!(failed.len(), 2);
+        // a very long list is not retried one by one
+        let many = (0..=SPLIT_MAX).map(|i| format!("repo:o/r{i}")).collect::<Vec<_>>().join(" ");
+        let mut calls = 0;
+        let mut one = |_: &str| -> Result<Hits, String> {
+            calls += 1;
+            Err("Validation Failed (HTTP 422)".into())
+        };
+        assert!(search_split(&many, &mut one, &mut Vec::new()).is_err());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn t085d_the_poll_reads_each_open_pull_requests_checks_word_with_one_list_and_one_graphql_call() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-t085d-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let repo = tools.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["remote", "add", "origin", "https://github.com/o/r.git"]] {
+            assert!(quiet("git").args(args).current_dir(&repo).status().unwrap().success());
+        }
+        fs::write(tools.join("list.json"), r#"[{"number":7,"id":"PR_7"},{"number":9,"id":"PR_9"}]"#).unwrap();
+        fs::write(tools.join("checks.json"), r#"{"data":{"nodes":[{"id":"PR_7","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}]}}"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"graphql\" (type \"%~dp0checks.json\") else (type \"%~dp0list.json\")\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$2\" = graphql ]; then cat \"$(dirname \"$0\")/checks.json\"; else cat \"$(dirname \"$0\")/list.json\"; fi\n").unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let path = repo.to_string_lossy().to_string();
+        let pr = |n: u64, state: &str| Some(Pr { number: n, url: format!("https://github.com/o/r/pull/{n}"), state: state.into(), title: None, head: None, draft: false });
+        let row = |path: &str, pr: Option<Pr>, error: Option<&str>| PolledPr { path: path.into(), linked: false, pr, error: error.map(String::from) };
+        let polled = [row(&path, pr(7, "OPEN"), None), row("C:/closed", pr(8, "CLOSED"), None), row("C:/broken", pr(9, "OPEN"), Some("rate limited")), row("C:/none", None, None)];
+        let got = polled_checks(&gh, &polled);
+        // Only the open pull request with a readable project is asked about; the rest are left out.
+        assert_eq!(got.get(&path).map(String::as_str), Some("failing"));
+        assert_eq!(got.len(), 1, "{got:?}");
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        assert_eq!(calls.lines().count(), 2, "{calls}");
+        assert!(calls.contains("pr list --state open") && calls.contains("api graphql --hostname github.com") && calls.contains("PR_7") && !calls.contains("PR_9"), "{calls}");
+        // Nothing open to ask about asks nothing.
+        let before = calls.lines().count();
+        assert!(polled_checks(&gh, &polled[1..]).is_empty());
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
+        assert_eq!(open_ids("not json"), std::collections::HashMap::new());
+        let _ = fs::remove_dir_all(&tools);
     }
 
     #[test]

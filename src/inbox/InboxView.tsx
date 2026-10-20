@@ -73,9 +73,33 @@ export default function InboxView({ items, now, onOpen }: Props) {
   );
 }
 
+// EDIT-041 (T-035-c): a prompt read off the pane's screen, with the answers it takes on the spot.
+type Readable = { prompt: { kind: string; text: string; options: string[] }; choices: { label: string; keys: string }[] };
+
 function Detail({ item, onOpen }: { item: Item; onOpen: () => void }) {
   const [scm, setScm] = useState<Status | null>(null);
   const [last, setLast] = useState<Entry | null>(null);
+  const [readable, setReadable] = useState<Readable | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  // T-035-c: a question or permission whose terminal is alive is read off its screen; when the
+  // menu's keys are sure, the detail offers its options here, else only Answer in Code.
+  const canRead = item.group === "needs" && !item.exited && item.state !== "blocked";
+  useEffect(() => {
+    setReadable(null);
+    setNote(null);
+    if (!canRead) return;
+    invoke<Readable | null>("prompt_read", { paneKey: item.key }).then(setReadable).catch(() => setReadable(null));
+  }, [item.key, item.state, canRead]);
+  const answer = (choice: number) => {
+    if (!readable) return;
+    const text = readable.prompt.text;
+    const label = readable.choices[choice]?.label ?? "";
+    setReadable(null);
+    invoke("prompt_answer", { paneKey: item.key, text, choice }).then(
+      () => setNote(`Answered: ${label}`),
+      (e) => setNote(typeof e === "string" ? e : "The answer did not reach the pane; answer it in Code."),
+    );
+  };
   useEffect(() => {
     setScm(null);
     setLast(null);
@@ -109,6 +133,17 @@ function Detail({ item, onOpen }: { item: Item; onOpen: () => void }) {
         )}
       </dl>
       {exitNote(item) && <p className="exited">{exitNote(item)}</p>}
+      {readable && (
+        <div className="actions" data-prompt={readable.prompt.kind}>
+          <span className="prompt">{readable.prompt.text}</span>
+          {readable.choices.map((c, i) => (
+            <button key={i} className="btn" onClick={() => answer(i)} title={`Type the answer into the agent's pane: ${c.label}`}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {note && <p className="exited">{note}</p>}
       <div className="actions">
         <button className="btn primary" onClick={onOpen} title="Go to the tab and pane where this agent runs (Enter)">
           {openLabel(item)}

@@ -34,10 +34,10 @@ export function stopCard(stop: string, f: StopFacts): StopCard | null {
 /** The keep-awake switch: off turns on its automatic mode (Agent); either on mode can be switched off. */
 export const awakeToggle = (mode: AwakeMode): AwakeMode => (mode === "off" ? "agent" : "off");
 
-/** The mode the commit-writer switch writes when it is turned back on: the one it had before it went off
- *  (custom stays custom). With nothing remembered, a saved command means the user had picked custom. A
- *  custom writer needs its command, so with none it is Claude. */
-export function writerBack(before: "claude" | "custom" | null, hasCommand: boolean): "claude" | "custom" {
+/** What the commit-writer switch writes when it is turned back on: what it had before it went off (an agent
+ *  or custom). With nothing remembered, a saved command means the user had picked custom. A custom writer
+ *  needs its command, so with none it is Claude. */
+export function writerBack(before: string | null, hasCommand: boolean): string {
   const want = before ?? (hasCommand ? "custom" : "claude");
   return want === "custom" && !hasCommand ? "claude" : want;
 }

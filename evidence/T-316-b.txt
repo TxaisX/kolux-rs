@@ -1,0 +1,23 @@
+
+T-316-b piece 1 (2026-10-19, lane/editor from 27a86891): the editor minimap. T-316-b stays open (PDF export of a
+note, Jupyter notebooks).
+
+BUILT (no new npm dependency; the card allowed a small canvas drawn from the document)
+- src/editor/minimap.ts: a CodeMirror extension. A 76px canvas beside the text draws one row per few lines, a bar
+  as long and as indented as the text there (up to eight lines looked at per row, tabs as four columns, 100 columns
+  cap), and a lighter box over the part of the page the editor shows. Click or drag on it to scroll (the spot under
+  the pointer goes to the middle of the window, never past the ends). Redraws on scroll, edit and resize, one frame
+  at a time. The editor's own scroller gets a right margin so text never runs under it.
+- src/editor/EditorPane.tsx: a minimapping Compartment; Settings > General editorMinimap (already stored, default
+  off) turns it on and off live for every open editor tab.
+- Pure helpers tested: sampleDoc, viewBox, scrollForClick.
+TESTS: src/editor/minimap.test.ts, 6 tests (rows, shared rows in a long file, empty and capped lines, box position,
+  short file, click centring and ends).
+READINGS: vitest src/editor: 46 files, 294 tests passed (v3-t316-a.log); tsc --noEmit 0 (v3-t316-tsc.log). No Rust, no
+  shared file, no patch. The canvas drawing needs a real window, so it is live-proof only.
+LIVE PROOF PENDING (batched)
+1. Settings > General: switch the minimap on. Open a long source file: a thin picture of the file shows on the right;
+   scrolling moves the lit box; clicking the picture jumps there; dragging scrolls smoothly. Switch it off: it goes
+   away at once and the text uses the full width. A short file shows a short picture.
+STILL OPEN IN T-316-b: EDIT-018 export a note to PDF (needs a PDF writer; the app cannot open a print dialog) and
+  EDIT-024 Jupyter notebooks (kernel launch, skipped by the brief).

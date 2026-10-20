@@ -177,7 +177,8 @@ export type CliWorkspace =
   // CLI-022: a file to open as an editing tab or as a diff, in the named worktree.
   | CliFile;
 
-export type CliFile = { kind: "file-open"; path: string; worktree: string; branch: string | null } | { kind: "file-diff"; path: string; staged: boolean; worktree: string; branch: string | null };
+// T-250-c: `ack` is the request number the window answers through cli_file_result once the tab is open.
+export type CliFile = { kind: "file-open"; path: string; worktree: string; branch: string | null; ack?: number } | { kind: "file-diff"; path: string; staged: boolean; worktree: string; branch: string | null; ack?: number };
 
 // SESS-035: the composer's project search. The typed letters in order inside `text`: one run when
 // they appear together, else the first letters that fit; null when they are not all there.

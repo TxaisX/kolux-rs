@@ -570,6 +570,32 @@ impl Git {
         run(&["for-each-ref", "--format=%(refname)", &format!("refs/heads/{branch}"), &format!("refs/remotes/*/{branch}")], Some(repo)).is_ok_and(|s| !s.is_empty())
     }
 
+    /// GIT-020 / PROJ-039: the upstream `branch` tracks (for example `origin/work`), if any. Read
+    /// before a rename so the answer can say what tracking was kept.
+    pub fn upstream_of(&self, repo: &Path, branch: &str) -> Option<String> {
+        if !Self::ref_ok(branch) {
+            return None;
+        }
+        run(&["for-each-ref", "--format=%(upstream:short)", &format!("refs/heads/{branch}")], Some(repo)).ok().filter(|s| !s.is_empty())
+    }
+
+    /// GIT-020: renames the local branch `old` to `new` with `git branch -m`, which keeps the
+    /// branch's commits and moves its tracking settings along. It never uses `-M` and deletes
+    /// nothing: a name a local branch or a remote already uses is refused here, so the refusal does
+    /// not depend on Git's wording.
+    pub fn rename_branch(&self, repo: &Path, old: &str, new: &str) -> Result<(), String> {
+        if !Self::ref_ok(old) || !Self::ref_ok(new) {
+            return Err("That branch name is not usable.".into());
+        }
+        if old == new {
+            return Ok(());
+        }
+        if self.branch_taken(repo, new) {
+            return Err(format!("A branch named {new} already exists, so {old} keeps its name."));
+        }
+        run(&["branch", "-m", old, new], Some(repo)).map(|_| ())
+    }
+
     /// The worktree's markdown files, tracked and untracked, as full paths (EDIT-012). Git leaves
     /// out ignored files and never walks into a symlinked folder; the list stops at `cap`, and the
     /// flag says it did.

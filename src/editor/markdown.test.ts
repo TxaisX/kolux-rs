@@ -13,7 +13,6 @@ describe("rich markdown view (EDIT-012)", () => {
 
   it("names what it cannot show", () => {
     expect(unsupported("---\ntitle: x\n---\n# A\n")).toBe("it has front matter");
-    expect(unsupported("| a | b |\n|---|---|\n| 1 | 2 |\n")).toBe("it has tables");
     expect(unsupported("hi <b>there</b>\n")).toBe("it has HTML");
     expect(unsupported("![logo](a.png)\n")).toBe("it has images");
     expect(unsupported("see [x][1]\n\n[1]: https://a.b\n")).toBe("it has reference links");

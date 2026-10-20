@@ -332,7 +332,8 @@ pub async fn scm_check_log(worktree: String, link: String) -> Result<String, Str
 /// GIT-024: the title and description an agent writes for the branch against `base`. Needs a real
 /// agent, so its live run is pending; the prompt and the parsing are unit tested.
 #[tauri::command]
-pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>, instructions: Option<String>, issue: Option<Issue>, use_template: bool) -> Result<(String, String), String> {
+#[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
+pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>, instructions: Option<String>, issue: Option<Issue>, use_template: bool, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<(String, String), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
         // A base given with its remote (origin/main) is used as is; a bare name must match one remote.
@@ -352,15 +353,9 @@ pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>
         let template = if use_template { find_template(dir) } else { None };
         let prompt = pr_text_prompt(&scm::trim_diff(&diff, scm::MESSAGE_BUDGET), issue.as_ref(), template.as_deref(), instructions.as_deref().unwrap_or(""));
         let limit = std::time::Duration::from_secs(180);
-        let answer = if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
-            let words = scm::split_command(&line);
-            let (args, input) = scm::writer_args(&words[1..], &prompt);
-            let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
-            scm::write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit)?
-        } else {
-            let program = crate::agents::find_program("claude").ok_or("Claude Code was not found on this computer")?;
-            scm::write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)?
-        };
+        // GIT-018 / GIT-022: the same writer the commit messages use (custom command, else the chosen agent).
+        let writer = scm::writers::WriterArg { agent, model, effort, command };
+        let answer = scm::writers::ask(&writer, &prompt, dir, &worktree, limit)?;
         parse_pr_text(&answer, issue.as_ref().map(|i| i.number)).ok_or_else(|| "The agent returned no title".to_string())
     })
     .await

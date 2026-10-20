@@ -24,3 +24,31 @@ test("T-116-a-fix: a custom prefix shows its field, and a refused one warns", ()
   expect(html).toContain("Git does not accept");
   expect(html).toMatch(/<option value="upstream" selected="">Branch upstream/);
 });
+
+test("T-228-d: the writer picker lists the agents, shows model and effort for a chosen agent, and the branch-naming switch is on by default", () => {
+  const html = view({ commitWriter: "codex", commitWriterModel: "gpt-5", commitWriterEffort: "high" });
+  expect(html).toContain('aria-label="commit message writer"');
+  expect(html).toMatch(/<option value="codex" selected="">/);
+  for (const id of ["claude", "amp", "kimi", "copilot", "pi", "cursor", "antigravity"]) expect(html).toContain(`<option value="${id}"`);
+  expect(html).toContain('aria-label="commit message model"');
+  expect(html).toContain('value="gpt-5"');
+  expect(html).toContain('aria-label="Name the branch after the work"');
+  expect(html).toMatch(/aria-label="Name the branch after the work" checked=""/);
+  const off = view({ autoBranchName: false, autoBranchChosen: true });
+  expect(off).not.toMatch(/aria-label="Name the branch after the work" checked=""/);
+});
+
+test("T-116-b: renaming branches after the work is on by default and switches off", () => {
+  const on = view({});
+  expect(on).toMatch(/aria-label="Rename branches after the work"[^>]*checked=""/);
+  expect(on).toContain("is renamed to a short description");
+  const off = view({ renameBranches: false });
+  expect(off).not.toMatch(/aria-label="Rename branches after the work"[^>]*checked=""/);
+  expect(off).toContain("keeps the branch name Kolux suggested");
+  expect(view({ renameBranches: true })).toContain("is renamed to a short description");
+});
+
+test("T-116-b: updating the local base first stays off by default", () => {
+  expect(view({})).not.toMatch(/aria-label="Refresh the base first"[^>]*checked=""/);
+  expect(view({ refreshBaseFirst: true })).toMatch(/aria-label="Refresh the base first"[^>]*checked=""/);
+});

@@ -3,10 +3,9 @@
 //! against the addresses the workspace's terminals printed: on Windows the port scan carries no
 //! working folder, so a port counts as the workspace's when one of its terminals printed an address
 //! for it and the port is listening. Ranking: a printed address first, then a port speaking HTTP,
-//! then the smallest port number. Registered by `evidence/browser-T-242-lib.rs.patch`, hence the allow.
+//! then the smallest port number.
 //! ponytail: ports owned by the workspace's own processes (no printed address) are not candidates
 //! yet; that needs the pane's process tree from the terminal lane (after-list).
-#![allow(dead_code)]
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
