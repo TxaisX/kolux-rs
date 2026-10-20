@@ -1,0 +1,39 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index c21ca38a..294e4399 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -70,6 +70,7 @@ import { notesMarkdown, reviewOn, selections, sendTargets, startChoices, type No
+ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
+ import ArtifactsPage from "./artifacts/ArtifactsPage";
+ import SkillsPage from "./skills/SkillsPage";
++import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
+ import { closeSkills, toggleSkills } from "./skills/nav";
+ import { KitGallery, KitSetup } from "./kits/Kits";
+ import Wizard from "./onboarding/Wizard";
+@@ -1790,6 +1791,17 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // the tab strip is open (ORCH-066 / T-129-d: Board rows and generated titles read the same label).
+   const [workerNames, setWorkerNames] = useState<Record<string, string>>({});
+   const labelOf = (p: Pane) => workerNames[`term-${ptys.current[p.key]}`];
++  // TERM-056 / T-258: the tab's text and its hover (the full title); generated titles (off by default) touch only
++  // terminal panes without a name of their own.
++  const tabLabel = (p: Pane) => {
++    const full = tabName(p, titles, labelOf(p));
++    const shown = p.kind ? full : tabText({ full, own: p.title, on: generatedOn(settings), generated: generatedTitle({ label: labelOf(p), word: p.agent === "shell" ? "Shell" : programWord(p.agent), branch: p.branch, cwd: p.cwd }) });
++    return (
++      <span className="tab-name" data-tip={tabTip(full, shown)}>
++        {shown}
++      </span>
++    );
++  };
+   useEffect(() => {
+     if (!agentsScreen && !board && !terminals) return;
+     const look = () => void invoke<Record<string, string>>("worker_labels").then(setWorkerNames, () => {});
+@@ -2744,7 +2756,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                             {renamingTab === p.key ? (
+                               <NameField value={tabName(p, titles)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
+                             ) : (
+-                              <span className="tab-name">{tabName(p, titles, labelOf(p))}</span>
++                              tabLabel(p)
+                             )}
+                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
+                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
