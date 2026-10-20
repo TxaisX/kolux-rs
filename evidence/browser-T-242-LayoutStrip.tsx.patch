@@ -1,0 +1,38 @@
+diff --git a/src/chrome/LayoutStrip.tsx b/src/chrome/LayoutStrip.tsx
+index 18ae47db..74cfd9ae 100644
+--- a/src/chrome/LayoutStrip.tsx
++++ b/src/chrome/LayoutStrip.tsx
+@@ -4,7 +4,7 @@
+ // (TERM-040 / TERM-041, SESS-006): one terminal per installed shell, or any installed agent, as a
+ // tab beside the focused pane; "Choose agent…" (an empty chooser pane, nothing started); the
+ // browser; a new or an existing markdown file; or a file from disk in an editor tab (EDIT-001).
+-import { useState } from "react";
++import { useState, type ReactNode } from "react";
+ import { FileCode, Globe, Plus } from "./icons";
+ import VendorMark from "./VendorMark";
+ import { Kbd } from "../keys/KeymapContext";
+@@ -18,9 +18,10 @@ export type ShellInfo = { id: string; name: string; program: string; args: strin
+ /** What a new tab runs: an agent, the default shell (null) or another one, the browser (BROW-001),
+  * a chooser pane or a markdown file (SESS-006), or a file picked from disk (EDIT-001). */
+ export type NewTab = AgentInfo | null | { shell: ShellInfo } | "browser" | "file" | "diff" | "changes" | "chooser" | "markdown-new" | "markdown-open";
+-type Props = { count: number; onLayout: (n: number) => void; agents?: AgentInfo[]; shells?: ShellInfo[]; onNewTab?: (what: NewTab) => void; open?: boolean };
++/** `preview`: T-242 (BROW-067), the Preview button shown beside "New tab" (browser/PreviewButton). */
++type Props = { count: number; onLayout: (n: number) => void; agents?: AgentInfo[]; shells?: ShellInfo[]; onNewTab?: (what: NewTab) => void; open?: boolean; preview?: ReactNode };
+ 
+-export default function LayoutStrip({ count, onLayout, agents = [], shells = [], onNewTab, open = false }: Props) {
++export default function LayoutStrip({ count, onLayout, agents = [], shells = [], onNewTab, open = false, preview }: Props) {
+   const [at, setAt] = useState<{ top: number; right: number } | null>(open ? { top: 0, right: 0 } : null);
+   const pick = (a: NewTab) => {
+     setAt(null);
+@@ -36,9 +37,11 @@ export default function LayoutStrip({ count, onLayout, agents = [], shells = [],
+           </button>
+         ))}
+       </div>
++      {preview && <span style={{ marginLeft: "auto" }}>{preview}</span>}
+       {onNewTab && (
+         <button
+           className="btn newtab"
++          style={preview ? { marginLeft: 8 } : undefined}
+           aria-haspopup="menu"
+           aria-expanded={at !== null}
+           title="New tab beside the focused pane (Ctrl+T for a shell)"

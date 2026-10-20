@@ -78,7 +78,49 @@ pub const COMMANDS: &[Command] = &[
     ("storage get", "browser.storage-get", &["area", "key", "worktree", "page"]),
     ("storage set", "browser.storage-set", &["area", "key", "value", "worktree", "page"]),
     ("storage clear", "browser.storage-clear", &["area", "worktree", "page"]),
+    // T-242 (BROW-049): interception, capture and the console and network logs.
+    ("intercept enable", "browser.intercept-enable", &["patterns", "worktree", "page"]),
+    ("intercept disable", "browser.intercept-disable", &["worktree", "page"]),
+    ("intercept list", "browser.intercept-list", &["worktree", "page"]),
+    ("capture start", "browser.capture-start", &["worktree", "page"]),
+    ("capture stop", "browser.capture-stop", &["worktree", "page"]),
+    ("console", "browser.console", &["limit", "worktree", "page"]),
+    ("network", "browser.network", &["limit", "worktree", "page"]),
+    // T-242 (BROW-050): emulation, dialogs and the clipboard.
+    ("viewport", "browser.viewport", &["width", "height", "scale", "mobile", "worktree", "page"]),
+    ("geolocation", "browser.geolocation", &["latitude", "longitude", "accuracy", "worktree", "page"]),
+    ("set device", "browser.set-device", &["name", "worktree", "page"]),
+    ("set offline", "browser.set-offline", &["state", "worktree", "page"]),
+    ("set headers", "browser.set-headers", &["headers", "worktree", "page"]),
+    ("set credentials", "browser.set-credentials", &["user", "pass", "worktree", "page"]),
+    ("set media", "browser.set-media", &["color-scheme", "reduced-motion", "worktree", "page"]),
+    ("clipboard read", "browser.clipboard-read", &["worktree", "page"]),
+    ("clipboard write", "browser.clipboard-write", &["text", "worktree", "page"]),
+    ("dialog accept", "browser.dialog-accept", &["text", "worktree", "page"]),
+    ("dialog dismiss", "browser.dialog-dismiss", &["worktree", "page"]),
 ];
+
+/// BROW-050 `kolux set device --name`: width, height, scale and whether it is a mobile device.
+/// ponytail: a short table of common devices; a settings file if people ask for their own.
+pub const DEVICES: &[(&str, f64, f64, f64, bool)] = &[
+    ("iPhone SE", 375.0, 667.0, 2.0, true),
+    ("iPhone 14", 390.0, 844.0, 3.0, true),
+    ("iPhone 14 Pro Max", 430.0, 932.0, 3.0, true),
+    ("Pixel 7", 412.0, 915.0, 2.625, true),
+    ("Galaxy S23", 360.0, 780.0, 3.0, true),
+    ("iPad", 810.0, 1080.0, 2.0, true),
+    ("iPad Pro 12.9", 1024.0, 1366.0, 2.0, true),
+    ("Laptop", 1366.0, 768.0, 1.0, false),
+    ("Desktop 1080p", 1920.0, 1080.0, 1.0, false),
+];
+/// A clipboard write larger than this is refused before anything runs (BROW-050).
+pub const CLIPBOARD_MAX: usize = 1024 * 1024;
+/// `kolux console` / `kolux network` without `--limit`.
+pub const LOG_DEFAULT: usize = 100;
+/// The most entries a capture keeps per log.
+const CAPTURE_MAX: usize = 2000;
+const COLOR_SCHEMES: &[&str] = &["dark", "light"];
+const MOTIONS: &[&str] = &["reduce", "no-preference"];
 
 /// The commands that need the engine's picture or printer. Tauri's public API has no page capture
 /// or print on Windows (that is WebView2's CapturePreview / PrintToPdf, reached only through the
@@ -133,6 +175,18 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
     let number = |k: &str| match text(k) {
         Some(v) if v.parse::<f64>().is_ok() => Ok(()),
         Some(v) => Err(args(format!("--{k} takes a number, not {v}"))),
+        None => Ok(()),
+    };
+    // T-242: a viewport side is a whole number of CSS pixels from 1 to 10000; a coordinate stays
+    // within its range.
+    let size = |k: &str| match text(k) {
+        Some(v) if v.parse::<u32>().is_ok_and(|n| (1..=10_000).contains(&n)) => Ok(()),
+        Some(v) => Err(args(format!("--{k} takes whole pixels from 1 to 10000, not {v}"))),
+        None => Ok(()),
+    };
+    let within = |k: &str, max: f64| match text(k) {
+        Some(v) if v.parse::<f64>().is_ok_and(|n| n.abs() <= max) => Ok(()),
+        Some(v) => Err(args(format!("--{k} takes a number from -{max} to {max}, not {v}"))),
         None => Ok(()),
     };
     if let Some(p) = text("page") {
@@ -274,9 +328,93 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
                 return Err(args("--value is required"));
             }
         }
+        "browser.console" | "browser.network" => {
+            if let Some(n) = text("limit") {
+                if !n.parse::<usize>().is_ok_and(|n| n > 0) {
+                    return Err(args(format!("--limit takes a count from 1 up, not {n}")));
+                }
+            }
+        }
+        "browser.viewport" => {
+            need("width")?;
+            need("height")?;
+            size("width")?;
+            size("height")?;
+            scale(text("scale"))?;
+        }
+        "browser.geolocation" => {
+            need("latitude")?;
+            need("longitude")?;
+            within("latitude", 90.0)?;
+            within("longitude", 180.0)?;
+            number("accuracy")?;
+        }
+        "browser.set-device" => {
+            let name = need("name")?;
+            if device(name).is_none() {
+                return Err(args(format!("no device is called {name}; one of {}", DEVICES.iter().map(|d| d.0).collect::<Vec<_>>().join(", "))));
+            }
+        }
+        "browser.set-offline" => one_of("state", &["on", "off"])?,
+        "browser.set-headers" => {
+            headers_of(need("headers")?)?;
+        }
+        "browser.set-credentials" => {
+            need("user")?;
+            need("pass")?;
+        }
+        "browser.set-media" => {
+            if !flags.contains_key("color-scheme") && !flags.contains_key("reduced-motion") {
+                return Err(args("set media needs --color-scheme dark|light or --reduced-motion reduce|no-preference"));
+            }
+            one_of("color-scheme", COLOR_SCHEMES)?;
+            one_of("reduced-motion", MOTIONS)?;
+        }
+        "browser.clipboard-write" => {
+            let Some(t) = flags.get("text").and_then(Value::as_str) else {
+                return Err(args("--text is required"));
+            };
+            // BROW-050: an oversized write is refused here, before anything runs.
+            if t.len() > CLIPBOARD_MAX {
+                return Err(args(format!("--text is {} bytes; the clipboard takes up to {} KB", t.len(), CLIPBOARD_MAX / 1024)));
+            }
+        }
         _ => {}
     }
     Ok(flags.clone())
+}
+
+/// `--scale`: the device scale from 0.25 to 5 (the engine's zoom range), when given.
+fn scale(v: Option<&str>) -> Result<(), Fail> {
+    match v {
+        Some(s) if s.parse::<f64>().is_ok_and(|n| (0.25..=5.0).contains(&n)) => Ok(()),
+        Some(s) => Err(args(format!("--scale takes a factor from 0.25 to 5, not {s}"))),
+        None => Ok(()),
+    }
+}
+
+/// BROW-050: the device a name stands for, letter case and spaces aside.
+pub fn device(name: &str) -> Option<&'static (&'static str, f64, f64, f64, bool)> {
+    let key = |s: &str| s.to_lowercase().replace([' ', '-', '_'], "");
+    DEVICES.iter().find(|d| key(d.0) == key(name))
+}
+
+/// `--headers <json>`: an object of header names to string values.
+pub fn headers_of(text: &str) -> Result<Map<String, Value>, Fail> {
+    let v: Value = serde_json::from_str(text).map_err(|e| args(format!("--headers is not JSON: {e}")))?;
+    let Value::Object(m) = v else {
+        return Err(args("--headers takes a JSON object, such as {\"X-Debug\":\"1\"}"));
+    };
+    if let Some((k, _)) = m.iter().find(|(_, v)| !v.is_string()) {
+        return Err(args(format!("--headers: the value of {k} must be a string")));
+    }
+    Ok(m)
+}
+
+/// `kolux set credentials`: the Authorization header the page's requests carry.
+pub fn basic_auth(user: &str, pass: &str) -> String {
+    use base64::Engine as _;
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}")))
 }
 
 /// `*` matches any run of characters; everything else is literal (the `--url` pattern of wait).
@@ -440,22 +578,256 @@ fn files_of(list: &str) -> Result<Vec<Value>, Fail> {
     Ok(out)
 }
 
+/// T-242: what the command line emulates for one tab. `state` is the JSON the page's `__kxEmu`
+/// takes (intercept, offline, headers, auth, geo, media, mobile); the viewport is the app's (the
+/// page is laid out at that size); a capture holds what `kolux network` / `kolux console` saw
+/// between `capture start` and `capture stop`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Emu {
+    pub state: Map<String, Value>,
+    pub viewport: Option<(f64, f64)>,
+    pub capture: Option<Capture>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Capture {
+    pub on: bool,
+    pub console: Vec<Value>,
+    pub network: Vec<Value>,
+}
+
+static EMU: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u32, Emu>>> = std::sync::LazyLock::new(Default::default);
+
+fn with_emu<T>(id: u32, f: impl FnOnce(&mut Emu) -> T) -> T {
+    let mut all = EMU.lock().unwrap_or_else(|e| e.into_inner());
+    f(all.entry(id).or_default())
+}
+
+/// The tab's emulation state as the page's script takes it; `None` when nothing is emulated.
+pub fn emu_state(id: u32) -> Option<String> {
+    let all = EMU.lock().ok()?;
+    let e = all.get(&id)?;
+    (!e.state.is_empty()).then(|| Value::Object(e.state.clone()).to_string())
+}
+
+/// BROW-050: whether the tab emulates being offline (its navigations are refused).
+pub fn offline(id: u32) -> bool {
+    EMU.lock().is_ok_and(|all| all.get(&id).is_some_and(|e| e.state.get("offline").and_then(Value::as_bool).unwrap_or(false)))
+}
+
+/// The page's size inside its pane: the pane's, cut to the emulated viewport when there is one.
+pub fn fit(id: u32, w: f64, h: f64) -> (f64, f64) {
+    match EMU.lock().ok().and_then(|all| all.get(&id).and_then(|e| e.viewport)) {
+        Some((vw, vh)) => (w.min(vw), h.min(vh)),
+        None => (w, h),
+    }
+}
+
+/// BROW-049: a closed tab's set-up is cleared.
+pub fn forget(id: u32) {
+    if let Ok(mut all) = EMU.lock() {
+        all.remove(&id);
+    }
+}
+
+/// Capture: entries the page handed back that the capture does not hold yet are appended, oldest
+/// first, up to the cap (a page's performance entries repeat on every pull; a repeat adds nothing).
+pub fn merge_entries(into: &mut Vec<Value>, fresh: &[Value]) -> usize {
+    let mut added = 0;
+    for e in fresh {
+        if !into.contains(e) {
+            into.push(e.clone());
+            added += 1;
+        }
+    }
+    if into.len() > CAPTURE_MAX {
+        into.drain(..into.len() - CAPTURE_MAX);
+    }
+    added
+}
+
+/// The last `limit` entries of a log.
+pub fn tail(list: &[Value], limit: usize) -> Vec<Value> {
+    list[list.len().saturating_sub(limit)..].to_vec()
+}
+
+/// Sends the tab's emulation state to its page (the same script the load hook runs).
+fn apply_emu(id: u32) -> Result<(), Fail> {
+    let state = emu_state(id).unwrap_or_else(|| "{}".into());
+    eval_json(id, &format!("({}, {{ok:true}})", super::emu_script(&state)), EVAL_WAIT).map(|_| ()).map_err(|m| Fail::new("failed", m))
+}
+
+/// The page's log entries (`__kxLog`): the recorder is in every page's first script.
+fn page_log(id: u32, what: &str, limit: usize) -> Result<Vec<Value>, Fail> {
+    let answer = page(id, "log", json!({ "what": what, "limit": limit }), EVAL_WAIT)?;
+    Ok(answer["entries"].as_array().cloned().unwrap_or_default())
+}
+
+/// `kolux console` / `kolux network`: while a capture runs, the page's log is pulled into it and the
+/// capture is listed; after a stop the capture stands; with no capture the page's own log is listed.
+fn log_cmd(id: u32, what: &str, limit: usize) -> Result<Value, Fail> {
+    let on = with_emu(id, |e| e.capture.as_ref().map(|c| c.on));
+    let fresh = if on != Some(false) { page_log(id, what, CAPTURE_MAX)? } else { Vec::new() };
+    let list = with_emu(id, |e| match e.capture.as_mut() {
+        Some(c) => {
+            let into = if what == "console" { &mut c.console } else { &mut c.network };
+            if c.on {
+                merge_entries(into, &fresh);
+            }
+            tail(into, limit)
+        }
+        None => tail(&fresh, limit),
+    });
+    Ok(json!({ "page": id, "entries": list, "capturing": on == Some(true), "summary": format!("{} {what} entr{}", list.len(), if list.len() == 1 { "y" } else { "ies" }) }))
+}
+
+/// BROW-050 `kolux clipboard`: the system clipboard, read and written from the app side.
+fn clipboard(cmd: &str, text: Option<&str>) -> Result<Value, Fail> {
+    #[cfg(windows)]
+    {
+        if cmd == "clipboard-read" {
+            let t = crate::clipboard::os::get_text().unwrap_or_default();
+            return Ok(json!({ "text": t, "summary": format!("{} character(s) on the clipboard", t.chars().count()) }));
+        }
+        let t = text.unwrap_or_default();
+        crate::clipboard::os::put_text(std::ptr::null_mut(), t).map_err(|m| Fail::new("failed", m))?;
+        Ok(json!({ "characters": t.chars().count(), "summary": format!("{} character(s) placed on the clipboard", t.chars().count()) }))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (cmd, text);
+        Err(Fail::new("unsupported", "the clipboard is reached through the Windows clipboard in this build"))
+    }
+}
+
 /// The app side of every browser command (the dispatch arm). `worktree` is the folder the command
 /// is for: `--worktree` resolved, or the caller's own worktree, or none.
 pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let on = |k: &str| a.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false)));
     let page_no = text("page").and_then(|p| p.parse::<u32>().ok());
     if let Some(v) = tabs_cmd(req, worktree, page_no)? {
         return Ok(v);
     }
+    if req.command.starts_with("browser.clipboard-") {
+        // The clipboard is the machine's, not a page's: no tab is needed.
+        return clipboard(short(&req.command), a["text"].as_str());
+    }
     let id = gate(&req.command, page_no, worktree, &tabs())?;
     let cmd = short(&req.command);
+    let limit = text("limit").and_then(|n| n.parse::<usize>().ok()).unwrap_or(LOG_DEFAULT);
+    let set = |f: &dyn Fn(&mut Map<String, Value>)| with_emu(id, |e| f(&mut e.state));
     match req.command.as_str() {
         "browser.goto" => {
             let url = text("url").ok_or_else(|| args("--url is required"))?;
+            if offline(id) {
+                // BROW-050: an offline tab fails to load, as the real thing would.
+                return Err(Fail { code: "offline", message: format!("page {id} emulates being offline, so {url} cannot load; kolux set offline --state off lets it"), data: json!({ "page": id, "url": url }) });
+            }
             let to = super::navigate_to(id, &url)?;
             Ok(json!({ "page": id, "url": to, "summary": format!("page {id} is going to {to}") }))
+        }
+        "browser.intercept-enable" => {
+            let patterns: Vec<String> = text("patterns").unwrap_or_else(|| "*".into()).split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).collect();
+            set(&|s| {
+                s.insert("intercept".into(), json!(patterns));
+            });
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "patterns": patterns, "summary": format!("page {id} holds requests matching {}", patterns.join(", ")) }))
+        }
+        "browser.intercept-disable" => {
+            set(&|s| {
+                s.insert("intercept".into(), Value::Null);
+            });
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "summary": format!("page {id} holds no requests; held ones were released") }))
+        }
+        "browser.intercept-list" => {
+            let patterns = with_emu(id, |e| e.state.get("intercept").cloned().unwrap_or(Value::Null));
+            let held = page_log(id, "held", CAPTURE_MAX)?;
+            Ok(json!({ "page": id, "patterns": patterns, "held": held, "summary": format!("{} request(s) held", held.len()) }))
+        }
+        "browser.capture-start" => {
+            with_emu(id, |e| e.capture = Some(Capture { on: true, ..Default::default() }));
+            Ok(json!({ "page": id, "summary": format!("page {id}: capturing console and network") }))
+        }
+        "browser.capture-stop" => {
+            let (console, network) = (page_log(id, "console", CAPTURE_MAX)?, page_log(id, "network", CAPTURE_MAX)?);
+            let counts = with_emu(id, |e| {
+                let c = e.capture.get_or_insert_with(Default::default);
+                if c.on {
+                    merge_entries(&mut c.console, &console);
+                    merge_entries(&mut c.network, &network);
+                }
+                c.on = false;
+                (c.console.len(), c.network.len())
+            });
+            Ok(json!({ "page": id, "console": counts.0, "network": counts.1, "summary": format!("page {id}: capture stopped with {} console and {} network entries", counts.0, counts.1) }))
+        }
+        "browser.console" | "browser.network" => log_cmd(id, cmd, limit),
+        "browser.viewport" | "browser.set-device" => {
+            let (w, h, scale, mobile) = if cmd == "viewport" {
+                let n = |k: &str| text(k).and_then(|v| v.parse::<f64>().ok());
+                (n("width").unwrap_or(1024.0), n("height").unwrap_or(768.0), n("scale"), on("mobile"))
+            } else {
+                let d = device(&text("name").unwrap_or_default()).ok_or_else(|| args("--name is required"))?;
+                (d.1, d.2, Some(d.3), d.4)
+            };
+            with_emu(id, |e| {
+                e.viewport = Some((w, h));
+                e.state.insert("mobile".into(), json!(mobile));
+            });
+            super::relayout(id, scale).map_err(|m| Fail::new("failed", m))?;
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "width": w, "height": h, "scale": scale, "mobile": mobile, "summary": format!("page {id} shows {w}x{h}{}{}", scale.map(|s| format!(" at {s}x")).unwrap_or_default(), if mobile { " (mobile)" } else { "" }) }))
+        }
+        "browser.geolocation" => {
+            let n = |k: &str| text(k).and_then(|v| v.parse::<f64>().ok());
+            let geo = json!({ "latitude": n("latitude"), "longitude": n("longitude"), "accuracy": n("accuracy").unwrap_or(1.0) });
+            set(&|s| {
+                s.insert("geo".into(), geo.clone());
+            });
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "geolocation": geo, "summary": format!("page {id} is at {}, {}", geo["latitude"], geo["longitude"]) }))
+        }
+        "browser.set-offline" => {
+            let off = text("state").is_none_or(|s| s == "on");
+            set(&|s| {
+                s.insert("offline".into(), json!(off));
+            });
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "offline": off, "summary": format!("page {id} is {}", if off { "offline" } else { "online" }) }))
+        }
+        "browser.set-headers" => {
+            let h = headers_of(&text("headers").unwrap_or_default())?;
+            set(&|s| {
+                s.insert("headers".into(), Value::Object(h.clone()));
+            });
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "headers": h, "summary": format!("page {id} sends {} extra header(s) with its requests", h.len()) }))
+        }
+        "browser.set-credentials" => {
+            let auth = basic_auth(&text("user").unwrap_or_default(), &text("pass").unwrap_or_default());
+            set(&|s| {
+                s.insert("auth".into(), json!(auth));
+            });
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "summary": format!("page {id} sends HTTP basic credentials with its requests") }))
+        }
+        "browser.set-media" => {
+            let media = json!({ "colorScheme": text("color-scheme"), "reducedMotion": text("reduced-motion") });
+            set(&|s| {
+                s.insert("media".into(), media.clone());
+            });
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "media": media, "summary": format!("page {id} prefers {}{}", text("color-scheme").map(|c| format!("a {c} colour scheme")).unwrap_or_default(), text("reduced-motion").map(|m| format!(" {m} motion")).unwrap_or_default()) }))
+        }
+        "browser.dialog-accept" | "browser.dialog-dismiss" => {
+            let accept = cmd == "dialog-accept";
+            let mut answer = page(id, "dialog", json!({ "accept": accept, "text": a["text"] }), EVAL_WAIT)?;
+            answer["page"] = json!(id);
+            Ok(answer)
         }
         "browser.back" | "browser.forward" | "browser.reload" => {
             super::go(id, cmd)?;
@@ -725,8 +1097,18 @@ pub fn text(command: &str, r: &Value) -> Option<String> {
             Value::Null => "null".into(),
             v => serde_json::to_string_pretty(v).unwrap_or_default(),
         },
+        "browser.console" => lines(&r["entries"], |e| format!("[{}] {}", e["level"].as_str().unwrap_or("log"), e["text"].as_str().unwrap_or_default()), "no console message recorded"),
+        "browser.network" => lines(&r["entries"], |e| format!("{:<6} {} {}{}", e["kind"].as_str().unwrap_or_default(), e["status"].as_u64().map(|s| s.to_string()).unwrap_or_else(|| e["failed"].as_str().map(|f| format!("({f})")).unwrap_or_default()), e["url"].as_str().unwrap_or_default(), e["ms"].as_u64().map(|ms| format!("  {ms} ms")).unwrap_or_default()), "no request recorded"),
+        "browser.intercept-list" => format!("patterns: {}\n{}", match &r["patterns"] { Value::Array(p) => p.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "), _ => "none".into() }, lines(&r["held"], |e| format!("held {} {}", e["kind"].as_str().unwrap_or_default(), e["url"].as_str().unwrap_or_default()), "no request held")),
+        "browser.clipboard-read" => r["text"].as_str().unwrap_or_default().to_string(),
         _ => r["summary"].as_str().map(str::to_string).unwrap_or_else(|| "ok".into()),
     })
+}
+
+/// One line per entry, or the word for none.
+fn lines(list: &Value, line: impl Fn(&Value) -> String, none: &str) -> String {
+    let rows: Vec<String> = list.as_array().map(|l| l.iter().map(&line).collect()).unwrap_or_default();
+    if rows.is_empty() { none.to_string() } else { rows.join("\n") }
 }
 
 /// The page-side helper. It installs itself once per page as `window.__kx` (references, mouse
@@ -805,6 +1187,8 @@ if(!window.__kx){
   case 'storage-get': { const st=a.area==='session'?sessionStorage:localStorage; if(a.key!=null&&a.key!=='') return {ok:true,value:st.getItem(String(a.key))}; const o={}; for(let i=0;i<st.length;i++){ const k=st.key(i); o[k]=st.getItem(k); } return {ok:true,value:o}; }
   case 'storage-set': { const st=a.area==='session'?sessionStorage:localStorage; st.setItem(String(a.key),a.value==null?'':String(a.value)); return {ok:true,summary:(a.area||'local')+' storage: '+a.key+' set'}; }
   case 'storage-clear': { const st=a.area==='session'?sessionStorage:localStorage; const n=st.length; st.clear(); return {ok:true,summary:(a.area||'local')+' storage cleared ('+n+' key(s))'}; }
+  case 'log': { if(!window.__kxLog) throw new Error('this page has no recorder; reload it'); return {ok:true,entries:window.__kxLog(a.what,Number(a.limit)||100)}; }
+  case 'dialog': { if(!window.__kxDialog) throw new Error('this page has no dialog hook; reload it'); const n=window.__kxDialog({accept:!!a.accept,text:a.text==null?null:String(a.text)}); return {ok:true,armed:n,summary:(a.accept?'the next dialog is accepted':'the next dialog is dismissed')+(a.text!=null?' with '+JSON.stringify(String(a.text)):'')+' ('+n+' answer(s) armed)',dialogs:window.__kxLog('dialogs',5)}; }
   case 'check-wait': { let ok=true; if(a.selector){ const e=document.querySelector(a.selector); ok=ok&&(a.state==='hidden'?!(e&&vis(e)):!!e&&(a.state!=='visible'||vis(e))); }
    if(a.text) ok=ok&&((document.body&&document.body.innerText)||'').includes(a.text); if(a.load) ok=ok&&(a.load==='domcontentloaded'?document.readyState!=='loading':document.readyState==='complete'); if(a.fn) ok=ok&&!!(0,eval)(a.fn); return {ok:true,value:ok,url:location.href}; }
   default: throw new Error('unknown command '+q.cmd);
@@ -859,6 +1243,89 @@ mod tests {
         assert_eq!(check("browser.snapshot", &flags(&[("worktree", " ")])).unwrap_err().message, "--worktree cannot be empty");
         assert_eq!(check("browser.exec", &flags(&[])).unwrap_err().message, "--command is required");
         assert_eq!(check("browser.exec", &flags(&[])).unwrap_err().code, "invalid_arguments");
+    }
+
+    #[test]
+    fn brow049_050_check_wants_what_the_log_and_emulation_commands_need() {
+        assert!(check("browser.console", &flags(&[("limit", "0")])).unwrap_err().message.contains("--limit takes a count"));
+        assert!(check("browser.network", &flags(&[("limit", "20")])).is_ok());
+        assert_eq!(check("browser.viewport", &flags(&[("width", "390")])).unwrap_err().message, "--height is required");
+        assert!(check("browser.viewport", &flags(&[("width", "390"), ("height", "0")])).unwrap_err().message.contains("whole pixels from 1 to 10000"));
+        assert!(check("browser.viewport", &flags(&[("width", "390"), ("height", "844"), ("scale", "9")])).unwrap_err().message.contains("--scale takes a factor"));
+        assert!(check("browser.viewport", &flags(&[("width", "390"), ("height", "844"), ("scale", "3"), ("mobile", "true")])).is_ok());
+        assert!(check("browser.geolocation", &flags(&[("latitude", "91"), ("longitude", "0")])).unwrap_err().message.contains("-90 to 90"));
+        assert!(check("browser.geolocation", &flags(&[("latitude", "37.77"), ("longitude", "-122.4"), ("accuracy", "10")])).is_ok());
+        assert!(check("browser.set-device", &flags(&[("name", "Nokia 3310")])).unwrap_err().message.starts_with("no device is called Nokia 3310"));
+        assert!(check("browser.set-device", &flags(&[("name", "iphone-14")])).is_ok());
+        assert_eq!(device("IPHONE 14").map(|d| (d.1, d.2, d.4)), Some((390.0, 844.0, true)));
+        assert_eq!(check("browser.set-offline", &flags(&[("state", "maybe")])).unwrap_err().message, "--state maybe is not one of on|off");
+        assert!(check("browser.set-offline", &flags(&[])).is_ok());
+        assert!(check("browser.set-headers", &flags(&[("headers", "[1]")])).unwrap_err().message.contains("JSON object"));
+        assert!(check("browser.set-headers", &flags(&[("headers", r#"{"X-Debug":1}"#)])).unwrap_err().message.contains("must be a string"));
+        assert_eq!(headers_of(r#"{"X-Debug":"1"}"#).unwrap().len(), 1);
+        assert_eq!(check("browser.set-credentials", &flags(&[("user", "me")])).unwrap_err().message, "--pass is required");
+        assert_eq!(basic_auth("me", "secret"), "Basic bWU6c2VjcmV0");
+        assert!(check("browser.set-media", &flags(&[])).unwrap_err().message.starts_with("set media needs"));
+        assert!(check("browser.set-media", &flags(&[("color-scheme", "blue")])).unwrap_err().message.contains("dark|light"));
+        assert!(check("browser.set-media", &flags(&[("reduced-motion", "reduce")])).is_ok());
+        // BROW-050: an oversized clipboard write is refused before anything runs.
+        let big = "x".repeat(CLIPBOARD_MAX + 1);
+        let f = check("browser.clipboard-write", &flags(&[("text", &big)])).unwrap_err();
+        assert_eq!(f.code, "invalid_arguments");
+        assert!(f.message.contains("the clipboard takes up to 1024 KB"));
+        assert!(check("browser.clipboard-write", &flags(&[("text", "")])).is_ok());
+        assert_eq!(check("browser.clipboard-write", &flags(&[])).unwrap_err().message, "--text is required");
+        assert!(check("browser.dialog-accept", &flags(&[("text", "hi")])).is_ok());
+        for c in ["browser.intercept-enable", "browser.capture-start", "browser.console", "browser.network", "browser.viewport", "browser.set-device", "browser.clipboard-read", "browser.dialog-dismiss"] {
+            assert!(is_browser(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn brow049_050_emulation_state_is_per_tab_and_goes_with_the_tab() {
+        let id = 9_049;
+        assert_eq!(emu_state(id), None);
+        assert!(!offline(id));
+        assert_eq!(fit(id, 1200.0, 800.0), (1200.0, 800.0));
+        with_emu(id, |e| {
+            e.state.insert("offline".into(), json!(true));
+            e.viewport = Some((390.0, 844.0));
+        });
+        assert!(offline(id));
+        // The page is cut to the emulated viewport, never grown past its pane.
+        assert_eq!(fit(id, 1200.0, 800.0), (390.0, 800.0));
+        assert_eq!(fit(id, 300.0, 900.0), (300.0, 844.0));
+        assert_eq!(emu_state(id).as_deref(), Some(r#"{"offline":true}"#));
+        assert_eq!(super::super::emu_script(r#"{"offline":true}"#), r#"window.__kxEmu && window.__kxEmu(JSON.parse("{\"offline\":true}"))"#);
+        forget(id);
+        assert_eq!(emu_state(id), None);
+        assert!(!offline(id));
+        assert_eq!(fit(id, 1200.0, 800.0), (1200.0, 800.0));
+    }
+
+    #[test]
+    fn brow049_a_capture_merges_what_the_page_hands_back_and_lists_its_tail() {
+        let mut got = vec![json!({ "url": "https://a.test/x", "kind": "fetch", "status": 200 })];
+        // The page's performance entries repeat on every pull: a repeat adds nothing.
+        assert_eq!(merge_entries(&mut got, &[json!({ "url": "https://a.test/x", "kind": "fetch", "status": 200 }), json!({ "url": "https://a.test/y", "kind": "img", "ms": 3, "bytes": 10 })]), 1);
+        assert_eq!(got.len(), 2);
+        assert_eq!(tail(&got, 1)[0]["url"], "https://a.test/y");
+        assert_eq!(tail(&got, 10).len(), 2);
+        let many: Vec<Value> = (0..CAPTURE_MAX + 5).map(|i| json!({ "i": i })).collect();
+        merge_entries(&mut got, &many);
+        assert_eq!(got.len(), CAPTURE_MAX);
+        assert_eq!(got[0]["i"], 5);
+        // The console line and the network line of the readable form.
+        let console = json!({ "entries": [{ "level": "warn", "text": "careful" }] });
+        assert_eq!(text("browser.console", &console).unwrap(), "[warn] careful");
+        let net = json!({ "entries": [{ "kind": "fetch", "status": 404, "url": "https://a.test/x" }, { "kind": "xhr", "failed": "offline", "url": "https://a.test/y" }] });
+        assert_eq!(text("browser.network", &net).unwrap(), "fetch  404 https://a.test/x\nxhr    (offline) https://a.test/y");
+        assert_eq!(text("browser.console", &json!({ "entries": [] })).unwrap(), "no console message recorded");
+        assert_eq!(text("browser.intercept-list", &json!({ "patterns": ["*/api/*"], "held": [] })).unwrap(), "patterns: */api/*\nno request held");
+        assert_eq!(text("browser.clipboard-read", &json!({ "text": "hi" })).unwrap(), "hi");
+        for needle in ["case 'log':", "case 'dialog':", "window.__kxLog(a.what", "window.__kxDialog("] {
+            assert!(DRIVER.contains(needle), "{needle}");
+        }
     }
 
     #[test]
@@ -1000,7 +1467,10 @@ mod tests {
         assert!(script.ends_with("return window.__kx.run({\"cmd\":\"snapshot\",\"args\":{}});\n})()"));
         for (_, wire, _) in COMMANDS {
             let cmd = short(wire);
-            if cmd.starts_with("tab-") || cmd.starts_with("profiles-") || ["goto", "back", "forward", "reload", "wait", "exec", "screenshot", "full-screenshot", "pdf", "download"].contains(&cmd) {
+            // T-242: the log, emulation and dialog commands reach the page through the shared
+            // 'log' and 'dialog' cases and the __kxEmu state; clipboard never reaches the page.
+            let app_side = ["tab-", "profiles-", "intercept-", "capture-", "set-", "clipboard-", "dialog-"].iter().any(|p| cmd.starts_with(p));
+            if app_side || ["goto", "back", "forward", "reload", "wait", "exec", "screenshot", "full-screenshot", "pdf", "download", "console", "network", "viewport", "geolocation"].contains(&cmd) {
                 continue;
             }
             assert!(DRIVER.contains(&format!("case '{cmd}'")), "the driver answers {cmd}");

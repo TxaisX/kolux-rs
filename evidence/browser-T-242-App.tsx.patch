@@ -1,0 +1,46 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 1571c672..0326a32b 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -43,7 +43,8 @@ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId }
+ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
+ import { navTarget, travel, visit, type Place } from "./projects/nav";
+ import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
+-import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPane";
++import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
++import PreviewButton from "./browser/PreviewButton";
+ import { chordPlan } from "./browser/chord";
+ import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
+ import { writerOf } from "./scm/generate";
+@@ -153,7 +154,7 @@ export type Pane = { key: number; cwd: string | null; branch: string | null; age
+ 
+ /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
+ function tabName(p: Pane, titles: Record<number, string>): string {
+-  if (p.kind === "browser") return titles[p.key] || "New Tab";
++  if (p.kind === "browser") return p.title || titles[p.key] || "New Tab";
+   if (p.kind === "editor") return baseName(p.path ?? "");
+   if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
+   if (p.kind === "changes") return "All Changes";
+@@ -362,10 +363,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // GIT-036: a page asked for in the built-in browser opens as a new tab in the focused split.
+   useEffect(() => {
+     const show = (e: Event) => {
+-      const url = (e as CustomEvent<string>).detail;
++      // T-242 (BROW-067): the Preview button names its tab "Preview host:port".
++      const { url, title } = openDetail((e as CustomEvent<OpenInBrowser>).detail);
+       const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+       const key = nextKey.current++;
+-      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "browser", url }]);
++      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "browser", url, title }]);
+       setFocused(key);
+     };
+     window.addEventListener(OPEN_IN_BROWSER, show);
+@@ -2312,7 +2314,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                   }}
+                 />
+               )}
+-              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} />}
++              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} preview={<PreviewButton dir={activeDir} onFocus={setFocused} />} />}
+               {picking === "file" && activeDir && (
+                 <FilePicker
+                   root={activeDir}
