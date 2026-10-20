@@ -1,5 +1,5 @@
-//! T-121 (STAT-012 / STAT-013 / STAT-015): status hooks for Cursor Agent, Factory's Droid and Kimi
-//! Code, from each vendor's public hook docs (PROVENANCE.md, T-121). As for the T-120-b vendors,
+//! T-121 (STAT-012 / STAT-013 / STAT-015) and T-122 (STAT-017): status hooks for Cursor Agent,
+//! Factory's Droid, Kimi Code and GitHub Copilot CLI, from each vendor's public hook docs (PROVENANCE.md, T-121). As for the T-120-b vendors,
 //! each event is turned into the one shape the status rules read (`normalize`); `change` then reads
 //! it with Codex's rules plus what each card adds (a blocked stop, a question).
 //!
@@ -8,6 +8,7 @@
 //!   file is absent, the `hooks` key of `~/.factory/settings.json`, where `hooksDisabled` lives too.
 //! - Kimi Code: `[[hooks]]` tables in `~/.kimi-code/config.toml`, inside one marked block after
 //!   the user's own settings; taking the block out gives the file back byte for byte.
+//! - Copilot CLI: Kolux's own `kolux-rs.json` in `hooks` under Copilot's home (`COPILOT_HOME`).
 
 use super::super::{codex_change, install_groups, script, write_atomic, write_json, write_script, Change};
 use super::{back_up, backup_of, drop_created, fenced, kept, names_mine, read_opt, remove_groups, scratch_only, target_dir, was_created, Plan, BACKUP_RECORD};
@@ -20,7 +21,13 @@ pub const CURSOR_SCRIPT: &str = "cursor.cmd";
 pub const DROID_SCRIPT: &str = "droid.cmd";
 pub const KIMI_SCRIPT: &str = "kimi.cmd";
 /// The agents this module manages, by catalogue id.
-pub const AGENTS: [&str; 3] = ["cursor", "droid", "kimi"];
+pub const AGENTS: [&str; 4] = ["cursor", "droid", "kimi", "copilot"];
+pub const COPILOT_SCRIPT: &str = "copilot.cmd";
+/// STAT-017: Copilot CLI's 13 events, under the names its compat list gives (the PascalCase ones,
+/// whose payloads carry snake_case fields; subagentStart has no PascalCase form).
+pub const COPILOT_EVENTS: [&str; 13] = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "subagentStart", "SubagentStop", "PreCompact", "Stop", "ErrorOccurred", "PermissionRequest", "Notification"];
+/// Copilot's ask-the-user tool, by its documented name.
+const COPILOT_ASK_TOOL: &str = "ask_user";
 /// STAT-012: the eight Cursor events installed. Session start can fire while idle and is left
 /// unhooked on purpose; session end is understood (`normalize`) but not installed.
 pub const CURSOR_EVENTS: [&str; 8] = ["beforeSubmitPrompt", "stop", "preToolUse", "postToolUse", "postToolUseFailure", "beforeShellExecution", "beforeMCPExecution", "afterAgentResponse"];
@@ -49,7 +56,9 @@ pub fn is_route(path: &str) -> bool {
 
 /// The agent id a route reports for.
 pub fn agent_of(path: &str) -> Option<&'static str> {
-    AGENTS.iter().copied().find(|a| path.trim_start_matches('/') == *a)
+    let p = path.trim_start_matches('/');
+    // Copilot's route names the event (`copilot/<event>`), as Antigravity's does.
+    AGENTS.iter().copied().find(|a| p == *a || (*a == "copilot" && p.strip_prefix("copilot/").is_some_and(|e| !e.is_empty() && !e.contains('/'))))
 }
 
 /// What these agents' events need remembered between events, per session.
@@ -106,7 +115,10 @@ pub fn normalize_any(path: &str, event: &Value) -> Option<Value> {
 pub fn normalize_with(memory: &mut Memory, path: &str, event: &Value) -> Option<Value> {
     let agent = agent_of(path)?;
     let str_of = |k: &str| event.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
-    let name = str_of("hook_event_name")?;
+    let name = match path.trim_start_matches('/').split_once('/') {
+        Some((_, e)) => e,
+        None => str_of("hook_event_name")?,
+    };
     let tool = |n: Option<&str>, input: Option<&Value>| json!({ "tool_name": n, "tool_input": input });
     let (name, session, mut out) = match agent {
         "cursor" => {
@@ -178,6 +190,37 @@ pub fn normalize_with(memory: &mut Memory, path: &str, event: &Value) -> Option<
             };
             (name, session, out)
         }
+        "copilot" => {
+            // STAT-017: both spellings of each event and of each field are read.
+            let either = |a: &str, b: &str| str_of(a).or_else(|| str_of(b));
+            let session = either("session_id", "sessionId");
+            let tool_name = either("tool_name", "toolName");
+            let input = event.get("tool_input").or_else(|| event.get("toolArgs"));
+            let (name, out) = match name {
+                "UserPromptSubmit" | "userPromptSubmitted" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                "PreToolUse" | "preToolUse" if tool_name == Some(COPILOT_ASK_TOOL) => ("PreToolUse", json!({ "kolux_ask": question(input).unwrap_or("Copilot is asking you something") })),
+                "PreToolUse" | "preToolUse" => {
+                    if let Some(s) = session {
+                        memory.tool(s, tool_name);
+                    }
+                    ("PreToolUse", tool(tool_name, input))
+                }
+                "PostToolUse" | "postToolUse" | "PostToolUseFailure" | "postToolUseFailure" => ("PostToolUse", tool(tool_name, None)),
+                "PermissionRequest" | "permissionRequest" => ("PermissionRequest", tool(tool_name.or_else(|| session.and_then(|s| memory.last_tool(s))), input)),
+                "Notification" | "notification" => match droid_notice(None, str_of("message"))? {
+                    Notice::Permission => ("PermissionRequest", tool(session.and_then(|s| memory.last_tool(s)), None)),
+                    Notice::Ask => ("PreToolUse", json!({ "kolux_ask": str_of("message") })),
+                    Notice::Idle => ("Stop", json!({})),
+                },
+                "Stop" | "agentStop" | "SessionEnd" | "sessionEnd" => ("Stop", json!({})),
+                // STAT-017: an error Copilot recovers from keeps the turn working; any other ends it.
+                "ErrorOccurred" | "errorOccurred" if event.get("recoverable").and_then(Value::as_bool) == Some(true) => ("PostToolUse", json!({})),
+                "ErrorOccurred" | "errorOccurred" => ("Stop", json!({})),
+                // Session start (idle at launch), subagent and before-compact events change nothing.
+                _ => return None,
+            };
+            (name, session, out)
+        }
         _ => return None,
     };
     let o = out.as_object_mut()?;
@@ -188,6 +231,13 @@ pub fn normalize_with(memory: &mut Memory, path: &str, event: &Value) -> Option<
         o.insert("session_id".into(), s.into());
     }
     Some(out)
+}
+
+/// The question an ask-the-user call carries: its first text argument (the argument names are not
+/// documented, so `question` and `message` are tried first).
+fn question(input: Option<&Value>) -> Option<&str> {
+    let o = input?.as_object()?;
+    ["question", "message", "prompt"].iter().find_map(|k| o.get(*k).and_then(Value::as_str)).or_else(|| o.values().find_map(Value::as_str)).filter(|q| !q.trim().is_empty())
 }
 
 /// STAT-015: a failure kind that names a rate limit.
@@ -247,7 +297,82 @@ pub fn write_scripts(home: &Path) -> Result<String, String> {
     write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", true))?;
     write_script(home, DROID_SCRIPT, &script("droid", "droid", true))?;
     // Kimi adds a hook's output to the model's context, so its script prints nothing.
-    write_script(home, KIMI_SCRIPT, &script("kimi", "kimi", false))
+    write_script(home, KIMI_SCRIPT, &script("kimi", "kimi", false))?;
+    write_copilot_script(home)
+}
+
+/// Copilot's script takes the event as its argument; it prints nothing, which Copilot reads as no
+/// decision.
+fn write_copilot_script(home: &Path) -> Result<String, String> {
+    write_script(home, COPILOT_SCRIPT, &script("copilot", "copilot/%~1", false))
+}
+
+/// STAT-017: Copilot's home, `COPILOT_HOME` when the user set it.
+fn copilot_home(home: &Path) -> PathBuf {
+    std::env::var_os("COPILOT_HOME").filter(|h| !h.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".copilot"))
+}
+
+/// Kolux's own user-level hook file in Copilot's home.
+pub fn copilot_file(home: &Path) -> PathBuf {
+    copilot_home(home).join("hooks").join("kolux-rs.json")
+}
+
+/// A Copilot hook file is Kolux's when one of its commands runs a script from Kolux's folder.
+fn copilot_mine(v: &Value) -> bool {
+    v.get("hooks").and_then(Value::as_object).is_some_and(|h| {
+        h.values().filter_map(Value::as_array).flatten().any(|e| ["bash", "powershell", "command"].iter().any(|k| e.get(*k).and_then(Value::as_str).is_some_and(super::super::is_my_command)))
+    })
+}
+
+/// STAT-017: Kolux's file, written whole: version 1, one entry per event, no disable-all switch.
+pub fn install_copilot(home: &Path, file: &Path) -> Result<bool, String> {
+    let path = write_copilot_script(home)?;
+    let text = read_opt(file)?;
+    if let Some(t) = &text {
+        if !serde_json::from_str::<Value>(t).is_ok_and(|v| copilot_mine(&v)) {
+            return Err(format!("{} is not Kolux's own hook file; left alone", file.display()));
+        }
+    }
+    let ps = super::vendors::gemini_command(&path);
+    let hooks: Map<String, Value> = COPILOT_EVENTS.iter().map(|e| (e.to_string(), json!([{ "type": "command", "bash": format!("{} {e}", quoted(&path)), "powershell": format!("{ps} {e}"), "timeoutSec": TIMEOUT }]))).collect();
+    let v = json!({ "version": 1, "hooks": hooks });
+    if text.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()).as_ref() == Some(&v) {
+        return Ok(false);
+    }
+    if let Some(dir) = file.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}; hooks not installed", dir.display()))?;
+    }
+    write_json(file, &v, text.as_deref())?;
+    Ok(true)
+}
+
+/// Kolux's file goes; a file of the same name that is not Kolux's stays.
+pub fn remove_copilot(file: &Path) -> Result<bool, String> {
+    let Some(text) = read_opt(file)? else { return Ok(false) };
+    if !serde_json::from_str::<Value>(&text).is_ok_and(|v| copilot_mine(&v)) {
+        return Ok(false);
+    }
+    fs::remove_file(file).map_err(|e| format!("{}: {e}; nothing removed", file.display()))?;
+    Ok(true)
+}
+
+fn inspect_copilot(file: &Path) -> (&'static str, Option<String>) {
+    match read_opt(file).map(|t| t.map(|t| serde_json::from_str::<Value>(&t))) {
+        Ok(None) => ("not installed", None),
+        Ok(Some(Ok(v))) if copilot_mine(&v) => {
+            let missing: Vec<&str> = COPILOT_EVENTS.iter().copied().filter(|e| v["hooks"].get(*e).and_then(Value::as_array).is_none_or(|l| l.is_empty())).collect();
+            if v.get("disableAllHooks").and_then(Value::as_bool) == Some(true) {
+                ("partial", Some("disableAllHooks is set in Kolux's hook file".into()))
+            } else if missing.is_empty() {
+                ("installed", None)
+            } else {
+                ("partial", Some(format!("no Kolux entry for {}", missing.join(", "))))
+            }
+        }
+        Ok(Some(Ok(_))) => ("error", Some(format!("{} is not Kolux's own hook file", file.display()))),
+        Ok(Some(Err(e))) => ("error", Some(format!("{} is not JSON ({e})", file.display()))),
+        Err(e) => ("error", Some(e)),
+    }
 }
 
 fn quoted(path: &str) -> String {
@@ -566,6 +691,10 @@ pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'stat
             let file = target(profile, kimi_file(home))?;
             if install { install_kimi(home, &file) } else { remove_kimi(home, &file) }
         }
+        "copilot" => {
+            let file = target(profile, copilot_file(home))?;
+            if install { install_copilot(home, &file) } else { remove_copilot(&file) }
+        }
         _ => return Ok("left as it was"),
     }
     .map(|_| if install { "installed" } else { "removed" })
@@ -637,6 +766,7 @@ pub fn rows(home: &Path) -> Vec<Value> {
         row("cursor", "Cursor Agent", cursor_file(home), inspect_cursor(&cursor_file(home))),
         row("droid", "Droid", droid_file(home), inspect_droid(home)),
         row("kimi", "Kimi Code", kimi_file(home), inspect_kimi(&kimi_file(home))),
+        row("copilot", "GitHub Copilot CLI", copilot_file(home), inspect_copilot(&copilot_file(home))),
     ]
 }
 

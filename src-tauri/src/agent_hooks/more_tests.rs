@@ -276,12 +276,78 @@ fn stat_015_kimi_file_kolux_created_goes_and_its_script_prints_nothing() {
 fn t_121_rows_name_each_agent() {
     let home = scratch("rows");
     let rows = rows(&home);
-    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi"]);
+    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi", "copilot"]);
     assert!(rows.iter().all(|r| r["state"] == "not installed"));
     install_cursor(&home, &cursor_file(&home)).unwrap();
     install_droid(&home, &droid_file(&home)).unwrap();
     install_kimi(&home, &kimi_file(&home)).unwrap();
+    install_copilot(&home, &copilot_file(&home)).unwrap();
     assert!(super::rows(&home).iter().all(|r| r["state"] == "installed"), "{:?}", super::rows(&home));
+}
+
+#[test]
+fn stat_017_copilot_events_drive_the_dot() {
+    let (mut s, mut m) = (Session::default(), Memory::default());
+    assert!(is_route("/copilot/PreToolUse") && !is_route("/copilot/") && !is_route("/copilot/a/b"));
+    assert_eq!(agent_of("copilot/Stop"), Some("copilot"));
+    for quiet in ["SessionStart", "subagentStart", "SubagentStop", "PreCompact", "sessionStart"] {
+        assert_eq!(normalize_with(&mut m, &format!("/copilot/{quiet}"), &json!({"session_id":"p1"})), None, "{quiet} is registered but changes nothing");
+    }
+    assert_eq!(state(&mut s, &mut m, "/copilot/UserPromptSubmit", json!({"session_id":"p1","prompt":"fix it"})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/copilot/PreToolUse", json!({"session_id":"p1","tool_name":"bash","tool_input":{"command":"ls"}})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/copilot/PermissionRequest", json!({"session_id":"p1","toolName":"bash"})), Some("permission"));
+    assert_eq!(state(&mut s, &mut m, "/copilot/PostToolUse", json!({"session_id":"p1","tool_name":"bash"})), Some("working"));
+    // STAT-017: the ask-the-user tool needs you, with the question shown.
+    let ask = normalize_with(&mut m, "/copilot/PreToolUse", &json!({"session_id":"p1","tool_name":"ask_user","tool_input":{"question":"Which branch?"}})).unwrap();
+    let c = change(&ask).unwrap().unwrap();
+    assert_eq!((c.state, c.ask.as_deref()), ("waiting", Some("Which branch?")));
+    assert_eq!(s.apply(Agent::Vendor, &ask).map(|(c, _)| c.state), Some("waiting"));
+    assert_eq!(state(&mut s, &mut m, "/copilot/PostToolUse", json!({"session_id":"p1","tool_name":"ask_user"})), Some("working"));
+    // An error Copilot recovers from keeps working; one it cannot ends the turn done.
+    assert_eq!(state(&mut s, &mut m, "/copilot/ErrorOccurred", json!({"session_id":"p1","error":{"message":"timeout","name":"Err"},"recoverable":true})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/copilot/ErrorOccurred", json!({"session_id":"p1","error":{"message":"fatal","name":"Err"},"recoverable":false})), Some("done"));
+    assert_eq!(s.resolved(), "done");
+    // The older camelCase names and fields are still read.
+    assert_eq!(state(&mut s, &mut m, "/copilot/userPromptSubmitted", json!({"sessionId":"p1","prompt":"again"})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/copilot/preToolUse", json!({"sessionId":"p1","toolName":"edit","toolArgs":{"path":"a"}})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/copilot/agentStop", json!({"sessionId":"p1","stopReason":"end_turn"})), Some("done"));
+    let e = normalize_with(&mut m, "/copilot/Stop", &json!({"session_id":"p1"})).unwrap();
+    assert_eq!((e["session_id"].as_str(), e[MARK].as_str()), (Some("p1"), Some("copilot")));
+}
+
+#[test]
+fn stat_017_copilot_hook_file_is_kolux_own_and_goes_whole() {
+    let home = scratch("copilot");
+    let file = copilot_file(&home);
+    assert!(file.ends_with(Path::new(".copilot").join("hooks").join("kolux-rs.json")));
+    assert!(install_copilot(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["version"], 1);
+    assert!(v.get("disableAllHooks").is_none());
+    assert_eq!(v["hooks"].as_object().unwrap().len(), 13);
+    let e = &v["hooks"]["ErrorOccurred"][0];
+    assert_eq!(e["type"], "command");
+    assert!(e["bash"].as_str().unwrap().ends_with(" ErrorOccurred") && e["powershell"].as_str().unwrap().ends_with(" ErrorOccurred"));
+    assert_eq!(e["timeoutSec"], 10);
+    assert!(v["hooks"].get("subagentStart").is_some(), "subagent start keeps its only spelling");
+    assert_eq!(inspect_copilot(&file).0, "installed");
+    assert!(!install_copilot(&home, &file).unwrap(), "a second install changes nothing");
+    // A disable-all switch set in Kolux's file is cleared by the next install, and reads partial until then.
+    let mut off = v.clone();
+    off["disableAllHooks"] = json!(true);
+    fs::write(&file, serde_json::to_string(&off).unwrap()).unwrap();
+    assert_eq!(inspect_copilot(&file).0, "partial");
+    assert!(install_copilot(&home, &file).unwrap());
+    assert!(serde_json::from_str::<Value>(&read(&file)).unwrap().get("disableAllHooks").is_none());
+    assert!(remove_copilot(&file).unwrap());
+    assert!(!file.exists());
+    // A file of the user's under that name is never written or removed.
+    let user = "{\"version\":1,\"hooks\":{\"Stop\":[{\"type\":\"command\",\"bash\":\"./mine.sh\"}]}}";
+    fs::write(&file, user).unwrap();
+    assert!(install_copilot(&home, &file).unwrap_err().contains("left alone"));
+    assert!(!remove_copilot(&file).unwrap());
+    assert_eq!(read(&file), user);
+    assert_eq!(inspect_copilot(&file).0, "error");
 }
 
 const SCRIPT_DIR_FOR_TESTS: &str = super::super::super::SCRIPT_DIR;

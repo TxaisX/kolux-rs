@@ -1,0 +1,60 @@
+T-122 · STAT-017 Copilot CLI · STAT-018 Grok · STAT-019 Devin · STAT-020 MiMo Code · STAT-021 Pi and OMP (LEFT OPEN)
+lane/hooks from 853dc324 (T-121) · 2026-10-20 · Claude Opus 5.5 · Routing v3 (build first, live proof batched)
+
+Source (public docs only; cited in PROVENANCE.md)
+- GitHub Copilot CLI: https://docs.github.com/en/copilot/reference/hooks-configuration — user hook files are
+  *.json in ~/.copilot/hooks/ (%USERPROFILE%\.copilot\hooks\), or $COPILOT_HOME/hooks/; layout
+  {"version": 1, "hooks": {"<event>": [{"type": "command", "bash", "powershell", "timeoutSec"}]}}; camelCase events
+  with PascalCase aliases (PascalCase payloads use snake_case fields; subagentStart has no alias); errorOccurred
+  carries error{message,name} and recoverable; agentStop = Stop; disableAllHooks at the top of a hook file; empty
+  preToolUse output = no decision; the ask-the-user tool is named ask_user.
+
+Built (lane-local, in this commit)
+- src-tauri/src/agent_hooks/more.rs: Copilot joins the T-121 module.
+  · Route copilot/<event> (the script takes the event as its argument, as Antigravity's does, because the docs do
+    not say a PascalCase payload names its event); both spellings of every event and field are read.
+  · ask_user = needs you with the question (its first text argument: question / message / prompt, else the first
+    string); ErrorOccurred recoverable = working, otherwise done; PermissionRequest = needs you; prompt, tool steps
+    = working; Stop / agentStop / SessionEnd = done; SessionStart, subagentStart, SubagentStop, PreCompact
+    registered and ignored.
+  · Kolux's own file <Copilot home>/hooks/kolux-rs.json (COPILOT_HOME honoured), written whole: version 1, the 13
+    events, bash and powershell commands, timeoutSec 10, no disableAllHooks (an install clears one set in that file
+    only; the status row reads partial while it is set). A file of that name that is not Kolux's is never written
+    or removed. The script prints nothing (no decision).
+- src-tauri/src/agent_hooks/more_tests.rs: 2 new tests, rows test now names four agents.
+
+Patches for the resolver (apply AFTER the four T-121 patches, in this order)
+1. evidence/hooks-T-122-mod.rs.patch: MANAGED gains copilot; the T-121 apply() arm takes copilot too.
+2. evidence/hooks-T-122-tests.rs.patch: stat_004 asserts copilot at [8].
+hooks.rs, switch.rs and saved.rs need nothing more (more::is_route / rows / agent_of cover Copilot).
+
+Readings (logs under G:\Temp\hooks-v3-logs\, read back)
+- cargo build: exit 0 (b3-t122-build.log). clippy --all-targets -D warnings: 0 (b3-t122-clippy.log).
+- cargo test --lib agent_hooks::more: 15 passed, 0 failed (b3-t122-test1.log), new:
+  stat_017_copilot_events_drive_the_dot, stat_017_copilot_hook_file_is_kolux_own_and_goes_whole.
+- cargo test --lib hooks: 107 passed, 1 failed (b3-t122-test-hooks.log): the failure is the timing test
+  stat_006_an_event_kolux_cannot_take_waits_in_the_holding_file (7.45 s against a load-scaled bound while other
+  lanes built); rerun alone: 1 passed (b3-t122-test-stat006.log). This commit does not touch script().
+- cargo test --lib status: 57 passed, 0 failed (b3-t122-test-status.log).
+- T-121 patches + T-122 patches applied: clippy 0 (b3-t122-clippy-patched.log), cargo test --lib agent_hooks 89
+  passed, 0 failed (b3-t122-test-patched.log); then reverted; git apply --check OK (T-122 on top of T-121).
+- COPILOT_HOME unset and HOME / USERPROFILE / CLAUDE_CONFIG_DIR / CODEX_HOME / TMP on G:\Temp\hooks-v3\ scratch
+  folders for every run; no real agent was started.
+
+LEFT OPEN
+- STAT-018 Grok: not built in this batch (budget). Public docs (https://docs.x.ai/build/features/hooks) give
+  ~/.grok/hooks/*.json, but the card's removal at quit needs a quit hook in lib.rs (shared file) and the docs' full
+  event list and home override still need reading.
+- STAT-019 Devin: not built in this batch (budget); its settings file is commented JSON, and keeping comments needs a
+  JSONC writer this tree does not have.
+- STAT-020 MiMo Code and STAT-021 Pi / OMP: not built; no public hook or extension reference was checked in this
+  batch.
+- STAT-017 ask_user: the docs name the tool but not its argument names; the question is taken from the first text
+  argument; a live run must confirm the question shows.
+
+LIVE PROOF PENDING (batched)
+1. With the T-121 and T-122 patches applied and copilot installed, start Kolux: <Copilot home>/hooks/kolux-rs.json
+   exists with version 1 and 13 events; `kolux agent hooks status` shows GitHub Copilot CLI installed.
+2. In a Copilot pane: prompt -> working; a tool approval -> needs you; Copilot asks a question (ask_user) -> needs
+   you with the question text; finish -> done; an unrecoverable error -> done.
+3. Switch the hooks off: kolux-rs.json is gone; any other file in that folder is untouched.
