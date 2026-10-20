@@ -25,6 +25,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
+import { recordPoll } from "../scm/prSearch";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, projectLabel, splitGitSaid, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
@@ -413,6 +414,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         .then((answer) => {
           if (dead) return;
           setPrBy((prev) => mergePoll(prev, answer));
+          recordPoll(answer); // VIEW-043: the palette lists these pull requests
           st.failures = answer.prs.some((x) => x.error !== null) ? st.failures + 1 : 0;
           st.at = Date.now();
           st.limited = answer.limitedUntil ?? 0;

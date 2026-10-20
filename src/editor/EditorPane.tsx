@@ -28,7 +28,15 @@ import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { clampView, keepView, takeView } from "../terminal/viewKeep";
-import { attach, baseName, detach, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
+import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
+import NamePrompt from "./NamePrompt";
+import { announceMoves } from "./fileMoved";
+import { isUntitled, needsName } from "./untitled";
+import { seedSources, seedText } from "./searchSeed";
+import { followStep } from "./logFollow";
+import { offersPreview, previewHtml } from "./htmlPreview";
+import DiffPane from "./DiffPane"; // EDIT-056: the Changes view (DiffPane imports this file back; both only use each other when rendering)
+import { drawn, underRoot, VIEW_LABEL, viewsFor, type View } from "./viewSwitch";
 import { createAutosave, covers, movingNow, prefsReader, type Autosave } from "./autosave";
 import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
@@ -97,6 +105,18 @@ export async function saveFile(path: string, onStale: (stale: boolean) => void, 
   }
 }
 
+/** EDIT-031 (T-236-b): saves in place for the close prompt; true only when the file was written. A refusal is a toast, so the
+ *  tab stays open with its text. */
+export async function saveQuiet(path: string, onToast?: (text: string) => void): Promise<boolean> {
+  try {
+    await writeRemembering(path, false);
+    return true;
+  } catch (err) {
+    onToast?.(isStale(err) ? `${baseName(path)} changed on disk since you opened it, so it was not saved.` : `${baseName(path)} was not saved: ${String(err)}`);
+    return false;
+  }
+}
+
 /** The choice after a stale refusal: Reload takes the disk copy, Keep mine writes over it. */
 export function StaleNotice({ path, onDone, onToast }: { path: string; onDone: () => void; onToast?: (text: string) => void }) {
   const name = baseName(path);
@@ -159,14 +179,15 @@ export const look = EditorView.theme(
 );
 
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
-type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
+type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; /** EDIT-026: a log tab that keeps adding lines as the file grows (give it readOnly too). */ follow?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
 
-export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
+export default function EditorPane({ id, path, root = null, readOnly = false, follow = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [naming, setNaming] = useState(false); // EDIT-054: the first save of an untitled note is asking for its name
   const [stale, setStale] = useState(false); // the last save was refused: the disk copy moved on
   // T-073: the disk copy changed under unsaved edits (with the stamp Keep my edits keeps), the
   // Compare view, and the Undo toast after a Reload.
@@ -184,6 +205,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const md = isMarkdown(path);
   const grid = isTable(path); // EDIT-023: a CSV or TSV file opens as a table, with Source beside it
   const [table, setTable] = useState(grid);
+  const [changesOn, setChangesOn] = useState(false); // EDIT-056: the Changes view (last commit beside the working file)
   const tableOn = grid && table;
   // EDIT-006: wrapping is on by default; the saved setting decides once it has loaded, Alt+Z flips it.
   const { settings, save: saveSetting } = useSettings();
@@ -241,7 +263,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     // EDIT-002: autosave; EDIT-032: it stands down while the file is being moved.
     const auto = createAutosave({
       prefs: prefs.get,
-      covered: () => covers({ readOnly, conflict: conflictsRef.current > 0 }),
+      covered: () => covers({ readOnly, conflict: conflictsRef.current > 0 }) && !needsName(path, root, diskOf(path)), // an untitled note waits for its name
       dirty: () => isDirty(path),
       held: () => bannerUp(path) || movingNow(path),
       write: () => saveFile(path, setStale, report.current.onToast),
@@ -323,7 +345,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       },
       (err) => alive && setError(String(err)),
     );
-    editors.set(id, () => saveFile(path, setStale, report.current.onToast));
+    editors.set(id, () => (needsName(path, root, diskOf(path)) ? (setNaming(true), Promise.resolve()) : saveFile(path, setStale, report.current.onToast)));
     return () => {
       alive = false;
       auto.cancel();
@@ -417,6 +439,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   useEffect(() => {
     setMode(isMarkdown(path) ? "rich" : "source");
     setTable(isTable(path));
+    setChangesOn(false);
     setBigOk(false);
     setBanner(null);
   }, [path]);
@@ -432,13 +455,14 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   useEffect(() => {
     const cm = view.current;
     if (!cm || !hasSpot(path)) return;
+    if (changesOn) return setChangesOn(false);
     if (md && mode !== "source") return setMode("source");
     if (tableOn) return setTable(false);
     const s = takeSpot(path)!;
     const r = spotRange(cm.state.doc, s);
     cm.dispatch({ selection: { anchor: r.from, head: r.to }, effects: EditorView.scrollIntoView(r.from, { y: "center" }) });
     cm.focus();
-  }, [reveals, ready, mode, path, md, tableOn]);
+  }, [reveals, ready, mode, path, md, tableOn, changesOn]);
 
   // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
   useEffect(() => {
@@ -495,7 +519,24 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const name = baseName(path);
   // EDIT-005 / EDIT-009: find and conflict stepping act on the source view (the rich view's
   // find comes with EDIT-017).
-  const sourceShown = (!md || mode === "source") && !tableOn;
+  const sourceShown = (!md || mode === "source") && !tableOn && !changesOn;
+  // EDIT-056 (T-237-b): one switch for the views the file offers; Changes is only for files in the worktree.
+  const offer = viewsFor({ path, untitled: isUntitled(path, root), inWorktree: !readOnly && underRoot(path, root) });
+  const views = drawn(offer, grid);
+  const current: View = changesOn ? "changes" : tableOn ? "rendered" : md ? (mode === "rich" ? "rich" : "source") : grid ? "source" : "edit";
+  const pick = (v: View) => {
+    setChangesOn(v === "changes");
+    if (v === "rich") {
+      setMode("rich");
+      if (changesOn) setRichTries((n) => n + 1); // text typed in Changes reaches the rich view
+    }
+    if (v === "source") {
+      setMode("source");
+      setBanner(null);
+      setTable(false);
+    }
+    if (v === "rendered") setTable(true);
+  };
   const keymap = useKeymap();
   const stepConflicts = (dir: 1 | -1) => {
     const cm = view.current;
@@ -532,7 +573,9 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     e.preventDefault();
     e.stopPropagation();
   };
-  const shown = tableOn ? "table" : !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  const shown = changesOn ? "changes" : tableOn ? "table" : !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
   const richRoot = useCallback(() => richHost.current, []);
   const hasHeadings = useMemo(() => md && outline(noteText).length > 0, [md, noteText]);
   const tocShown = toc && hasHeadings && shown === "rich";
@@ -549,6 +592,58 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     });
     return () => void selections.delete(id);
   }, [md, id, path, shown]);
+  // EDIT-038: a file search started from here takes the selection, or the word at the caret, as its first query.
+  useEffect(() => {
+    seedSources.set(id, () => {
+      const sel = window.getSelection();
+      if (shownRef.current === "rich" && richHost.current && sel && richHost.current.contains(sel.anchorNode)) return seedText(sel.toString(), 0, sel.toString().length);
+      const cm = view.current;
+      if (!cm) return "";
+      const r = cm.state.selection.main;
+      return seedText(cm.state.doc.toString(), r.from, r.to);
+    });
+    return () => void seedSources.delete(id);
+  }, [id]);
+  useEffect(() => {
+    if (focused && !hidden) seedSources.focus(id);
+  }, [focused, hidden, id]);
+
+  // EDIT-026: a followed log reads the file once a second while its tab shows, and only when it changed.
+  // ponytail: reads the whole file each time it changes; a tail-only read if logs of hundreds of MB matter.
+  useEffect(() => {
+    if (!follow || !ready || hidden) return;
+    let alive = true;
+    let last = "";
+    let busy = false;
+    const tick = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const st = JSON.stringify(await invoke("file_stamps", { paths: [path] }));
+        if (!alive || st === last) return;
+        const disk = await invoke<string>("file_read", { path });
+        if (!alive) return;
+        last = st;
+        const next = followStep(textOf(path) ?? "", disk);
+        if (!next) return;
+        const cm = view.current;
+        const d = cm?.scrollDOM;
+        const atEnd = !d || next.reset || d.scrollHeight - d.scrollTop - d.clientHeight < 40;
+        replaceAll(path, next.text);
+        if (cm && atEnd) cm.dispatch({ effects: EditorView.scrollIntoView(cm.state.doc.length) });
+      } catch {
+        // a read that failed is tried again on the next second
+      } finally {
+        busy = false;
+      }
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 1000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, [follow, ready, hidden, path]);
   useEffect(() => {
     copiers.set(id, () => {
       const cm = view.current;
@@ -595,31 +690,36 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         <span className="path" title={path}>
           {path}
         </span>
-        {md && (
-          <span className="view-switch" role="group" aria-label="View">
-            <button aria-pressed={mode === "rich"} onClick={() => setMode("rich")} title="Rich view">
-              Rich
-            </button>
-            <button
-              aria-pressed={mode === "source"}
-              onClick={() => {
-                setMode("source");
-                setBanner(null);
-              }}
-              title="Source view"
-            >
-              Source
-            </button>
-          </span>
+        <button
+          className="ib"
+          title="Copy the full path"
+          aria-label="Copy the full path"
+          onClick={() =>
+            void navigator.clipboard.writeText(path).then(
+              () => report.current.onToast?.("Path copied"),
+              () => report.current.onToast?.("The path could not be copied; select it in the header instead."),
+            )
+          }
+        >
+          Copy
+        </button>
+        {offersPreview(path) && (
+          <button
+            className="ib"
+            title="Show this page rendered in a browser tab"
+            aria-label="Preview in a browser tab"
+            onClick={() => void previewHtml(path).then((err) => err && report.current.onToast?.(err))}
+          >
+            Preview
+          </button>
         )}
-        {grid && (
+        {views.length > 1 && (
           <span className="view-switch" role="group" aria-label="View">
-            <button aria-pressed={table} onClick={() => setTable(true)} title="Table view">
-              Table
-            </button>
-            <button aria-pressed={!table} onClick={() => setTable(false)} title="Source view">
-              Source
-            </button>
+            {views.map((v) => (
+              <button key={v} aria-pressed={current === v} onClick={() => pick(v)} title={offer.why?.[v] ?? `${VIEW_LABEL[v]} view`}>
+                {VIEW_LABEL[v]}
+              </button>
+            ))}
           </span>
         )}
         {hasHeadings && shown === "rich" && (
@@ -639,7 +739,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           </span>
         )}
         <span className="right">
-          <button className="ib" onClick={() => (void drafts.discard(worktreeOf(root, path), path), onClose?.())} title="Close tab (Ctrl+W)">
+          <button className="ib" onClick={() => onClose?.()} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
         </span>
@@ -657,8 +757,23 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           )}
         </div>
       )}
+      {naming && root && (
+        <NamePrompt
+          path={path}
+          root={root}
+          text={() => textOf(path) ?? ""}
+          onCancel={() => setNaming(false)}
+          onSaved={(r) => {
+            setNaming(false);
+            if (r.note) report.current.onToast?.(r.note);
+            // The suggested name saves in place; a new name was written already and the tab follows the file (EDIT-032).
+            if (r.same) void saveFile(path, setStale, report.current.onToast);
+            else announceMoves([[path, r.path]]);
+          }}
+        />
+      )}
       {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
-      {moved && !stale && !comparing && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
+      {moved && !stale && !comparing && !follow && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
       {undoable && !moved && <UndoToast path={path} onUndo={undoReload} onClose={() => setUndoable(null)} />}
       {banner && (
         <div className="notice md-banner" role="status">
@@ -691,6 +806,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       {railShown && <NoteRail host={richHost} notes={railed} version={noteText} onRemove={onRemoveNote} />}
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
+      {changesOn && <DiffPane embedded against="head" id={id} path={path} root={root} staged={false} hidden={hidden || comparing} focused={focused} onFocus={onFocus} onToast={onToast} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
       {grid && <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />}
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (

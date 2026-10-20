@@ -1,0 +1,29 @@
+T-224-b (lane/repo from ece31cd1): the palette's pull request part (VIEW-043) is built; the Explorer toolbar and Search-tab cards of the line stay open.
+
+BUILT
+- src/scm/prSearch.ts: a small store of the pull requests the background poll found (number, title, state, workspace) and of the
+  checks the Checks panel read for them. applyPoll: a found PR replaces the row (its checks are kept only for the same PR number
+  and url); an answer with no PR and no error (the host says it is not there / unlinked) removes the row at once, so an older
+  cached PR is never listed in its place; an error keeps the last row (the poll's own rule). applyChecks: the panel's answer
+  with no PR removes the row; a different PR than the known one replaces it whole (no title of one PR beside the checks of
+  another). prItems: rows in the "Pull requests" section, label "#12 Title" (found by number or title word), hint "Open · 1 failed ·
+  2 passed" (checkLine, same outcome names and order as the Checks panel's summary), Enter goes to the workspace.
+- src/scm/usePrRows.ts: hook for the palette; while it is open, up to 6 open PRs with unknown or older-than-60s checks are read
+  with the Checks panel's own command (scm_pr_checks), one at a time, into the store. A failed read leaves "checks not read yet".
+- src/scm/ChecksPanel.tsx: records every answer into the store (the palette sees the same data).
+- Rust untouched (scm_prs_poll left alone for the T-085-d patch).
+- Patches for the resolver: evidence/repo-T-224-b-ProjectsPanel.tsx.patch (recordPoll after each poll round) and
+  evidence/repo-T-224-b-App.tsx.patch (usePrRows, rows spread into paletteItems, the old branch-name "Pull requests" rows turned off
+  with prOf={() => null} because the new rows replace them). Both check with git apply --check; tsc 0 with them applied.
+
+TESTS
+- src/scm/prSearch.test.ts (6 tests): number finds the PR with its check state, title word finds it, wrong number finds nothing;
+  go runs with the path; unlinked answer removes the row, error keeps it, panel "no PR" removes it; checks never stay on a
+  different PR; checkLine and needChecks; the store.
+- vitest src/scm src/projects (+src/App) all pass; tsc 0 with and without the patches.
+
+LIVE PROOF PENDING (batched)
+1. Open the palette (Mod+K) in a workspace whose branch has a pull request, type its number: one row "#<n> <title>" in
+   Pull requests with "Open · <counts>" (counts appear within a few seconds as the checks are read).
+2. Type a word of its title: the same row.
+3. Unlink / close the branch's PR on the host and wait one poll round (3 min) or refresh: the row is gone.

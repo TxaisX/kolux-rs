@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { formatMemory } from "./memory";
 import { cleanupCandidates, EndQuestion, endConfirmed, ManageSessions, paneless, sessionsLoaded, type InventoryTab } from "./manage";
 import { committedNote, endNeedsAsk, formatCommitted, formatCpu, groupSessions, RES_COLUMNS, type Resources, type Row, type SessionUsage, type Usage } from "./resources";
+import { bulkQuestion, bulkReport, leftOver, type Bulk, type BulkKind } from "../shell/endAll";
 
 const cols = { gridTemplateColumns: RES_COLUMNS };
 
@@ -80,6 +81,25 @@ export default function ResourceManager({ names, workspaces, loaded, onClose }: 
   const ask = async (row: Row) => {
     if (endNeedsAsk(await read(), row.id)) setEnding(row);
   };
+  // SET-042 / SET-060 (T-285): End all and Restart end every session a fresh read lists at the click, after a question;
+  // the report comes from a read after the kills, so it says what really ended.
+  const [bulk, setBulk] = useState<Bulk | null>(null);
+  const [report, setReport] = useState<{ text: string; ok: boolean } | null>(null);
+  const askBulk = async (kind: BulkKind) => {
+    const r = await read();
+    const ids = r ? r.sessions.map((s) => s.id) : [];
+    setBulk(ids.length > 0 ? { kind, ids } : null);
+    if (ids.length === 0) setReport(bulkReport(kind, [], []));
+  };
+  const runBulk = async () => {
+    if (!bulk) return;
+    setBulk(null);
+    const ended = await endConfirmed(bulk.ids, () => read().then((r) => r?.sessions ?? []), (id) => invoke("terminal_kill", { id }).catch((e) => setFailed(String(e))));
+    const fresh = await read();
+    setReport(bulkReport(bulk.kind, ended, leftOver(ended, fresh?.sessions ?? null)));
+    await refresh();
+  };
+  const bulkQ = bulk ? bulkQuestion(bulk.kind, bulk.ids) : null;
   useEffect(() => {
     void refresh();
     const t = setInterval(() => void refresh(), 2000);
@@ -130,7 +150,35 @@ export default function ResourceManager({ names, workspaces, loaded, onClose }: 
             <span className="res-end" />
           </div>
         )}
+        {report && (
+          <div className={`menu-hint${report.ok ? "" : " warn"}`} role="status" data-bulk="report">
+            {report.text}
+          </div>
+        )}
+        {bulkQ && (
+          <div className="res-ask res-bulk" role="alertdialog" aria-label={bulkQ.label} data-bulk="ask">
+            <span>{bulkQ.text}</span>
+            <span className="btn-row">
+              <button className="btn danger" onClick={() => void runBulk()}>
+                {bulkQ.confirm}
+              </button>
+              <button className="btn" autoFocus onClick={() => setBulk(null)}>
+                Keep
+              </button>
+            </span>
+          </div>
+        )}
         {data && data.sessions.length === 0 && <div className="menu-hint">No terminal sessions are running.</div>}
+        {data && data.sessions.length > 0 && !bulkQ && (
+          <div className="res-row res-bulk" data-bulk="offer" style={{ display: "flex", justifyContent: "flex-end", gap: "6px" }}>
+            <button className="btn" onClick={() => void askBulk("all")} title="End every terminal session that is running now; asks first">
+              End all
+            </button>
+            <button className="btn" onClick={() => void askBulk("restart")} title="Kill every terminal pane and start over; asks first (the terminals run inside Kolux, there is no separate service)">
+              Restart terminals
+            </button>
+          </div>
+        )}
         {data && data.sessions.length > 0 && <ManageSessions loaded={isLoaded} candidates={asking ?? candidates} asking={asking !== null} onAsk={() => void askAll()} onEnd={() => void endAll()} onKeep={() => setAsking(null)} />}
         {groups.map((g) => (
           <section key={g.dir ?? ""} className="res-group" aria-label={g.label}>

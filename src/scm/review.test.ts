@@ -90,3 +90,58 @@ describe("review comments", () => {
     expect(moreNote(3)).toContain("3 more comments");
   });
 });
+
+// ---- VIEW-075: cards ----------------------------------------------------------------------------
+import { botNames, cardCount, cardGroups, conflictView, emojiOf, placeOf, reactKind, repliable, reviewPrompt, sendsOnEnter } from "./review";
+
+const card = (id: string, at: string, author = "ann") => ({ id, db_id: Number(id.replace(/\D/g, "")) || null, author, bot: false, body: id, at });
+const thr = (id: string, resolved: boolean, at: string, path: string | null = "src/a.ts", line: number | null = 3) => ({ id, path, line, resolved, comments: [card(`c${id}`, at)], more: 0 });
+
+it("VIEW-075: cards come as open, conversation and resolved, each oldest first", () => {
+  const r: Review = { threads: [thr("2", false, "2026-10-19T12:00:00Z"), thr("1", false, "2026-10-19T10:00:00Z"), thr("3", true, "2026-10-19T09:00:00Z")], talk: [card("t2", "2026-10-19T08:00:00Z"), card("t1", "2026-10-19T07:00:00Z")], talk_more: 0 };
+  const g = cardGroups(r);
+  expect(g.open.map((t) => t.id)).toEqual(["1", "2"]);
+  expect(g.resolved.map((t) => t.id)).toEqual(["3"]);
+  expect(g.conversation.map((c) => c.id)).toEqual(["t1", "t2"]);
+  expect(cardCount(r)).toBe(5);
+  expect(timeline(r).map((x) => x.comment.id)).toEqual(["t1", "t2", "c3", "c1", "c2"]);
+});
+
+it("VIEW-075: Enter sends, Shift+Enter does not, and Enter while an input method composes does not", () => {
+  expect(sendsOnEnter({ key: "Enter", shiftKey: false })).toBe(true);
+  expect(sendsOnEnter({ key: "Enter", shiftKey: true })).toBe(false);
+  expect(sendsOnEnter({ key: "Enter", shiftKey: false, isComposing: true })).toBe(false);
+  expect(sendsOnEnter({ key: "Enter", shiftKey: false, keyCode: 229 })).toBe(false);
+  expect(sendsOnEnter({ key: "a", shiftKey: false })).toBe(false);
+});
+
+it("VIEW-075: reactions, places and bot names read as the cards need them", () => {
+  expect(emojiOf("heart")).toBe("\u2764\uFE0F");
+  expect(emojiOf("unknown")).toBe("unknown");
+  expect(reactKind(true)).toBe("react");
+  expect(reactKind(false)).toBe("react_talk");
+  expect(placeOf({ path: "src/a.ts", line: 7 })).toBe("src/a.ts:7");
+  expect(placeOf({ path: "src/a.ts", line: null })).toBe("src/a.ts");
+  expect(placeOf({ path: null, line: null })).toBe("");
+  expect(botNames(["ci", 3, "x"])).toEqual(["ci", "x"]);
+  expect(botNames("no")).toEqual([]);
+});
+
+it("GIT-031: the queued comments become one prompt with where each is; only repliable threads are offered", () => {
+  const mk = (id: string, author: string, body: string, db: number | null, path: string | null, line: number | null) => ({ id, path, line, resolved: false, more: 0, comments: [{ id: "c" + id, db_id: db, author, bot: false, body, at: "2026-10-19T10:00:00Z" }] });
+  const a = mk("t1", "alice", "Rename this", 11, "src/a.ts", 12);
+  const b = mk("t2", "bob", "Why?", null, null, null);
+  const p = reviewPrompt([a, b]);
+  expect(p).toContain("1. src/a.ts:12\n  alice: Rename this");
+  expect(p).toContain("2. pull request conversation\n  bob: Why?");
+  expect(repliable([a, b]).map((t) => t.id)).toEqual(["t1"]);
+});
+
+it("GIT-032: a conflict lists files; a clean local merge says GitHub may be stale and offers commands", () => {
+  const files = conflictView({ state: "conflicts", files: ["a.rs"], base: "main", note: "These files conflict", prompt: "p" });
+  expect(files).toMatchObject({ kind: "files", commands: [] });
+  const stale = conflictView({ state: "clean", files: [], base: "main", note: "", prompt: null });
+  expect(stale.kind).toBe("stale");
+  expect(stale.commands[0]).toBe("git fetch origin main");
+  expect(conflictView(null).kind).toBe("unknown");
+});
