@@ -1111,6 +1111,15 @@ pub fn keeps_branch(store: &Store, path: &str) -> bool {
     origin(store, path).is_some_and(|o| o["existingBranch"] == true)
 }
 
+/// PROJ-073: a branch left behind when its workspace went, with the commit it pointed at then.
+/// Deleting it later is refused once the branch has moved on from that commit.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptBranch {
+    pub branch: String,
+    pub commit: String,
+}
+
 /// `remove_workspace`, keeping the branch when `keep_branch`.
 pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<Option<Kept>, String> {
     let repo = Path::new(&project.path);
@@ -1691,6 +1700,15 @@ pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::ter
     Ok(kept)
 }
 
+/// The cleanup dialog's delete (T-113-b, T-162): `remove_one` by the workspace's own record, where
+/// `keep_anyway` keeps the branch as if the workspace had been opened on it (the dialog does this for a
+/// branch holding commits that are in no other branch). The kept branch comes back for the kept list.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn remove_now_keeping(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_anyway: bool) -> Result<Option<KeptBranch>, String> {
+    let kept = remove_one(git, store, terminals, project, path, force, stamp, keep_anyway.then_some(true))?;
+    Ok(kept.map(|k| KeptBranch { branch: k.branch, commit: k.commit }))
+}
+
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1848,12 +1866,38 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
         };
         let busy: Vec<String> = app.state::<crate::terminal::Terminals>().list().into_iter().filter_map(|(_, _, dir)| dir).collect();
         let dir = app.path().app_data_dir().ok();
+        // PROJ-074: trash folders a run left behind are cleared (this is off the startup path).
+        let folders = trash_folders(&app.state::<Mutex<Store>>(), &app.state::<Git>(), &projects, &origins);
+        for gone in folders.iter().flat_map(|f| crate::git::sweep_trash(f)) {
+            if let Some(dir) = dir.as_deref() {
+                crate::diag::write(dir, &format!("cleared the leftover trash folder {}", gone.display()));
+            }
+        }
         for path in sweep_all_gone(&app.state::<Mutex<Store>>(), &app.state::<Git>(), &projects, &origins, &busy, dir.as_deref()) {
             if let Some(dir) = dir.as_deref() {
                 crate::diag::write(dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
             }
         }
     });
+}
+
+/// PROJ-074: the folders a trash folder can sit in: each workspaces folder in use, and the parent
+/// of every workspace Kolux made. Only names the trash uses are ever touched inside them.
+pub(crate) fn trash_folders(store: &Mutex<Store>, git: &Git, projects: &[Project], origins: &serde_json::Map<String, serde_json::Value>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Ok(store) = store.lock() {
+        out.push(workspaces_dir(&store));
+        out.extend(used_dirs(&store).into_iter().map(PathBuf::from));
+    }
+    for p in projects {
+        out.extend(p.workspaces_dir.iter().map(PathBuf::from));
+        if let Ok(all) = git.worktrees(Path::new(&p.path)) {
+            out.extend(kolux_made(origins, all).iter().filter_map(|w| Path::new(&w.path).parent().map(Path::to_path_buf)));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The sweep `forget_gone_at_start` runs: for every project, the gone worktrees Kolux RS made and no

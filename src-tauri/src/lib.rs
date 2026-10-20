@@ -446,6 +446,8 @@ pub fn run() {
             projects::handoff_note_prepare,
             projects::workspace_remove,
             cleanup::cleanup_remove,
+            cleanup::cleanup_scan,
+            cleanup::branch_delete_kept,
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
