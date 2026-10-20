@@ -1,0 +1,144 @@
+diff --git a/src-tauri/src/cli.rs b/src-tauri/src/cli.rs
+index c46a2114..93bd81eb 100644
+--- a/src-tauri/src/cli.rs
++++ b/src-tauri/src/cli.rs
+@@ -4341,7 +4341,7 @@ fn setup_note(setup: &str, created: bool) -> Option<&'static str> {
+     match (setup, created) {
+         ("skip", _) => None,
+         (_, false) => Some("no new worktree was made, so no setup script runs"),
+-        _ => Some("the window runs the project's setup script in the new worktree, if it has one; the start does not wait for it"),
++        _ => Some("the window asks whether to trust the project's setup script and runs it once in the new worktree's Setup tab, if it has one; the agent starts after it ends"),
+     }
+ }
+ 
+@@ -4512,23 +4512,40 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
+     // cli FIX-4 (council AFTER 4): the window runs the new worktree's setup script unless the
+     // notice says skip, so --setup reaches it as worktree create's does (PROJ-033).
+     let setup = text("setup").unwrap_or_else(|| "inherit".into());
++    // ORCH-017 (T-172-d): worker-start never runs the setup script itself. The created notice asks
++    // the window (setupRequest) to run its trust question and the setup once, and the agent starts
++    // only after the window reports how it ended (orchestration::setup_gate).
++    let gated = created && setup != "skip";
+     if created {
+-        (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false, "parent": worktree.parent }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup }));
++        if gated {
++            crate::orchestration::setup_gate::open(&dispatch_id);
++        }
++        (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false, "parent": worktree.parent }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup, "setupRequest": if gated { json!(dispatch_id) } else { Value::Null } }));
+     }
+-    // T-172-e: the window starts the agent with the dispatch id in its environment (DISPATCH_ENV).
+-    expect_stamp(&dispatch_id);
+-    (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"], "dispatch": dispatch_id }));
+-    let (terminal, ready) = wait_ready(ctx.terminals, &dispatch_id, since, timeout);
+-    // cli FIX-8: a start that found no session keeps its place, so a session the window starts after
+-    // the timeout is still tied to this dispatch (reconcile_late records it on the row).
+-    finish_stamp(&dispatch_id, terminal, LATE_WINDOW);
+-    let status = if ready { "ready" } else { "unknown" };
++    let (setup_failed, setup_result) = if gated {
++        crate::orchestration::setup_gate::outcome(crate::orchestration::setup_gate::wait(&dispatch_id, crate::orchestration::setup_gate::LIMIT).as_ref())
++    } else {
++        (false, json!(if setup == "skip" { "skipped" } else { "not_configured" }))
++    };
++    let (terminal, ready) = if setup_failed {
++        (None, false)
++    } else {
++        // T-172-e: the window starts the agent with the dispatch id in its environment (DISPATCH_ENV).
++        expect_stamp(&dispatch_id);
++        (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"], "dispatch": dispatch_id }));
++        let (terminal, ready) = wait_ready(ctx.terminals, &dispatch_id, since, timeout);
++        // cli FIX-8: a start that found no session keeps its place, so a session the window starts after
++        // the timeout is still tied to this dispatch (reconcile_late records it on the row).
++        finish_stamp(&dispatch_id, terminal, LATE_WINDOW);
++        (terminal, ready)
++    };
++    let status = if ready { "ready" } else if setup_failed { "failed" } else { "unknown" };
+ 
+     let mut receipt = json!({
+         "dispatchId": dispatch_id, "taskId": task_id, "status": status, "stage": "worker",
+         "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "projectId": project.id, "created": created, "parent": worktree.parent },
+         "placement": placement, "agent": agent_id, "program": agent.program, "model": model, "effort": effort, "tier": tier,
+-        "setup": if setup == "skip" { "skipped" } else { "not_configured" }, "setupNote": setup_note(&setup, created), "trust": trusted,
++        "setup": setup_result, "setupNote": setup_note(&setup, created), "trust": trusted,
+         "terminals": terminal.map(|id| vec![json!({ "id": id, "role": "worker" })]).unwrap_or_default(),
+         "waitedMs": since.elapsed().as_millis() as u64,
+         "launch": "new_terminal",
+@@ -4544,6 +4561,25 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
+     }
+     if ready {
+         Ok(receipt)
++    } else if setup_failed {
++        // ORCH-017 (T-172-d): a failed setup fails the task (the row above is failed too), so the
++        // offered retry passes start_check; no agent was started.
++        {
++            let store = ctx.store.lock().map_err(|e| e.to_string())?;
++            let mut tasks = load_list(&store, TASKS_KEY);
++            if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task_id.as_str() && t["dispatchId"] == dispatch_id.as_str()) {
++                t["status"] = json!("failed");
++            }
++            save_list(&store, TASKS_KEY, &tasks)?;
++        }
++        let setup = receipt["setup"].clone();
++        let why = match setup["exitCode"].as_i64() {
++            Some(n) => format!("the worktree's setup script failed with exit code {n}"),
++            None => setup["note"].as_str().unwrap_or("the worktree's setup script failed").to_string(),
++        };
++        crate::orchestration::start_failed(&mut receipt, "setup", setup);
++        start_failed_run(&mut receipt, run_id.as_deref());
++        Err(Fail { code: "failed", message: format!("{why}; the worker was not started ({dispatch_id} in {})", worktree.path), data: receipt })
+     } else {
+         // ORCH-017 (T-172-c): the stage reached, the setup result, what is left over (never closed)
+         // and the commands to clean up or try again.
+@@ -5811,7 +5847,14 @@ mod tests {
+             s.save_settings(&settings).unwrap();
+         }
+         let events = Mutex::new(Vec::<Value>::new());
+-        let notify = |v: Value| events.lock().unwrap().push(v);
++        // T-172-d: the stand-in window answers a worker start's setup request with `answer`.
++        let answer = Mutex::new(json!({ "result": "none" }));
++        let notify = |v: Value| {
++            if let Some(r) = v["setupRequest"].as_str() {
++                crate::orchestration::setup_gate::settle(r, answer.lock().unwrap().clone());
++            }
++            events.lock().unwrap().push(v)
++        };
+         let terminals = Terminals::default();
+         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+         let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+@@ -5948,6 +5991,7 @@ mod tests {
+             let n = ev.len();
+             assert_eq!(ev[n - 2]["kind"], "created");
+             assert_eq!(ev[n - 2]["setup"], "inherit", "cli FIX-4: --setup reaches the window");
++            assert_eq!(ev[n - 2]["setupRequest"], "dispatch-1", "T-172-d: the window is asked to run the setup and report back");
+             assert_eq!(ev[n - 1]["kind"], "start");
+             assert_eq!(ev[n - 1]["dispatch"], "dispatch-1", "cli FIX-6: the window is told which dispatch it starts");
+             // ORCH-014: the worker gets its brief, the task text last.
+@@ -5978,6 +6022,20 @@ mod tests {
+             assert!(again.message.contains("already"), "{}", again.message);
+             let gone = dispatch(&ctx, &req("orchestration.worker-start", &repo, json!({ "task": "task-9", "agent": "claude", "worktree": "current", "setup": "inherit", "timeoutMs": "1" }))).unwrap_err();
+             assert_eq!(gone.code, "not_found");
++            // ORCH-017 (T-172-d): a setup the window reports failed fails the start at the setup
++            // stage with its exit code; no agent is started and the task can be started again.
++            *answer.lock().unwrap() = json!({ "result": "ran", "exitCode": 3 });
++            let before = events.lock().unwrap().len();
++            let bad = dispatch(&ctx, &req("orchestration.worker-start", &repo, json!({ "spec": "setup fails", "agent": "claude", "worktree": "new-top-level", "setup": "inherit", "timeoutMs": "1" }))).unwrap_err();
++            assert_eq!((bad.code, bad.data["stage"].as_str(), bad.data["setup"]["exitCode"].as_i64()), ("failed", Some("setup"), Some(3)), "{}", bad.message);
++            assert!(bad.message.contains("exit code 3"), "{}", bad.message);
++            assert!(events.lock().unwrap()[before..].iter().all(|e| e["kind"] != "start"), "no agent starts after a failed setup");
++            let task = bad.data["taskId"].as_str().unwrap().to_string();
++            let tasks = load_list(&store.lock().unwrap(), TASKS_KEY);
++            assert_eq!(tasks.iter().find(|t| t["id"] == task.as_str()).unwrap()["status"], "failed");
++            assert!(bad.data["next"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains(&format!("worker-start --task {task}"))), "{}", bad.data["next"]);
++            let made = bad.data["worktree"]["path"].as_str().unwrap().to_string();
++            dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": format!("path:{made}"), "force": true }))).unwrap();
+             dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": format!("path:{}", wt.display()), "force": true }))).unwrap();
+         } else {
+             assert!(out.message.contains("not installed"));
+@@ -7677,7 +7735,7 @@ mod tests {
+     fn fix7_e_receipt_notes_setup_and_the_tier_retry() {
+         assert_eq!(setup_note("skip", true), None);
+         assert!(setup_note("inherit", true).unwrap().contains("setup script"));
+-        assert!(setup_note("run", true).unwrap().contains("does not wait"));
++        assert!(setup_note("run", true).unwrap().contains("starts after it ends"), "T-172-d: the start waits for the setup");
+         assert!(setup_note("inherit", false).unwrap().contains("no new worktree"));
+         let failed = |tier: Value, run: Option<&str>| {
+             let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "codex", "model": null, "effort": null, "tier": tier, "terminals": [{ "id": 7, "role": "worker" }], "worktree": { "path": "C:/Temp/wt-1", "created": true } });

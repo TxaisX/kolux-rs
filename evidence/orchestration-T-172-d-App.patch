@@ -1,0 +1,70 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 88b87c4e..0e21c8c8 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
+ import SettingsPage from "./settings/SettingsPage";
+ import Ask from "./chrome/Ask";
+ import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
++import { gatedSetup, settleSetup, setupRequestOf } from "./orchestration/workerSetup";
+ import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
+ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+ import { losable, quitQuestion, runningAgents, type Losable } from "./shell/closeAsk";
+@@ -1368,6 +1369,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     trustedSetup(dir)
+       .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
+       .catch((err) => setNotice(String(err)));
++  // ORCH-017 (T-172-d): a worker start's setup: the trust question, one run in a background Setup
++  // tab, and how it ended (its exit code, or null a second after the tab stopped without one)
++  // reported to the worker-start waiting under `request`.
++  const setupExits = useRef<Record<number, (code: number | null) => void>>({});
++  const gateSetup = (request: string, dir: string, branch: string | null) =>
++    gatedSetup(dir, (line) =>
++      new Promise<number | null>((done) => {
++        let key = -1;
++        key = cli.current.startSetup(dir, branch, line, "tab", false, () => void setTimeout(() => setupExits.current[key]?.(null), 1000));
++        setupExits.current[key] = (code) => {
++          delete setupExits.current[key];
++          done(code);
++        };
++      }),
++    )
++      .then((a) => settleSetup(request, a))
++      .catch((err) => setNotice(String(err)));
+   // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
+   const fromItem = (item: WorkItem) => {
+     setToast(`Making a workspace from ${item.kind === "pull" ? "pull request" : "issue"} #${item.number}…`);
+@@ -1598,8 +1616,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     void invoke("cli_file_window", { listening: true }).catch(() => undefined);
+     return () => void invoke("cli_file_window", { listening: false }).catch(() => undefined);
+   }, []);
+-  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
+-  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
++  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, gateSetup, dropPane: (_k: number) => {} });
++  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, gateSetup, dropPane: (k: number) => dropPane(k) };
+   // AUTO-011 (T-085-g): a run's own agent tab shuts by itself, once, when that agent exits, unless the user
+   // clicked (the pane's mouse-down above) or typed in it (a key inside the focused pane) or pinned it.
+   const focusedNow = useRef(focused);
+@@ -1612,9 +1630,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       if (typedInRunTab(runTabs.current, focusedNow.current, inside)) runTabs.current = touchRunTab(runTabs.current, focusedNow.current);
+     };
+     document.addEventListener("keydown", typed, true);
+-    const off = listen<{ id: number }>("terminal-exit", (e) => {
++    const off = listen<{ id: number; code?: number | null }>("terminal-exit", (e) => {
+       const key = paneOfTerminal(ptys.current, e.payload.id);
+       if (key === null) return;
++      setupExits.current[key]?.(e.payload.code ?? null);
+       const ended = runTabEnded(runTabs.current, key, pinnedNow.current.has(key));
+       runTabs.current = ended.tabs;
+       if (ended.verdict === "close") cli.current.dropPane(key);
+@@ -1660,7 +1679,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       // PROJ-033: a workspace made from the command line runs its setup script in a background tab
+       // unless it was told to skip it. SESS-026 (T-150): the setup settles (asked, opened or said
+       // why not) before its agent starts.
+-      const setup = p.setup !== "skip" ? cli.current.runSetup(p.worktree.path, p.worktree.branch) : Promise.resolve();
++      // ORCH-017 (T-172-d): a worker-start's notice carries a request; worker-start waits for its answer.
++      const request = setupRequestOf(p);
++      const setup = p.setup === "skip" ? Promise.resolve() : request ? cli.current.gateSetup(request, p.worktree.path, p.worktree.branch) : cli.current.runSetup(p.worktree.path, p.worktree.branch);
+       if (a) void setup.then(() => cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate));
+       else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
+     });

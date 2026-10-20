@@ -12,6 +12,9 @@ pub mod sendonce;
 /// ORCH-007 (T-030-b): the one-line mail pointer typed into an idle agent.
 #[allow(dead_code)] // T-030-b: called from cli.rs by evidence/orchestration-T-030-b-cli.patch
 pub mod pointer;
+/// ORCH-017 (T-172-d): worker-start waits for the window to run the trust question and the setup once.
+#[allow(dead_code)] // T-172-d: called from cli.rs and lib.rs by evidence/orchestration-T-172-d-cli.patch and -lib.patch
+pub mod setup_gate;
 /// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
 pub mod upgrade;
 /// ORCH-062..064 (T-312): the runtime commands agents call for files, git and GitHub, past sessions

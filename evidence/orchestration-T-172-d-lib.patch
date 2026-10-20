@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 4fb34e85..641471be 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -576,6 +576,7 @@ pub fn run() {
+             agents::inventory::session_tabs,
+             orchestration::task_reset,
+             orchestration::worker_labels,
++            orchestration::setup_gate::worker_setup_settled,
+             prompt_answer::prompt_read,
+             prompt_answer::prompt_answer,
+             prompt_scan::prompt_scan,

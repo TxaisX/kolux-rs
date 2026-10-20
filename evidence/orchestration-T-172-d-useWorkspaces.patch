@@ -1,0 +1,12 @@
+diff --git a/src/projects/useWorkspaces.ts b/src/projects/useWorkspaces.ts
+index d59415ab..54011956 100644
+--- a/src/projects/useWorkspaces.ts
++++ b/src/projects/useWorkspaces.ts
+@@ -68,6 +68,7 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
+       setActiveDir(dir);
+       setFocused(key);
+     }
++    return key;
+   };
+ 
+   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
