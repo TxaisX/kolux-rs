@@ -134,7 +134,7 @@ export const actions: Action[] = [
   a("browser.focusAddressBar", "Focus Browser Address Bar", "browser", ["Mod+L"]),
   a("browser.grabElement", "Grab Page Element", "browser", ["Mod+C"]),
   a("editor.find", "Find in editor", "editor", ["Mod+F"]),
-  a("editor.replace", "Replace in editor", "editor", ["Mod+H"]),
+  a("editor.replace", "Replace in editor", "editor", ["Mod+H"], { darwin: ["Mod+Alt+F"] }),
   a("editor.save", "Save File", "editor", ["Mod+S"]),
   a("editor.markdownPreview", "Show Markdown Preview", "editor", ["Mod+Shift+V"]),
   a("editor.toggleWordWrap", "Toggle Word Wrap", "editor", ["Alt+Z"]),

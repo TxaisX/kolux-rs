@@ -54,16 +54,18 @@ import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import FloatingLayer, { floatingKeys } from "./floating/FloatingLayer";
 import { baseName, keyOf } from "./editor/buffers";
+import { useDesktopDrops } from "./editor/desktopDrops";
 import { NOTHING_TO_SEND, sendRoute } from "./editor/noteCommands";
 import { noteTarget, plainNote, useRepoless } from "./editor/fileNotes";
 import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
 import LineNotes from "./scm/LineNotes";
 import ChecksPanel from "./scm/ChecksPanel";
 import PreviewPane from "./editor/PreviewPane";
+import type { Action } from "./editor/noteLinks";
 import TemplatePicker from "./editor/TemplatePicker";
 import ReviewNotes from "./editor/ReviewNotes";
 import { copiers } from "./editor/EditorPane";
-import { notesMarkdown, reviewOn, selections, sendTargets, type Note, type Picked } from "./editor/notes";
+import { notesMarkdown, reviewOn, selections, sendTargets, startChoices, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import SkillsPage from "./skills/SkillsPage";
@@ -81,6 +83,7 @@ import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
 import Explorer from "./editor/Explorer";
+import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
 import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
@@ -225,6 +228,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [dragLeft, setDragLeft] = useState<number | null>(null); // VIEW-050: the left sidebar mid-drag
   // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
   const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? []); // T-543-b: no pane until a workspace is opened
+  useFileMoves(setPanes); // EDIT-032: editor tabs follow a renamed or moved file
   const [focused, setFocused] = useState(layout?.focused ?? 0);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
   // whose active tab was closed falls back to its last tab.
@@ -976,6 +980,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path, jump }]);
     setFocused(key);
   };
+  // EDIT-039: a file dragged in from the desktop opens here; a folder on the project list is added there.
+  useDesktopDrops((path) => openFile(path), setToast);
+
+  // EDIT-014: a Mod+clicked link in a note. Web links open in the Kolux browser (Shift: the system browser),
+  // notes inside the worktree as previews, anything else as an editor tab at its line.
+  const followLink = (a: Action, shift: boolean) => {
+    if (a.kind === "web") return shift ? void invoke("open_external", { url: a.url }).catch((err) => setToast(String(err))) : openInBrowser(a.url);
+    if (a.kind === "file") return a.how === "preview" ? openPreview(a.path) : openFile(a.path, a.line);
+  };
 
   // EDIT-027: a changed file's diff opens as a tab beside the focused pane; its staged and
   // unstaged diffs are separate tabs, and one already open in that cell comes to the front.
@@ -1686,6 +1699,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // else its right neighbour (left if it was last), never to a tab that is closing.
   const dropPanes = (keys: number[]) => {
     const gone = new Set(keys);
+    discardDraftsOf(panes.filter((p) => gone.has(p.key))); // EDIT-004: a tab closed on purpose keeps no draft
     exitedPrompt.current = onClose(exitedPrompt.current, keys);
     keys.forEach((k) => delete ptys.current[k]);
     keys.forEach((k) => (runTabs.current = forgetRunTab(runTabs.current, k)));
@@ -2037,6 +2051,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setNotes([]);
     setToast(`The review notes were sent to ${tabName(p, titles)}.`);
     return null;
+  };
+  // EDIT-020 (T-132-b): the Send menu can start a new agent in this worktree with the notes as its
+  // first prompt; a start that fails keeps the notes.
+  const startReview = async (id: string): Promise<string | null> => {
+    const a = agents.find((x) => x.id === id && x.installed);
+    if (!a) return "That agent is not installed, so nothing was sent. The notes are kept.";
+    if (activeDir === null) return "Open a workspace first. The notes are kept.";
+    try {
+      await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, notesMarkdown(notes), true);
+    } catch (err) {
+      return `${a.name} did not start, so the notes are kept: ${String(err)}`;
+    }
+    setNotes([]);
+    return `Started ${a.name} with the review notes.`;
   };
   const reviewPane = reviewing && panes.find((p) => p.key === reviewing.key);
   // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
@@ -2711,18 +2739,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     path={p.path}
                     root={p.cwd}
                     readOnly={p.kitPreview}
+                    notes={notes}
+                    onRemoveNote={(n) => setNotes((ns) => ns.filter((x) => x !== n))}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onClose={() => closePane(p.key)}
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
+                    jump={p.jump}
+                    onLink={followLink}
                   />
                 ) : p.kind === "diff" && p.path ? (
                   <DiffPane
                     key={p.key}
                     id={p.key}
                     path={p.path}
+                    root={p.cwd}
                     staged={!!p.staged}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
@@ -2738,7 +2771,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                 ) : p.kind === "changes" && p.cwd ? (
                   <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} onOpenDiff={(path, staged) => openDiff(path, staged, true)} pinnedBase={projects.find((pr) => pr.id === projectOf(p.cwd))?.base ?? null} />
                 ) : p.kind === "preview" && p.path ? (
-                  <PreviewPane key={p.key} id={p.key} path={p.path} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <PreviewPane key={p.key} id={p.key} path={p.path} worktree={p.cwd} onLink={followLink} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
                   renderChooser(p as Pane & { seats: Seat[] }, !board && p.key !== active, p.key === focused, () => setFocused(p.key), () => closePane(p.key))
                 ) : (
@@ -2747,6 +2780,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     hidden={!board && p.key !== active}
                     restored={restoredKeys.current.has(p.key)}
                     resumed={p.resumed}
+                    onOpenFile={openFile}
+                    onOpenLink={openInBrowser}
+                    linksOpenInKolux={settings.linksOpenInKolux === true}
                     gpu={gpuOn(settings)}
                     card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
                     cwd={p.cwd}
@@ -2965,6 +3001,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           menu={sendMenu}
           onMenu={setSendMenu}
           onSend={sendReview}
+          starters={activeDir === null ? [] : startChoices(agents, defaultId)}
+          onStart={startReview}
         />
       )}
       {readStatusBar(settings).visible && (

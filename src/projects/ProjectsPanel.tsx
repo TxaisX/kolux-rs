@@ -17,6 +17,7 @@
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { projectDrop } from "../editor/desktopDrops";
 import CacheTimer from "./CacheTimer";
 import { asksBeforeDelete, blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
@@ -627,6 +628,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     }
   };
 
+  // EDIT-039: folders dropped from the desktop onto the project list are added one after another.
+  useEffect(() => {
+    projectDrop.add = (paths) => void paths.reduce((chain, dir) => chain.then(() => addPath(dir)), Promise.resolve());
+    return () => {
+      projectDrop.add = null;
+    };
+  });
+
   const browse = async () => {
     try {
       const picked = await open({ directory: true, multiple: true, title: "Choose project folders" });
@@ -1019,6 +1028,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     try {
       const kept = await invoke<KeptBranch | null>("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, keepBranch: c.keep });
       if (kept) setKept((old) => addKept(old, [{ ...kept, projectId: c.projectId }]));
+      void invoke("editor_drafts_drop", { worktree: c.path }).catch(() => undefined); // EDIT-004: removing a worktree discards its drafts
       onRemoved(c.path);
       say("ok", kept ? `removed ${c.branch}'s folder; kept the branch ${kept.branch}` : `removed ${c.branch} and its folder`);
       setConfirm(null);

@@ -20,6 +20,7 @@ mod codex_accounts;
 mod codex_usage;
 mod creatures;
 mod diag;
+mod editor_drafts;
 mod editor_search;
 mod fence;
 mod files;
@@ -596,6 +597,11 @@ pub fn run() {
             files::file_stamps,
             files::file_pick,
             files::md_list,
+            editor_drafts::editor_draft_set,
+            editor_drafts::editor_draft_clear,
+            editor_drafts::editor_drafts_get,
+            editor_drafts::editor_drafts_drop,
+            editor_drafts::editor_draft_rename,
             editor_search::editor_search,
             editor_search::editor_search_cancel,
             skills::skills_scan,

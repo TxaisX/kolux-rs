@@ -21,12 +21,16 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
-import { editors, look, saveFile, StaleNotice } from "./EditorPane";
-import { editedText, notesOn, sideOf, where, type LineNote, type Side } from "./diffNotes";
+import { copiers, editors, look, saveFile, StaleNotice } from "./EditorPane";
+import { contextText, oldSideContext } from "./copyContext";
+import { editedText, notesOn, shortPath, sideOf, where, type LineNote, type Side } from "./diffNotes";
 import { oldSideDoc, withOldSideNote } from "./oldSide";
 import { noteCommand } from "./noteCommands";
 import { useKeymap } from "../keys/KeymapContext";
 import { watchStatus } from "../scm/watch";
+import { askText, needsAsk } from "./bigDiff";
+import { bannerUp } from "./diskChange";
+import { covers, createAutosave, movingNow, prefsReader } from "./autosave";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
 export const diffNav = new Map<number, (dir: 1 | -1) => void>();
@@ -127,9 +131,9 @@ const noteTools = (act: NoteActions, side: Side = "new"): Extension => [
 ];
 type Pop = { line: number; end: number; side?: Side; note?: LineNote; text: string; x: number; y: number; refused?: boolean };
 
-type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number; side?: "old" } };
+type Props = { id: number; path: string; staged: boolean; root?: string | null; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number; side?: "old" } };
 
-export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump }: Props) {
+export default function DiffPane({ id, path, staged, root = null, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [sides, setSides] = useState<Sides | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -148,7 +152,11 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   const front = useRef(!hidden);
   front.current = !hidden;
   const lang = useRef(new Compartment());
-  const ready = sides !== null;
+  // EDIT-028: a very big diff asks before it draws; Load draws it as usual.
+  const [loadBig, setLoadBig] = useState(false);
+  const asking = sides !== null && !loadBig && needsAsk(sides);
+  const ready = sides !== null && !asking;
+  const prefs = useRef(prefsReader(() => invoke<Record<string, unknown>>("get_settings"))).current;
   const [pop, setPop] = useState<Pop | null>(null);
   const noteRef = useRef({ notes, onDeleteNote, canNote: !!onSaveNote });
   noteRef.current = { notes, onDeleteNote, canNote: !!onSaveNote };
@@ -277,14 +285,26 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   // tab's (EDIT-003, T-073-c), so an agent's edit made behind the diff is never overwritten unseen.
   useEffect(() => {
     if (staged) return;
+    // EDIT-002: autosave covers the diff tab of one unstaged file.
+    const auto = createAutosave({
+      prefs: prefs.get,
+      covered: () => covers({ staged: false }),
+      dirty: () => isDirty(path),
+      held: () => bannerUp(path) || movingNow(path),
+      write: () => saveFile(path, setStale, report.current.onToast),
+    });
+    let alive = true;
     const off = subscribe(path, () => {
       const d = isDirty(path);
       setDirty(d);
       report.current.onDirty?.(d);
+      if (d) void prefs.refresh().then(() => alive && auto.edit());
     });
     setStale(false);
     editors.set(id, () => saveFile(path, setStale, report.current.onToast));
     return () => {
+      alive = false;
+      auto.cancel();
       off();
       editors.delete(id);
     };
@@ -323,6 +343,25 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     });
     return () => void diffNav.delete(id);
   }, [id]);
+
+  // EDIT-007 (T-132-b): Copy Context in a diff copies the selection of the side that has focus (the
+  // new side when neither has), headed by the path and the lines of that side.
+  useEffect(() => {
+    copiers.set(id, () => {
+      const v = views.current;
+      if (!v) return false;
+      const old = v.a !== null && v.a.hasFocus && !v.b.hasFocus;
+      const view = old && v.a ? v.a : v.b;
+      const { from, to } = view.state.selection.main;
+      const got = contextText(view.state.doc, from, to, shortPath(path, root));
+      navigator.clipboard.writeText(old ? oldSideContext(got) : got.text).then(
+        () => report.current.onToast?.("Copied with path and lines"),
+        (err) => report.current.onToast?.(`Nothing was copied: ${String(err)}`),
+      );
+      return true;
+    });
+    return () => void copiers.delete(id);
+  }, [id, path, root]);
 
   useEffect(() => {
     if (focused && !hidden) views.current?.b.focus();
@@ -391,6 +430,14 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
         </div>
       )}
       {stale && !staged && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
+      {asking && sides && (
+        <div className="notice md-banner" role="status">
+          {askText(name, sides)}
+          <button className="btn" onClick={() => setLoadBig(true)}>
+            Load the full diff
+          </button>
+        </div>
+      )}
       {ready && !changes && <div className="notice md-banner" role="status">No {staged ? "staged" : "unstaged"} changes in this file right now.</div>}
       <div ref={host} className="pane-body diff-body" />
       {pop && (

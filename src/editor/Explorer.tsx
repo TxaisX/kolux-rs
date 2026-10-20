@@ -15,12 +15,15 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ChevronDown, Close, Expand, FolderPlus, Plus, Search } from "../chrome/icons";
+import { ChevronDown, Close, EyeOff, Expand, FolderPlus, Plus, Refresh, Search } from "../chrome/icons";
+import { DOTFILES_KEY, filterRows, hidesDotfiles, withDotfiles, withoutDotfiles } from "./explorerView";
+import { refuseDrop } from "./desktopDrops";
 import FileIcon from "./FileIcon";
 import { loadTargets, openIn, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
+import { announceMoves } from "./fileMoved";
 
 export type Node = { name: string; path: string; kind: "dir" | "file" | "link" };
 export type Row = { node: Node; depth: number; parent: string | null };
@@ -181,7 +184,34 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     if (focusAsk && !hidden && !searching) box.current?.focus();
   }, [focusAsk, hidden]);
 
-  const rows = flatten(root, kids, open, draft);
+  // EDIT-035: the name filter shows every match in the loaded folders with the folders above it; the
+  // dotfiles switch (per worktree) leaves dot names out.
+  const [query, setQuery] = useState("");
+  const [noDots, setNoDots] = useState(() => {
+    try {
+      return hidesDotfiles(localStorage.getItem(DOTFILES_KEY), root);
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      setNoDots(hidesDotfiles(localStorage.getItem(DOTFILES_KEY), root));
+    } catch {
+      setNoDots(false);
+    }
+  }, [root]);
+  const flipDots = () => {
+    const next = !noDots;
+    setNoDots(next);
+    try {
+      localStorage.setItem(DOTFILES_KEY, withDotfiles(localStorage.getItem(DOTFILES_KEY), root, next));
+    } catch {
+      /* the switch still works for this session */
+    }
+  };
+  const visible = noDots ? withoutDotfiles(kids) : kids;
+  const rows = query.trim() ? filterRows(flatten(root, visible, new Set(Object.keys(visible)), null), query) : flatten(root, visible, open, draft);
   const index = rows.findIndex((r) => r.node.path === at);
   const isDir = (n: Node) => n.kind === "dir" || (n.kind === "link" && real[n.path] === "dir");
 
@@ -248,6 +278,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   };
   /** Open folders that moved or were renamed stay open at their new paths. */
   const follow = (moves: [string, string][], also?: string) => {
+    // EDIT-032: open tabs follow their files, unsaved text and drafts included.
+    announceMoves(moves);
+    moves.forEach(([from, to]) => void invoke("editor_draft_rename", { worktree: root, from, to }).catch(() => undefined));
     const to = (p: string) => moves.reduce((q, [a, b]) => (q === a || inside(q, a) ? b + q.slice(a.length) : q), p);
     const next = new Set([...open].map(to));
     if (also && also !== root) next.add(also);
@@ -460,7 +493,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         const dir = over ? dirAt(live.current.rows, rowAt(y), root, live.current.isDir) : null;
         if (p.type !== "drop") return setDropAt(dir);
         setDropAt(null);
-        if (dir) void live.current.doCopy(p.paths, dir);
+        const why = refuseDrop(p.paths);
+        if (dir && why) setNote({ text: why, bad: true });
+        else if (dir) void live.current.doCopy(p.paths, dir);
       })
       .then((u) => (gone ? u() : (off = u)), () => {});
     return () => {
@@ -509,6 +544,15 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         </button>
         <button className="ib" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); if (openTargets) setOpenTargets(null); else void loadTargets().then((list) => setOpenTargets({ list, x: r.left, y: r.bottom + 4 })); }} aria-expanded={!!openTargets} aria-haspopup="menu" title="Open this folder in another app" aria-label="Open in">
           <Expand size={12} />
+        </button>
+        <button className="ib" onClick={() => shownDirs.current.forEach((d) => void load(d))} title="Refresh the tree" aria-label="Refresh the tree">
+          <Refresh size={12} />
+        </button>
+        <button className="ib" onClick={() => setOpen(new Set())} title="Collapse all folders" aria-label="Collapse all folders">
+          <ChevronDown size={12} style={{ transform: "rotate(180deg)" }} />
+        </button>
+        <button className={`ib${noDots ? " on" : ""}`} onClick={flipDots} aria-pressed={noDots} title={noDots ? "Dotfiles are hidden; click to show them" : "Hide dotfiles"} aria-label="Hide dotfiles">
+          <EyeOff size={12} />
         </button>
         <button className="ib" onClick={() => startNew(false)} title="New file" aria-label="New file">
           <Plus size={12} />
@@ -566,6 +610,16 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
           </button>
         </div>
       )}
+      {!searching && (
+        <div className="ex-filter">
+          <input className="field" aria-label="Filter files by name" placeholder="Filter by name" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} />
+          {query && (
+            <button className="ib" onClick={() => setQuery("")} title="Clear the filter" aria-label="Clear the filter">
+              <Close size={10} />
+            </button>
+          )}
+        </div>
+      )}
       <ContentSearch root={root} hidden={!searching} focusAsk={searchAsk} onOpen={onOpen} />
       <div
         hidden={searching}
@@ -580,7 +634,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         onFocus={() => index < 0 && rows.length && setAt(rows[0].node.path)}
         onScroll={(e) => setScroll(e.currentTarget.scrollTop)}
       >
-        {kids[root] && !rows.length && <div className="menu-hint">This folder is empty.</div>}
+        {kids[root] && !rows.length && <div className="menu-hint">{query.trim() ? "No file name matches the filter." : "This folder is empty."}</div>}
         <div style={{ height: rows.length * ROW, position: "relative" }}>
           {rows.slice(first, last).map((r, k) => {
             const i = first + k;
