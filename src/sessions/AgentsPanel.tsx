@@ -13,6 +13,7 @@ import { chooseScope, DEFAULT_VIEW, DEPTHS, differing, effectiveScope, readScope
 import { AFTER_START_MS, publishDelay, recall, remember, RescanLimiter } from "./refresh";
 import { dragPayload, planFor, resumeBlock, SESSION_DRAG, type ResumePlan } from "./resume";
 import { chatResumeBlock } from "./chatResume";
+import SessionDetail from "./SessionDetail";
 
 export type PanelProps = {
   /** The window's settings and the way to save one (the view options and the scope live there, so every window sees them). */
@@ -31,6 +32,9 @@ export type PanelProps = {
   onResume: (s: Session, plan: ResumePlan) => void;
   /** VIEW-086 (T-146-d): resume in a new tab and bring the Agents (chat) screen to the front; the button shows only when this is given. */
   onResumeChat?: (s: Session, plan: ResumePlan) => void;
+  /** VIEW-084: every workspace folder open in Kolux, and the way to go to one (the row's worktree line). */
+  openDirs?: string[];
+  onJump?: (dir: string) => void;
 };
 
 /** What the back end is asked for under the saved scope and depth. */
@@ -305,6 +309,7 @@ function AgentsPanelBody(props: PanelProps) {
               <div className="agents-meta">
                 {s.agent} · {ago(s.modifiedMs, now)} · {s.turns} message{s.turns === 1 ? "" : "s"}
               </div>
+              <SessionDetail session={s} activeDir={activeDir} openDirs={props.openDirs ?? projectDirs} onJump={props.onJump} />
               <div className="agents-actions">
                 <button type="button" className="btn" disabled={block !== null} title={block ?? "Open a terminal and continue this session"} onClick={() => resume(s)}>
                   Resume
