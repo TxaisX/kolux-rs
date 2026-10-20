@@ -2,7 +2,12 @@ import { locale } from "../language";
 // The shapes the Rust side hands over for projects and workspaces, plus the pure helpers the
 // sidebar draws from. No Tauri calls here, so it can be tested on its own.
 
-export type Project = { id: string; name: string; path: string; workspacesDir?: string | null; base?: string | null };
+export type Project = { id: string; name: string; path: string; workspacesDir?: string | null; base?: string | null; displayName?: string | null };
+
+/** SET-033: the name a project shows in the sidebar and pickers: its display name when it has one, else the folder's name. */
+export function projectLabel(p: Pick<Project, "name" | "displayName">): string {
+  return p.displayName?.trim() || p.name;
+}
 /** What a typed name becomes in a project: its branch and the folder it would get (PROJ-021, PROJ-025). */
 export type Preview = { branch: string; folder: string };
 /** A workspace just made: the worktree, the ref it started from, a note when the saved base was gone (PROJ-028), and what could not be brought along (GIT-067). */

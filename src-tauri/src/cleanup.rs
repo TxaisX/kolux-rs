@@ -135,7 +135,7 @@ mod tests {
         }
         let store = Store::open(&base.join("db")).unwrap();
         set_origin(&store, &base.join("ours").to_string_lossy(), Some(&serde_json::json!({ "madeBy": "app" }))).unwrap();
-        let project = Project { id: "p".into(), name: "r".into(), path: repo.to_string_lossy().into_owned(), workspaces_dir: None, base: None };
+        let project = Project { id: "p".into(), name: "r".into(), path: repo.to_string_lossy().into_owned(), workspaces_dir: None, base: None, display_name: None };
         (base, repo, store, project)
     }
 

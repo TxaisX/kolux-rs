@@ -28,6 +28,9 @@ pub struct Project {
     /// The ref new workspaces start from (PROJ-028); none means the default branch Git reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// SET-033: the name the sidebar shows instead of the folder's name; none shows the folder's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 /// A workspace just made (PROJ-028): the worktree, the ref it started from, and a note when
@@ -426,6 +429,7 @@ pub fn register_project(store: &Store, (top, main): (PathBuf, PathBuf)) -> Resul
     let project = Project {
         workspaces_dir: None,
         base: None,
+        display_name: None,
         id: format!("{}-{}", name.to_lowercase(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)),
         name,
         path: top.display().to_string(),
@@ -1510,6 +1514,35 @@ pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: St
     Ok(project)
 }
 
+/// The longest display name kept, in characters.
+pub const DISPLAY_NAME_MAX: usize = 80;
+
+/// SET-033: what a typed display name becomes: control characters dropped, runs of spaces made one,
+/// ends trimmed, cut at `DISPLAY_NAME_MAX`; blank means no display name, so the folder's name shows.
+pub fn clean_display_name(raw: &str) -> Option<String> {
+    let kept: String = raw.chars().filter(|c| !c.is_control() || c.is_whitespace()).collect();
+    let one_line = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = one_line.chars().take(DISPLAY_NAME_MAX).collect();
+    Some(cut.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// SET-033: saves (or with a blank `raw` clears) the display name of project `id`. The folder, the
+/// base and every other field of the project stay as they are.
+pub fn set_display_name(store: &Store, id: &str, raw: &str) -> Result<Project, String> {
+    let mut projects = load_projects(store);
+    let project = projects.iter_mut().find(|p| p.id == id).ok_or("that project is no longer registered")?;
+    project.display_name = clean_display_name(raw);
+    let project = project.clone();
+    save_projects(store, &projects)?;
+    Ok(project)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // T-116-c-c: registered by the lib.rs hunk the coordinator applies
+pub fn project_display_name_set(store: StoreState<'_>, project_id: String, name: String) -> Result<Project, String> {
+    set_display_name(&*store.lock().map_err(|e| e.to_string())?, &project_id, &name)
+}
+
 #[tauri::command(async)]
 pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String) -> Result<RemoveCheck, String> {
     let project = {
@@ -2103,6 +2136,48 @@ mod tests {
         let kept: Vec<_> = fs::read_dir(&admin).unwrap().flatten().filter(|e| e.path().join("locked").exists()).collect();
         assert_eq!(kept.len(), 1, "the locked record under {} is still there", admin.display());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn set033_a_display_name_is_one_clean_line_or_nothing() {
+        assert_eq!(clean_display_name("  My   shop 	 app "), Some("My shop app".into()));
+        assert_eq!(clean_display_name("a[31mb
+c"), Some("a[31mb c".into()), "control characters drop, a line break is a space");
+        assert_eq!(clean_display_name("   
+	 "), None);
+        assert_eq!(clean_display_name(""), None);
+        let long = "x".repeat(200);
+        assert_eq!(clean_display_name(&long).unwrap().chars().count(), DISPLAY_NAME_MAX);
+        assert_eq!(clean_display_name("한글 이름"), Some("한글 이름".into()));
+    }
+
+    #[test]
+    fn set033_a_display_name_is_kept_beside_the_other_fields_and_survives_edits_and_a_re_add() {
+        let git = Git::detect().unwrap();
+        let profile = temp("setdn-profile");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("setdn-repo");
+        let p = add_project(&git, &store, &repo).unwrap();
+        assert_eq!(p.display_name, None);
+        let named = set_display_name(&store, &p.id, " Shop  front ").unwrap();
+        assert_eq!(named.display_name.as_deref(), Some("Shop front"));
+        assert_eq!((&named.name, &named.path), (&p.name, &p.path), "the folder name and path never change");
+        // the per-repository folder and base edits (project_set) keep it
+        let mut projects = load_projects(&store);
+        projects[0].base = Some("develop".into());
+        save_projects(&store, &projects).unwrap();
+        assert_eq!(load_projects(&store)[0].display_name.as_deref(), Some("Shop front"));
+        // adding the same repository again returns the saved record, name included
+        assert_eq!(add_project(&git, &store, &repo).unwrap().display_name.as_deref(), Some("Shop front"));
+        // an old record without the field still loads, and blank clears it
+        assert!(!serde_json::to_string(&p).unwrap().contains("displayName"));
+        let old: Project = serde_json::from_str(r#"{"id":"a","name":"a","path":"C:/a"}"#).unwrap();
+        assert_eq!(old.display_name, None);
+        assert_eq!(set_display_name(&store, &p.id, "  ").unwrap().display_name, None);
+        assert!(set_display_name(&store, "nope", "x").is_err());
+        drop(store);
+        let _ = fs::remove_dir_all(&profile);
+        let _ = fs::remove_dir_all(&repo);
     }
 
     #[test]
@@ -2810,7 +2885,7 @@ mod tests {
     fn proj024_only_suggested_names_are_retired_per_scope_ignoring_case_and_spaces() {
         let profile = temp("retire-profile");
         let store = Store::open(&profile).unwrap();
-        let (flat_a, flat_b) = (Project { id: "a".into(), name: "alpha".into(), path: "C:/alpha".into(), workspaces_dir: None, base: None }, Project { id: "b".into(), name: "beta".into(), path: "C:/beta".into(), workspaces_dir: None, base: None });
+        let (flat_a, flat_b) = (Project { id: "a".into(), name: "alpha".into(), path: "C:/alpha".into(), workspaces_dir: None, base: None, display_name: None }, Project { id: "b".into(), name: "beta".into(), path: "C:/beta".into(), workspaces_dir: None, base: None, display_name: None });
         let flat = Place { root: PathBuf::from("C:/ws"), flat: true, prefix: String::new(), prefix_warning: None, refresh: false };
         let nest = Place { root: PathBuf::from("C:/ws"), flat: false, prefix: String::new(), prefix_warning: None, refresh: false };
         let (fa, fb) = (retired_scope(&flat, &flat_a), retired_scope(&flat, &flat_b));
@@ -3705,7 +3780,7 @@ mod tests {
         for p in [&a_made, &a_mine, &a_busy, &b_made] {
             fs::remove_dir_all(p).unwrap();
         }
-        let project = |id: &str, path: &Path| Project { id: id.into(), name: id.into(), path: key(path), workspaces_dir: None, base: None };
+        let project = |id: &str, path: &Path| Project { id: id.into(), name: id.into(), path: key(path), workspaces_dir: None, base: None, display_name: None };
         let projects = [project("gone-folder", &base.join("nowhere")), project("a", &a), project("b", &b)];
         let origins = load_origins(&store.lock().unwrap());
         let mut forgotten = sweep_all_gone(&store, &git, &projects, &origins, &[key(&a_busy)], None);
