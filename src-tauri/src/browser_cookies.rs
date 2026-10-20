@@ -276,9 +276,43 @@ pub fn apply(page: &tauri::Webview, entries: &[Entry], report: &mut Report) -> R
     Ok(())
 }
 
+/// T-319-b (BROW-030): browsers installed where their installers put them, named by the toolbar's
+/// import hint. Only whether the program file exists is looked at: no profile, cookie store or
+/// setting of theirs is ever opened.
+const BROWSERS: [(&str, &str); 6] = [
+    ("Google Chrome", r"Google\Chrome\Application\chrome.exe"),
+    ("Microsoft Edge", r"Microsoft\Edge\Application\msedge.exe"),
+    ("Brave", r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+    ("Firefox", r"Mozilla Firefox\firefox.exe"),
+    ("Vivaldi", r"Vivaldi\Application\vivaldi.exe"),
+    ("Opera", r"Programs\Opera\opera.exe"),
+];
+
+/// The browsers whose program is under one of `roots`, in the table's order.
+pub fn installed(roots: &[std::path::PathBuf], exists: impl Fn(&std::path::Path) -> bool) -> Vec<&'static str> {
+    BROWSERS.iter().filter(|(_, rel)| roots.iter().any(|r| exists(&r.join(rel)))).map(|(name, _)| *name).collect()
+}
+
+#[tauri::command]
+#[allow(dead_code)] // registered by evidence/browser-T-319-b-lib.rs.patch
+pub fn browser_import_sources() -> Vec<&'static str> {
+    let roots: Vec<std::path::PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"].iter().filter_map(std::env::var_os).map(Into::into).collect();
+    installed(&roots, |p| p.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brow030_installed_browsers_are_named_from_their_program_file_alone() {
+        let roots = [std::path::PathBuf::from("P"), std::path::PathBuf::from("L")];
+        let have = [roots[1].join(r"Google\Chrome\Application\chrome.exe"), roots[0].join(r"Mozilla Firefox\firefox.exe")];
+        assert_eq!(installed(&roots, |p| have.iter().any(|h| h == p)), vec!["Google Chrome", "Firefox"]);
+        assert!(installed(&roots, |_| false).is_empty());
+        assert!(installed(&[], |_| true).is_empty());
+        assert_eq!(installed(&roots, |_| true).len(), BROWSERS.len());
+    }
 
     const NOW: i64 = 1_800_000_000;
 

@@ -25,7 +25,8 @@ import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
-import { CHROME_STEPS, type CookieReport, cookieReportText, type CookieSource, GOOGLE_NOTE, IMPORT_SOURCES, pickerFor } from "./cookies";
+import { CHROME_STEPS, type CookieReport, cookieReportText, type CookieSource, dismissHint, GOOGLE_NOTE, hintDismissed, importHintText, IMPORT_SOURCES, pickerFor } from "./cookies";
+import { chipCommit } from "./preview";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
 import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
@@ -157,6 +158,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const closeMe = useRef(onClose);
   closeMe.current = onClose;
   const [preview, setPreview] = useState<Preview | null>(null);
+  // T-319-b (BROW-041): what is typed in the preview chip while it is open for typing.
+  const [chipEdit, setChipEdit] = useState<string | null>(null);
   // T-159 (BROW-040): the outside address a previewed document asked to open; offered, never followed.
   const [outbound, setOutbound] = useState<string | null>(null);
   // T-272-c (BROW-016): tabs this tab's family asked for past its allowance, said in the toolbar.
@@ -525,6 +528,19 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     feed({ t: "navigate" }); // a new address gets its own recovery allowance (BROW-009)
     invoke("browser_navigate", { id, url }).catch((err) => setNote(String(err)));
   };
+  // T-319-b (BROW-041): Enter in the chip: a web address turns this tab into that page (Back returns
+  // to the preview, Forward goes to the page again); another document swaps the preview; the same
+  // document does nothing. Escape or leaving the field puts the chip back unchanged.
+  const commitChip = (current: string) => {
+    const c = chipCommit(chipEdit ?? "", current);
+    if (c.kind === "error") return setNote(c.error);
+    setChipEdit(null);
+    if (c.kind === "web") navigateTo(c.url);
+    else if (c.kind === "document")
+      invoke<{ url: string }>("browser_preview", { path: c.path })
+        .then((r) => navigateTo(r.url))
+        .catch((err) => setNote(String(err)));
+  };
   const go = () => {
     const picked = menuPick(menuRef.current);
     if (picked) return navigateTo(picked.url);
@@ -574,6 +590,24 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   // the report says what came in and what did not.
   const [cookieMenu, setCookieMenu] = useState<null | "menu" | "chrome">(null);
   const [importing, setImporting] = useState(false);
+  // T-319-b (BROW-030): the import-logins hint, read from storage on the first render (never
+  // flashes); it names the browsers found, or the supported sources until the app has looked.
+  const [hintShown, setHintShown] = useState(() => !hintDismissed());
+  const [found, setFound] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!hintShown) return;
+    let alive = true;
+    invoke<string[]>("browser_import_sources")
+      .then((f) => alive && setFound(f))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [hintShown]);
+  const hideHint = () => {
+    dismissHint();
+    setHintShown(false);
+  };
   const importCookies = async (source: CookieSource) => {
     const picked = await openDialog({ multiple: false, directory: false, ...pickerFor(source) }).catch(() => null);
     if (typeof picked !== "string") return;
@@ -582,6 +616,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     try {
       const r = await invoke<CookieReport>("browser_cookies_import", { id, path: picked });
       setNote(cookieReportText(r)); // T-158 (BROW-029): Google advice only when Google rows were left out
+      if (r.imported > 0) hideHint(); // BROW-030: logins came over, the hint has done its job
     } catch (err) {
       setNote(String(err));
     } finally {
@@ -659,9 +694,27 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         {/* BROW-006: the slot keeps the bar's place in the toolbar; in a narrow pane the bar inside it
             is compact and, while focused, floats across the toolbar (browser.css). */}
         <span className="address-slot">
-          {preview ? (
+          {preview && chipEdit !== null ? (
+            <input
+              className="address chip-edit"
+              aria-label="Web address or another document for this tab"
+              placeholder="Web address or a document's path"
+              value={chipEdit}
+              autoFocus
+              onChange={(e) => setChipEdit(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitChip(preview.path);
+                else if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setChipEdit(null);
+                }
+              }}
+              onBlur={() => setChipEdit(null)}
+            />
+          ) : preview ? (
             // BROW-039: a previewed document shows where it is instead of its loopback address.
-            <span className="preview-chip" title={preview.path}>
+            // T-319-b (BROW-041): clicking it (not its buttons) opens it for typing an address.
+            <span className="preview-chip" title={`${preview.path} (click to open a web address or another document here)`} onClick={(e) => !(e.target as HTMLElement).closest("button") && setChipEdit(preview.path)}>
               <span className="preview-folder">{preview.folder}</span>
               <span className="preview-sep">/</span>
               <b>{preview.file}</b>
@@ -751,6 +804,16 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
               </option>
             ))}
           </select>
+          {hintShown && (
+            <span className="import-hint">
+              <button type="button" className="ib" onClick={() => setCookieMenu("menu")} title={`${importHintText(found)}. ${GOOGLE_NOTE}`}>
+                {importHintText(found)}
+              </button>
+              <button type="button" className="ib" onClick={hideHint} title="Hide this hint for good" aria-label="Dismiss import hint">
+                <Close size={10} />
+              </button>
+            </span>
+          )}
           {/* T-240 (BROW-028): cookies from Google Chrome (guided export) or a file go into this tab's profile. */}
           <button className={`ib cookies${cookieMenu ? " on" : ""}`} onClick={() => setCookieMenu(cookieMenu ? null : "menu")} disabled={importing} title={importing ? "Importing cookies…" : `Import cookies from Google Chrome or a file. ${GOOGLE_NOTE}`} aria-label="Import cookies" aria-haspopup="menu" aria-expanded={cookieMenu !== null}>
             <Globe size={12} />

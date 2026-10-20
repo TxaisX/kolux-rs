@@ -210,9 +210,50 @@ pub fn close_for(app: &tauri::AppHandle, tab: u32) {
     }
 }
 
+/// T-319-b (BROW-026): the engine's built-in identity prompt (FedCM) cannot work inside a pane, so
+/// it is switched off and sites fall back to their ordinary popup or redirect sign-in. Engine
+/// switches are one string shared by every web view on a data folder, so this adds the feature to
+/// that string's one `--disable-features=` list (a second such switch would replace the first).
+#[allow(dead_code)] // called by recovery::browser_args through evidence/browser-T-319-b-recovery.rs.patch
+pub fn fedcm_off(args: &str) -> String {
+    const SWITCH: &str = "--disable-features=";
+    const FEDCM_FEATURE: &str = "FedCm";
+    let mut found = false;
+    let mut out: Vec<String> = Vec::new();
+    for a in args.split_whitespace() {
+        match a.strip_prefix(SWITCH) {
+            Some(list) if !found => {
+                found = true;
+                let mut names: Vec<&str> = list.split(',').filter(|n| !n.is_empty()).collect();
+                if !names.contains(&FEDCM_FEATURE) {
+                    names.push(FEDCM_FEATURE);
+                }
+                out.push(format!("{SWITCH}{}", names.join(",")));
+            }
+            _ => out.push(a.to_string()),
+        }
+    }
+    if !found {
+        out.push(format!("{SWITCH}{FEDCM_FEATURE}"));
+    }
+    out.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brow026_fedcm_joins_the_one_disable_features_list_once() {
+        let wry = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-renderer-backgrounding";
+        assert_eq!(fedcm_off(wry), "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,FedCm --disable-renderer-backgrounding");
+        // Already there: the string is unchanged, so every web view keeps passing the same one.
+        assert_eq!(fedcm_off(&fedcm_off(wry)), fedcm_off(wry));
+        // No list yet: one is added; an empty string gets just the switch.
+        assert_eq!(fedcm_off("--disable-gpu"), "--disable-gpu --disable-features=FedCm");
+        assert_eq!(fedcm_off(""), "--disable-features=FedCm");
+        assert_eq!(fedcm_off("--disable-features=FedCm,X"), "--disable-features=FedCm,X");
+    }
 
     fn u(s: &str) -> Url {
         Url::parse(s).unwrap()
