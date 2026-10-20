@@ -41,7 +41,7 @@ Readings (logs under G:\Temp\hooks-v3-logs\, read back)
 - COPILOT_HOME unset and HOME / USERPROFILE / CLAUDE_CONFIG_DIR / CODEX_HOME / TMP on G:\Temp\hooks-v3\ scratch
   folders for every run; no real agent was started.
 
-LEFT OPEN
+Batch 3 left open (superseded below)
 - STAT-018 Grok: not built in this batch (budget). Public docs (https://docs.x.ai/build/features/hooks) give
   ~/.grok/hooks/*.json, but the card's removal at quit needs a quit hook in lib.rs (shared file) and the docs' full
   event list and home override still need reading.
@@ -58,3 +58,67 @@ LIVE PROOF PENDING (batched)
 2. In a Copilot pane: prompt -> working; a tool approval -> needs you; Copilot asks a question (ask_user) -> needs
    you with the question text; finish -> done; an unrecoverable error -> done.
 3. Switch the hooks off: kolux-rs.json is gone; any other file in that folder is untouched.
+
+Batch 4 · lane/hooks after merging main d0bc3c83 (merge 2ea72096) · 2026-10-20 · Claude Opus 5.5
+
+Source (public docs only; cited in PROVENANCE.md)
+- Grok: https://docs.x.ai/build/features/hooks and the settings reference: personal hook files
+  <Grok home>/hooks/*.json, GROK_HOME overrides ~/.grok; matcher groups {"hooks":{"<Event>":[{"matcher","hooks":
+  [{"type":"command","command","timeout"}]}]}}; camelCase payload (hookEventName, sessionId, toolName, toolInput).
+- Devin: https://docs.devin.ai/cli/extensibility/hooks/overview and .../lifecycle-hooks: the user file is
+  %APPDATA%\devin\config.json (~/.config/devin/config.json elsewhere) under "hooks", Claude Code matcher-group
+  format; .devin/hooks.v1.json is project-only; read_config_from.claude is on by default; payload session_id,
+  prompt, tool_name, tool_input, PostCompaction summary, SessionEnd reason, Stop stop_hook_active.
+- MiMo Code: https://mimo.xiaomi.com/mimocode/config-files lists no hooks key and no plugin event API.
+
+Built (lane-local, in this commit)
+- src-tauri/src/agent_hooks/grok.rs (STAT-018): Kolux's own <Grok home>/hooks/kolux-rs.json (GROK_HOME honoured
+  for the real home only), 9 events, one group each, no matcher, the event as the script's argument; written only
+  when absent or still exactly what Kolux last wrote (record in the target folder); a hand edit, a file emptied by
+  hand and a file of the user's under that name are left alone. Removal takes out only entries whose command is
+  Kolux's, deletes the file when nothing else is left, and is idempotent. At quit (at_quit, cut short after 2 s on
+  a worker thread) the file goes unless another running Kolux owns it (owner file: host, pid, boot time, profile;
+  anything that cannot be checked counts as running). Notification wording: routine per-tool notice = working,
+  permission/approval = needs you, feedback/answer = needs you with the text, waiting/idle = done.
+- src-tauri/src/agent_hooks/devin.rs (STAT-019): marked blocks (// >>> kolux-rs status hooks ... // <<< kolux-rs
+  status hooks <<<) inside config.json's hooks: one block opening each existing event array, one block with the
+  missing events, or one block holding the whole hooks key; the file's own newline style; a backup copy before the
+  first write; removal cuts the blocks out byte for byte and deletes a file Kolux created and left holding {}.
+  The status row warns when read_config_from.claude is not false (Devin also runs Claude Code's hooks).
+  Events: prompt, tool steps, PostCompaction = working; PermissionRequest = needs you; Stop, SessionEnd = done.
+- src-tauri/src/agent_hooks/jsonc.rs: a no-dependency commented-JSON reader (line and block comments, trailing
+  commas, BOM) and the marked-block editor.
+- src-tauri/src/agent_hooks/more.rs: Grok and Devin join (routes grok/<event> and devin, rows, scripts, apply).
+- src-tauri/src/agent_hooks/more_tests.rs: rows test names six agents and installs all six.
+
+Patches for the resolver (apply AFTER every earlier hooks patch; full order in the commit body)
+1. evidence/hooks-T-122-2-mod.rs.patch: MANAGED gains grok and devin; the apply() arm takes them.
+2. evidence/hooks-T-122-2-tests.rs.patch: stat_004 asserts grok and devin at [9..].
+3. evidence/hooks-T-122-2-lib.rs.patch (after hooks-T-271-lib.rs): RunEvent::Exit calls grok::at_quit.
+
+Readings (logs under G:\Temp\hooks-v3-logs\, read back)
+- All 14 hooks patches applied: cargo build exit 0 (b4-t122-build.log); clippy --all-targets -D warnings 0
+  (b4-t122-clippy3.log); cargo test --lib agent_hooks 95 passed, 4 failed (b4-t122-test-ah.log), the 4 known
+  scratch-HOME reds t_152_1, t_152_b_2, t_134_b, vendors fix1_apply; --lib hooks 114 passed, the same 4 failed
+  (b4-t122-test-hooks.log); --lib status 57 passed, 0 failed (b4-t122-test-status.log); tsc 0 (b4-t122-tsc.log).
+  New tests: 5 stat_018_*, 3 stat_019_* (devin), 2 stat_019_* (jsonc).
+- Reverted: cargo build 0 (b4-t122-build-rev.log), clippy 0 (b4-t122-clippy-rev.log), agent_hooks 95 passed, the
+  same 4 known reds (b4-t122-test-ah-rev.log). The 14 patches apply in order on a clean tree (git apply).
+- HOME / USERPROFILE / CLAUDE_CONFIG_DIR / CODEX_HOME / APPDATA on G:\Temp\hooks-v3\ scratch folders; GROK_HOME
+  unset; no real agent started; no --help run.
+
+LEFT OPEN
+- STAT-020 MiMo Code: no public source documents MiMo Code hook events or a plugin event API (its config-files
+  reference lists no hooks key), so nothing is built.
+- STAT-021 Pi / OMP: Pi's hooks are in-process TypeScript extensions whose official API page
+  (badlogic/pi-mono packages/coding-agent/docs/extensions.md) was not read in this batch and no public source for
+  OMP was found, so nothing is built.
+
+LIVE PROOF PENDING (batched)
+1. Copilot CLI: steps 1-3 of batch 3 (kolux-rs.json in the Copilot home, the dot through a session, removal).
+2. Grok: start Kolux with grok installed: <Grok home>/hooks/kolux-rs.json holds 9 events; a prompt -> working, a
+   permission notice -> needs you, finish -> done; quit Kolux -> the file is gone; quit with a second Kolux running
+   -> the file stays. Check the Notification field names (message / level) against a real notice.
+3. Devin: with a commented %APPDATA%\devin\config.json, start Kolux: the comments stay, the marked blocks appear;
+   prompt -> working, permission -> needs you, finish -> done; switch the hooks off -> the file is byte for byte
+   what it was.

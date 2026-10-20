@@ -276,12 +276,14 @@ fn stat_015_kimi_file_kolux_created_goes_and_its_script_prints_nothing() {
 fn t_121_rows_name_each_agent() {
     let home = scratch("rows");
     let rows = rows(&home);
-    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi", "copilot"]);
+    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi", "copilot", "grok", "devin"]);
     assert!(rows.iter().all(|r| r["state"] == "not installed"));
     install_cursor(&home, &cursor_file(&home)).unwrap();
     install_droid(&home, &droid_file(&home)).unwrap();
     install_kimi(&home, &kimi_file(&home)).unwrap();
     install_copilot(&home, &copilot_file(&home)).unwrap();
+    super::grok::install(&home, &super::grok::file(&home)).unwrap();
+    super::devin::install(&home, &super::devin::file(&home)).unwrap();
     assert!(super::rows(&home).iter().all(|r| r["state"] == "installed"), "{:?}", super::rows(&home));
 }
 

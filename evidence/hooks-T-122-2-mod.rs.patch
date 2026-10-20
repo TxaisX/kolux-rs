@@ -1,0 +1,24 @@
+diff --git a/src-tauri/src/agent_hooks/mod.rs b/src-tauri/src/agent_hooks/mod.rs
+index 6f34f044..041c322a 100644
+--- a/src-tauri/src/agent_hooks/mod.rs
++++ b/src-tauri/src/agent_hooks/mod.rs
+@@ -26,7 +26,7 @@ const LOCK_STALE: Duration = Duration::from_secs(30);
+ const LOCK_WAIT: Duration = Duration::from_secs(35);
+ 
+ /// The agents whose hooks Kolux manages, by catalogue id.
+-pub const MANAGED: [&str; 9] = ["claude", "codex", "gemini", "antigravity", "amp", "cursor", "droid", "kimi", "copilot"];
++pub const MANAGED: [&str; 11] = ["claude", "codex", "gemini", "antigravity", "amp", "cursor", "droid", "kimi", "copilot", "grok", "devin"];
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum Plan {
+@@ -583,8 +583,8 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
+         }
+         // T-120-b: Gemini CLI, Antigravity and Amp.
+         (id @ ("gemini" | "antigravity" | "amp"), Plan::Install | Plan::Remove) => vendors::apply(home, profile, id, plan),
+-        // T-121: Cursor Agent, Droid and Kimi Code; T-122: Copilot CLI.
+-        (id @ ("cursor" | "droid" | "kimi" | "copilot"), Plan::Install | Plan::Remove) => more::apply(home, profile, id, plan),
++        // T-121: Cursor Agent, Droid and Kimi Code; T-122: Copilot CLI, Grok and Devin.
++        (id @ ("cursor" | "droid" | "kimi" | "copilot" | "grok" | "devin"), Plan::Install | Plan::Remove) => more::apply(home, profile, id, plan),
+         _ => Ok("left as it was"),
+     }
+ }
