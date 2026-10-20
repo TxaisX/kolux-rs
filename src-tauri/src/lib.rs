@@ -495,6 +495,8 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_go,
             browser::browser_close,
+            browser::browser_probe,
+            browser::browser_diagnose,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
