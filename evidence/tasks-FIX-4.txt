@@ -52,3 +52,59 @@ LIVE PROOF PENDING (batched, after the scm patch is applied)
 - Switch workspace while a create is out, open New issue in the new workspace, let the old create finish: the new dialog stays open; the "created elsewhere" note shows and its x dismisses it.
 - Projects table: change one Status cell three times quickly: afterwards the cell shows GitHub's value.
 - A title of 200 emoji does not trigger the 256-character warning.
+
+=====================================================================================================
+FIX-4 (wave 16, lane/tasks from 9446cf2d): pre-merge fixes from d2/tasks-9446cf2d-standin-review.md, items 1 to 4
+(the section above is the earlier wave-12 FIX-4; this file name is the one the wave-16 brief named)
+=====================================================================================================
+
+WHAT THE USER CAN NOW DO
+1. Open a pull request or issue whose description holds thousands of unclosed "<!--" openers: the page reads it at once
+   (16000 openers on one line: 61 s before on a loaded PC, under 500 ms after) instead of freezing the window.
+2. Paste an issue or pull request link whose repository is an ssh-alias remote of the chosen project (or start a workspace
+   from such a link): the project is found through the user's ssh config, which is now read once per call, not once per project.
+3. Nothing visible for items 3 and 4: the proj037 test no longer depends on the developer's own ~/.ssh/config, and there is one
+   ssh config reader (scm::ssh_config) instead of two.
+
+RED FIRST (each on an assertion with the code present, before the fix)
+- TS: G:/Temp/tasks-w16-logs/fix4-ts-red.log: "expected 61632.7093 to be less than 500" at markdown.test.ts:50 (16000 openers).
+- Rust: G:/Temp/tasks-w16-logs/fix4-rs-red.log: projects::tests::proj037_workspace_item_... "left: Err(That link is to
+  github.com/acme/app, which is not a remote of p ...) right: Ok(())" and proj037_workspace_from_item_... (the new helpers were
+  first stubbed to the old has_repo, which reads the real config, so the alias was not found).
+- Hermetic: G:/Temp/tasks-w16-logs/fix4-rs-red-hermetic.log: with a scratch HOME whose .ssh/config is "Host github.com /
+  HostName ssh.github.com", the old proj037 assertions failed at pr_checkout.rs:295; they pass now (has_repo_with(.., "")).
+
+TESTS ADDED
+- markdown.test.ts: "reads a description full of unclosed comment openers in one pass (stand-in review FIX-BEFORE 1)": 16000
+  openers on one line, 8000 lines of "a <!-- b", 3000 openers after a closed comment (each under 500 ms and the exact text
+  shown), and an opener closed by a later line's terminator followed by a stray one.
+- projects::tests::proj037_workspace_item_accepts_a_remote_through_an_ssh_alias_only_when_the_config_names_it
+- projects::tests::proj037_workspace_from_item_finds_the_project_whose_remote_is_an_ssh_alias
+- pr_checkout proj037 test: the old assertions now call has_repo_with(.., "").
+- Differential check (outside the repo, G:/Temp/tasks-w16/fix4/diff.mjs): 200000 random token strings (openers, closers, both
+  fences, headings, bullets) through the old and the new parseMarkdown: 0 differences.
+
+CHANGES
+- src/tasks/markdown.ts: withoutComments is one pass: openers pair with the next closer; an opener still open at the end has no
+  closer after it (so none after any later opener), so it and the rest show as written and are copied as is.
+- src-tauri/src/projects.rs (the hoist and its tests only): workspace_item and workspace_from_item read scm::ssh_config() once
+  and call the new helpers item_is_remote_of / project_with_remote, which take the config text.
+- src-tauri/src/pr_checkout.rs: has_repo and user_ssh_config removed (no production caller is left; has_repo_with is the one entry).
+- src-tauri/src/pull_requests.rs: pr_merge reads crate::scm::ssh_config().
+- src-tauri/src/scm.rs: `fn ssh_config` -> `pub(crate) fn ssh_config` (the only change there).
+
+GATES (scratch HOME under G:/Temp/tasks-w16, build slot held per job)
+- node node_modules/vitest/vitest.mjs run src/tasks: 14 files, 124 tests pass
+- full vitest: 233 files, 1599 tests pass; node node_modules/typescript/bin/tsc --noEmit: exit 0
+- cargo build: exit 0; cargo clippy --all-targets -- -D warnings: exit 0
+- cargo test --lib -- proj037 pull_requests pr_checkout scm::: 96 passed, 0 failed
+- full cargo test --no-fail-fast: lib 1013 passed, 1 failed (hooks script_runs stat_006, fails on the base too, hooks lane; see
+  evidence/tasks-FIX-3b.txt), 2 ignored; other targets ok (3 passed). Log G:/Temp/tasks-w16-logs/fix4-cargo-full.log.
+- plan-check: OK; '^## Last 10 passes' count in STATE.md: 1; duplicate PLAN id grep: nothing
+- firewall-check.ps1 -Baseline: 53 hit(s) in 22 file(s), 0 new
+- patches evidence/tasks-T-232-c-lib.patch and tasks-T-231-e-App.patch unchanged; git apply --cached --check against main
+  9e63435d (temporary GIT_INDEX_FILE) exit 0 each
+
+LIVE PROOF PENDING (batched, no app launched)
+- Paste an issue link whose repository is the ssh-alias origin of the chosen project in the workspace composer: it is found.
+- Open a pull request whose description has many stray "<!--": the page opens at once and shows the text as written.

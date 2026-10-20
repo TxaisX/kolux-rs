@@ -85,3 +85,33 @@ SEEN, NOT FIXED
 - A failed webview creation inside tauri leaves no window, so the retry re-creates the native window each
   try (no flicker expected: the config window starts hidden, "visible": false).
 - The message box blocks the main thread until OK; a headless run that ever hits it waits on a person.
+
+=== 2026-10-19 · reliability lane (Routing v3), lane/reliability from d78e1b89 (MERGE 192) · TICK ===
+Root cause, confirmed by reading our own code (tools.rs, lib.rs run/setup/Exit) and the smoke record:
+  Tauri opens the config's windows inside its own setup step and panics "Failed to setup app" on any error
+  there; a relaunch within a few seconds of a quit finds the quitting instance's msedgewebview2.exe processes
+  still holding the profile's WebView2 user-data folder (smoke-243736d: 6 of them outlived a 3.6 s quit), so
+  WebView2 answers ERROR_BUSY 0x800700AA and the new process died in setup. There is no single-instance
+  guard in the app and none is needed: the folder frees itself once those processes end.
+Fix in place since 634aaa6b (lane side) and main 8c856676 (lib.rs hunk applied): windows are created by
+  tools::guarded_setup through tools::open_retrying (250/500/1000/2000x4 ms, 9.75 s), a busy that outlasts
+  the waits ends in a plain native "Kolux is still closing. Try again in a few seconds." (never a panic),
+  and the Exit handler waits up to 3 s for this process's WebView2 tree to end (tools::wait_webviews_closed).
+New unit test this pass (tools::tests):
+  t552_a_busy_folder_that_then_fails_for_another_reason_stops_waiting_and_says_why: busy twice, then
+  0x80070005 -> that error back at once (3 tries, waits [250 ms, 500 ms], no third wait), startup_message
+  names it ("Kolux could not start: ...") instead of "still closing".
+Gates (G:/Temp/reliability-v3-logs/): cargo test --lib tools::tests::t552 -> ok. 6 passed; 0 failed
+  (t552-test.log); cargo clippy --all-targets -D warnings -> see t552-clippy.log (exit 0).
+Live record on merged main (resolver's pnpm smoke flow 5 with the stress part, evidence/smoke-<sha>.txt):
+  25 consecutive runs 2026-10-19 10:42 -> 21:57 (smoke-2f79fc02 ... smoke-c8a202d0) each read "stress:
+  relaunched at once after a quit (exited in 1.7-10.4 s); page up in 5.4-23.2 s; no webview failure in the
+  log"; 0 of them contain "failed to create webview"; the storm part is 10/10 in every run.
+LIVE PROOF PENDING (batched, for the resolver's smoke flow 5 / bug-fix phase; release build):
+  1. Quit Kolux (X button or Ctrl+Q) and start it again within 1 s -> the window comes up (up to ~10 s under
+     load), no crash dialog, logs/kolux.log has no "failed to create webview" and no "fatal error" line.
+  2. Keep the profile folder busy past 10 s (two exes on one profile: start the second while the first is
+     open) -> a plain "Kolux" message box "Kolux is still closing. Try again in a few seconds."; OK ends the
+     second process; the first keeps running; no kolux-rs.exe is left from the second.
+  3. After each quit: within 3 s no msedgewebview2.exe child of the old pid remains (the Exit log line
+     "app exit: N WebView2 process(es) still running after 3 s (T-552)" is absent).

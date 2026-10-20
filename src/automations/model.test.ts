@@ -7,6 +7,8 @@ test("T-085-h a run reconnected after a restart says its output is the replay so
   expect(outputNote({ ...r, outputCut: true })).toContain("older lines were left out. The run carries on");
   expect(outputNote({ ...r, status: "completed", outputFrom: "screen" })).toBe("What the agent's terminal showed when the run ended.");
   expect(outputNote({ ...r, status: "completed", outputFrom: "screen", outputCut: true })).toBe("The most recent text the agent's terminal showed; older lines were left out.");
+  expect(outputNote({ ...r, status: "completed", outputFrom: "transcript" })).toBe("What the agent said during the run, from its transcript.");
+  expect(outputNote({ ...r, status: "completed", outputFrom: "transcript", outputCut: true })).toBe("The most recent of what the agent said; older text was left out.");
 });
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };

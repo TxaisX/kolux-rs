@@ -39,8 +39,8 @@ function nativeHits(chords: string[], native: readonly NativeChord[]): NativeCho
 export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): Row[] {
   const p = map.platform;
   const title = (id: string) => map.bindings.get(id)?.action.title ?? id;
-  // T-543-b: Reopen closed tab does nothing until T-164-b wires it, so its row is not offered for a key.
-  return [...map.bindings.values()].filter(({ action }) => action.id !== "tab.reopenClosed").map(({ action, chords, custom, dropped }) => {
+  // T-239 (BROW-019): Reopen closed tab is offered again now that the window reopens closed browser tabs (T-543-b had hidden it).
+  return [...map.bindings.values()].map(({ action, chords, custom, dropped }) => {
     const defaults = defaultsFor(action, p);
     const disabled = custom && chords.length === 0 && defaults.length > 0;
     const modified = custom && chords.join() !== defaults.join();

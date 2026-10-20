@@ -45,3 +45,14 @@ describe("review notes on both sides of a side-by-side diff (GIT-040, T-034-b)",
     expect(state.field(field).deco.size).toBe(1);
   });
 });
+
+describe("how a diff tab starts (SET-038, T-323-b)", () => {
+  it("follows the Settings > General diff choices, and starts inline, unwrapped, whitespace hidden by default", async () => {
+    const { diffStart } = await import("./DiffPane");
+    const { readEditorPrefs } = await import("../settings/editorPrefs");
+    expect(diffStart(readEditorPrefs({}))).toEqual({ split: false, wrap: false, spaces: false });
+    expect(diffStart(readEditorPrefs({ diffView: "split", diffWordWrap: true, diffShowWhitespace: true }))).toEqual({ split: true, wrap: true, spaces: true });
+    // the editor's own word wrap does not move the diff's
+    expect(diffStart(readEditorPrefs({ editorWordWrap: false })).wrap).toBe(false);
+  });
+});

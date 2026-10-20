@@ -17,6 +17,8 @@ import { sameDir } from "../workspaces";
 import { newPaceMemory, noteId, paced } from "../notify/pace";
 import { badgeCount } from "../notify/badge";
 import { toAcknowledge } from "../notify/seen";
+import { admit, ledger } from "./gone";
+import { finished } from "./finished";
 
 export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean };
 
@@ -207,6 +209,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string; fresh?: boolean } & Turn>("agent-status", (e) => {
       const { paneKey, state, children, tool, detail, ask, reply, wrote, boundary, stop, plan, planCut, session, monitoring, fresh } = e.payload;
+      // STAT-031 / T-275: a closed tab's late event, or a retired pane's, changes nothing.
+      if (!admit(ledger, paneKey, new Set(panesRef.current.map((x) => x.key)), { state, fresh })) return;
       // SESS-030: the newest session id is what a restart resumes (a /clear or a resume brings a new one).
       if (session) setPanes((ps) => (ps.some((p) => p.key === paneKey && p.session !== session) ? ps.map((p) => (p.key === paneKey ? { ...p, session } : p)) : ps));
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
@@ -215,6 +219,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       const prev = hookRef.current[paneKey];
       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
       const note = turnNote(prev, e.payload);
+      // STAT-038 / T-309-b: a finish asks the sidebar's pull request poll for one early round.
+      if (note?.what === "finished") finished(paneKey, panesRef.current.find((x) => x.key === paneKey)?.cwd ?? null);
       if (note) {
         const p = panesRef.current.find((x) => x.key === paneKey);
         if (p) noticedRef.current(p, note.what, note.body, note.stopped ? "notifyOnStopped" : "notifyOnFinish");
