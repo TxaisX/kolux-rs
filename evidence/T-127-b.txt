@@ -1,0 +1,29 @@
+T-127-b (lane/repo from 0202532f): the comments part of the line is built (VIEW-075, GIT-030 reading and answering); the rest of the line stays open.
+
+BUILT
+- src/scm/CommentsPanel.tsx (+ comments.css): the pull request's comments as cards under the checks in the Checks tab. Groups Open,
+  Conversation and Resolved (oldest first), or one chronological list (By time button); Hide bots; Refresh; Add comment button after
+  the display options opens a composer that posts to the conversation; thread cards: Reply (composer, indented replies under the
+  thread's first comment), Resolve / Reopen; reactions with counts (own ones marked) and a "+" picker of the 8 GitHub reactions;
+  compact relative times; the first-100 note; Enter sends, Shift+Enter is a new line, Enter while an input method composes does
+  nothing; a blank comment cannot be sent. Every change goes to GitHub through scm_review_act, then the comments are read again.
+- src/scm/review.ts: cardGroups, cardCount, sendsOnEnter, REACTION_CHOICES/emojiOf, reactKind, placeOf, botNames/REVIEW_BOTS_KEY
+  (store key reviewBots, author names treated as bots); Comment gained reactions.
+- src-tauri/src/pr_review.rs: reactions read (GraphQL reactionGroups, mapped to REST names, zero counts dropped, viewer's own marked),
+  Act::ReactTalk + scm_review_act kind react_talk (conversation comments use issues/comments/{id}/reactions).
+- src/scm/ChecksPanel.tsx: renders the CommentsPanel for the branch's pull request.
+- No shared file touched; no patch.
+
+TESTS
+- cargo test pr_review 12/12 (reactions parsed; React and ReactTalk make different calls); clippy --all-targets -D warnings clean; build ok.
+- vitest src/scm src/projects 328/328 (3 new in review.test.ts: grouping/order, Enter + IME, reactions/places/bot names); tsc 0.
+
+STILL OPEN ON THE LINE: queuing threads for the agent with one combined reply (T-230-d), a pull request the host reports unlinked kept
+hidden / the user's unlink notice with link-again, session rows, finding a past session's live pane, tab titles (need T-169).
+
+LIVE PROOF PENDING (batched)
+1. Open the Checks tab on a branch with a pull request that has review threads and conversation comments: cards appear grouped Open /
+   Conversation / Resolved; By time lists all oldest first.
+2. Click + on a card and pick a reaction: the count shows after the re-read and GitHub shows it.
+3. Reply to a thread (Enter sends), Resolve it: it moves to Resolved; Reopen puts it back.
+4. Add comment, type spaces only: Send stays disabled; type text, Enter: it is posted on the pull request.

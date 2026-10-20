@@ -54,7 +54,8 @@ export function relativeTime(iso: string | null | undefined, now: number): strin
   return "now";
 }
 
-export type Comment = { id: string; db_id: number | null; author: string; bot: boolean; body: string; at: string };
+export type Reaction = { content: string; count: number; mine: boolean };
+export type Comment = { id: string; db_id: number | null; author: string; bot: boolean; body: string; at: string; reactions?: Reaction[] };
 export type Thread = { id: string; path: string | null; line: number | null; resolved: boolean; comments: Comment[]; more: number };
 export type Review = { threads: Thread[]; talk: Comment[]; talk_more: number };
 
@@ -93,4 +94,80 @@ export function cleanComment(text: string): string | null {
 /** The note for threads or conversations longer than the 100 comments read. */
 export function moreNote(n: number): string | null {
   return n > 0 ? `${n} more comment${n === 1 ? "" : "s"} not shown; open the pull request on GitHub to read them.` : null;
+}
+
+// ---- VIEW-075: the comments as cards ---------------------------------------------------------------
+
+/** The reactions GitHub offers, by the name the REST call takes. */
+export const REACTION_CHOICES: { content: string; emoji: string; label: string }[] = [
+  { content: "+1", emoji: "👍", label: "Thumbs up" },
+  { content: "-1", emoji: "👎", label: "Thumbs down" },
+  { content: "laugh", emoji: "😄", label: "Laugh" },
+  { content: "hooray", emoji: "🎉", label: "Hooray" },
+  { content: "confused", emoji: "😕", label: "Confused" },
+  { content: "heart", emoji: "❤️", label: "Heart" },
+  { content: "rocket", emoji: "🚀", label: "Rocket" },
+  { content: "eyes", emoji: "👀", label: "Eyes" },
+];
+
+export const emojiOf = (content: string): string => REACTION_CHOICES.find((r) => r.content === content)?.emoji ?? content;
+
+export type CardGroups = { open: Thread[]; conversation: Comment[]; resolved: Thread[] };
+
+/** Open threads, the plain conversation and resolved threads, each oldest first. */
+export function cardGroups(r: Review): CardGroups {
+  const first = (t: Thread) => Date.parse(t.comments[0]?.at ?? "") || 0;
+  const byAge = (a: Thread, b: Thread) => first(a) - first(b);
+  return {
+    open: r.threads.filter((t) => !t.resolved).sort(byAge),
+    conversation: [...r.talk].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
+    resolved: r.threads.filter((t) => t.resolved).sort(byAge),
+  };
+}
+
+/** How many cards the comments make: threads plus conversation comments. */
+export const cardCount = (r: Review): number => r.threads.length + r.talk.length;
+
+/** Enter sends, Shift+Enter makes a new line, and Enter while an input method is composing does neither. */
+export function sendsOnEnter(e: { key: string; shiftKey: boolean; isComposing?: boolean; keyCode?: number }): boolean {
+  if (e.key !== "Enter" || e.shiftKey) return false;
+  return !(e.isComposing === true || e.keyCode === 229);
+}
+
+/** The settings key of author names the user marked as bots. */
+export const REVIEW_BOTS_KEY = "reviewBots";
+export const botNames = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/** The REST kind a reaction goes by: review comments and conversation comments use different calls. */
+export const reactKind = (inThread: boolean): "react" | "react_talk" => (inThread ? "react" : "react_talk");
+
+/** What a card says about its place: the file and line of a thread, nothing for the conversation. */
+export const placeOf = (t: Pick<Thread, "path" | "line">): string => (t.path ? (t.line ? `${t.path}:${t.line}` : t.path) : "");
+
+/** GIT-031: the text that asks the agent to address the queued review comments, each with where it is. */
+export function reviewPrompt(threads: Thread[]): string {
+  const parts = threads.map((t, i) => {
+    const where = t.path ? `${t.path}${t.line ? ":" + t.line : ""}` : "pull request conversation";
+    const said = t.comments.map((c) => `  ${c.author}: ${c.body.trim().slice(0, 2000)}`).join("\n");
+    return `${i + 1}. ${where}\n${said}`;
+  });
+  return `These review comments were left on this branch's pull request. Address each one in the code, run the tests, and tell me what you changed for each number.\n\n${parts.join("\n\n")}`;
+}
+
+/** The threads that can be answered from here: they need the first comment's id to reply to. */
+export function repliable(threads: Thread[]): Thread[] {
+  return threads.filter((t) => t.comments[0]?.db_id != null);
+}
+
+export type Conflicts = { state: "conflicts" | "clean" | "unknown"; files: string[]; base: string; note: string; prompt: string | null };
+
+/** GIT-032: what to tell the person when the host reports a conflict, given the local trial merge. */
+export function conflictView(c: Conflicts | null): { kind: "files" | "stale" | "unknown"; text: string; commands: string[] } {
+  if (!c || c.state === "unknown") return { kind: "unknown", text: c?.note ?? "Kolux has not tried the merge yet.", commands: [] };
+  if (c.state === "conflicts") return { kind: "files", text: c.note, commands: [] };
+  return {
+    kind: "stale",
+    text: `GitHub reports a conflict, but this branch merges with ${c.base} cleanly here. Fetch first: the host may be out of date or your copy of ${c.base} is old. If it still shows after a fetch, a new commit or reopening makes GitHub work it out again.`,
+    commands: [`git fetch origin ${c.base}`, 'git commit --allow-empty -m "Recompute mergeability"'],
+  };
 }
