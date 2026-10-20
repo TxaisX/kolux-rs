@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseInline, parseMarkdown, safeHref } from "./markdown";
+import { type Block, parseInline, parseMarkdown, safeHref } from "./markdown";
+
+/** What each block shows as plain words (a list's items are not read). */
+const words = (blocks: Block[]) => blocks.map((b) => (b.t === "code" ? b.text : b.t === "list" ? "" : b.spans.map((x) => x.text).join("")));
 
 describe("GIT-050 rendered descriptions", () => {
   it("turns markdown into blocks", () => {
@@ -22,9 +25,24 @@ describe("GIT-050 rendered descriptions", () => {
     expect(spans.some((s) => s.t === "text" && s.text.includes("[bad](javascript:alert(1)"))).toBe(true);
   });
   it("leaves HTML comments out, as a pull request template's hints, but keeps them in code", () => {
-    const blocks = parseMarkdown("Intro\n\n<!-- Describe the change\nover two lines -->\n\nAfter <!-- inline --> text <!-- unclosed\nstill hidden\n\n```\n<!-- kept -->\n```\n");
-    const words = blocks.map((b) => (b.t === "code" ? b.text : b.t === "list" ? "" : b.spans.map((x) => x.text).join("")));
-    expect(words).toEqual(["Intro", "After  text", "<!-- kept -->"]);
+    const blocks = parseMarkdown("Intro\n\n<!-- Describe the change\nover two lines -->\n\nAfter <!-- inline --> text\n\n```\n<!-- kept -->\n```\n");
+    expect(words(blocks)).toEqual(["Intro", "After  text", "<!-- kept -->"]);
+  });
+  it("shows the text as written when a comment never closes (stand-in review FIX-SOON 2)", () => {
+    // prose that merely mentions the opener must not swallow the rest of the description
+    expect(words(parseMarkdown("Use <!-- to start a hint\n\nSecond paragraph\n\n- item"))).toEqual(["Use <!-- to start a hint", "Second paragraph", ""]);
+    // a closed comment before it is still left out; only the one that never closes is kept
+    expect(words(parseMarkdown("A <!-- gone --> B <!-- open\n\nlast"))).toEqual(["A  B <!-- open", "last"]);
+    // two openers, the first closed by the only terminator: the second shows
+    expect(words(parseMarkdown("x <!-- one\nstill one --> y <!-- two\nz"))).toEqual(["x y <!-- two z"]);
+  });
+  it("treats a tilde fence like a backtick fence, so a comment inside it is kept", () => {
+    const blocks = parseMarkdown("Before\n\n~~~\n<!-- kept in tildes -->\n~~~\n\nAfter <!-- hint -->\n");
+    expect(blocks.map((b) => b.t)).toEqual(["para", "code", "para"]);
+    expect(words(blocks)).toEqual(["Before", "<!-- kept in tildes -->", "After"]);
+    // a fence closes only with its own marker: backticks inside a tilde fence do not end it
+    const mixed = parseMarkdown("~~~\n```\n<!-- still code -->\n~~~\n\nok");
+    expect(words(mixed)).toEqual(["```\n<!-- still code -->", "ok"]);
   });
   it("reads bold, italic and inline code", () => {
     expect(parseInline("a **b** *c* `d`").map((s) => s.t)).toEqual(["text", "bold", "text", "italic", "text", "code"]);

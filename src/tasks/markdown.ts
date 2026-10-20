@@ -47,29 +47,51 @@ export function parseInline(text: string): Span[] {
   return out;
 }
 
-/** HTML comments (a pull request template's hints) never show, even across lines; code blocks keep theirs. */
+/** The marker a code fence line opens or closes with (backticks or tildes), else null. */
+const fenceMark = (line: string) => (line.startsWith("```") ? "```" : line.startsWith("~~~") ? "~~~" : null);
+
+/**
+ * HTML comments (a pull request template's hints) never show, even across lines; code blocks keep
+ * theirs. A comment that never closes is not a comment: its opener and the text after it show as
+ * written, so prose that merely mentions the opener cannot hide the rest of a description.
+ */
 function withoutComments(lines: string[]): string[] {
-  let fenced = false;
-  let inComment = false;
-  return lines.map((line) => {
-    if (/^```/.test(line)) fenced = !fenced;
-    if (fenced || /^```/.test(line)) return line;
-    let rest = line;
-    let out = "";
-    for (;;) {
-      if (inComment) {
-        const end = rest.indexOf("-->");
-        if (end < 0) return out;
-        rest = rest.slice(end + 3);
-        inComment = false;
+  const literal = new Set<string>(); // openers (line:column) known to have no closer
+  for (;;) {
+    let fence: string | null = null;
+    let open: string | null = null; // where the comment now open began
+    const out = lines.map((line, i) => {
+      const mark = fenceMark(line);
+      if (mark && (fence === null || fence === mark)) {
+        fence = fence === null ? mark : null;
+        return line;
       }
-      const start = rest.indexOf("<!--");
-      if (start < 0) return out + rest;
-      out += rest.slice(0, start);
-      rest = rest.slice(start + 4);
-      inComment = true;
-    }
-  });
+      if (fence !== null) return line;
+      let rest = line;
+      let kept = "";
+      for (;;) {
+        if (open !== null) {
+          const end = rest.indexOf("-->");
+          if (end < 0) return kept;
+          rest = rest.slice(end + 3);
+          open = null;
+        }
+        const start = rest.indexOf("<!--");
+        if (start < 0) return kept + rest;
+        const at = `${i}:${line.length - rest.length + start}`;
+        if (literal.has(at)) {
+          kept += rest.slice(0, start + 4);
+          rest = rest.slice(start + 4);
+          continue;
+        }
+        kept += rest.slice(0, start);
+        rest = rest.slice(start + 4);
+        open = at;
+      }
+    });
+    if (open === null) return out;
+    literal.add(open);
+  }
 }
 
 export function parseMarkdown(source: string): Block[] {
@@ -82,10 +104,11 @@ export function parseMarkdown(source: string): Block[] {
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^```/.test(line)) {
+    const mark = fenceMark(line);
+    if (mark) {
       flush();
       const body: string[] = [];
-      for (i++; i < lines.length && !/^```/.test(lines[i]); i++) body.push(lines[i]);
+      for (i++; i < lines.length && !lines[i].startsWith(mark); i++) body.push(lines[i]);
       blocks.push({ t: "code", text: body.join("\n") });
       continue;
     }

@@ -113,8 +113,21 @@ pub fn issue(gh: &Path, repo: &Path, number: u64) -> Result<Issue, String> {
 /// PROJ-037: whether any remote in `remotes` (`git config --get-regexp` lines: key, then the
 /// address as the user wrote it) is the GitHub repository `host/owner/name`.
 pub fn has_repo(remotes: &str, host: &str, owner: &str, name: &str) -> bool {
+    has_repo_with(remotes, host, owner, name, &user_ssh_config())
+}
+
+/// `has_repo` with the SSH config text given: an SSH alias remote (`git@work-gh:acme/app.git`) is the
+/// host the alias stands for, the same reading the page's `scm_github_repo` gives, so the merge gate
+/// and the page agree (stand-in review FIX-SOON 1).
+pub fn has_repo_with(remotes: &str, host: &str, owner: &str, name: &str, ssh_config: &str) -> bool {
     let want = format!("{host}/{owner}/{name}").to_lowercase();
-    remotes.lines().filter_map(|l| l.split_once(' ')).any(|(_, url)| crate::scm::github_repo(url, "").is_some_and(|g| g.key == want))
+    remotes.lines().filter_map(|l| l.split_once(' ')).any(|(_, url)| crate::scm::github_repo(url, ssh_config).is_some_and(|g| g.key == want))
+}
+
+/// The user's SSH config text, empty when there is none (the twin of scm.rs's private reader).
+pub fn user_ssh_config() -> String {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    home.and_then(|h| std::fs::read_to_string(Path::new(&h).join(".ssh").join("config")).ok()).unwrap_or_default()
 }
 
 /// The remote addresses of the repository at `repo` as written (an insteadOf rewrite is not
@@ -283,6 +296,10 @@ mod tests {
         assert!(!has_repo(remotes, "github.com", "acme", "other"));
         assert!(!has_repo(remotes, "ghe.corp.example", "acme", "app"), "the host counts");
         assert!(!has_repo("", "github.com", "acme", "app"));
+        // an ssh alias is the host it stands for (the page reads remotes the same way)
+        let aliased = "remote.origin.url git@work-gh:acme/app.git\n";
+        assert!(has_repo_with(aliased, "github.com", "acme", "app", "Host work-gh\n  HostName github.com\n"));
+        assert!(!has_repo_with(aliased, "github.com", "acme", "app", ""));
         let issue = parse_issue(r#"{"number":34,"title":"Crash on save","url":"https://github.com/acme/app/issues/34"}"#).unwrap();
         assert_eq!((issue.number, issue.title.as_str()), (34, "Crash on save"));
         assert!(parse_issue("not json").unwrap_err().contains("cannot read"));

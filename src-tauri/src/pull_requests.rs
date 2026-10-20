@@ -452,16 +452,30 @@ pub fn merge(gh: &Path, host: &str, repo: &str, number: u64, method: &str, confi
     Ok(s(&v["sha"]))
 }
 
-/// The merge, only for a repository added in Kolux (stand-in review FIX-BEFORE 3): `remotes` is one
-/// `git config --get-regexp` text per added project, and `host/owner/name` must be a GitHub remote of
-/// one of them. The page already hides Merge for other repositories; this keeps the rule when the
-/// command is called any other way. Nothing reaches gh when it is refused.
-pub fn merge_in_added(gh: &Path, remotes: &[String], (host, repo): (&str, &str), number: u64, method: &str, confirmed: bool, sha: &str) -> Result<String, String> {
-    let added = repo.split_once('/').is_some_and(|(owner, name)| remotes.iter().any(|r| crate::pr_checkout::has_repo(r, host, owner, name)));
-    if !added {
+/// The merge, only for a repository added in Kolux (stand-in review FIX-BEFORE 3): `added` is one
+/// `git config --get-regexp` text per added project plus the user's SSH config text, and
+/// `host/owner/name` must be a GitHub remote of one of them (an SSH alias counts as the host it
+/// stands for, as on the page). The page already hides Merge for other repositories; this keeps the
+/// rule when the command is called any other way. Nothing reaches gh when it is refused.
+pub fn merge_in_added(gh: &Path, added: (&[String], &str), (host, repo): (&str, &str), number: u64, method: &str, confirmed: bool, sha: &str) -> Result<String, String> {
+    let (remotes, ssh_config) = added;
+    let is_added = repo.split_once('/').is_some_and(|(owner, name)| remotes.iter().any(|r| crate::pr_checkout::has_repo_with(r, host, owner, name, ssh_config)));
+    if !is_added {
         return Err("Add this repository in Kolux to merge from here.".into());
     }
     merge(gh, host, repo, number, method, confirmed, sha)
+}
+
+/// The folders of the projects added in Kolux. The store lock is held only to read that list.
+pub fn added_paths(store: &std::sync::Mutex<crate::state::Store>) -> Result<Vec<String>, String> {
+    Ok(crate::projects::load_projects(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|p| p.path).collect())
+}
+
+/// `merge_in_added` over the added projects' folders: their remotes are read from git here, outside
+/// any lock.
+pub fn merge_in_paths(gh: &Path, (paths, ssh_config): (&[String], &str), target: (&str, &str), number: u64, method: &str, confirmed: bool, sha: &str) -> Result<String, String> {
+    let remotes: Vec<String> = paths.iter().map(|p| crate::pr_checkout::remotes(Path::new(p))).collect();
+    merge_in_added(gh, (&remotes, ssh_config), target, number, method, confirmed, sha)
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce(&Path) -> Result<T, String> + Send + 'static) -> Result<T, String> {
@@ -529,13 +543,8 @@ pub async fn pr_reply(host: String, repo: String, number: u64, comment: u64, bod
 
 #[tauri::command]
 pub async fn pr_merge(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, host: String, repo: String, number: u64, method: String, confirmed: bool, sha: String) -> Result<String, String> {
-    // the folders of the projects added in Kolux; the lock is held only to read that list
-    let paths: Vec<String> = crate::projects::load_projects(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|p| p.path).collect();
-    blocking(move |gh| {
-        let remotes: Vec<String> = paths.iter().map(|p| crate::pr_checkout::remotes(Path::new(p))).collect();
-        merge_in_added(gh, &remotes, (&host, &repo), number, &method, confirmed, &sha)
-    })
-    .await
+    let paths = added_paths(&store)?;
+    blocking(move |gh| merge_in_paths(gh, (&paths, &crate::pr_checkout::user_ssh_config()), (&host, &repo), number, &method, confirmed, &sha)).await
 }
 
 #[cfg(test)]
@@ -763,13 +772,13 @@ mod tests {
     fn a_merge_is_refused_for_a_repository_no_added_project_has_as_a_remote() {
         let (gh, dir) = stand_in("pr-merge-added", &json!({ "merged": true, "sha": "deadbeef" }));
         let mine = vec!["remote.origin.url https://github.com/Acme/App.git\n".to_string(), "remote.origin.url git@github.com:corp/lib.git\nremote.up.url https://github.com/other/thing\n".to_string()];
-        let go = |host: &str, repo: &str| merge_in_added(&gh, &mine, (host, repo), 7, "squash", true, "abc1234");
+        let go = |host: &str, repo: &str| merge_in_added(&gh, (&mine, ""), (host, repo), 7, "squash", true, "abc1234");
         let refused = "Add this repository in Kolux to merge from here.";
         // another host with the same name, a stranger, no projects at all, a malformed name
         assert_eq!(go("git.corp.example", "acme/app").unwrap_err(), refused);
         assert_eq!(go("git.corp.example", "corp/lib").unwrap_err(), refused);
         assert_eq!(go("github.com", "nobody/nothing").unwrap_err(), refused);
-        assert_eq!(merge_in_added(&gh, &[], ("github.com", "acme/app"), 7, "squash", true, "abc1234").unwrap_err(), refused);
+        assert_eq!(merge_in_added(&gh, (&[], ""), ("github.com", "acme/app"), 7, "squash", true, "abc1234").unwrap_err(), refused);
         assert_eq!(go("github.com", "acme").unwrap_err(), refused);
         assert!(!dir.join("calls.txt").exists(), "a refused merge never reached gh");
         // added: https in another case, ssh, a second remote of the same checkout
@@ -778,7 +787,70 @@ mod tests {
         assert_eq!(go("github.com", "other/thing").unwrap(), "deadbeef");
         assert_eq!(calls(&dir).lines().count(), 3);
         // being added does not skip the other checks
-        assert!(merge_in_added(&gh, &mine, ("github.com", "acme/app"), 7, "squash", false, "abc1234").unwrap_err().contains("confirm"));
+        assert!(merge_in_added(&gh, (&mine, ""), ("github.com", "acme/app"), 7, "squash", false, "abc1234").unwrap_err().contains("confirm"));
+    }
+
+    const SSH_CONFIG: &str = "Host work-gh\n  HostName github.com\n  User git\n\nHost corp-gh\n  HostName git.corp.example\n";
+
+    #[test]
+    fn a_remote_through_an_ssh_alias_is_the_host_the_alias_stands_for_as_on_the_page() {
+        let (gh, dir) = stand_in("pr-merge-alias", &json!({ "merged": true, "sha": "deadbeef" }));
+        let mine = vec!["remote.origin.url git@work-gh:acme/app.git\n".to_string(), "remote.origin.url ssh://git@corp-gh/corp/lib.git\n".to_string()];
+        let go = |ssh: &str, host: &str, repo: &str| merge_in_added(&gh, (&mine, ssh), (host, repo), 7, "squash", true, "abc1234");
+        let merges = |d: &std::path::Path| calls(d).lines().filter(|l| l.contains("/merge")).count();
+        let refused = "Add this repository in Kolux to merge from here.";
+        // the page's own reading (scm_github_repo) gives github.com/acme/app for this remote; so does the gate
+        assert_eq!(crate::scm::github_repo("git@work-gh:acme/app.git", SSH_CONFIG).unwrap().key, "github.com/acme/app");
+        assert_eq!(go(SSH_CONFIG, "github.com", "acme/app").unwrap(), "deadbeef");
+        // an alias for another host is added too; gh then only has to be signed in there (it is not, in this stand-in)
+        assert_ne!(go(SSH_CONFIG, "git.corp.example", "corp/lib").unwrap_err(), refused);
+        assert_eq!(merges(&dir), 1);
+        // the alias is not the host itself, and an alias for one host is not another host
+        assert_eq!(go(SSH_CONFIG, "work-gh", "acme/app").unwrap_err(), refused);
+        assert_eq!(go(SSH_CONFIG, "github.com", "corp/lib").unwrap_err(), refused);
+        assert_eq!(go(SSH_CONFIG, "git.corp.example", "acme/app").unwrap_err(), refused);
+        assert_eq!(merges(&dir), 1, "a refused merge never reached gh");
+        // without an ssh config the alias is unknown, so it matches no real host
+        assert_eq!(go("", "github.com", "acme/app").unwrap_err(), refused);
+    }
+
+    fn repo_with_origin(name: &str, url: &str) -> crate::test_dir::TempDir {
+        let dir = crate::test_dir::temp(name);
+        for args in [vec!["init", "-q"], vec!["remote", "add", "origin", url]] {
+            let ok = std::process::Command::new("git").args(&args).current_dir(&*dir).output().unwrap().status.success();
+            assert!(ok, "git {args:?}");
+        }
+        dir
+    }
+
+    #[test]
+    fn the_merge_command_reads_the_added_projects_from_the_store_and_their_remotes_from_git() {
+        let (gh, calls_dir) = stand_in("pr-merge-wrap", &json!({ "merged": true, "sha": "deadbeef" }));
+        let aliased = repo_with_origin("pr-merge-wrap-a", "git@work-gh:acme/app.git");
+        let plain = repo_with_origin("pr-merge-wrap-b", "https://github.com/Corp/Lib.git");
+        let not_a_repo = crate::test_dir::temp("pr-merge-wrap-c"); // an added folder that is gone as a repository
+        let profile = crate::test_dir::temp("pr-merge-wrap-profile");
+        let store = std::sync::Mutex::new(crate::state::Store::open(&profile).unwrap());
+        // nothing added yet: nothing is read, nothing is merged
+        assert_eq!(added_paths(&store).unwrap(), Vec::<String>::new());
+        {
+            let s = store.lock().unwrap();
+            for d in [&aliased, &plain, &not_a_repo] {
+                crate::projects::register_project(&s, ((**d).clone(), (**d).clone())).unwrap();
+            }
+        }
+        let paths = added_paths(&store).unwrap();
+        assert_eq!(paths.len(), 3);
+        assert!(store.try_lock().is_ok(), "the store lock is not held after the paths are read");
+        let go = |ssh: &str, host: &str, repo: &str| merge_in_paths(&gh, (&paths, ssh), (host, repo), 7, "squash", true, "abc1234");
+        let refused = "Add this repository in Kolux to merge from here.";
+        // an aliased origin is merged when the user's ssh config names the alias, refused when it does not
+        assert_eq!(go(SSH_CONFIG, "github.com", "acme/app").unwrap(), "deadbeef");
+        assert_eq!(go("", "github.com", "acme/app").unwrap_err(), refused);
+        assert_eq!(go("", "github.com", "corp/lib").unwrap(), "deadbeef");
+        assert_eq!(go(SSH_CONFIG, "github.com", "nobody/else").unwrap_err(), refused);
+        assert_eq!(calls(&calls_dir).lines().count(), 2);
+        drop(store);
     }
 
     #[test]

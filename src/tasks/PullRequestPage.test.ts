@@ -152,6 +152,31 @@ describe("T-232-c the pull request page only writes when told to", () => {
     expect(sent("pr_files")).toHaveLength(1);
   });
 
+  it("a files answer still in flight for the old head is dropped when a Reload finds a new head (stand-in review FIX-SOON 3)", async () => {
+    const file = (filename: string) => ({ files: [{ filename, status: "modified", additions: 1, deletions: 0, patch: "@@" }], truncated: false, limit: 500 });
+    // the first read of the files is held open by the test; later reads answer at once
+    let release: (v: unknown) => void = () => {};
+    let reads = 0;
+    h.answers.pr_files = () => (++reads === 1 ? new Promise((res) => (release = res)) : file("src/new.ts"));
+    const c = await open();
+    await click(c, withText(c, "button", "Files changed")[0]);
+    await until(() => sent("pr_files").length === 1, "the first files read");
+    // someone pushes; the page is reloaded (the button sits on the Conversation tab) while the old read is still pending
+    await click(c, withText(c, "button", "Conversation")[0]);
+    h.answers.pr_page = page({ headSha: "fed9876cba" });
+    await click(c, byText(c, "button", "Reload")[0]);
+    await until(() => sent("pr_threads").length > 1, "the reload");
+    await settle();
+    // the old head's answer arrives late
+    release(file("src/old.ts"));
+    await settle();
+    await click(c, withText(c, "button", "Files changed")[0]);
+    await settle();
+    expect(withText(c, "summary", "src/old.ts")).toHaveLength(0);
+    expect(withText(c, "summary", "src/new.ts")).toHaveLength(1);
+    expect(sent("pr_files")).toHaveLength(2);
+  });
+
   it("Cancel on the confirm step sends nothing and closes it", async () => {
     const c = await open();
     await click(c, byText(c, "button", "Merge...")[0]);

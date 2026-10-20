@@ -36,10 +36,17 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   // old head are dropped and a merge confirm still open is closed, so a merge never pins a commit
   // whose files were not shown (stand-in review FIX-BEFORE 1).
   const shown = useRef<string | null>(null);
+  // Counts the head changes seen. A files read remembers the count it started under and is dropped
+  // when the count has moved, so a late answer for an old head never replaces the dropped files
+  // (stand-in review FIX-SOON 3); the count is also state so the files effect reads them again.
+  const headChanges = useRef(0);
+  const [headEpoch, setHeadEpoch] = useState(0);
   const reload = useCallback(async () => {
     try {
       const p = await invoke<PrPageData>("pr_page", args);
       if (shown.current !== null && shown.current !== p.headSha) {
+        headChanges.current += 1;
+        setHeadEpoch(headChanges.current);
         setFiles(null);
         setSure(false);
         setNote("New commits were pushed since you opened this page; check Files changed again.");
@@ -59,9 +66,15 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
     void invoke<Person[]>("github_people", { host: target.host, repo: target.repo }).then(setPeople, () => setPeople([]));
   }, [reload, target.host, target.repo]);
   useEffect(() => {
-    if (tab === "files" && files === null) void invoke<PrFiles>("pr_files", args).then(setFiles, (e) => (setFiles({ files: [], truncated: false, limit: 0 }), setNote(say(e))));
+    if (tab !== "files" || files !== null) return;
+    const started = headChanges.current;
+    const current = () => started === headChanges.current;
+    void invoke<PrFiles>("pr_files", args).then(
+      (f) => current() && setFiles(f),
+      (e) => current() && (setFiles({ files: [], truncated: false, limit: 0 }), setNote(say(e))),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, files]);
+  }, [tab, files, headEpoch]);
 
   /** One write, then read the page again; its error shows in the note. */
   const act = async (f: () => Promise<unknown>, done?: string) => {
