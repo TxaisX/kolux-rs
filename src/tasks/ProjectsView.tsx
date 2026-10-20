@@ -2,13 +2,15 @@
 // or a pasted URL / owner and number), open one of its views, and read and edit it as a table whose
 // columns sort and group. Board views are marked unsupported in the picker and in the view alike;
 // roadmap views are drawn as a timeline (T-549; GIT-057, one rule for both: viewSupport).
-// ponytail: assignee and issue-type cells, and adding a repository that is not in Kolux, are T-314-d.
+// T-314-d: the assignee and issue-type cells are the issue's own fields (edited on the issue, not through
+// the project), and a row of a repository that is not open in Kolux offers to add it (the clone dialog).
 import { invoke } from "@tauri-apps/api/core";
 import { Fragment, useEffect, useRef, useState } from "react";
+import AddRepo from "./AddRepo";
 import { Refresh } from "../chrome/icons";
 import type { Project as KoluxProject } from "../projects/model";
 import Timeline from "./RoadmapTimeline";
-import { applyCellEdit, cellEditable, cellKey, cellText, endSave, isSaving, newBook, readBackFresh, readBackLost, readBackStart, sendEdit, settleEdit, type Saving, startSave, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, projectHostRefused, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyAssignees, applyCellEdit, assigneeChange, cellEditable, cloneAddress, cellKey, cellText, endSave, isSaving, newBook, readBackFresh, readBackLost, readBackStart, sendEdit, settleEdit, type Saving, startSave, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, projectHostRefused, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 type Settings = Record<string, unknown> | null;
 type Save = (patch: Record<string, unknown>) => Promise<unknown> | void;
@@ -23,9 +25,32 @@ async function koluxRepos(): Promise<string[]> {
   return repos.flatMap((r) => (r ? [`${r.owner}/${r.name}`.toLowerCase()] : []));
 }
 
-function CellEditor({ item, field, onDone }: { item: ProjectItem; field: ProjectField; onDone: (value: string | null) => void }) {
-  const now = field.kind === "single_select" || field.kind === "iteration" ? (item.values[field.id]?.id ?? "") : cellText(item, field);
+function CellEditor({ item, field, host, onDone }: { item: ProjectItem; field: ProjectField; host: string; onDone: (value: string | null) => void }) {
+  const now = field.kind === "single_select" || field.kind === "iteration" ? (item.values[field.id]?.id ?? "") : field.kind === "assignees" ? item.assignees.join(", ") : field.kind === "issue_type" ? item.issueType : cellText(item, field);
   const [text, setText] = useState(now);
+  // T-314-d: what the repository offers for this cell (its issue types; the people who can be assigned).
+  const [offered, setOffered] = useState<string[]>([]);
+  useEffect(() => {
+    if (field.kind !== "issue_type" && field.kind !== "assignees") return;
+    let live = true;
+    const ask = field.kind === "issue_type" ? invoke<string[]>("github_issue_types", { host, repo: item.repo }) : invoke<{ login: string }[]>("github_people", { host, repo: item.repo }).then((p) => p.map((x) => x.login));
+    ask.then((o) => live && setOffered(o), () => {});
+    return () => {
+      live = false;
+    };
+  }, [field.kind, host, item.repo]);
+  if (field.kind === "issue_type") {
+    return (
+      <select className="field" autoFocus value={text} aria-label={field.name} onChange={(e) => onDone(e.target.value)} onBlur={() => onDone(null)} onKeyDown={(e) => e.key === "Escape" && onDone(null)}>
+        <option value="">No issue type</option>
+        {[...new Set([...(item.issueType ? [item.issueType] : []), ...offered])].map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+      </select>
+    );
+  }
   if (field.kind === "single_select" || field.kind === "iteration") {
     return (
       <select className="field" autoFocus value={text} aria-label={field.name} onChange={(e) => onDone(e.target.value)} onBlur={() => onDone(null)} onKeyDown={(e) => e.key === "Escape" && onDone(null)}>
@@ -42,20 +67,30 @@ function CellEditor({ item, field, onDone }: { item: ProjectItem; field: Project
   const type = field.kind === "number" ? "number" : field.kind === "date" ? "date" : "text";
   const commit = () => onDone(text === now ? null : text);
   return (
-    <input
-      className="field"
-      autoFocus
-      type={type}
-      value={text}
-      aria-label={field.name}
-      placeholder={field.kind === "labels" ? "bug, docs" : undefined}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") onDone(null);
-      }}
-    />
+    <>
+      <input
+        className="field"
+        autoFocus
+        type={type}
+        value={text}
+        aria-label={field.name}
+        placeholder={field.kind === "labels" ? "bug, docs" : field.kind === "assignees" ? "ana, bo" : undefined}
+        list={field.kind === "assignees" ? "projects-people" : undefined}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") onDone(null);
+        }}
+      />
+      {field.kind === "assignees" && (
+        <datalist id="projects-people">
+          {offered.map((l) => (
+            <option key={l} value={l} />
+          ))}
+        </datalist>
+      )}
+    </>
   );
 }
 
@@ -76,6 +111,8 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
   const [scope, setScope] = useState<Scope>(kept.scope);
   const [inKolux, setInKolux] = useState<string[]>([]);
   const [editing, setEditing] = useState<{ item: string; field: string } | null>(null);
+  // T-314-d: the repository (owner/name) whose "add to Kolux" copy dialog is open.
+  const [adding, setAdding] = useState<string | null>(null);
   const [cellError, setCellError] = useState<string | null>(null);
   // FIX-1 (council FS 1): the cells whose edit is still on its way to GitHub (a call can take 30 s).
   // FIX-2 (council AFTER 3): one entry per edit, so a second edit of the same cell keeps its mark.
@@ -185,6 +222,32 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
         .finally(end);
       return;
     }
+    if (field.kind === "assignees") {
+      const change = assigneeChange(item.assignees, value);
+      if (change.bad.length > 0) return setCellError(`${item.title}: ${change.bad.join(", ")} ${change.bad.length === 1 ? "is not a GitHub login" : "are not GitHub logins"}`);
+      if (change.add.length + change.remove.length === 0) return;
+      begin();
+      invoke("pr_assignees", { host: ref.host, repo: item.repo, number: item.number, add: change.add, remove: change.remove })
+        .then(() => settle(true, () => put({ assignees: applyAssignees(item.assignees, change) })))
+        .catch((e) => {
+          setCellError(`${item.title}: ${String(e)}`);
+          settle(false, () => {});
+        })
+        .finally(end);
+      return;
+    }
+    if (field.kind === "issue_type") {
+      if (value === item.issueType) return;
+      begin();
+      invoke<string>("github_issue_type_set", { host: ref.host, repo: item.repo, number: item.number, name: value })
+        .then((now) => settle(true, () => put({ issueType: now })))
+        .catch((e) => {
+          setCellError(`${item.title}: ${String(e)}`);
+          settle(false, () => {});
+        })
+        .finally(end);
+      return;
+    }
     begin();
     invoke("github_project_set", { host: ref.host, project: project.id, item: item.id, field: field.id, kind: field.kind, value })
       .then(() => settle(true, () => setProject((p) => p && applyCellEdit(p, item.id, field, value))))
@@ -226,15 +289,24 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
                     it.title
                   )}
                   {it.number !== null && <span className="tasks-kind"> #{it.number}</span>}
-                  {it.repo && scope.mode === "all" && inKolux.length > 0 && !inKolux.includes(it.repo.toLowerCase()) && <span className="projects-away" title="This repository is not open in Kolux">not in Kolux</span>}
+                  {it.repo && scope.mode === "all" && inKolux.length > 0 && !inKolux.includes(it.repo.toLowerCase()) && (
+                    <span className="projects-away" title="This repository is not open in Kolux">
+                      not in Kolux
+                      {ref && cloneAddress(ref.host, it.repo) && (
+                        <button className="btn" data-add-repo={it.repo} title={`Copy ${it.repo} from GitHub and add it to Kolux`} onClick={() => setAdding(it.repo)}>
+                          Add
+                        </button>
+                      )}
+                    </span>
+                  )}
                 </>
               )}
             </td>
           );
         }
         return (
-          <td key={f.id} data-kind={f.kind} className={can ? "editable" : undefined} tabIndex={can ? 0 : undefined} onClick={() => can && setEditing({ item: it.id, field: f.id })} onKeyDown={(e) => can && e.key === "Enter" && setEditing({ item: it.id, field: f.id })}>
-            {isEditing ? <CellEditor item={it} field={f} onDone={(v) => edit(it, f, v)} /> : cellText(it, f)}
+          <td key={f.id} data-kind={f.kind} className={can ? "editable" : undefined} tabIndex={can ? 0 : undefined} onClick={() => can && setEditing({ item: it.id, field: f.id })} onKeyDown={(e) => can && e.key === "Enter" && e.target === e.currentTarget && setEditing({ item: it.id, field: f.id })}>
+            {isEditing ? <CellEditor item={it} field={f} host={ref?.host ?? host} onDone={(v) => edit(it, f, v)} /> : cellText(it, f)}
             {isSaving(saving, cellKey(it.id, f.id)) &&<span className="tasks-kind" data-saving title="Saving to GitHub">{" "}saving…</span>}
           </td>
         );
@@ -244,6 +316,16 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
 
   return (
     <div className="projects" data-projects>
+      {adding && ref && cloneAddress(ref.host, adding) && (
+        <AddRepo
+          url={cloneAddress(ref.host, adding)!}
+          onClose={() => setAdding(null)}
+          onAdded={() => {
+            setAdding(null);
+            koluxRepos().then(setInKolux, () => {});
+          }}
+        />
+      )}
       <div className="projects-pick">
         <form
           className="autos-search"
