@@ -41,9 +41,32 @@ fn raw(store: &Store) -> Option<Onboarding> {
     store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
 }
 
+/// ONB-008 (T-208-c): the version that had a view-choice screen after the welcome. Coordinator
+/// default (no allowed source gives the old numbers): it is the version just before this one, and
+/// every version below it is the older five-step wizard. Txais may overrule in AFTER.
+const VIEW_CHOICE_VERSION: u32 = 6;
+/// ONB-008: a completed older record with at least this many steps maps to the last screen.
+const ENOUGH_STEPS: i32 = 3;
+
+/// ONB-008: the screen an older wizard's progress stands on in the four-screen wizard. A record with
+/// no version, or this version, is kept as it is; the view-choice version moves back by one past that
+/// screen; the five-step wizard restarts at screen one (even when dismissed), except a completed
+/// record with enough steps, which maps to the last screen.
+fn carried_step(rec: &Onboarding) -> i32 {
+    match rec.version {
+        0 => rec.step,
+        VERSION.. => rec.step,
+        VIEW_CHOICE_VERSION => (rec.step - 1).max(rec.step.min(0)),
+        _ if rec.outcome.as_deref() == Some("completed") && rec.step >= ENOUGH_STEPS => LAST,
+        _ if rec.outcome.as_deref() == Some("completed") => rec.step,
+        _ => -1,
+    }
+}
+
 /// ONB-008: progress held within the four screens, the version raised to this one, and a close
 /// time filled in when an outcome has none. Fields this version does not read are kept as they are.
 fn upgraded(mut rec: Onboarding, now: u64) -> Onboarding {
+    rec.step = carried_step(&rec);
     rec.version = VERSION;
     rec.step = rec.step.clamp(-1, LAST);
     if rec.outcome.is_some() && rec.closed_at.is_none() {
@@ -676,7 +699,7 @@ mod tests {
     #[test]
     fn an_older_record_is_brought_up_to_date_on_start() {
         let (s, dir) = store("upgrade");
-        s.set(KEY, r#"{"version":5,"step":9,"outcome":"dismissed","checklist":[true]}"#).unwrap();
+        s.set(KEY, r#"{"step":9,"outcome":"dismissed","checklist":[true]}"#).unwrap();
         first_start(&s, 4).unwrap();
         let rec = load(&s).unwrap();
         assert_eq!((rec.version, rec.step, rec.outcome.as_deref()), (VERSION, 3, Some("dismissed")));
@@ -688,6 +711,37 @@ mod tests {
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    /// ONB-008 (T-208-c): older wizards' progress lands on the same visible screen, or on screen one.
+    #[test]
+    fn older_wizard_progress_maps_onto_the_four_screens() {
+        let at = |version: u32, step: i32, outcome: Option<&str>| {
+            let rec = Onboarding { version, step, closed_at: None, outcome: outcome.map(Into::into), rest: Default::default() };
+            let up = upgraded(rec, 5);
+            (up.version, up.step)
+        };
+        // The view-choice version: past that screen, one back; before it, unchanged.
+        assert_eq!(at(VIEW_CHOICE_VERSION, 2, None), (VERSION, 1), "finished connect: connect was screen 3, now 2");
+        assert_eq!(at(VIEW_CHOICE_VERSION, 1, None), (VERSION, 0), "finished the view choice: resumes at connect");
+        assert_eq!(at(VIEW_CHOICE_VERSION, 0, None), (VERSION, 0));
+        assert_eq!(at(VIEW_CHOICE_VERSION, -1, None), (VERSION, -1));
+        assert_eq!(at(VIEW_CHOICE_VERSION, 4, Some("completed")), (VERSION, 3));
+        // The five-step wizard: unfinished progress restarts at screen one, even when dismissed.
+        assert_eq!(at(5, 3, None), (VERSION, -1));
+        assert_eq!(at(5, 3, Some("dismissed")), (VERSION, -1));
+        assert_eq!(at(1, 0, None), (VERSION, -1));
+        // A completed older record with enough steps maps to the last screen; one with fewer keeps its step.
+        assert_eq!(at(5, 4, Some("completed")), (VERSION, LAST));
+        assert_eq!(at(5, 3, Some("completed")), (VERSION, LAST));
+        assert_eq!(at(5, 1, Some("completed")), (VERSION, 1));
+        // This version, and a record with no version, are only held within the four screens.
+        assert_eq!(at(VERSION, 2, None), (VERSION, 2));
+        assert_eq!(at(VERSION, 9, None), (VERSION, 3));
+        assert_eq!(at(0, 2, None), (VERSION, 2));
+        // Raising the version stores once: a second pass changes nothing.
+        let once = upgraded(Onboarding { version: VIEW_CHOICE_VERSION, step: 3, closed_at: None, outcome: None, rest: Default::default() }, 5);
+        assert_eq!(upgraded(once.clone(), 6), once);
+    }
+
     #[test]
     fn reopening_starts_over_and_keeps_the_rest() {
         let done = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: Some("completed".into()), rest: serde_json::from_str(r#"{"checklist":[true],"checklistDismissed":true,"milestones":{"aiConnected":5}}"#).unwrap() };
