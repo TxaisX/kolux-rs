@@ -903,3 +903,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · cli T-250-c · rules from spec CLI-008/CLI-022 cards; macOS osascript administrator-prompt form from Apple's public Terminal/AppleScript documentation (developer.apple.com); this tree's own cli_register.rs and file_cli.rs; no outside code
 > 2026-10-19 · cli T-262-b · this tree's own cli.rs and agents/inventory.rs; no outside code
 > 2026-10-19 · cli T-279-d · this tree's own orchestration.rs (breaker_reset) and cli.rs; no outside code
+> 2026-10-20 · repo T-224-b (palette part) · spec/05 VIEW-043 as given in the brief; this tree's own scm and palette code; no outside source
+> 2026-10-20 · repo T-127-b (comments part) · spec/05 VIEW-075 and spec/11 GIT-030 as given in the brief; GitHub GraphQL and REST docs for reactionGroups and the reactions endpoints (docs.github.com); this tree's own pr_review.rs; no outside code
+> 2026-10-20 · repo T-230-d · spec/11 GIT-031 and GIT-032 as given in the brief; git documentation for merge-tree (git-scm.com/docs/git-merge-tree); this tree's own cli send path and scm code; no outside code
+> 2026-10-20 · repo T-294-c · spec/09 SET-033 and spec PROJ-035 as given in the brief; this tree's own setup.rs and settings pages; no outside code
