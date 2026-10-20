@@ -31,7 +31,9 @@ import { clampView, keepView, takeView } from "../terminal/viewKeep";
 import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
 import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";
-import { needsName } from "./untitled";
+import { isUntitled, needsName } from "./untitled";
+import DiffPane from "./DiffPane"; // EDIT-056: the Changes view (DiffPane imports this file back; both only use each other when rendering)
+import { drawn, underRoot, VIEW_LABEL, viewsFor, type View } from "./viewSwitch";
 import { createAutosave, covers, movingNow, prefsReader, type Autosave } from "./autosave";
 import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
@@ -200,6 +202,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const md = isMarkdown(path);
   const grid = isTable(path); // EDIT-023: a CSV or TSV file opens as a table, with Source beside it
   const [table, setTable] = useState(grid);
+  const [changesOn, setChangesOn] = useState(false); // EDIT-056: the Changes view (last commit beside the working file)
   const tableOn = grid && table;
   // EDIT-006: wrapping is on by default; the saved setting decides once it has loaded, Alt+Z flips it.
   const { settings, save: saveSetting } = useSettings();
@@ -433,6 +436,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   useEffect(() => {
     setMode(isMarkdown(path) ? "rich" : "source");
     setTable(isTable(path));
+    setChangesOn(false);
     setBigOk(false);
     setBanner(null);
   }, [path]);
@@ -448,13 +452,14 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   useEffect(() => {
     const cm = view.current;
     if (!cm || !hasSpot(path)) return;
+    if (changesOn) return setChangesOn(false);
     if (md && mode !== "source") return setMode("source");
     if (tableOn) return setTable(false);
     const s = takeSpot(path)!;
     const r = spotRange(cm.state.doc, s);
     cm.dispatch({ selection: { anchor: r.from, head: r.to }, effects: EditorView.scrollIntoView(r.from, { y: "center" }) });
     cm.focus();
-  }, [reveals, ready, mode, path, md, tableOn]);
+  }, [reveals, ready, mode, path, md, tableOn, changesOn]);
 
   // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
   useEffect(() => {
@@ -511,7 +516,24 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const name = baseName(path);
   // EDIT-005 / EDIT-009: find and conflict stepping act on the source view (the rich view's
   // find comes with EDIT-017).
-  const sourceShown = (!md || mode === "source") && !tableOn;
+  const sourceShown = (!md || mode === "source") && !tableOn && !changesOn;
+  // EDIT-056 (T-237-b): one switch for the views the file offers; Changes is only for files in the worktree.
+  const offer = viewsFor({ path, untitled: isUntitled(path, root), inWorktree: !readOnly && underRoot(path, root) });
+  const views = drawn(offer, grid);
+  const current: View = changesOn ? "changes" : tableOn ? "rendered" : md ? (mode === "rich" ? "rich" : "source") : grid ? "source" : "edit";
+  const pick = (v: View) => {
+    setChangesOn(v === "changes");
+    if (v === "rich") {
+      setMode("rich");
+      if (changesOn) setRichTries((n) => n + 1); // text typed in Changes reaches the rich view
+    }
+    if (v === "source") {
+      setMode("source");
+      setBanner(null);
+      setTable(false);
+    }
+    if (v === "rendered") setTable(true);
+  };
   const keymap = useKeymap();
   const stepConflicts = (dir: 1 | -1) => {
     const cm = view.current;
@@ -548,7 +570,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     e.preventDefault();
     e.stopPropagation();
   };
-  const shown = tableOn ? "table" : !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  const shown = changesOn ? "changes" : tableOn ? "table" : !md || mode === "source" ? "source" : richError ? "error" : "rich";
   const richRoot = useCallback(() => richHost.current, []);
   const hasHeadings = useMemo(() => md && outline(noteText).length > 0, [md, noteText]);
   const tocShown = toc && hasHeadings && shown === "rich";
@@ -624,31 +646,13 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         >
           Copy
         </button>
-        {md && (
+        {views.length > 1 && (
           <span className="view-switch" role="group" aria-label="View">
-            <button aria-pressed={mode === "rich"} onClick={() => setMode("rich")} title="Rich view">
-              Rich
-            </button>
-            <button
-              aria-pressed={mode === "source"}
-              onClick={() => {
-                setMode("source");
-                setBanner(null);
-              }}
-              title="Source view"
-            >
-              Source
-            </button>
-          </span>
-        )}
-        {grid && (
-          <span className="view-switch" role="group" aria-label="View">
-            <button aria-pressed={table} onClick={() => setTable(true)} title="Table view">
-              Table
-            </button>
-            <button aria-pressed={!table} onClick={() => setTable(false)} title="Source view">
-              Source
-            </button>
+            {views.map((v) => (
+              <button key={v} aria-pressed={current === v} onClick={() => pick(v)} title={offer.why?.[v] ?? `${VIEW_LABEL[v]} view`}>
+                {VIEW_LABEL[v]}
+              </button>
+            ))}
           </span>
         )}
         {hasHeadings && shown === "rich" && (
@@ -735,6 +739,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       {railShown && <NoteRail host={richHost} notes={railed} version={noteText} onRemove={onRemoveNote} />}
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
+      {changesOn && <DiffPane embedded against="head" id={id} path={path} root={root} staged={false} hidden={hidden || comparing} focused={focused} onFocus={onFocus} onToast={onToast} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
       {grid && <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />}
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (

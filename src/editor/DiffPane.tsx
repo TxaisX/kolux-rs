@@ -33,6 +33,7 @@ import { watchStatus } from "../scm/watch";
 import { askText, needsAsk } from "./bigDiff";
 import { bannerUp } from "./diskChange";
 import { covers, createAutosave, movingNow, prefsReader } from "./autosave";
+import { headSides } from "./viewSwitch";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
 /** SET-038 (T-323-b): how a new diff tab starts, from the Settings > General choices. */
@@ -136,9 +137,27 @@ const noteTools = (act: NoteActions, side: Side = "new"): Extension => [
 ];
 type Pop = { line: number; end: number; side?: Side; note?: LineNote; text: string; x: number; y: number; refused?: boolean };
 
-type Props = { id: number; path: string; staged: boolean; root?: string | null; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number; side?: "old" } };
+type Props = { id: number; path: string; staged: boolean; root?: string | null; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number; side?: "old" };
+  /** EDIT-056 (T-237-b): "head" compares the last commit with the working file (staged edits count as uncommitted). */
+  against?: "head";
+  /** The Changes view inside a file tab: that tab's header, save, copy and autosave stay in charge. */
+  embedded?: boolean;
+};
 
-export default function DiffPane({ id, path, staged, root = null, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump }: Props) {
+/** The diff's outer box: its own pane, or a plain filler inside a file tab. */
+function Shell({ embedded, focused, hidden, label, onFocus, onKeys, id, children }: { embedded: boolean; focused: boolean; hidden: boolean; label: string; onFocus?: () => void; onKeys: (e: React.KeyboardEvent) => void; id: number; children: React.ReactNode }) {
+  return embedded ? (
+    <div className="diff changes-view" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }} hidden={hidden} aria-label={label} onMouseDown={onFocus} onKeyDown={onKeys}>
+      {children}
+    </div>
+  ) : (
+    <section className={`pane editor diff${focused ? " focused" : ""}`} hidden={hidden} aria-label={label} onMouseDown={onFocus} onKeyDown={onKeys} data-kind="diff" data-key={id}>
+      {children}
+    </section>
+  );
+}
+
+export default function DiffPane({ id, path, staged, root = null, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump, against, embedded = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [sides, setSides] = useState<Sides | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -213,7 +232,10 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
     let alive = true;
     setError(null);
     const fetch = () =>
-      invoke<Sides>("diff_sides", { path, staged }).then(
+      (against === "head"
+        ? Promise.all([invoke<Sides>("diff_sides", { path, staged: true }), invoke<Sides>("diff_sides", { path, staged: false })]).then(([h, w]) => headSides(h, w))
+        : invoke<Sides>("diff_sides", { path, staged })
+      ).then(
         (s) => alive && setSides((old) => (old && old.original === s.original && old.modified === s.modified ? old : s)),
         (err) => alive && setError(String(err)),
       );
@@ -227,7 +249,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
       missed.current = null;
       stop();
     };
-  }, [path, staged, tries]);
+  }, [path, staged, tries, against]);
 
   // The views, built again when the layout or a menu option changes.
   useEffect(() => {
@@ -299,7 +321,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   // Unsaved marker and Mod+S, for an unstaged diff. The save carries the loaded hash like an editor
   // tab's (EDIT-003, T-073-c), so an agent's edit made behind the diff is never overwritten unseen.
   useEffect(() => {
-    if (staged) return;
+    if (staged || embedded) return; // a file tab's own pane saves, autosaves and answers Mod+S
     // EDIT-002: autosave covers the diff tab of one unstaged file.
     const auto = createAutosave({
       prefs: prefs.get,
@@ -323,7 +345,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
       off();
       editors.delete(id);
     };
-  }, [id, path, staged]);
+  }, [id, path, staged, embedded]);
 
   // GIT-040 / GIT-041: the cards follow the notes; opening a note from Source Control scrolls to it.
   useEffect(() => {
@@ -362,6 +384,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   // EDIT-007 (T-132-b): Copy Context in a diff copies the selection of the side that has focus (the
   // new side when neither has), headed by the path and the lines of that side.
   useEffect(() => {
+    if (embedded) return;
     copiers.set(id, () => {
       const v = views.current;
       if (!v) return false;
@@ -376,7 +399,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
       return true;
     });
     return () => void copiers.delete(id);
-  }, [id, path, root]);
+  }, [id, path, root, embedded]);
 
   useEffect(() => {
     if (focused && !hidden) views.current?.b.focus();
@@ -385,7 +408,8 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   const name = baseName(path);
   const step = (dir: 1 | -1) => diffNav.get(id)?.(dir);
   return (
-    <section className={`pane editor diff${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Diff of ${name}`} onMouseDown={onFocus} onKeyDown={onKeys} data-kind="diff" data-key={id}>
+    <Shell embedded={embedded} focused={focused} hidden={hidden} label={`Diff of ${name}`} onFocus={onFocus} onKeys={onKeys} id={id}>
+      {!embedded && (
       <header className="pane-head">
         <span className="agent-mark" title="Diff">
           <FileCode size={13} />
@@ -436,6 +460,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
           </button>
         </span>
       </header>
+      )}
       {error && (
         <div className="notice load-failed" role="alert">
           The diff of {name} did not load: {error}
@@ -453,7 +478,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
           </button>
         </div>
       )}
-      {ready && !changes && <div className="notice md-banner" role="status">No {staged ? "staged" : "unstaged"} changes in this file right now.</div>}
+      {ready && !changes && <div className="notice md-banner" role="status">{against === "head" ? "Nothing uncommitted in this file." : `No ${staged ? "staged" : "unstaged"} changes in this file right now.`}</div>}
       <div ref={host} className="pane-body diff-body" />
       {pop && (
         <>
@@ -484,6 +509,6 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
           </div>
         </>
       )}
-    </section>
+    </Shell>
   );
 }
