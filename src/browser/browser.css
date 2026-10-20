@@ -38,3 +38,9 @@
 .pane.browser .notes-tray .send-menu button { width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 3px 6px; cursor: pointer; }
 .pane.browser .notes-tray .send-menu button:hover { background: var(--chip-bg); }
 .pane.browser .notes-tray .send-menu small { color: var(--fg-muted); margin-left: 6px; }
+
+/* T-241 (BROW-039): a previewed document's folder and file stand in for the address. */
+.preview-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 0 6px; font-size: 12px; overflow: hidden; white-space: nowrap; }
+.preview-folder { opacity: 0.6; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.preview-sep { opacity: 0.5; }
+.preview-copy { font-size: 11px; }

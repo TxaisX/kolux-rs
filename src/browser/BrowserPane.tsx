@@ -30,6 +30,22 @@ type Props = { id: number; url?: string; title?: string; hidden?: boolean; focus
 export const OPEN_IN_BROWSER = "kolux-open-in-browser";
 export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
 
+/** T-241 (BROW-039): what a tab's address previews, when it is a worktree document of ours. */
+type Preview = { folder: string; file: string; path: string };
+
+/** T-241 (BROW-044): `kolux tab create` asks the window for a tab; one listener for the whole
+ * window, started by the first pane, so a tab opens once however many panes there are. */
+let bridge = false;
+function startBridge() {
+  if (bridge) return;
+  bridge = true;
+  listen<{ action: string; url?: string }>("browser-cli", (e) => {
+    if (e.payload.action === "create") openInBrowser(e.payload.url ?? BLANK);
+  }).catch(() => {
+    bridge = false;
+  });
+}
+
 type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; busy: boolean; connecting: boolean; onRetry: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
 
 /** T-074 (BROW-008, BROW-009): what the user sees over a page that failed or crashed. */
@@ -105,6 +121,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const draftBox = useRef<HTMLTextAreaElement>(null);
   const focusMe = useRef(onFocus);
   focusMe.current = onFocus;
+  const closeMe = useRef(onClose);
+  closeMe.current = onClose;
+  const [preview, setPreview] = useState<Preview | null>(null);
   // T-074 (BROW-008, BROW-009): the page's health. The engine says only started / finished, so the
   // pane probes the page (browser_probe) and feeds loadState's machine; the overlay it decides on
   // covers the pane body while the page itself is hidden under it (a child web view cannot be
@@ -174,6 +193,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           }
           at.current = url;
           setIcon((i) => iconAt(i, url));
+          invoke<Preview | null>("browser_preview_of", { url })
+            .then((p) => alive && setPreview(p ?? null))
+            .catch(() => setPreview(null));
         }),
       );
       // BROW-014: a link the page opens as a new window, or Mod / middle click, becomes another tab
@@ -193,6 +215,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           if (e.payload.id === id) setIcon((i) => iconFound(i, at.current, e.payload.page, e.payload.icon));
         }),
       );
+      // T-241 (BROW-044): `kolux tab switch|close` name this pane.
+      unlisteners.push(
+        await listen<{ action: string; page?: number }>("browser-cli", (e) => {
+          if (e.payload.page !== id) return;
+          if (e.payload.action === "switch") focusMe.current?.();
+          if (e.payload.action === "close") closeMe.current?.();
+        }),
+      );
+      startBridge();
       if (!alive) return;
       try {
         const first = url ? resolveAddress(url) : null;
@@ -274,8 +305,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   // says which worktree its tab belongs to and whether it is the one shown.
   useEffect(() => {
     if (!open) return;
-    invoke("browser_tab", { id, worktree: cwd, shown: !hidden }).catch(() => {});
-  }, [id, open, hidden, cwd]);
+    invoke("browser_tab", { id, worktree: cwd, shown: !hidden, url: at.current, title: title ?? "" }).catch(() => {});
+  }, [id, open, hidden, cwd, loading, title]);
 
   // BROW-037: while picking, the page's picker is asked four times a second what was clicked; a
   // page that was replaced meanwhile gets the picker again. Escape in the page ends picking.
@@ -412,9 +443,21 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         {/* BROW-006: the slot keeps the bar's place in the toolbar; in a narrow pane the bar inside it
             is compact and, while focused, floats across the toolbar (browser.css). */}
         <span className="address-slot">
+          {preview ? (
+            // BROW-039: a previewed document shows where it is instead of its loopback address.
+            <span className="preview-chip" title={preview.path}>
+              <span className="preview-folder">{preview.folder}</span>
+              <span className="preview-sep">/</span>
+              <b>{preview.file}</b>
+              <button type="button" className="ib preview-copy" title="Copy the file's path" aria-label="Copy path" onClick={() => void navigator.clipboard?.writeText(preview.path).catch(() => {})}>
+                copy
+              </button>
+            </span>
+          ) : null}
           <input
             ref={bar}
             className="address"
+            style={preview ? { display: "none" } : undefined}
             aria-label="Address"
             placeholder="Address"
             value={address}

@@ -20,6 +20,12 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url
 // through evidence/browser-T-195-cli.rs.patch.
 #[path = "browser_cli.rs"]
 pub mod cli;
+// T-241: BROW-045 session profiles (a tab's own engine data folder) and BROW-039 HTML previews
+// (a worktree's document served from a loopback port).
+#[path = "browser_profiles.rs"]
+pub mod profiles;
+#[path = "browser_preview.rs"]
+pub mod preview;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -622,9 +628,12 @@ fn err(e: tauri::Error) -> String {
 /// so it is handed back for the address bar (BROW-001).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
-pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>) -> Result<(), String> {
+pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>) -> Result<(), String> {
     let url = parse(&url)?;
     let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
+    if let Ok(dir) = app.path().app_data_dir() {
+        profiles::set_root(dir); // T-241
+    }
     let _ = DRIVER.set(Box::new(drive));
     let dev = app_origin(&app);
     allowed(&url, dev.as_ref())?;
@@ -633,7 +642,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let window_app = app.clone();
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
-    let builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
+    let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile)
         .focused(false)
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
         .zoom_hotkeys_enabled(false)
@@ -835,6 +844,9 @@ pub struct Tab {
     pub worktree: Option<String>,
     pub shown: bool,
     pub seen: u64,
+    /// The page's address and title as the pane last reported them (BROW-044 `kolux tab list`).
+    pub url: String,
+    pub title: String,
 }
 
 static TABS: Mutex<Vec<Tab>> = Mutex::new(Vec::new());
@@ -861,7 +873,7 @@ pub fn note_tab(tabs: &mut Vec<Tab>, id: u32, worktree: Option<String>, shown: b
             t.shown = shown;
             t.seen = seen;
         }
-        None => tabs.push(Tab { id, worktree, shown, seen }),
+        None => tabs.push(Tab { id, worktree, shown, seen, url: String::new(), title: String::new() }),
     }
 }
 
@@ -912,10 +924,23 @@ pub fn pick_tab(tabs: &[Tab], page: Option<u32>, worktree: Option<&str>) -> Resu
 // Registered by evidence/browser-T-195-lib.rs.patch (lib.rs is a shared file); drop this allow once applied.
 #[allow(dead_code)]
 #[tauri::command]
-pub async fn browser_tab(id: u32, worktree: Option<String>, shown: bool) -> Result<(), String> {
+pub async fn browser_tab(app: AppHandle, id: u32, worktree: Option<String>, shown: bool, url: Option<String>, title: Option<String>) -> Result<(), String> {
+    // T-241: the command line's profile store lives under the app's data folder; the app says where.
+    if let Ok(dir) = app.path().app_data_dir() {
+        profiles::set_root(dir);
+    }
+    let _ = APP.set(app);
     let tick = TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut t = TABS.lock().map_err(|e| e.to_string())?;
     note_tab(&mut t, id, worktree, shown, tick);
+    if let Some(t) = t.iter_mut().find(|t| t.id == id) {
+        if let Some(url) = url {
+            t.url = url;
+        }
+        if let Some(title) = title {
+            t.title = title;
+        }
+    }
     Ok(())
 }
 
@@ -927,6 +952,8 @@ pub enum Act<'a> {
     Eval(u32, &'a str, Duration),
     Navigate(u32, &'a str),
     Go(u32, &'a str),
+    /// T-241 (BROW-044): a word to the front end, which owns the tabs (open, show, close).
+    Emit(&'a str, serde_json::Value),
 }
 type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
 static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
@@ -990,6 +1017,36 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             }
             Ok(serde_json::Value::Null)
         }
+        Act::Emit(event, payload) => {
+            app.emit(event, payload).map_err(err)?;
+            Ok(serde_json::Value::Null)
+        }
+    }
+}
+
+/// `kolux tab switch|create|close`, `tab profile ...`: the front end is told and acts.
+pub fn tell(event: &str, payload: serde_json::Value) -> Result<(), String> {
+    driver()?(Act::Emit(event, payload)).map(|_| ())
+}
+
+/// BROW-045: the profile the next `browser_open` runs in, left by `kolux tab create --profile`
+/// (the front end opens the tab and does not know the profile). ponytail: one slot, since tabs
+/// open one at a time from the command line; a map by url if that stops holding.
+pub static NEXT_PROFILE: Mutex<Option<String>> = Mutex::new(None);
+
+/// A tab in a profile other than the default runs in that profile's own engine data folder.
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>) -> WebviewBuilder<tauri::Wry> {
+    let profile = profile.or_else(|| NEXT_PROFILE.lock().ok().and_then(|mut n| n.take()));
+    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return b };
+    let Ok(root) = profiles::root() else { return b };
+    let mut store = profiles::load(&root);
+    if profiles::set_tab(&mut store, id, &p).is_err() {
+        return b;
+    }
+    let _ = profiles::save(&root, &store);
+    match profiles::data_dir(&root, &p) {
+        Some(dir) => b.data_directory(dir),
+        None => b,
     }
 }
 
@@ -1064,7 +1121,7 @@ mod agent_tests {
     use super::*;
 
     fn tab(id: u32, worktree: Option<&str>, shown: bool, seen: u64) -> Tab {
-        Tab { id, worktree: worktree.map(str::to_string), shown, seen }
+        Tab { id, worktree: worktree.map(str::to_string), shown, seen, url: String::new(), title: String::new() }
     }
 
     #[test]

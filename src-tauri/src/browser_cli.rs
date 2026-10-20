@@ -10,7 +10,7 @@
 //! `evidence/browser-T-195-cli.rs.patch`; until that lands nothing here is reachable, hence the allow.
 #![allow(dead_code)]
 
-use super::{eval_json, pick_tab, tabs, EVAL_WAIT};
+use super::{eval_json, pick_tab, preview, profiles, same_dir, tabs, tell, Tab, EVAL_WAIT, NEXT_PROFILE};
 use crate::cli::{Fail, Request};
 use serde_json::{json, Map, Value};
 use std::time::{Duration, Instant};
@@ -57,6 +57,27 @@ pub const COMMANDS: &[Command] = &[
     ("mouse up", "browser.mouse-up", &["button", "worktree", "page"]),
     ("mouse wheel", "browser.mouse-wheel", &["dy", "dx", "worktree", "page"]),
     ("exec", "browser.exec", &["command", "worktree", "page"]),
+    // T-241 (BROW-044, BROW-045, BROW-048): tabs, profiles, cookies and web storage. The tab and
+    // profile commands need no page but keep the two flags every browser command takes.
+    ("tab list", "browser.tab-list", &["show-profile", "worktree", "page"]),
+    ("tab current", "browser.tab-current", &["worktree", "page"]),
+    ("tab show", "browser.tab-show", &["index", "worktree", "page"]),
+    ("tab switch", "browser.tab-switch", &["index", "focus", "worktree", "page"]),
+    ("tab create", "browser.tab-create", &["url", "profile", "worktree", "page"]),
+    ("tab close", "browser.tab-close", &["index", "worktree", "page"]),
+    ("tab profile", "browser.tab-profile", &["worktree", "page"]),
+    ("tab profile set", "browser.tab-profile-set", &["profile", "worktree", "page"]),
+    ("tab profile use-default", "browser.tab-profile-use-default", &["worktree", "page"]),
+    ("tab profile clone", "browser.tab-profile-clone", &["worktree", "page"]),
+    ("profiles list", "browser.profiles-list", &["worktree", "page"]),
+    ("profiles create", "browser.profiles-create", &["label", "scope", "no-ua-spoof", "worktree", "page"]),
+    ("profiles delete", "browser.profiles-delete", &["profile", "worktree", "page"]),
+    ("cookie get", "browser.cookie-get", &["name", "url", "worktree", "page"]),
+    ("cookie set", "browser.cookie-set", &["name", "value", "url", "domain", "path", "expires", "secure", "httpOnly", "sameSite", "worktree", "page"]),
+    ("cookie delete", "browser.cookie-delete", &["name", "url", "domain", "path", "worktree", "page"]),
+    ("storage get", "browser.storage-get", &["area", "key", "worktree", "page"]),
+    ("storage set", "browser.storage-set", &["area", "key", "value", "worktree", "page"]),
+    ("storage clear", "browser.storage-clear", &["area", "worktree", "page"]),
 ];
 
 /// The commands that need the engine's picture or printer. Tauri's public API has no page capture
@@ -78,6 +99,7 @@ const IS_WHAT: &[&str] = &["visible", "enabled", "checked"];
 const BUTTONS: &[&str] = &["left", "right", "middle"];
 const FIND_ACTIONS: &[&str] = &["click", "dblclick", "check", "uncheck", "focus", "clear", "select-all", "hover", "scrollintoview", "fill", "type", "select", "highlight"];
 const LOCATORS: &[&str] = &["role", "text", "label", "selector", "placeholder"];
+const STORAGE_AREAS: &[&str] = &["local", "session"];
 /// A wait with no `--timeout`, and the longest one accepted.
 pub const WAIT_DEFAULT_MS: u64 = 5_000;
 pub const WAIT_MAX_MS: u64 = 300_000;
@@ -216,6 +238,41 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
         }
         "browser.exec" => {
             need("command")?;
+        }
+        "browser.tab-show" | "browser.tab-switch" | "browser.tab-close" => {
+            if let Some(i) = text("index") {
+                if i.parse::<u32>().is_err() {
+                    return Err(args(format!("--index takes a tab number, not {i}")));
+                }
+            }
+        }
+        "browser.tab-profile-set" | "browser.profiles-delete" => {
+            need("profile")?;
+        }
+        "browser.profiles-create" => {
+            need("label")?;
+            one_of("scope", profiles::SCOPES)?;
+        }
+        "browser.cookie-set" => {
+            need("name")?;
+            if !flags.contains_key("value") {
+                return Err(args("--value is required"));
+            }
+            if flags.contains_key("httpOnly") {
+                return Err(Fail::new("unsupported", "--httpOnly cookies are set by the engine's cookie manager, which this build does not reach; without the flag the page sets the cookie itself"));
+            }
+            one_of("sameSite", &["Strict", "Lax", "None"])?;
+        }
+        "browser.cookie-delete" => {
+            need("name")?;
+        }
+        "browser.storage-get" | "browser.storage-clear" => one_of("area", STORAGE_AREAS)?,
+        "browser.storage-set" => {
+            one_of("area", STORAGE_AREAS)?;
+            need("key")?;
+            if !flags.contains_key("value") {
+                return Err(args("--value is required"));
+            }
         }
         _ => {}
     }
@@ -389,6 +446,9 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let page_no = text("page").and_then(|p| p.parse::<u32>().ok());
+    if let Some(v) = tabs_cmd(req, worktree, page_no)? {
+        return Ok(v);
+    }
     let id = gate(&req.command, page_no, worktree, &tabs())?;
     let cmd = short(&req.command);
     match req.command.as_str() {
@@ -413,6 +473,28 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
             }
             Ok(json!({ "page": id, "characters": sent, "summary": format!("{cmd}: {sent} character(s) went to the focused field") }))
         }
+        "browser.cookie-get" | "browser.cookie-set" | "browser.cookie-delete" => {
+            // BROW-048: cookies are read and set by the open page (document.cookie), so --url may
+            // only name that page's site.
+            if let Some(u) = text("url") {
+                let page_url = tabs().into_iter().find(|t| t.id == id).map(|t| t.url).unwrap_or_default();
+                if !same_origin(&u, &page_url) {
+                    return Err(args(format!("--url {u} is not the site of browser tab {id} ({page_url}); cookies are read and set on the open page")));
+                }
+            }
+            let mut answer = page(id, cmd, a.clone(), EVAL_WAIT)?;
+            answer["page"] = json!(id);
+            if cmd == "cookie-delete" {
+                answer["destructive"] = json!(true);
+            }
+            Ok(answer)
+        }
+        "browser.storage-clear" => {
+            let mut answer = page(id, cmd, a.clone(), EVAL_WAIT)?;
+            answer["page"] = json!(id);
+            answer["destructive"] = json!(true);
+            Ok(answer)
+        }
         "browser.upload" => {
             let files = files_of(&text("files").unwrap_or_default())?;
             let mut answer = page(id, cmd, json!({ "element": a["element"], "files": files }), EVAL_WAIT)?;
@@ -425,6 +507,180 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
             Ok(answer)
         }
     }
+}
+
+/// BROW-044 `kolux tab list`: the registry's rows for a worktree (`--worktree all`, or a caller
+/// outside every worktree: every tab). Tabs no pane has described yet count for any worktree.
+pub fn tab_rows(tabs: &[Tab], worktree: Option<&str>, all: bool) -> Vec<Tab> {
+    let mut rows: Vec<Tab> = match worktree {
+        Some(wt) if !all => {
+            let mine: Vec<Tab> = tabs.iter().filter(|t| t.worktree.as_deref().is_some_and(|w| same_dir(w, wt))).cloned().collect();
+            if mine.is_empty() && tabs.iter().all(|t| t.worktree.is_none()) { tabs.to_vec() } else { mine }
+        }
+        _ => tabs.to_vec(),
+    };
+    rows.sort_by_key(|t| t.id);
+    rows
+}
+
+fn row(t: &Tab, store: Option<&profiles::Store>) -> Value {
+    let mut v = json!({ "page": t.id, "url": t.url, "title": t.title, "worktree": t.worktree, "shown": t.shown });
+    if let Some(s) = store {
+        v["profile"] = json!(profiles::tab_profile(s, t.id));
+    }
+    v
+}
+
+/// Two addresses of one site: scheme, host and port alike (the cookie commands' `--url`).
+pub fn same_origin(a: &str, b: &str) -> bool {
+    match (tauri::Url::parse(a), tauri::Url::parse(b)) {
+        (Ok(a), Ok(b)) => a.origin() == b.origin(),
+        _ => false,
+    }
+}
+
+fn store() -> Result<(std::path::PathBuf, profiles::Store), Fail> {
+    let root = profiles::root().map_err(|m| Fail::new("failed", m))?;
+    let s = profiles::load(&root);
+    Ok((root, s))
+}
+
+/// Waits up to `limit` for the registry to show `done` (the pane acts on the event and reports).
+fn settle(limit: Duration, mut done: impl FnMut(&[Tab]) -> bool) -> bool {
+    let start = Instant::now();
+    loop {
+        if done(&tabs()) {
+            return true;
+        }
+        if start.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(WAIT_STEP);
+    }
+}
+
+/// The front end owns the tabs: it is told what to open, show or close and the registry says when it did.
+const TAB_EVENT: &str = "browser-cli";
+const PROFILE_EVENT: &str = "browser-profile";
+const SETTLE: Duration = Duration::from_secs(5);
+
+/// BROW-044 / BROW-045: the tab and profile commands. They need no page, so they run before the
+/// gate; `Ok(None)` for every other command.
+fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Result<Option<Value>, Fail> {
+    let a = &req.args;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let on = |k: &str| a.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false)));
+    let all = text("worktree").is_some_and(|w| w == "all");
+    let index = || text("index").and_then(|i| i.parse::<u32>().ok());
+    let current = |id: Option<u32>| gate("browser.tab-show", id.or(page_no), worktree, &tabs());
+    let fail = |m: String| Fail::new("failed", m);
+    let v = match req.command.as_str() {
+        "browser.tab-list" => {
+            let prof = if on("show-profile") { Some(store()?.1) } else { None };
+            let rows: Vec<Value> = tab_rows(&tabs(), worktree, all).iter().map(|t| row(t, prof.as_ref())).collect();
+            json!({ "tabs": rows, "summary": format!("{} browser tab(s)", rows.len()) })
+        }
+        "browser.tab-current" | "browser.tab-show" => {
+            let id = current(index())?;
+            let t = tabs().into_iter().find(|t| t.id == id).ok_or_else(|| fail(format!("browser tab {id} is not open")))?;
+            let mut v = row(&t, store().ok().map(|s| s.1).as_ref());
+            v["summary"] = json!(format!("page {id}: {} {}", t.title, t.url));
+            v
+        }
+        "browser.tab-switch" => {
+            let id = current(index())?;
+            tell(TAB_EVENT, json!({ "action": "switch", "page": id, "focus": on("focus") })).map_err(fail)?;
+            if !settle(Duration::from_secs(2), |t| t.iter().any(|t| t.id == id && t.shown)) {
+                return Err(fail(format!("browser tab {id} did not come on screen")));
+            }
+            json!({ "page": id, "summary": format!("page {id} is on screen") })
+        }
+        "browser.tab-create" => {
+            let mut url = text("url").unwrap_or_else(|| "about:blank".into());
+            let mut answer = json!({});
+            if preview::is_document(&url) {
+                // BROW-039: an HTML document on disk opens as a preview.
+                let p = preview::add(&url).map_err(fail)?;
+                url = p["url"].as_str().unwrap_or_default().to_string();
+                answer = p;
+            } else {
+                super::allowed(&super::parse(&url).map_err(args)?, None).map_err(args)?;
+            }
+            if let Some(p) = text("profile") {
+                let (_, s) = store()?;
+                profiles::get(&s, &p).ok_or_else(|| Fail::new("not_found", format!("no profile is called {p}")))?;
+                if let Ok(mut n) = NEXT_PROFILE.lock() {
+                    *n = Some(p);
+                }
+            }
+            let before: Vec<u32> = tabs().iter().map(|t| t.id).collect();
+            tell(TAB_EVENT, json!({ "action": "create", "url": url, "worktree": worktree })).map_err(fail)?;
+            let mut id = None;
+            settle(SETTLE, |t| {
+                id = t.iter().map(|t| t.id).find(|i| !before.contains(i));
+                id.is_some()
+            });
+            let Some(id) = id else {
+                if let Ok(mut n) = NEXT_PROFILE.lock() {
+                    n.take();
+                }
+                return Err(fail("no new browser tab appeared within 5 s".into()));
+            };
+            answer["page"] = json!(id);
+            answer["url"] = json!(url);
+            answer["summary"] = json!(format!("page {id} opened at {url}"));
+            answer
+        }
+        "browser.tab-close" => {
+            let id = current(index())?;
+            tell(TAB_EVENT, json!({ "action": "close", "page": id })).map_err(fail)?;
+            if !settle(SETTLE, |t| t.iter().all(|t| t.id != id)) {
+                return Err(fail(format!("browser tab {id} did not close")));
+            }
+            json!({ "page": id, "destructive": true, "summary": format!("page {id} closed") })
+        }
+        "browser.tab-profile" => {
+            let id = current(None)?;
+            let (_, s) = store()?;
+            let p = profiles::tab_profile(&s, id);
+            json!({ "page": id, "profile": p, "summary": format!("page {id} runs in profile {p}") })
+        }
+        "browser.tab-profile-set" | "browser.tab-profile-use-default" | "browser.tab-profile-clone" => {
+            let id = current(None)?;
+            let (root, mut s) = store()?;
+            let p = match req.command.as_str() {
+                "browser.tab-profile-set" => profiles::set_tab(&mut s, id, &text("profile").unwrap_or_default()),
+                "browser.tab-profile-use-default" => profiles::set_tab(&mut s, id, profiles::DEFAULT),
+                _ => {
+                    let from = profiles::tab_profile(&s, id);
+                    profiles::clone_profile(&mut s, &from, Some(id))
+                }
+            }
+            .map_err(|m| Fail::new("not_found", m))?;
+            profiles::save(&root, &s).map_err(fail)?;
+            tell(PROFILE_EVENT, json!({ "page": id, "profile": p.id })).map_err(fail)?;
+            json!({ "page": id, "profile": p, "summary": format!("page {id} uses profile {} from its next open (the pane was told)", p.id) })
+        }
+        "browser.profiles-list" => {
+            let (_, s) = store()?;
+            let list = profiles::list(&s);
+            json!({ "profiles": list, "summary": format!("{} profile(s)", list.len()) })
+        }
+        "browser.profiles-create" => {
+            let (root, mut s) = store()?;
+            let p = profiles::create(&mut s, &text("label").unwrap_or_default(), text("scope").as_deref(), !on("no-ua-spoof")).map_err(args)?;
+            profiles::save(&root, &s).map_err(fail)?;
+            json!({ "profile": p, "summary": format!("profile {} created ({})", p.id, p.scope) })
+        }
+        "browser.profiles-delete" => {
+            let (root, mut s) = store()?;
+            let p = profiles::delete(&mut s, &text("profile").unwrap_or_default()).map_err(|m| if m.contains("default") { args(m) } else { Fail::new("not_found", m) })?;
+            profiles::save(&root, &s).map_err(fail)?;
+            json!({ "profile": p, "destructive": true, "summary": format!("profile {} deleted; its tabs fall back to the default from their next open", p.id) })
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(v))
 }
 
 /// The readable form of a browser answer.
@@ -441,6 +697,34 @@ pub fn text(command: &str, r: &Value) -> Option<String> {
         },
         "browser.is" => r["value"].as_bool().unwrap_or(false).to_string(),
         "browser.wait" => format!("the condition holds (asked {} time(s)) at {}", r["asked"], r["url"].as_str().unwrap_or_default()),
+        "browser.tab-list" => {
+            let rows = r["tabs"].as_array().cloned().unwrap_or_default();
+            if rows.is_empty() {
+                "no browser tab is open".into()
+            } else {
+                rows.iter()
+                    .map(|t| {
+                        let title = t["title"].as_str().filter(|s| !s.is_empty()).unwrap_or("(untitled)");
+                        format!("{}{} {} {}{}{}", t["page"], if t["shown"].as_bool().unwrap_or(false) { "*" } else { " " }, title, t["url"].as_str().unwrap_or_default(), t["worktree"].as_str().map(|w| format!("  [{w}]")).unwrap_or_default(), t["profile"].as_str().map(|p| format!("  profile {p}")).unwrap_or_default())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
+        "browser.profiles-list" => r["profiles"].as_array().cloned().unwrap_or_default().iter().map(|p| format!("{}  {} ({}{})", p["id"].as_str().unwrap_or_default(), p["label"].as_str().unwrap_or_default(), p["scope"].as_str().unwrap_or_default(), if p["uaSpoof"].as_bool().unwrap_or(true) { "" } else { ", no ua spoof" })).collect::<Vec<_>>().join("\n"),
+        "browser.cookie-get" => {
+            let c = r["cookies"].as_array().cloned().unwrap_or_default();
+            if c.is_empty() {
+                "no cookie the page can read".into()
+            } else {
+                c.iter().map(|c| format!("{}={}", c["name"].as_str().unwrap_or_default(), c["value"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n")
+            }
+        }
+        "browser.storage-get" => match &r["value"] {
+            Value::String(s) => s.clone(),
+            Value::Null => "null".into(),
+            v => serde_json::to_string_pretty(v).unwrap_or_default(),
+        },
         _ => r["summary"].as_str().map(str::to_string).unwrap_or_else(|| "ok".into()),
     })
 }
@@ -515,6 +799,12 @@ if(!window.__kx){
   case 'mouse-move': { K.mouse={x:Number(a.x),y:Number(a.y)}; ev(at(K.mouse.x,K.mouse.y),'mousemove',{clientX:K.mouse.x,clientY:K.mouse.y}); return {ok:true,summary:'mouse at '+K.mouse.x+','+K.mouse.y}; }
   case 'mouse-down': case 'mouse-up': { const b={left:0,middle:1,right:2}[a.button||'left']; ev(at(K.mouse.x,K.mouse.y),q.cmd==='mouse-down'?'mousedown':'mouseup',{button:b,clientX:K.mouse.x,clientY:K.mouse.y}); return {ok:true,summary:q.cmd.replace('-',' ')+' ('+(a.button||'left')+')'}; }
   case 'mouse-wheel': { const dx=Number(a.dx||0), dy=Number(a.dy||0); const e=at(K.mouse.x,K.mouse.y); e.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaX:dx,deltaY:dy,clientX:K.mouse.x,clientY:K.mouse.y})); window.scrollBy(dx,dy); return {ok:true,summary:'wheel '+dx+','+dy}; }
+  case 'cookie-get': { const all=document.cookie?document.cookie.split('; ').map(c=>{ const i=c.indexOf('='); return {name:i<0?c:c.slice(0,i),value:i<0?'':decodeURIComponent(c.slice(i+1))}; }):[]; const list=a.name?all.filter(c=>c.name===a.name):all; return {ok:true,cookies:list,summary:list.length+' cookie(s) the page can read'}; }
+  case 'cookie-set': { let s=a.name+'='+encodeURIComponent(a.value==null?'':String(a.value))+'; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; if(a.expires){ const n=Number(a.expires); s+='; expires='+new Date(isNaN(n)?a.expires:n*1000).toUTCString(); } if(a.secure) s+='; secure'; if(a.sameSite) s+='; samesite='+a.sameSite; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' set for '+location.host}; }
+  case 'cookie-delete': { let s=a.name+'=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' deleted for '+location.host}; }
+  case 'storage-get': { const st=a.area==='session'?sessionStorage:localStorage; if(a.key!=null&&a.key!=='') return {ok:true,value:st.getItem(String(a.key))}; const o={}; for(let i=0;i<st.length;i++){ const k=st.key(i); o[k]=st.getItem(k); } return {ok:true,value:o}; }
+  case 'storage-set': { const st=a.area==='session'?sessionStorage:localStorage; st.setItem(String(a.key),a.value==null?'':String(a.value)); return {ok:true,summary:(a.area||'local')+' storage: '+a.key+' set'}; }
+  case 'storage-clear': { const st=a.area==='session'?sessionStorage:localStorage; const n=st.length; st.clear(); return {ok:true,summary:(a.area||'local')+' storage cleared ('+n+' key(s))'}; }
   case 'check-wait': { let ok=true; if(a.selector){ const e=document.querySelector(a.selector); ok=ok&&(a.state==='hidden'?!(e&&vis(e)):!!e&&(a.state!=='visible'||vis(e))); }
    if(a.text) ok=ok&&((document.body&&document.body.innerText)||'').includes(a.text); if(a.load) ok=ok&&(a.load==='domcontentloaded'?document.readyState!=='loading':document.readyState==='complete'); if(a.fn) ok=ok&&!!(0,eval)(a.fn); return {ok:true,value:ok,url:location.href}; }
   default: throw new Error('unknown command '+q.cmd);
@@ -616,7 +906,7 @@ mod tests {
         assert_eq!(f.message, "no browser tab is open in G:/Temp/wt");
         assert!(f.data["hint"].as_str().unwrap().contains("--page"));
         assert_eq!(gate("browser.snapshot", Some(7), None, &[]).unwrap_err().message, "browser tab 7 is not open");
-        let tabs = [super::super::Tab { id: 3, worktree: Some("G:/Temp/wt".into()), shown: true, seen: 1 }];
+        let tabs = [super::super::Tab { id: 3, worktree: Some("G:/Temp/wt".into()), shown: true, seen: 1, url: String::new(), title: String::new() }];
         assert_eq!(gate("browser.snapshot", None, Some("G:/Temp/wt"), &tabs).unwrap(), 3);
     }
 
@@ -650,12 +940,67 @@ mod tests {
     }
 
     #[test]
+    fn brow044_tab_rows_follow_the_worktree_and_all_means_every_tab() {
+        let t = |id: u32, wt: Option<&str>, shown: bool| Tab { id, worktree: wt.map(str::to_string), shown, seen: id as u64, url: format!("https://{id}.test/"), title: format!("T{id}") };
+        let tabs = vec![t(3, Some("G:/wt/a"), false), t(1, Some("G:/wt/b"), true), t(2, Some("G:/wt/a"), true)];
+        assert_eq!(tab_rows(&tabs, Some("g:\\wt\\a"), false).iter().map(|t| t.id).collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(tab_rows(&tabs, Some("G:/wt/a"), true).len(), 3);
+        assert_eq!(tab_rows(&tabs, None, false).len(), 3);
+        assert!(tab_rows(&tabs, Some("G:/wt/c"), false).is_empty());
+        let blank = vec![t(5, None, true)];
+        assert_eq!(tab_rows(&blank, Some("G:/wt/c"), false).len(), 1, "tabs no pane described count for any worktree");
+        let mut s = profiles::Store::default();
+        profiles::create(&mut s, "Work", None, true).unwrap();
+        profiles::set_tab(&mut s, 2, "work").unwrap();
+        let r = row(&tabs[2], Some(&s));
+        assert_eq!((r["page"].as_u64(), r["profile"].as_str(), r["shown"].as_bool()), (Some(2), Some("work"), Some(true)));
+        assert!(row(&tabs[0], None).get("profile").is_none());
+        assert!(same_origin("https://a.test/x", "https://a.test/y?z") && !same_origin("https://a.test/", "http://a.test/") && !same_origin("nope", "https://a.test/"));
+        assert_eq!(text("browser.tab-list", &json!({ "tabs": [r] })).unwrap(), "2* T2 https://2.test/  [G:/wt/a]  profile work");
+        assert_eq!(text("browser.tab-list", &json!({ "tabs": [] })).unwrap(), "no browser tab is open");
+    }
+
+    #[test]
+    fn brow044_tab_and_profile_commands_check_their_flags_and_need_no_page() {
+        assert!(check("browser.tab-switch", &flags(&[("index", "x")])).unwrap_err().message.contains("--index takes a tab number"));
+        assert!(check("browser.tab-switch", &flags(&[("index", "4"), ("focus", "true")])).is_ok());
+        assert_eq!(check("browser.profiles-create", &flags(&[])).unwrap_err().message, "--label is required");
+        assert!(check("browser.profiles-create", &flags(&[("label", "Work"), ("scope", "shared")])).unwrap_err().message.contains("isolated|imported"));
+        assert_eq!(check("browser.profiles-delete", &flags(&[])).unwrap_err().message, "--profile is required");
+        assert!(gate("browser.tab-show", Some(9), None, &[]).is_err_and(|f| f.code == "not_found"));
+        let names: Vec<&str> = COMMANDS.iter().filter(|c| c.0.starts_with("tab ") || c.0.starts_with("profiles ")).map(|c| c.0).collect();
+        assert_eq!(names, ["tab list", "tab current", "tab show", "tab switch", "tab create", "tab close", "tab profile", "tab profile set", "tab profile use-default", "tab profile clone", "profiles list", "profiles create", "profiles delete"]);
+    }
+
+    #[test]
+    fn brow048_cookie_and_storage_commands_check_their_flags_and_the_page_answers_them() {
+        assert_eq!(check("browser.cookie-set", &flags(&[("value", "1")])).unwrap_err().message, "--name is required");
+        assert_eq!(check("browser.cookie-set", &flags(&[("name", "a")])).unwrap_err().message, "--value is required");
+        let mut f = flags(&[("name", "a"), ("value", "1")]);
+        f.insert("httpOnly".into(), json!(true));
+        assert_eq!(check("browser.cookie-set", &f).unwrap_err().code, "unsupported");
+        assert!(check("browser.cookie-set", &flags(&[("name", "a"), ("value", "1"), ("sameSite", "loose")])).unwrap_err().message.contains("Strict|Lax|None"));
+        assert!(check("browser.cookie-get", &flags(&[])).is_ok());
+        assert_eq!(check("browser.cookie-delete", &flags(&[])).unwrap_err().message, "--name is required");
+        assert!(check("browser.storage-get", &flags(&[("area", "cloud")])).unwrap_err().message.contains("local|session"));
+        assert_eq!(check("browser.storage-set", &flags(&[("area", "session")])).unwrap_err().message, "--key is required");
+        assert_eq!(check("browser.storage-set", &flags(&[("key", "k")])).unwrap_err().message, "--value is required");
+        for c in ["cookie-get", "cookie-set", "cookie-delete", "storage-get", "storage-set", "storage-clear"] {
+            assert!(DRIVER.contains(&format!("case '{c}'")), "the driver answers {c}");
+        }
+        assert_eq!(text("browser.cookie-get", &json!({ "cookies": [{ "name": "a", "value": "1" }, { "name": "b", "value": "" }] })).unwrap(), "a=1\nb=");
+        assert_eq!(text("browser.cookie-get", &json!({ "cookies": [] })).unwrap(), "no cookie the page can read");
+        assert_eq!(text("browser.storage-get", &json!({ "value": "v" })).unwrap(), "v");
+        assert_eq!(text("browser.profiles-list", &json!({ "profiles": [{ "id": "default", "label": "Default", "scope": "isolated", "uaSpoof": true }, { "id": "w", "label": "W", "scope": "imported", "uaSpoof": false }] })).unwrap(), "default  Default (isolated)\nw  W (imported, no ua spoof)");
+    }
+
+    #[test]
     fn the_driver_script_carries_the_request_and_every_command_word() {
         let script = DRIVER.replace("__REQ__", &json!({ "cmd": "snapshot", "args": {} }).to_string());
         assert!(script.ends_with("return window.__kx.run({\"cmd\":\"snapshot\",\"args\":{}});\n})()"));
         for (_, wire, _) in COMMANDS {
             let cmd = short(wire);
-            if ["goto", "back", "forward", "reload", "wait", "exec", "screenshot", "full-screenshot", "pdf", "download"].contains(&cmd) {
+            if cmd.starts_with("tab-") || cmd.starts_with("profiles-") || ["goto", "back", "forward", "reload", "wait", "exec", "screenshot", "full-screenshot", "pdf", "download"].contains(&cmd) {
                 continue;
             }
             assert!(DRIVER.contains(&format!("case '{cmd}'")), "the driver answers {cmd}");

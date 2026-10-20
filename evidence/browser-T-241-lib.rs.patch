@@ -1,0 +1,15 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 4d39a6bb..9577a22c 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -495,6 +495,10 @@ pub fn run() {
+             browser::browser_navigate,
+             browser::browser_go,
+             browser::browser_close,
++            browser::browser_tab,
++            browser::browser_annotate,
++            browser::preview::browser_preview,
++            browser::preview::browser_preview_of,
+             automations::automations_list,
+             automations::automation_set_enabled,
+             automations::automation_delete,
