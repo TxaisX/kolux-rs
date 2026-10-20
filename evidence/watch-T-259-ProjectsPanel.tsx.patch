@@ -1,0 +1,22 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index ad2ec0c4..1ae80bd9 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -48,6 +48,7 @@ import AutomationsRow from "./AutomationsRow";
+ import SkillsRow from "./SkillsRow";
+ import { chromeShown } from "../chrome/chromeItems";
+ import { VOCAB } from "../terminal/status";
++import { workingWord } from "../status/working";
+ import type { AgentPass } from "../launch/agents";
+ import { KeyText } from "../keys/KeymapContext";
+ import { requestUpdateCheck } from "../update/UpdateCenter";
+@@ -1198,6 +1199,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   const liveIn = (w: Worktree) => sessions.filter((s) => s.running && s.cwd !== null && same(s.cwd, w.path));
+   const liveCount = (w: Worktree) => {
+     const n = liveIn(w).length;
++    // STAT-036: the agents working here come first ("2 working"); a sleeping workspace shows none and says sleeping beside its name.
++    const word = isAsleep(w) ? "" : workingWord(infoOf(w).working);
++    if (word) return <span className="count working" title={`${word}; split panes are counted apart`}>{word}</span>;
+     return n > 0 ? <span className="count">{n}</span> : null;
+   };
+   const paneRows = (w: Worktree, depth = 0) =>

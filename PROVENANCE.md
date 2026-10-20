@@ -841,3 +841,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · watch T-125 · spec/04 STAT-044, STAT-047, STAT-048, STAT-049, STAT-061 as given in the brief; this tree own tray.rs, notifications.rs, agent_hooks/vendors.rs, src/status/useAgentStatus.ts and src/settings/notifications.ts; tauri 2.12 WebviewWindow::set_overlay_icon / set_badge_count and image::Image::new_owned from the public crate source on crates.io; no outside source
 > 2026-10-19 · watch T-033-e (batch 2) · no new outside source; own scm_watch.rs and evidence/T-033-e.txt
 > 2026-10-19 · watch T-275 · spec/04 STAT-031 as given in the brief; this tree own src/status/useAgentStatus.ts and status.rs; no outside source
+> 2026-10-19 · watch T-259 · spec/04 STAT-036 as given in the brief; no outside source

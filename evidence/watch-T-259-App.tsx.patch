@@ -1,0 +1,27 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 67e1ea58..5495669c 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -133,6 +133,7 @@ import { matchEvent } from "./keys/keymap";
+ import { heldByTerminal } from "./keys/terminalPolicy";
+ import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
+ import { useGone } from "./status/gone";
++import { workingByDir } from "./status/working";
+ import { useAppSettings } from "./settings/useAppSettings";
+ import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
+ import { useChrome, useMenuBar } from "./chrome/useChrome";
+@@ -1747,12 +1748,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // STAT-001: a hook-fed state wins over the guess from the program's state.
+   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
+   const rowStates: Record<string, RowInfo> = {};
++  const workingIn = workingByDir(panes, hook, running); // STAT-036: working agents per workspace
+   const cacheFor = cacheMinutes(settings); // SET-059
+   for (const [dir, states] of Object.entries(byDir)) {
+     const state = strongest(states);
+     const prev = rowRef.current[dir];
+     const cache = cacheDue(panes.filter((p) => p.cwd === dir).map((p) => ({ agent: p.agent, state: hook[p.key], since: stamp[p.key]?.at ?? 0 })), cacheFor);
+-    rowStates[dir] = { ...(prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null }), cache };
++    rowStates[dir] = { ...(prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null }), cache, working: workingIn[dir] ?? 0 };
+   }
+   rowRef.current = rowStates;
+   const cells = cellsOf(panes);
