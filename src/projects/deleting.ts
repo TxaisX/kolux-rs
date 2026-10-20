@@ -28,3 +28,29 @@ export function shownChanges(c: RemoveCheck, max = 5): { lines: string[]; more: 
 
 /** VIEW-048: the workspace the delete shortcut acts on; the row under the pointer wins over the one shown. */
 export const deleteTarget = (hovered: string | null, active: string | null) => hovered ?? active;
+
+/** PROJ-075: the row the delete shortcut found under the pointer, as the sidebar knows it. */
+export type PointerRow = { path: string; isMain: boolean; head: string };
+
+/**
+ * PROJ-075: what the delete shortcut does to the row under the pointer (the most deeply nested
+ * one): a Git worktree starts its delete (the usual question), a folder workspace (a row that is
+ * not a Git worktree: no commit) is taken out of Kolux with its folder left on disk. Nothing
+ * happens on a main checkout, on a row already being deleted, or while a text field has focus.
+ */
+export function pointerDelete(row: PointerRow | null, opts: { fieldFocused: boolean; deleting: ReadonlySet<string> }): { action: "delete" | "forget"; path: string } | null {
+  if (row === null || opts.fieldFocused || row.isMain) return null;
+  const norm = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const k = norm(row.path);
+  if ([...opts.deleting].some((d) => norm(d) === k)) return null;
+  return { action: row.head === "" ? "forget" : "delete", path: row.path };
+}
+
+/** PROJ-075: a text field (input, text area, editable element) has the focus, so typing Delete edits text. */
+export function isTextField(el: Element | null): boolean {
+  if (!el) return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "textarea") return true;
+  if (tag === "input") return !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(((el as HTMLInputElement).type || "text").toLowerCase());
+  return (el as HTMLElement).isContentEditable === true || el.getAttribute("contenteditable") === "true";
+}

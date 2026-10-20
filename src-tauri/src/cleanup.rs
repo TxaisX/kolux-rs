@@ -359,9 +359,43 @@ pub fn cleanup_remove(git: State<'_, Git>, store: State<'_, Mutex<Store>>, termi
     Ok(remove_selected(&git, &store, &terminals, &project, &paths))
 }
 
+/// PROJ-081: the size of each workspace folder, read only when the cleanup list is sorted or
+/// filtered by size (never during the scan). None = unknown: the folder is missing, unreadable, or
+/// bigger than the walk budget; the list puts those rows last.
+pub fn sizes_of(paths: &[String], budget: u64) -> Vec<Option<u64>> {
+    paths
+        .iter()
+        .map(|p| {
+            let path = Path::new(p);
+            if !path.is_dir() { return None }
+            let s = crate::bulk::dir_size(path, budget);
+            (!s.incomplete).then_some(s.bytes)
+        })
+        .collect()
+}
+
+#[tauri::command(async)]
+pub fn cleanup_sizes(paths: Vec<String>) -> Vec<Option<u64>> {
+    sizes_of(&paths, 200_000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proj081_sizes_are_read_on_demand_and_unknown_when_missing_or_over_budget() {
+        let root = std::env::temp_dir().join(format!("t303-sizes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("a/sub")).unwrap();
+        fs::write(root.join("a/x.txt"), "12345").unwrap();
+        fs::write(root.join("a/sub/y.txt"), "678").unwrap();
+        let a = root.join("a").to_string_lossy().to_string();
+        let gone = root.join("gone").to_string_lossy().to_string();
+        assert_eq!(sizes_of(&[a.clone(), gone], 1000), vec![Some(8), None]);
+        assert_eq!(sizes_of(&[a], 1), vec![None], "over the walk budget the size is unknown, not wrong");
+        let _ = fs::remove_dir_all(&root);
+    }
     use crate::projects::set_origin;
     use std::fs;
     use std::path::PathBuf;

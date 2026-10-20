@@ -1,7 +1,7 @@
 // CHAT-025 (T-329): links in the agent's messages. Which parts of a reply are links, what each opens, which
 // file paths may be opened (only those the agent printed recently), and which browser a click chooses.
 import { describe, expect, it } from "vitest";
-import { classify, openablePath, partsOf, printedPaths, webClick, type LinkTarget } from "./chatLinks";
+import { classify, fileJump, linksOpenInKolux, openablePath, partsOf, printedPaths, webClick, type LinkTarget } from "./chatLinks";
 import type { ChatItem } from "./model";
 
 const links = (text: string) => partsOf(text).flatMap((p) => (p.link ? [p.link] : []));
@@ -116,5 +116,27 @@ describe("FIX-1: what a written link may carry", () => {
   });
   it("a written mailto link goes through the same filter", () => {
     expect(links("[write](mailto:a@b.co?attach=C:/s.txt&subject=Hi)")).toEqual<LinkTarget[]>([{ kind: "mail", href: "mailto:a@b.co?subject=Hi" }]);
+  });
+});
+
+describe("T-329-b: the editor line and the Open-links-in-Kolux setting", () => {
+  it("a link line and column become the editor spot, the column counted from 0", () => {
+    expect(fileJump(12, 5)).toEqual({ line: 12, col: 4 });
+    expect(fileJump(12)).toEqual({ line: 12, col: 0 });
+    expect(fileJump(3.9, 2.2)).toEqual({ line: 3, col: 1 });
+    expect(fileJump(7, 0)).toEqual({ line: 7, col: 0 });
+    expect(fileJump(7, -4)).toEqual({ line: 7, col: 0 });
+  });
+  it("no usable line means no jump", () => {
+    expect(fileJump()).toBeUndefined();
+    expect(fileJump(0, 5)).toBeUndefined();
+    expect(fileJump(-1)).toBeUndefined();
+    expect(fileJump(Number.NaN)).toBeUndefined();
+  });
+  it("links open in Kolux only when the setting is exactly true", () => {
+    expect(linksOpenInKolux({ linksOpenInKolux: true })).toBe(true);
+    expect(linksOpenInKolux({ linksOpenInKolux: "true" })).toBe(false);
+    expect(linksOpenInKolux({})).toBe(false);
+    expect(linksOpenInKolux(null)).toBe(false);
   });
 });

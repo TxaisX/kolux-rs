@@ -8,7 +8,7 @@ const target = f("E", "Target date", "date");
 const sprint = f("I", "Sprint", "iteration");
 const status = f("X", "Status", "single_select");
 const cell = (text: string, days = 0) => ({ text, id: "", start: text, days });
-const item = (values: ProjectItem["values"], kind = "issue"): ProjectItem => ({ id: "i", kind, title: "t", number: 1, url: "", repo: "a/b", state: "open", labels: [], assignees: [], values });
+const item = (values: ProjectItem["values"], kind = "issue"): ProjectItem => ({ id: "i", kind, title: "t", number: 1, url: "", repo: "a/b", state: "open", labels: [], assignees: [], issueType: "", values });
 
 describe("T-549 roadmap timeline", () => {
   it("reads only real calendar dates", () => {
