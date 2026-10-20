@@ -229,7 +229,14 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
     // T-199 (APP-031): checks are numbered; a late answer from an earlier one stores nothing.
     let round = app.state::<Updates>().rounds.begin();
     let compat = compat_on(&app);
-    let mut builder = app.updater_builder().endpoints(vec![url]).map_err(|e| e.to_string())?.pubkey(feed.pubkey).timeout(CHECK_TIMEOUT);
+    let (ends, cleans) = (app.clone(), app.clone());
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| e.to_string())?
+        .pubkey(feed.pubkey)
+        .timeout(CHECK_TIMEOUT)
+        .on_before_exit(installer_hook(move || end_for_installer(&ends), move || cleans.cleanup_before_exit()));
     if compat {
         builder = builder.configure_client(|c| c.http1_only());
     }
@@ -362,15 +369,19 @@ fn restart_now(app: &AppHandle) -> Result<(), String> {
         *updates.ready.lock().map_err(|e| e.to_string())? = Some((update, bytes));
         return Err(e);
     }
-    app.state::<Terminals>().kill_all();
-    // T-286-b (APP-040): Kolux ending itself here is not a crash at the next start.
-    crate::resources::recovery::note_self_end(app, "restart to update (APP-029)");
+    // Row 535: the terminals are not ended here; the update's before-exit hook (installer_hook)
+    // ends them once the installer file is written and checked, so a package that fails its
+    // check leaves them running.
     // T-199 (APP-028): the attempt is written down so the next launch can tell whether it took.
     record_attempt(app, &update);
     // APP-029: the old process is forced out at the deadline so it never blocks the installer.
     updates.watchdog.arm(std::time::Instant::now() + care::WATCHDOG_AFTER);
-    updates.watchdog.watch(|| std::process::exit(0));
-    // On Windows this starts the installer and ends this process.
+    let forced = app.clone();
+    updates.watchdog.watch(move || {
+        end_for_installer(&forced);
+        std::process::exit(0)
+    });
+    // On Windows this checks the installer, runs the hook, starts the installer and ends this process.
     if let Err(e) = update.install(&bytes) {
         // Failed straight away: stand the watchdog down, keep the app usable, give the real cause.
         updates.watchdog.stand_down();
@@ -385,6 +396,23 @@ fn restart_now(app: &AppHandle) -> Result<(), String> {
         return Err(cause);
     }
     app.restart();
+}
+
+/// The updater's last step before Windows starts the installer and this process exits (row 535):
+/// it runs after the installer file is written and checked, so the terminals end only then; the
+/// plugin's own clean-up, which this hook replaces, still runs after them.
+fn installer_hook(end_terminals: impl Fn() + Send + Sync + 'static, cleanup: impl Fn() + Send + Sync + 'static) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        end_terminals();
+        cleanup();
+    }
+}
+
+/// Every terminal ends and the end is written down as Kolux's own (T-286-b, APP-040), right
+/// before the installer takes over.
+fn end_for_installer(app: &AppHandle) {
+    app.state::<Terminals>().kill_all();
+    crate::resources::recovery::note_self_end(app, "installer starts (APP-029)");
 }
 
 /// Called as the app quits: a downloaded update installs now and does not reopen the app.
@@ -429,6 +457,45 @@ mod tests {
             Ok(f) => assert_eq!(f.endpoint, RELEASE_ENDPOINT, "a release build must never read the test feed"),
             Err(e) => assert!(e.contains("signing key"), "{e}"),
         }
+    }
+
+    /// The updater plugin's Windows install, in its own order: write and check the installer,
+    /// run the before-exit hook, start the installer, exit.
+    fn plugin_install(extract_ok: bool, start_ok: bool, hook: &dyn Fn()) -> Result<(), String> {
+        if !extract_ok {
+            return Err("bad package".into());
+        }
+        hook();
+        if !start_ok {
+            return Err("did not start".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn terminals_end_only_once_the_installer_is_about_to_start() {
+        // Row 535: an install that fails before the installer is ready leaves every terminal running.
+        use std::sync::atomic::AtomicUsize;
+        let ended = Arc::new(AtomicUsize::new(0));
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let (e, c) = (ended.clone(), cleaned.clone());
+        let hook = installer_hook(
+            move || {
+                e.fetch_add(1, Ordering::SeqCst);
+            },
+            move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        assert!(plugin_install(false, true, &hook).is_err());
+        assert_eq!(ended.load(Ordering::SeqCst), 0, "a package that fails its check must not end the terminals");
+        assert!(plugin_install(true, true, &hook).is_ok());
+        assert_eq!(ended.load(Ordering::SeqCst), 1);
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1, "the plugin's own clean-up still runs");
+        // restart_now itself no longer ends the terminals ahead of the install.
+        let src = include_str!("update.rs");
+        let body = &src[src.find("fn restart_now").unwrap()..src.find("fn installer_hook").unwrap()];
+        assert!(!body.contains(".kill_all()"), "restart_now ends the terminals before the installer is ready");
     }
 
     #[test]
