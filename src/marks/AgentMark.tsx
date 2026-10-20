@@ -3,14 +3,14 @@
 // glyph with the name as its text alternative. A two-colour vendor draws both pictures, each with the name;
 // the one the theme hides is display:none, so it leaves the accessibility tree and only the shown one is read. Nothing is fetched at run time.
 import { Spark } from "../chrome/icons";
-import { vendorMark, vendorUrl } from "./registry";
+import { productName, vendorMark, vendorUrl } from "./registry";
 import "./marks.css";
 
 export default function AgentMark({ id, size = 13, label }: { id: string; size?: number; label?: string }) {
   const m = vendorMark(id);
   const light = m ? vendorUrl(m.light) : undefined;
   const dark = m ? vendorUrl(m.dark) : undefined;
-  if (!m || !light || !dark) return <Spark size={size} role="img" aria-label={label ?? id} />;
+  if (!m || !light || !dark) return <Spark size={size} role="img" aria-label={label ?? productName(id) ?? id} />;
   if (m.light === m.dark) return <img className="vmark" src={light} width={size} height={size} alt={m.name} draggable={false} />;
   return (
     <>

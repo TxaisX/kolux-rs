@@ -68,6 +68,8 @@ import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { copyOnSelect } from "../shell/inputExtras";
 import { askLink, linkState } from "../shell/linkAsk";
+import { applyKoluxUnicode } from "../shell/unicodeWidth";
+import { afterLigatures, importLigatures } from "../shell/ligatures";
 import { handlesIn } from "./tabs";
 import { markShell, runningOf, shellInAgentPane } from "./remove";
 import { registerTurnSource, xtermSource } from "./turnRead";
@@ -443,6 +445,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    applyKoluxUnicode(term); // T-308 / TERM-104: Unicode 16 widths and emoji sequences (xterm alone knows Unicode 6)
     term.open(el);
     termRef.current = term;
     // T-325-c (CHAT-010/011): the chat reads the running turn's reply off this terminal.
@@ -591,21 +594,21 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     const settleLigatures = () => {
       const ask = ++asked;
       if (!ligaturesOn(currentInput().ligatures, currentText().family)) {
-        ligatures?.dispose();
+        if (!ligatures) return;
+        ligatures.dispose();
         ligatures = null;
+        afterLigatures(choice, term); // T-267: plain arrows again on the GPU path too
         return;
       }
       if (ligatures) return;
-      // MERGE 203 smoke fix: the package is not installed yet (package.json change held for Txais), and a literal
-      // specifier makes vite fail the whole pane module at transform time. A variable specifier is left alone by
-      // vite; the browser then rejects the bare name, loadLigatures catches it and the pane draws plain text.
-      const ligaturesPkg: string = "@xterm/addon-ligatures";
-      void loadLigatures(() => import(/* @vite-ignore */ ligaturesPkg) as Promise<typeof import("@xterm/addon-ligatures")>).then((a) => {
+      // T-267 / TERM-102: the addon is an approved dependency (MERGE 240), imported by its literal name so vite bundles it.
+      void loadLigatures(importLigatures).then((a) => {
         if (!a) return;
         if (!alive || ask !== asked) return a.dispose();
         try {
           term.loadAddon(a);
           ligatures = a;
+          afterLigatures(choice, term); // T-267: the GPU glyph cache is rebuilt so the joined arrows draw
         } catch {
           a.dispose();
         }
@@ -1567,7 +1570,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
               Review plan
             </button>
           )}
-          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} /> : <ContextGauge context={context} agent={agent} />}
+          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} account={account} /> : <ContextGauge context={context} agent={agent} />}
           <button
             className="ib"
             title="Pane menu"

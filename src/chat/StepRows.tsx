@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { renderMarkdown } from "../editor/PreviewPane";
 import { Dots, FileCode, Globe, Plug, Search, Shell, Spark, Spinner } from "../chrome/icons";
 import type { ChatItem } from "./model";
+import { shortTokens } from "../usage/meter";
 import { diffLineKind, diffText, duration, linkParts, looksLikeDiff, type Child, type FileDiff, type Tool, type View } from "./steps";
 
 // CHAT-016: one clock for every elapsed timer in the chat, paused while the window is hidden.
@@ -266,6 +267,7 @@ function RosterRow({ view }: { view: Extract<View, { row: "roster" }> }) {
               {" "}
               · {STATE_WORD[c.state]}
               {c.at !== undefined && end !== undefined ? ` · ${duration(end - c.at)}` : ""}
+              {c.tokens !== undefined ? ` · ${shortTokens(c.tokens)} tokens` : ""}
             </span>
           </div>
         );

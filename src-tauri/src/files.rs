@@ -116,6 +116,102 @@ pub fn file_read(path: String, fence: tauri::State<'_, crate::fence::Fence>, sto
     read_text(&fence.allow(&path, &store, &git, true)?)
 }
 
+/// T-235-b (EDIT-029, EDIT-009): the most a bytes read hands to the window (a picture for the image
+/// viewer or a note). Coordinator default: same ceiling as the text read; Txais may overrule.
+pub const BYTES_MAX: u64 = 32 * 1024 * 1024;
+/// T-234-b (EDIT-009): the most one pasted or inserted picture may weigh when it is saved into a
+/// worktree. Coordinator default; Txais may overrule.
+pub const PICTURE_SAVE_MAX: usize = 16 * 1024 * 1024;
+/// The file endings a picture may be saved under: this command writes pictures, not arbitrary files.
+const PICTURE_EXT: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+/// The whole file as bytes, refused past `max` before it is read.
+pub fn read_bytes_up_to(path: &Path, max: u64) -> Result<Vec<u8>, String> {
+    let io = |e: std::io::Error| format!("{}: {e}", path.display());
+    let f = fs::File::open(path).map_err(io)?;
+    let meta = f.metadata().map_err(io)?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    if meta.len() > max {
+        return Err(format!("{} is too large to load ({} MB; up to {} MB)", path.display(), meta.len().div_ceil(1024 * 1024), max / (1024 * 1024)));
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    // take(max + 1): a file that grew after the size check still cannot pass the bound.
+    f.take(max + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > max {
+        return Err(format!("{} is too large to load (up to {} MB)", path.display(), max / (1024 * 1024)));
+    }
+    Ok(bytes)
+}
+
+/// T-235-b: a file's bytes for the image viewer and for pictures in notes, same fence as `file_read`.
+#[tauri::command(async)]
+pub fn file_bytes(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<tauri::ipc::Response, String> {
+    read_bytes_up_to(&fence.allow(&path, &store, &git, true)?, BYTES_MAX).map(tauri::ipc::Response::new)
+}
+
+/// Saves a picture as a NEW file: refused when the ending is not a picture's, when it is empty or
+/// over `max`, or when a file of that name exists (a paste never overwrites). The folder must exist.
+/// A write that fails part-way leaves no file behind.
+pub fn write_new_picture(path: &Path, bytes: &[u8], max: usize) -> Result<(), String> {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if !PICTURE_EXT.contains(&ext.as_str()) {
+        return Err(format!("{} is not a picture file name (png, jpg, gif, webp or bmp)", path.display()));
+    }
+    if bytes.is_empty() {
+        return Err("The picture is empty; nothing was saved.".into());
+    }
+    if bytes.len() > max {
+        return Err(format!("The picture is {} MB; at most {} MB can be saved into a note's folder.", bytes.len().div_ceil(1024 * 1024), max / (1024 * 1024)));
+    }
+    let fail = |e: std::io::Error| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("{} already exists; nothing was overwritten", path.display())
+        } else {
+            format!("could not save {}: {e}", path.display())
+        }
+    };
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(fail)?;
+    if let Err(e) = f.write_all(bytes).and_then(|_| f.flush()).and_then(|_| f.sync_all()) {
+        drop(f);
+        let _ = fs::remove_file(path);
+        return Err(fail(e));
+    }
+    Ok(())
+}
+
+/// The text of an `encodeURIComponent` header value back (the window sends the path that way).
+pub fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// T-234-b: a pasted or inserted picture saved beside its note. The picture is the raw request body
+/// and its full path goes in the `x-file-path` header (percent-encoded); the fence is `file_write`'s.
+#[tauri::command(async)]
+pub fn file_write_picture(request: tauri::ipc::Request<'_>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("The picture did not arrive; nothing was saved.".into());
+    };
+    let path = request.headers().get("x-file-path").and_then(|v| v.to_str().ok()).and_then(percent_decode).ok_or("The picture's file name did not arrive; nothing was saved.")?;
+    let path = fence.allow(&path, &store, &git, true)?;
+    let _one = WRITES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_new_picture(&path, bytes, PICTURE_SAVE_MAX)
+}
+
 /// T-073-a (EDIT-003): the SHA-256 of a file's bytes as lowercase hex. The editor hashes the UTF-8
 /// bytes of the text it loaded the same way (file_read hands the bytes back unchanged).
 pub fn text_hash(bytes: &[u8]) -> String {
@@ -1252,6 +1348,15 @@ pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
     cmd == "code" || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
 }
 
+/// T-317 (EDIT-048): the branches of the repository a worktree belongs to (local ones, then remote ones
+/// by short name), for the pull request composer's searchable Base box. The worktree must pass the
+/// fence like any folder open_in opens; a branch list is read-only.
+#[tauri::command(async)]
+pub fn worktree_branches(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<String>, String> {
+    let dir = open_target(&path, |p| fence.allow(p, &store, &git, false))?;
+    crate::projects::branches(&dir)
+}
+
 #[cfg(test)]
 mod open_in_tests {
     use super::*;
@@ -1418,5 +1523,59 @@ mod open_in_tests {
         let saved = serde_json::json!({ "openInApps": [{ "label": "Zed", "command": " zed " }] });
         assert!(saved_command(&saved, "zed"));
         assert!(!saved_command(&saved, "zed --evil"));
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("krs-files-pic-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn edit029_a_bytes_read_hands_back_the_file_unchanged_and_refuses_one_over_the_bound() {
+        let d = temp_dir("bytes");
+        let png = [0x89u8, b'P', b'N', b'G', 0, 1, 2, 255];
+        fs::write(d.join("a.png"), png).unwrap();
+        assert_eq!(read_bytes_up_to(&d.join("a.png"), 1024).unwrap(), png);
+        let err = read_bytes_up_to(&d.join("a.png"), 4).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+        assert!(read_bytes_up_to(&d, 1024).is_err()); // a folder is never handed back as bytes
+        assert!(read_bytes_up_to(&d.join("gone.png"), 1024).is_err());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn edit009_a_picture_is_saved_as_a_new_file_and_never_over_an_existing_one() {
+        let d = temp_dir("picture");
+        let p = d.join("pasted image.png");
+        write_new_picture(&p, &[1, 2, 3], 100).unwrap();
+        assert_eq!(fs::read(&p).unwrap(), [1, 2, 3]);
+        let err = write_new_picture(&p, &[9], 100).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(fs::read(&p).unwrap(), [1, 2, 3]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn edit009_only_picture_names_non_empty_and_within_the_bound_are_saved_and_a_missing_folder_reports() {
+        let d = temp_dir("picture-refused");
+        assert!(write_new_picture(&d.join("run.sh"), &[1], 100).unwrap_err().contains("not a picture"));
+        assert!(write_new_picture(&d.join("noext"), &[1], 100).is_err());
+        assert!(write_new_picture(&d.join("a.PNG"), &[], 100).unwrap_err().contains("empty"));
+        assert!(write_new_picture(&d.join("b.png"), &[0; 101], 100).unwrap_err().contains("at most"));
+        assert!(!d.join("b.png").exists() && !d.join("a.PNG").exists());
+        assert!(write_new_picture(&d.join("no-such-folder").join("c.png"), &[1], 100).unwrap_err().contains("could not save"));
+        write_new_picture(&d.join("d.JPG"), &[1], 100).unwrap();
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn edit009_the_path_header_decodes_spaces_unicode_and_refuses_a_broken_escape() {
+        assert_eq!(percent_decode("C%3A%5Cnotes%5Cmy%20pic%20%C3%A9.png").as_deref(), Some("C:\\notes\\my pic \u{e9}.png"));
+        assert_eq!(percent_decode("plain.png").as_deref(), Some("plain.png"));
+        assert_eq!(percent_decode("bad%2"), None);
+        assert_eq!(percent_decode("bad%zz"), None);
+        assert_eq!(percent_decode("%ff%fe"), None);
     }
 }

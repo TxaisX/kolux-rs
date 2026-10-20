@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import { CREDIT_NAMES } from "../launch/paneMark";
 import AgentMark from "./AgentMark";
-import { VENDOR_MARKS, vendorFiles, vendorMark, vendorUrl } from "./registry";
+import { agents } from "../keys/actions";
+import { NAME_ONLY, VENDOR_MARKS, markKind, productName, vendorFiles, vendorMark, vendorUrl } from "./registry";
 
 // Vite lists and reads the files, so no Node types are needed.
 const svgText = import.meta.glob("../assets/vendors/*.svg", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -62,11 +63,11 @@ describe("T-335 vendor mark files", () => {
   test("a vendor with two colour sets uses two different files; ids are unique", () => {
     const ids = VENDOR_MARKS.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
-    for (const id of ["codex", "copilot", "github"]) {
+    for (const id of ["codex", "copilot", "github", "cursor"]) {
       const m = vendorMark(id)!;
       expect(m.light, id).not.toBe(m.dark);
     }
-    for (const id of ["claude", "vscode"]) expect(vendorMark(id)!.light).toBe(vendorMark(id)!.dark);
+    for (const id of ["claude", "claude-agent-teams", "vscode"]) expect(vendorMark(id)!.light).toBe(vendorMark(id)!.dark);
   });
 
   test("every agent id in the registry is an agent the credit rule knows", () => {
@@ -108,7 +109,21 @@ describe("T-335 AgentMark", () => {
     expect(out).not.toContain("<img");
     expect(out).toContain('aria-label="Mistral Vibe"');
     expect(out).toContain("<svg");
-    expect(html("mistral-vibe")).toContain('aria-label="mistral-vibe"');
+    // With no label given the registry's own plain-text name is the alternative; an id nobody knows keeps its id.
+    expect(html("mistral-vibe")).toContain('aria-label="Mistral Vibe"');
+    expect(html("no-such-agent")).toContain('aria-label="no-such-agent"');
+  });
+
+  test("Cursor draws its cube twice (the dark-ink file for light surfaces, the pale file for dark) and names it", () => {
+    const out = html("cursor");
+    expect(srcs(out)).toEqual([vendorUrl("cursor-cube-for-light.svg"), vendorUrl("cursor-cube-for-dark.svg")]);
+    expect(out.match(/alt="Cursor"/g)).toHaveLength(2);
+  });
+
+  test("Claude Agent Teams wears the Claude spark and its own name", () => {
+    const out = html("claude-agent-teams");
+    expect(srcs(out)).toEqual([vendorUrl("anthropic-claude-spark.svg")]);
+    expect(out).toContain('alt="Claude Agent Teams"');
   });
 });
 
@@ -154,5 +169,37 @@ describe("T-335 nothing is fetched at run time", () => {
       expect(text, f).not.toMatch(/s2\/favicons|favicon\.ico\?|gstatic\.com\/faviconV2|icon\.horse|logo\.clearbit|simpleicons\.org\/|cdn\.simpleicons/i);
       expect(text, f).not.toMatch(/<img[^>]+src=["']https?:/i);
     }
+  });
+});
+
+describe("T-335-b every product has a kit mark or a plain-text name", () => {
+  test("every agent in the catalogue is either a kit mark or a name-only entry carrying the catalogue's own name", () => {
+    for (const [id, name] of agents) {
+      expect(markKind(id), id).not.toBe("none");
+      expect(productName(id), id).toBe(name);
+    }
+  });
+
+  test("the card's calls: Cursor, Claude Agent Teams are kit marks; Rovo Dev, Droid, Kilocode, Aider, Pi, OMP, OpenClaude and Mistral Vibe are name only", () => {
+    for (const id of ["claude", "claude-agent-teams", "codex", "copilot", "cursor"]) expect(markKind(id), id).toBe("kit");
+    for (const id of ["rovo", "droid", "kilo", "aider", "pi", "omp", "openclaude", "mistral-vibe"]) expect(markKind(id), id).toBe("name");
+  });
+
+  test("open-in editors, shells and terminal apps all have a name, and the open-in presets are all covered", () => {
+    for (const id of ["windsurf", "sublime", "zed", "jetbrains", "warp", "ghostty", "powershell", "cmd", "wsl", "git-for-windows"]) expect(markKind(id), id).not.toBe("none");
+    expect(markKind("vscode")).toBe("kit");
+    expect(markKind("github")).toBe("kit");
+  });
+
+  test("ids are unique across kit and name-only entries, every name-only entry has a plain name, and an unknown id is none", () => {
+    const ids = [...VENDOR_MARKS.map((m) => m.id), ...NAME_ONLY.map((n) => n.id)];
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const n of NAME_ONLY) expect(n.name.trim().length, n.id).toBeGreaterThan(1);
+    expect(markKind("not-a-product")).toBe("none");
+    expect(productName("not-a-product")).toBeUndefined();
+  });
+
+  test("no name-only entry is for a cut feature", () => {
+    for (const n of NAME_ONLY) expect(`${n.id} ${n.name}`, n.id).not.toMatch(/(^|[\s._-])(gitlab|jira|linear|ios|android)([\s._-]|$)/i);
   });
 });

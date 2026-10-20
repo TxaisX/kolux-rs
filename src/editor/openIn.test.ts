@@ -25,3 +25,21 @@ test("EDIT-043: an app with an empty command launches VS Code; the file manager 
   expect(commandOf({ label: "Zed", command: "zed --new" })).toBe("zed --new");
   expect(commandOf(FILE_MANAGER)).toBe(null);
 });
+
+import { fileTargetsOf, relInside } from "./openIn";
+
+test("T-323-b: a single file's Open in lists the saved apps in order, without the file manager", () => {
+  expect(fileTargetsOf(null)).toEqual([{ label: "Visual Studio Code", command: "code" }]);
+  const s = { openInApps: [{ id: "explorer", name: "File Explorer", command: "explorer" }, { id: "zed", name: "Zed", command: "zed" }, { id: "vscode", name: "Visual Studio Code", command: "code" }] };
+  expect(fileTargetsOf(s).map((a) => a.label)).toEqual(["Zed", "Visual Studio Code"]);
+});
+
+test("T-323-b: a file is opened by its path inside the worktree, and nothing outside it", () => {
+  expect(relInside("C:\\dev\\app", "C:\\dev\\app\\src\\a.ts")).toBe("src/a.ts");
+  expect(relInside("C:/Dev/app/", "c:/dev/app/x.md")).toBe("x.md");
+  expect(relInside("/home/u/app", "/home/u/app/a/b.rs")).toBe("a/b.rs");
+  expect(relInside("/home/u/app", "/home/u/App/a.rs")).toBe(null);
+  expect(relInside("/home/u/app", "/home/u/app2/a.rs")).toBe(null);
+  expect(relInside("/home/u/app", "/home/u/app")).toBe(null);
+  expect(relInside("/home/u/app", "/home/u/app/../x")).toBe(null);
+});

@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { capOn, codexOf, contextFill, meterOf, meterText, percentMode, planOf, readsLeft, shortTokens, shownPercent, tone, usageLine } from "./meter";
+import { accountKey, capOn, codexOf, contextFill, meterOf, meterText, percentMode, planOf, readsLeft, shortTokens, shownPercent, tone, usageLine } from "./meter";
 import Ring from "./Ring";
 import type { ClaudeLimit } from "./claude";
 import type { CodexUsage } from "./codex";
@@ -105,4 +105,18 @@ test("T-548: a Codex pane on another account than the active one gets no plan fi
   expect(codexOf("claude", "b", "a", codex)).toBe(codex); // only Codex panes are held back
   expect(meterOf(undefined, "codex", claude, codexOf("codex", "b", "a", codex))).toBeNull();
   expect(meterOf(undefined, "codex", claude, codexOf("codex", "a", "a", codex))?.plan).toEqual({ fiveHour: 12, weekly: null });
+});
+
+// T-548-b: the figures read for another account reach the pane that runs on it.
+test("T-548-b: a Codex pane on another account gets that account's own figures when they were read; the key of the system default is empty", () => {
+  const other: CodexUsage = { ...codex, fiveHour: { usedPercent: 80, resetsAt: null, windowMins: 300 } };
+  const by = { b: other, "": { ...codex, weekly: { usedPercent: 9, resetsAt: null, windowMins: null } } };
+  expect(codexOf("codex", "b", "a", codex, by)).toBe(other);
+  expect(codexOf("codex", null, "a", codex, by)).toBe(by[""]); // Codex's own sign-in while a managed account is active
+  expect(codexOf("codex", "c", "a", codex, by)).toBeNull(); // not read yet: no figures rather than another account's
+  expect(codexOf("codex", "a", "a", codex, by)).toBe(codex); // the active account keeps the pill's figures
+  expect(codexOf("claude", "b", "a", codex, by)).toBe(codex);
+  expect(accountKey(null)).toBe("");
+  expect(accountKey("b")).toBe("b");
+  expect(meterOf(undefined, "codex", claude, codexOf("codex", "b", "a", codex, by))?.plan).toEqual({ fiveHour: 80, weekly: null });
 });

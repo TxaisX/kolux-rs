@@ -119,7 +119,7 @@ export function creditedProgram(program: string): string | null {
 /** The mark a program earns: Claude or Codex when Rust would credit it to that agent, else the plain shell. */
 export function programMark(program: string | null | undefined): Agent {
   const id = creditedProgram(program ?? "");
-  return id === "claude" || id === "codex" ? id : "shell";
+  return id === "claude" || id === "codex" || id === "copilot" || id === "cursor" ? id : "shell";
 }
 
 /**
@@ -130,7 +130,7 @@ export function programMark(program: string | null | undefined): Agent {
  */
 export function markFor(id: string, program?: string | null): Agent {
   if (id === "claude-agent-teams") return "claude";
-  if (id === "claude" || id === "codex") return id;
+  if (id === "claude" || id === "codex" || id === "copilot" || id === "cursor") return id;
   return programMark(program);
 }
 

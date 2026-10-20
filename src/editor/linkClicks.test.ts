@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { followClick, headingEl } from "./linkClicks";
+import { followClick, headingEl, missingFileToast } from "./linkClicks";
 
 // EDIT-014 (T-234-b): Mod+click follows a note link; a plain click does not. No DOM here: the page
 // and its links are small stand-ins with the few members the code reads.
@@ -59,5 +59,18 @@ describe("following links in a note", () => {
     expect(followClick(click("b.md", { ctrlKey: true, button: 2 }), page, NOTE, ROOT, on)).toBe(false);
     const off = { ...click("b.md", { ctrlKey: true }), target: { closest: () => null } } as unknown as MouseEvent;
     expect(followClick(off, page, NOTE, ROOT, on)).toBe(false);
+  });
+});
+
+// EDIT-014 (T-234-b): a link to a file that is not there says so.
+describe("missing file toast", () => {
+  it("names the file when its stamp is gone", async () => {
+    const msg = await missingFileToast("C:/work/proj/docs/gone.md", async () => [null]);
+    expect(msg).toBe("Cannot open gone.md: the file is not there (or is outside this project).");
+    expect(await missingFileToast("C:\\work\\gone.md", async () => [undefined])).toContain("gone.md");
+  });
+  it("is silent for a file that exists, and when the check itself fails", async () => {
+    expect(await missingFileToast("a.md", async () => [{ mtime: 1, size: 2 }])).toBeNull();
+    expect(await missingFileToast("a.md", async () => { throw new Error("ipc"); })).toBeNull();
   });
 });

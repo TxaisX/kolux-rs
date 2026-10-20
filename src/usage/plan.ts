@@ -3,8 +3,10 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { nextTick, type ClaudeLimit } from "./claude";
 import type { CodexUsage } from "./codex";
+import { accountKey, type CodexByAccount } from "./meter";
 
-export type Plan = { claude: ClaudeLimit[]; codex: CodexUsage | null };
+/** `codexBy` (T-548-b): the Codex figures read for the accounts other than the active one that a pane runs on. */
+export type Plan = { claude: ClaudeLimit[]; codex: CodexUsage | null; codexBy?: CodexByAccount; /** T-548-b: the account new Codex panes use (null = the system default); unset until the window has published it. */ codexActive?: string | null };
 
 let plan: Plan = { claude: [], codex: null };
 const subs = new Set<() => void>();
@@ -14,6 +16,13 @@ const publish = (next: Plan) => {
 };
 export const publishClaude = (claude: ClaudeLimit[]) => publish({ ...plan, claude });
 export const publishCodex = (codex: CodexUsage | null) => publish({ ...plan, codex });
+/** T-548-b: the active Codex account, for readers that do not have it at hand (the pane header). */
+export const publishCodexActive = (codexActive: string | null) => plan.codexActive !== codexActive && publish({ ...plan, codexActive });
+/** T-548-b: stores (usage) or drops (null) the figures read for one account, `null` id = the system default sign-in. */
+export const publishCodexFor = (id: string | null, usage: CodexUsage | null) => {
+  const { [accountKey(id)]: _gone, ...rest } = plan.codexBy ?? {};
+  publish({ ...plan, codexBy: usage ? { ...rest, [accountKey(id)]: usage } : rest });
+};
 const subscribe = (f: () => void) => {
   subs.add(f);
   return () => void subs.delete(f);
