@@ -367,6 +367,72 @@ pub fn on_poll(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr]) {
     }
 }
 
+/// AUTO-004 (T-085-e): does this pane's agent status count as "agent finished"? Only an ordinary
+/// completion counts: the lead agent reached done after it was seen at work in this process. A
+/// done reported at a session boundary (start, resume, clear), an interrupted turn, a sub-agent's
+/// finish, and a done with no work seen first (a restored pane never confirmed by its hooks, or
+/// a ready prompt already on screen) never count. Fires once: the work seen is spent by the
+/// finish, so the same done reported again, or a later done with no new work, does not fire.
+/// `seen` holds, per pane, whether work has been seen since the last finish or boundary.
+pub fn agent_finished(seen: &mut std::collections::HashMap<u32, bool>, pane_key: u32, state: &str, boundary: bool, child: bool, interrupted: bool) -> bool {
+    if child {
+        return false;
+    }
+    if boundary {
+        seen.remove(&pane_key);
+        return false;
+    }
+    match state {
+        "working" | "permission" | "waiting" => {
+            seen.insert(pane_key, true);
+            false
+        }
+        "done" if !interrupted => seen.insert(pane_key, false) == Some(true),
+        "done" | "interrupted" => {
+            seen.insert(pane_key, false);
+            false
+        }
+        _ => false,
+    }
+}
+
+/// AUTO-004: a pane an automation run opened (followed as its terminal or hook pane, now or
+/// earlier) never sets off an automation, so no automation can trigger itself.
+pub fn own_pane(runs: &[Value], terminal: Option<u32>, pane_key: u32) -> bool {
+    runs.iter().any(|r| terminal.is_some_and(|t| r["terminal"] == t || r["lastTerminal"] == t) || r["paneKey"] == pane_key || r["lastPaneKey"] == pane_key)
+}
+
+/// AUTO-004: fed with every status the panes' hooks report (hooks.rs hands `on_status` the same
+/// readings). When the reading is an ordinary finish in a pane no automation opened, the
+/// automations of that worktree's project listening for "agent finished" start.
+// Called from hooks.rs (evidence/automations-T-085-e-hooks.rs.patch, hooks lane file); drop the allow once that lands.
+#[allow(dead_code)]
+pub fn on_finish(app: &tauri::AppHandle, pane_key: u32, terminal: Option<u32>, state: &str, boundary: bool, child: bool, interrupted: bool) {
+    use tauri::Manager;
+    static SEEN: std::sync::OnceLock<Mutex<std::collections::HashMap<u32, bool>>> = std::sync::OnceLock::new();
+    let fired = agent_finished(&mut SEEN.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner), pane_key, state, boundary, child, interrupted);
+    if !fired {
+        return;
+    }
+    let Some(pane) = app.try_state::<crate::terminal::Terminals>().and_then(|ts| ts.of_pane(pane_key)) else { return };
+    let Some(cwd) = pane.cwd else { return };
+    let agent = pane.agent.unwrap_or("The agent");
+    let line = format!("Event: {agent} finished its work in {}", folder_name(&cwd));
+    let outcome = launch_for(app, |l| {
+        let own = {
+            let store = l.store.lock().map_err(|e| e.to_string())?;
+            own_pane(&load(&store, RUNS_KEY)?, terminal, pane_key)
+        };
+        if own {
+            return Ok(Vec::new());
+        }
+        on_event(l, "agent-finished", &cwd, &line, now_ms() as i64)
+    });
+    if let Err(e) = outcome {
+        eprintln!("automations event: {e}");
+    }
+}
+
 /// A run that never started, logged so the gap shows (AUTO-007, AUTO-022). AUTO-012: when the
 /// automation's newest run was skipped for the same reason, that entry counts one more instead,
 /// so an hour of five-minute refusals is one line, not twelve. A missed time is already one entry
@@ -1135,6 +1201,80 @@ mod tests {
         // A worktree an automation made never sets off an automation (no automation triggers itself).
         projects::set_origin(&store.lock().unwrap(), &path, Some(&json!({ "madeBy": "automation", "automationId": "auto-9" }))).unwrap();
         assert!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 40 * 60_000).unwrap().is_empty());
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t085e_agent_finished_fires_once_on_an_ordinary_finish_and_never_on_the_rest() {
+        let mut seen = std::collections::HashMap::new();
+        let step = |seen: &mut std::collections::HashMap<u32, bool>, state: &str, boundary: bool, child: bool, interrupted: bool| agent_finished(seen, 7, state, boundary, child, interrupted);
+        // A session start reports done at its boundary: a starting point, not a finish.
+        assert!(!step(&mut seen, "done", true, false, false));
+        // Work, then an ordinary finish: fires exactly once.
+        assert!(!step(&mut seen, "working", false, false, false));
+        assert!(!step(&mut seen, "permission", false, false, false));
+        assert!(step(&mut seen, "done", false, false, false));
+        assert!(!step(&mut seen, "done", false, false, false), "the same finish reported again does not fire twice");
+        // A restored or idle pane with no work seen in this process: its done never counts.
+        assert!(!step(&mut seen, "done", false, false, false));
+        // A sub-agent's finish inside a turn that goes on is not the lead's finish.
+        assert!(!step(&mut seen, "working", false, false, false));
+        assert!(!step(&mut seen, "done", false, true, false));
+        // Ctrl+C: an interrupted turn ends without firing and spends the work seen.
+        assert!(!step(&mut seen, "done", false, false, true));
+        assert!(!step(&mut seen, "done", false, false, false));
+        // /clear right after work forgets it: the boundary's done and the next idle done are no finish.
+        assert!(!step(&mut seen, "working", false, false, false));
+        assert!(!step(&mut seen, "done", true, false, false));
+        assert!(!step(&mut seen, "done", false, false, false));
+        // Another pane's work never counts for this one.
+        assert!(!agent_finished(&mut seen, 8, "working", false, false, false));
+        assert!(!step(&mut seen, "done", false, false, false));
+        assert!(agent_finished(&mut seen, 8, "done", false, false, false));
+        // A pane an automation run opened, by terminal or by hook pane, is its own and never fires.
+        let runs = vec![json!({ "id": "run-1", "terminal": 3, "paneKey": 30 }), json!({ "id": "run-2", "lastTerminal": 4, "lastPaneKey": 40 })];
+        assert!(own_pane(&runs, Some(3), 99) && own_pane(&runs, None, 30) && own_pane(&runs, Some(4), 99) && own_pane(&runs, None, 40));
+        assert!(!own_pane(&runs, Some(5), 50) && !own_pane(&runs, None, 50));
+    }
+
+    #[test]
+    fn t085e_an_agent_finish_in_a_watched_worktree_starts_the_listening_automation_only() {
+        let dir = temp("t085e");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.email", "t@example.com"], &["config", "user.name", "t"], &["commit", "-q", "--allow-empty", "-m", "first"]] {
+            assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+        }
+        let wt = dir.join("feat");
+        assert!(std::process::Command::new("git").args(["worktree", "add", "-q", "-b", "feat"]).arg(&wt).current_dir(&repo).status().unwrap().success());
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        {
+            let s = store.lock().unwrap();
+            s.set("projects", &json!([{ "id": "p1", "name": "repo", "path": repo.to_string_lossy() }]).to_string()).unwrap();
+            let row = |id: &str, event: &str| json!({ "id": id, "name": id, "prompt": "tidy up", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": repo.to_string_lossy(), "trigger": { "kind": "event", "event": event }, "enabled": true });
+            s.set(KEY, &json!([row("auto-fin", "agent-finished"), row("auto-pr", "pr-opened")]).to_string()).unwrap();
+        }
+        let git = Git::detect().unwrap();
+        let said = RefCell::new(Vec::<(String, Value)>::new());
+        let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        let line = "Event: claude finished its work in feat";
+        // An unwatched session: a folder that is no worktree of any project starts nothing.
+        assert!(on_event(&l, "agent-finished", &dir.join("elsewhere").to_string_lossy(), line, FRI_NOON).unwrap().is_empty());
+        // A finish in the project's worktree starts only the automation listening for it.
+        let started = on_event(&l, "agent-finished", &wt.to_string_lossy(), line, FRI_NOON).unwrap();
+        assert_eq!(started.iter().map(|r| r["automationId"].as_str().unwrap()).collect::<Vec<_>>(), ["auto-fin"]);
+        assert_eq!((started[0]["trigger"].as_str(), started[0]["status"].as_str(), started[0]["eventDetail"].as_str()), (Some("event"), Some("dispatched"), Some(line)));
+        let start = said.borrow().iter().find(|(e, v)| e == crate::cli::EVENT && v["kind"] == "start").cloned().expect("a start");
+        assert!(start.1["prompt"].as_str().unwrap().ends_with(line), "{}", start.1["prompt"]);
+        // The run it started is this automation's own pane once a terminal claims it: no self-trigger.
+        let s = store.lock().unwrap();
+        claim(&s, 11, Some(110), &repo.to_string_lossy(), Some("claude")).unwrap();
+        assert!(own_pane(&load(&s, RUNS_KEY).unwrap(), Some(11), 110));
+        drop(s);
         drop(l);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

@@ -78,7 +78,7 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
 - [ ] T-085-d · checks failed trigger: the pull request poll learns each pull request's checks state and fires when it goes from pending to failing (blocked on the reliability lane: scm.rs has to report each pull request's checks state first)
-- [ ] T-085-e · agent finished trigger: fire when a watched agent session ends (HAND TO FABLE: needs T-025 hooks)
+- [x] T-085-e · agent finished trigger: fire when a watched agent session ends · done 2026-10-19 (lane/automations from fe376cf9; evidence/T-085-e.txt: automations::tests 24/24 incl. t085e_* (2 new), clippy -D warnings clean, plan-check OK, firewall 0 new; the hooks.rs feed line is evidence/automations-T-085-e-hooks.rs.patch for the merge resolver; live proof pending (batched))
 - [ ] T-085-f · the automation dialog offers checks failed and agent finished as triggers once they fire (blocked on T-085-d and T-085-e)
 - [ ] T-085-g · the self-closing run tab: a background run's tab closes itself when the run ends (blocked on the coordinator: needs App.tsx and terminal.rs wiring outside the automations lane)
 - [ ] T-085-h · replay and reconnect a run after a restart (HAND TO FABLE: PTY work)

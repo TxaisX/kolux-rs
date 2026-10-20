@@ -1,0 +1,16 @@
+T-085-e (lane/automations): feed the hooks' status readings to the agent-finished trigger.
+One call beside the existing AUTO-012 feed in the hooks listener; `automations::on_finish` does
+the work (its own state machine, the no-self-trigger check, the project lookup) and never blocks.
+Apply from the repo root: git apply evidence/automations-T-085-e-hooks.rs.patch
+
+--- a/src-tauri/src/hooks.rs
++++ b/src-tauri/src/hooks.rs
+@@ -578,6 +578,8 @@
+                 agent_hooks::saved::note(app, &req.path, &req.body, &status);
+                 // AUTO-012: an automation run in this pane completes on its agent's real finish.
+                 crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), crate::automations::now_ms()));
++                // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
++                crate::automations::on_finish(app, status.pane_key, status.terminal, status.change.state, status.change.boundary, status.child.is_some(), status.interrupted);
+                 let _ = app.emit(EVENT, status);
+             }
+             if code == 200 {
