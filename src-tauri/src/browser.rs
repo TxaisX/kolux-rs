@@ -41,6 +41,8 @@ pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
 pub const CHORD_EVENT: &str = "browser-chord";
 pub const LINK_EVENT: &str = "browser-link";
+/// T-159 (BROW-040): a document preview asked to leave its folder; the pane offers the address.
+pub const OUTBOUND_EVENT: &str = "browser-outbound";
 pub const ICON_EVENT: &str = "browser-icon";
 /// T-239 (BROW-017): a right-click inside a page (`kind: "menu"`, with the pointer, the page's
 /// size, the link under it and whether text is selected) or an entry picked in the menu it opened
@@ -894,6 +896,14 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         .initialization_script(CHORD_SCRIPT)
         // BROW-014: a link or script asking for a new window becomes another Kolux tab, in front.
         .on_new_window(move |url, _| {
+            // T-159 (BROW-040): a document preview's popups and script-opened windows are blocked;
+            // an outside address is offered to the user once, with its full address.
+            if let Some(v) = preview::navigating(id, url.as_str()) {
+                if v == preview::Verdict::Offer {
+                    let _ = window_app.emit(OUTBOUND_EVENT, LinkPayload { id, url: url.to_string(), front: true });
+                }
+                return NewWindowResponse::Deny;
+            }
             // BROW-016: a page opening windows in a loop gets a handful of tabs, never a flood.
             if let Some((url, front)) = new_window(&url, window_dev.as_ref(), &PAGE_TABS, is_shown(id), Instant::now()) {
                 let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url, front });
@@ -901,8 +911,17 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             NewWindowResponse::Deny
         })
         .on_navigation(move |url| match navigation(url, dev.as_ref(), &PAGE_TABS, is_shown(id), Instant::now()) {
+            // T-159 (BROW-040): a document preview follows its own files and what the app asked for;
+            // the first outside address is offered to the user, the rest are dropped.
             // T-242 (BROW-050): a tab emulating offline loads nothing new, as a cut cable would.
-            Nav::Load(go) => go && !cli::offline(id),
+            Nav::Load(go) => match preview::navigating(id, url.as_str()) {
+                Some(preview::Verdict::Offer) => {
+                    let _ = chord_app.emit(OUTBOUND_EVENT, LinkPayload { id, url: url.to_string(), front: true });
+                    false
+                }
+                Some(preview::Verdict::Drop) => false,
+                _ => go && !cli::offline(id),
+            },
             Nav::Link(url, front) => {
                 let _ = chord_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 false
@@ -948,6 +967,9 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             if event == "finished" {
                 history::noted_load(id, payload.url().as_str()); // T-238-b (BROW-004)
                 session::noted_load(id, payload.url().as_str()); // T-179 (BROW-020)
+                preview::rendered(id); // T-159 (BROW-040): agent tools may drive a preview now
+            } else {
+                preview::loading(id, payload.url().as_str()); // T-159: a preview address fences the tab
             }
             let _ = load_app.emit(LOAD_EVENT, LoadPayload { id, event, url: payload.url().to_string() });
         })
@@ -962,6 +984,13 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         .on_download(move |_, event| match event {
             DownloadEvent::Requested { url, destination } => {
                 let suggested = destination.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                // T-159 (BROW-040): a document preview downloads nothing; one notice per burst.
+                if let Some(notice) = preview::download_refused(id) {
+                    if notice {
+                        downloads::refused(&download_app, id, url.as_str(), &suggested, "a document preview may not download");
+                    }
+                    return false;
+                }
                 let dir = download_app.path().download_dir().map_err(|e| e.to_string());
                 match dir.and_then(|dir| downloads::requested(&download_app, id, url.as_str(), &dir, &suggested)) {
                     Ok(path) => {
@@ -1036,6 +1065,7 @@ fn place(v: &Webview, id: u32, spot: &Spot) -> Result<(), String> {
 pub async fn browser_navigate(app: AppHandle, id: u32, url: String) -> Result<(), String> {
     let url = parse(&url)?;
     allowed(&url, app_origin(&app).as_ref())?;
+    preview::expect(id); // T-159: the bar's own navigation leaves a preview freely
     view(&app, id)?.navigate(url).map_err(err)
 }
 
@@ -1099,6 +1129,7 @@ fn step_history(v: &Webview, id: u32, what: &str) -> Result<(), String> {
     let (probe, delta) = if what == "back" { ("!!(window.navigation && navigation.canGoBack)", -1) } else { ("!!(window.navigation && navigation.canGoForward)", 1) };
     let page = v.clone();
     let own = script(what).ok_or_else(|| format!("unknown browser action {what}"))?;
+    preview::expect(id); // T-159: Back and Forward leave a preview freely
     v.eval_with_callback(probe, move |answer| {
         if answer.trim() == "true" {
             let _ = page.eval(own);
@@ -1125,6 +1156,7 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     downloads::cancel_tab(&app, id);
     history::forget_tab(id);
     session::forget(id); // T-179: a closed tab does not come back after a restart
+    preview::forget(id); // T-159
     view(&app, id)?.close().map_err(err)
 }
 
@@ -1319,6 +1351,7 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
     let app = APP.get().ok_or("no browser tab has been opened yet")?;
     // T-179 (BROW-021): a page an agent drives is under agent control, never unloaded for a while.
     if let Act::Eval(id, ..) | Act::Navigate(id, _) | Act::Go(id, _) | Act::Relayout(id, _) = act {
+        preview::drivable(id)?; // T-159 (BROW-040): a preview is driven only once it has rendered
         session::drove(id);
     }
     match act {
@@ -1362,6 +1395,7 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             let url = parse(url)?;
             allowed(&url, app_origin(app).as_ref())?;
             let to = url.to_string();
+            preview::expect(id); // T-159: the command line's goto leaves a preview freely
             view(app, id)?.navigate(url).map_err(err)?;
             Ok(serde_json::Value::String(to))
         }

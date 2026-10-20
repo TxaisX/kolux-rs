@@ -41,7 +41,7 @@ export type OpenInBrowser = string | { url: string; title: string };
 export const openDetail = (d: OpenInBrowser): { url: string; title?: string } => (typeof d === "string" ? { url: d } : d);
 
 /** T-241 (BROW-039): what a tab's address previews, when it is a worktree document of ours. */
-type Preview = { folder: string; file: string; path: string };
+type Preview = { folder: string; file: string; path: string; granted: boolean };
 
 /** T-241 (BROW-044): `kolux tab create` asks the window for a tab; one listener for the whole
  * window, started by the first pane, so a tab opens once however many panes there are. */
@@ -146,6 +146,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const closeMe = useRef(onClose);
   closeMe.current = onClose;
   const [preview, setPreview] = useState<Preview | null>(null);
+  // T-159 (BROW-040): the outside address a previewed document asked to open; offered, never followed.
+  const [outbound, setOutbound] = useState<string | null>(null);
   // T-074 (BROW-008, BROW-009): the page's health. The engine says only started / finished, so the
   // pane probes the page (browser_probe) and feeds loadState's machine; the overlay it decides on
   // covers the pane body while the page itself is hidden under it (a child web view cannot be
@@ -208,6 +210,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           hist.current = h;
           setCan(canGo(h));
           setLoading(true);
+          setOutbound(null);
           if (!typing.current) setAddress(url === BLANK ? "" : url); // BROW-004: typed text survives
           if (!sameAddress(at.current, url)) {
             setNotes([]);
@@ -237,6 +240,13 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           const { front } = e.payload;
           const appHasFocus = document.hasFocus();
           void windowHasFocus().then((w) => openerRefocus(front, appHasFocus, w) && setTimeout(() => focusMe.current?.(), 0));
+        }),
+      );
+      // T-159 (BROW-040): a previewed document asked to leave its folder; the full address is
+      // offered once and nothing opens until Open is clicked.
+      unlisteners.push(
+        await listen<{ id: number; url: string }>("browser-outbound", (e) => {
+          if (e.payload.id === id) setOutbound(e.payload.url);
         }),
       );
       unlisteners.push(
@@ -565,6 +575,24 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
               <button type="button" className="ib preview-copy" title="Copy the file's path" aria-label="Copy path" onClick={() => void navigator.clipboard?.writeText(preview.path).catch(() => {})}>
                 copy
               </button>
+              {!preview.granted && (
+                // T-159 (BROW-040): until allowed, the preview reads only its own document.
+                <button
+                  type="button"
+                  className="ib preview-copy"
+                  title={`Let this preview read the other files in ${preview.folder} (styles, scripts, images); it reads only its own document until then`}
+                  onClick={() => {
+                    invoke("browser_preview_grant", { url: at.current })
+                      .then(() => {
+                        setPreview((p) => (p ? { ...p, granted: true } : p));
+                        return invoke("browser_go", { id, what: "reload" });
+                      })
+                      .catch((err) => setNote(String(err)));
+                  }}
+                >
+                  Allow folder
+                </button>
+              )}
             </span>
           ) : null}
           <input
@@ -759,6 +787,27 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       {note && (
         <div className="notice" role="alert">
           {note}
+        </div>
+      )}
+      {outbound && (
+        <div className="notice preview-ask" role="alertdialog" aria-label="Open an outside address?">
+          <span>
+            This preview wants to open <code>{outbound}</code>
+          </span>
+          <button
+            type="button"
+            className="ib"
+            onClick={() => {
+              const url = outbound;
+              setOutbound(null);
+              navigateTo(url);
+            }}
+          >
+            Open
+          </button>
+          <button type="button" className="ib" onClick={() => setOutbound(null)}>
+            Cancel
+          </button>
         </div>
       )}
       <div ref={host} className="pane-body">
