@@ -1,0 +1,74 @@
+diff --git a/src/feedback/FeedbackDialog.tsx b/src/feedback/FeedbackDialog.tsx
+index d3d22e5c..5c685fde 100644
+--- a/src/feedback/FeedbackDialog.tsx
++++ b/src/feedback/FeedbackDialog.tsx
+@@ -6,7 +6,7 @@ import { useEffect, useReducer, useRef } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+ import type { AppInfo } from "../app-info";
+ import type { FeedbackFacts } from "../settings/privacy";
+-import { closed, issue, reduce, typedText } from "./model";
++import { closed, issue, reduce, tabTarget, typedText } from "./model";
+ 
+ const EVENT = "kolux-feedback";
+ const NOTE_MS = 8000;
+@@ -79,11 +79,21 @@ export default function FeedbackDialog() {
+     <div className="scrim" onMouseDown={() => dispatch({ t: "close" })}>
+       <div
+         role="dialog"
++        aria-modal="true"
+         aria-label="Send feedback"
+         onMouseDown={(e) => e.stopPropagation()}
+         onKeyDown={(e) => {
+           if (e.key === "Escape") dispatch({ t: "close" });
+           else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send();
++          else if (e.key === "Tab") {
++            // APP-037: the box is modal; Tab never leaves it.
++            const items = [...e.currentTarget.querySelectorAll<HTMLElement>("textarea, input, button:not([disabled])")];
++            const to = tabTarget(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey);
++            if (to >= 0) {
++              e.preventDefault();
++              items[to].focus();
++            }
++          }
+         }}
+         style={{ width: "min(640px, calc(100vw - 48px))", display: "flex", flexDirection: "column", gap: 10, padding: "16px 18px", background: "var(--pane-bg)", border: "1px solid var(--line-focus)", borderRadius: 12, boxShadow: "0 12px 40px rgba(0, 0, 0, 0.5)", color: "var(--fg)" }}
+       >
+diff --git a/src/feedback/model.test.ts b/src/feedback/model.test.ts
+index b4166489..ae573d1b 100644
+--- a/src/feedback/model.test.ts
++++ b/src/feedback/model.test.ts
+@@ -3,7 +3,7 @@
+ // XMLHttpRequest made to throw.
+ import { afterEach, beforeEach, expect, test, vi } from "vitest";
+ import { URL_CAP, type FeedbackFacts } from "../settings/privacy";
+-import { block, closed, issue, MARK, reduce, typedText, withBlock } from "./model";
++import { block, closed, issue, MARK, reduce, tabTarget, typedText, withBlock } from "./model";
+ 
+ const facts: FeedbackFacts = { version: "0.1.0", platform: "Win32", release: "Windows 10.0.26200", arch: "x86_64", login: "octo-fake" };
+ 
+@@ -172,3 +172,10 @@ test("fix1: closing the box with a report typed keeps it for the next open, a se
+   // an empty box stays empty
+   expect(typedText(reduce(reduce(reduce(closed, { t: "open", facts }), { t: "close" }), { t: "open", facts }).draft)).toBe("");
+ });
++
++// APP-037 review item: the box is modal, so Tab stays inside it and wraps at both ends.
++test("tab order wraps inside the box and starts at an end when nothing inside has focus", () => {
++  expect([0, 1, 2, 3].map((at) => tabTarget(4, at, false))).toEqual([1, 2, 3, 0]);
++  expect([0, 1, 2, 3].map((at) => tabTarget(4, at, true))).toEqual([3, 0, 1, 2]);
++  expect([tabTarget(4, -1, false), tabTarget(4, -1, true), tabTarget(0, 0, false)]).toEqual([0, 3, -1]);
++});
+diff --git a/src/feedback/model.ts b/src/feedback/model.ts
+index af9b9259..db96061c 100644
+--- a/src/feedback/model.ts
++++ b/src/feedback/model.ts
+@@ -86,3 +86,10 @@ export function reduce(s: State, a: Act): State {
+       return { ...s, open: false };
+   }
+ }
++
++/** Which of `count` controls takes focus when Tab (Shift+Tab: `shift`) leaves control `at` (-1: none): focus wraps at both ends. */
++export function tabTarget(count: number, at: number, shift: boolean): number {
++  if (count <= 0) return -1;
++  if (at < 0) return shift ? count - 1 : 0;
++  return (at + (shift ? count - 1 : 1)) % count;
++}
