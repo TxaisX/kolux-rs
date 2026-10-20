@@ -584,6 +584,8 @@ pub fn run() {
             github::github_issue_state,
             github::github_issue_comment,
             github::github_issue_create,
+            github::github_issue_types,
+            github::github_issue_type_set,
             github::pull_requests::pr_page,
             github::pull_requests::pr_files,
             github::pull_requests::pr_file_patch,

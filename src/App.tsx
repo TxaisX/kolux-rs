@@ -2308,6 +2308,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               setCreateRequest((n) => n + 1);
             }}
             onClose={() => setPalette(false)}
+            linked={linkedPrs(settings[SCM_LINKED_PR_KEY])}
+            onItem={openInBrowser}
           />
         )}
         {asking && (

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { applyCellEdit, cellEditable, cellKey, endSave, newBook, sendEdit, settleEdit, readBackStart, readBackFresh, readBackLost, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyAssignees, applyCellEdit, assigneeChange, cellEditable, cellText, cloneAddress, cellKey, endSave, newBook, sendEdit, settleEdit, readBackStart, readBackFresh, readBackLost, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 const status: ProjectField = { id: "F_s", name: "Status", kind: "single_select", options: [{ id: "o1", name: "Todo", start: "", days: 0 }, { id: "o2", name: "Done", start: "", days: 0 }] };
 const points: ProjectField = { id: "F_p", name: "Points", kind: "number", options: [] };
 const repo: ProjectField = { id: "F_r", name: "Repository", kind: "repository", options: [] };
 const labels: ProjectField = { id: "F_l", name: "Labels", kind: "labels", options: [] };
-const item = (id: string, over: Partial<ProjectItem> = {}): ProjectItem => ({ id, kind: "issue", title: id, number: 1, url: "", repo: "acme/app", state: "open", labels: [], assignees: [], values: {}, ...over });
+const item = (id: string, over: Partial<ProjectItem> = {}): ProjectItem => ({ id, kind: "issue", title: id, number: 1, url: "", repo: "acme/app", state: "open", labels: [], assignees: [], issueType: "", values: {}, ...over });
 const cell = (text: string, id = "") => ({ text, id, start: "", days: 0 });
 
 describe("T-314-c GitHub Projects", () => {
@@ -242,5 +242,34 @@ describe("FIX-3 FIX-SOON 4: a cell shows the last edit that succeeded", () => {
     sendEdit(b, c, 2);
     settleEdit(b, c, 2, false, () => shown.push(2));
     expect(shown).toEqual([1]);
+  });
+});
+
+describe("T-314-d the issue's own fields", () => {
+  const assignees: ProjectField = { id: "F_a", name: "Assignees", kind: "assignees", options: [] };
+  const type: ProjectField = { id: "F_t", name: "Type", kind: "issue_type", options: [] };
+  it("assignees and issue type are editable on an issue; a pull request has no type; drafts and restricted rows have neither", () => {
+    expect([item("a"), item("b", { kind: "pr" }), item("c", { kind: "draft", repo: "", number: null }), item("d", { kind: "restricted" })].map((i) => [cellEditable(i, assignees), cellEditable(i, type)])).toEqual([
+      [true, true],
+      [true, false],
+      [false, false],
+      [false, false],
+    ]);
+    expect(cellText(item("a", { issueType: "Bug", assignees: ["ana", "bo"] }), type)).toBe("Bug");
+    expect(cellText(item("a", { assignees: ["ana", "bo"] }), assignees)).toBe("@ana, @bo");
+  });
+
+  it("an assignee edit is GitHub's add and remove lists: case-blind, @ optional, each login once; a bad login is named", () => {
+    expect(assigneeChange(["ana", "bo"], "@ANA, cy, cy")).toEqual({ add: ["cy"], remove: ["bo"], bad: [] });
+    expect(assigneeChange(["ana"], "")).toEqual({ add: [], remove: ["ana"], bad: [] });
+    expect(assigneeChange(["ana"], "ana").add).toEqual([]);
+    expect(assigneeChange([], "ana, -x, a b").bad).toEqual(["-x", "a b"]);
+    expect(applyAssignees(["ana", "bo"], { add: ["cy", "ANA"], remove: ["bo"] })).toEqual(["ana", "cy"]);
+  });
+
+  it("a repository is copied from an https address on a plain host, never from an odd name", () => {
+    expect(cloneAddress("github.com", "acme/app")).toBe("https://github.com/acme/app.git");
+    expect(cloneAddress("git.corp.example:8443", "corp/lib.js")).toBe("https://git.corp.example:8443/corp/lib.js.git");
+    for (const [h, r] of [["github.com", "acme"], ["github.com", "a/b/c"], ["github.com", "../x"], ["github.com", "a/.."], ["github.com", "a b/c"], ["evil.com/x@", "a/b"], ["", "a/b"]]) expect(cloneAddress(h, r)).toBeNull();
   });
 });
