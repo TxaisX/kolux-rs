@@ -229,7 +229,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme none · No theme (171 cards)
 
-- [ ] T-214-b · The rest of T-214 on T-214-a: PROJ-005 A folder without Git can be opened as a folder project · PROJ-008 Remove a project from Kolux · also from T-203: a folder project becomes a Git project by itself when Git is started in it outside Kolux, for example `git init` in a terminal
+- [x] T-214-b · The rest of T-214 on T-214-a: PROJ-005 A folder without Git can be opened as a folder project · PROJ-008 Remove a project from Kolux · also from T-203: a folder project becomes a Git project by itself when Git is started in it outside Kolux, for example `git init` in a terminal · done 2026-10-19 (lane/repo from e7712bfb; evidence/T-214-b.txt: folder projects with promotion to Git, project removal with trace clearing; live proof pending (batched))
 - [ ] T-215-b · The rest of T-215 on T-215-a's groups: PROJ-012 Scan a parent folder for the repositories inside it · PROJ-013 Import found repositories as one group or as separate projects
 - [ ] T-216-b · The rest of T-216 on T-216-a's list: PROJ-016 Drag project and group headers into order · PROJ-049 Manual order: drag workspaces into a custom order · PROJ-052 Filter the workspace list (its hide-sleeping filter needs T-217's sleep state)
 - [ ] T-217-b · The rest of T-217 on T-217-a's list: PROJ-056 [compat] Back and forward through visited workspaces · PROJ-060 Workspace details: name, linked item and notes · PROJ-065 Workspace context menu · also: the rest of T-055's card: Delete in the workspace menu; a workspace with children offers only to delete them all, children first and the parent last; a parent or a batch always asks even with the question switched off

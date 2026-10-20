@@ -1,3 +1,4 @@
+mod folder_projects;
 mod activity;
 mod agents;
 mod artifacts;
@@ -398,6 +399,7 @@ pub fn run() {
             projects::git_version,
             projects::project_list,
             projects::project_add,
+            folder_projects::project_add_folder, folder_projects::project_remove,
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,

@@ -27,3 +27,11 @@ test("an empty folder is said to get an empty first commit", () => {
   expect(html).toContain("the first commit will be empty");
   expect(html).toContain("0 files in the first commit.");
 });
+
+test("PROJ-005 the plain-folder question also offers Open as a folder, and only when the caller can do it", () => {
+  const html = renderToString(createElement(StartGit, { folder: "G:\work\site", files, busy: false, onStart: noop, onFolder: noop, onCancel: noop }));
+  expect(html).toContain("Open as a folder");
+  expect(html).toContain("becomes a Git project on its own");
+  const plain = renderToString(createElement(StartGit, { folder: "G:\work\site", files, busy: false, onStart: noop, onCancel: noop }));
+  expect(plain).not.toContain("Open as a folder");
+});

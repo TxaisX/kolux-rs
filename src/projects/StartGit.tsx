@@ -14,7 +14,7 @@ export function firstCommitLine(files: FirstFile[], chosen: Set<string>) {
   return `${n} file${n === 1 ? "" : "s"} in the first commit${out ? `, ${out} left out` : ""}.`;
 }
 
-export default function StartGit({ folder, files, busy, onStart, onCancel }: { folder: string; files: FirstFile[]; busy: boolean; onStart: (files: string[]) => void; onCancel: () => void }) {
+export default function StartGit({ folder, files, busy, onStart, onFolder, onCancel }: { folder: string; files: FirstFile[]; busy: boolean; onStart: (files: string[]) => void; onFolder?: () => void; onCancel: () => void }) {
   const [chosen, setChosen] = useState(() => defaultChosen(files));
   const toggle = (p: string) =>
     setChosen((c) => {
@@ -52,10 +52,16 @@ export default function StartGit({ folder, files, busy, onStart, onCancel }: { f
           {files.length === 0 && <li className="first-none">The folder is empty; the first commit will be empty.</li>}
         </ul>
         <p className="ask-body">{firstCommitLine(files, chosen)}</p>
+        {onFolder && <p className="ask-body">Or open it as a folder without Git: it gets one workspace, the folder itself, and becomes a Git project on its own if Git is started in it later.</p>}
         <div className="btn-row">
           <button className="btn" onClick={onCancel}>
             Cancel
           </button>
+          {onFolder && (
+            <button className="btn" disabled={busy} onClick={onFolder}>
+              Open as a folder
+            </button>
+          )}
           <button className="btn primary" autoFocus disabled={busy} onClick={() => onStart(files.filter((f) => chosen.has(f.path)).map((f) => f.path))}>
             Start Git and commit
           </button>
