@@ -1,0 +1,61 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index 93b61f8f..f86a3cff 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -19,6 +19,7 @@ import { copySelection } from "./copy";
+ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
+ import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
+ import { encodeHistory, replay, restoreTail, viewTop } from "./history";
++import { claimsClick } from "./linkClick";
+ import { fromThisService, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
+ import { batchAcks, memoryProfile } from "./flow";
+ import { explain as explainError, exitAdvice } from "./errors";
+@@ -408,6 +409,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+     });
+     // TERM-092 / TERM-093: web links and file paths are links (Ctrl+click; Cmd+click on macOS); a link wrapped over
+     // rows is read as one; the hint under the pointer says where the click goes. The text work is in links.ts.
++    // TERM-092: the link under the pointer, so a Ctrl+click on it is kept from a program that tracks the mouse.
++    let hot: Found | null = null;
+     const openFound = (f: Found, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) => {
+       const o = openRef.current;
+       const door = clickTarget(f, e, keys.current.platform === "darwin", o.linksOpenInKolux && !!o.onOpenLink);
+@@ -444,8 +447,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+         range: rangeOf(f.start, f.end, span.first, cols),
+         text: f.target,
+         activate: (e: MouseEvent) => openFound(f, e),
+-        hover: () => setLinkHint(hintOf(f)),
+-        leave: () => setLinkHint(null),
++        hover: () => ((hot = f), setLinkHint(hintOf(f))),
++        leave: () => ((hot = null), setLinkHint(null)),
+       }));
+     };
+     term.registerLinkProvider({
+@@ -464,10 +467,18 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+       },
+       hover: (_e, uri) => {
+         const f = linkFor(uri);
+-        if (f) setLinkHint(hintOf(f));
++        if (f) (hot = f), setLinkHint(hintOf(f));
+       },
+-      leave: () => setLinkHint(null),
++      leave: () => ((hot = null), setLinkHint(null)),
+     };
++    // TERM-092: xterm sends every unshifted press to a program that tracks the mouse; the link click is Kolux's.
++    const claim = (e: MouseEvent) => {
++      if (!hot || !claimsClick(e, keys.current.platform === "darwin", term.modes.mouseTrackingMode)) return;
++      e.preventDefault();
++      e.stopPropagation();
++      openFound(hot, e);
++    };
++    el.addEventListener("mousedown", claim, true);
+     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu);
+     setRenderer(choice.mode);
+     choice.onFallback(() => setRenderer("dom"));
+@@ -861,6 +872,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+       delete (el as DevHost).__koluxTerm;
+       delete (el as DevHost).__koluxLinks;
+       window.removeEventListener("blur", blurLinks);
++      el.removeEventListener("mousedown", claim, true);
+     };
+   }, []);
+ 

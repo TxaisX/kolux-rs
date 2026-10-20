@@ -45,7 +45,7 @@ import { matchEvent } from "../keys/keymap";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { replaceInRich } from "./notefind";
 import { outline } from "./toc";
-import { hasSpot, onReveal, spotRange, takeSpot } from "./search";
+import { hasSpot, jumpSpot, onReveal, revealAt, spotRange, takeSpot } from "./search";
 import "./editor-extras.css";
 import { pasteGuard } from "./paste";
 
@@ -150,9 +150,9 @@ export const look = EditorView.theme(
 );
 
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
-type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
+type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number } };
 
-export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
+export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -390,6 +390,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   // shows its source for that, since the hit's line and column are the file's.
   const [reveals, setReveals] = useState(0);
   useEffect(() => onReveal(() => setReveals((n) => n + 1)), []);
+  // T-222-c (TERM-093): a printed path:line opens the file at that line, the way a search hit does.
+  useEffect(() => {
+    if (jump) revealAt(path, jumpSpot(jump.line));
+  }, [jump?.at]);
   useEffect(() => {
     const cm = view.current;
     if (!cm || !hasSpot(path)) return;

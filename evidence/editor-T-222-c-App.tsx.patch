@@ -1,0 +1,22 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 28a6046f..4dfe520d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -2505,6 +2505,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     onClose={() => closePane(p.key)}
+                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
+                     onToast={setToast}
++                    jump={p.jump}
+                   />
+                 ) : p.kind === "diff" && p.path ? (
+                   <DiffPane
+@@ -2535,6 +2536,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     hidden={!board && p.key !== active}
+                     restored={restoredKeys.current.has(p.key)}
+                     resumed={p.resumed}
++                    onOpenFile={openFile}
++                    onOpenLink={openInBrowser}
++                    linksOpenInKolux={settings.linksOpenInKolux === true}
+                     gpu={gpuOn(settings)}
+                     card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
+                     cwd={p.cwd}
