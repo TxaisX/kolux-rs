@@ -1,0 +1,38 @@
+T-310 · VIEW-039 · VIEW-072 · VIEW-106 · VIEW-113 · VIEW-117 · VIEW-118
+Lane: shell · from 3f9e7866 (lane, on main MERGE 213 348a2a7e) · 2026-10-20 · Routing v3 · builder Sonnet 5.5
+
+STATUS: OPEN. Built: VIEW-039, VIEW-072, VIEW-117; VIEW-118 found built. Partial: VIEW-106 (panel built, menu item to open it not wired), VIEW-113 (per-file prefs
+module and the contents-panel open/shut memory; frontmatter toggle UI and the contents-panel drag handle are not built).
+
+WHAT WAS BUILT
+- VIEW-039: src/shell/paletteCaps.ts: capRows (20 rows a section, extra 20 per "N more" press, dedupe so a repeated row never draws twice),
+  restoreFocus (previous element if still on the page, else .xterm-helper-textarea, else .cm-content / contenteditable). 4 vitest.
+  Patch shell-T-310-WorktreePalette.tsx wires both into the palette (more button under a capped section, reset on typing; focus restore on close).
+- VIEW-072: Send was built (sourceControl.sendReviewNotes, unbound, sends to the agent through sendNotes). Clear now asks: src/shell/clearNotes.ts +
+  ConfirmClear.tsx (two or more notes ask "Clear N notes?" with Clear / Keep, Esc cancels; one note clears at once). 2 vitest.
+  Patch shell-T-310-LineNotes.tsx puts it on Clear all and the per-file clear.
+- VIEW-106: menus (View, Appearance toggles incl. title bar app name, Help) were already in src-tauri/src/menu.rs. The About panel did not exist:
+  src/shell/about.ts (rows: Version, Safe Graphics Mode ahead of the engine's GPU status; unknown reads "unavailable") and AboutPanel.tsx (opens on the
+  window event "kolux-about"; reads app_info, graphics_launch_choice, probeGpu). 3 vitest. Patch shell-T-310-App.tsx mounts it.
+  NOT BUILT: a Help menu item that sends kolux-about (menu.rs, chrome lane; Windows/Linux Help uses the stock About item today).
+- VIEW-113: src/shell/mdPrefs.ts: per-file toc / tocWidth (clamped 160..420) / hideFront in localStorage, corrupt or refusing storage reads as defaults. 5 vitest.
+  Patch shell-T-310-EditorPane.tsx makes the contents panel open or shut stay per file. NOT BUILT: the show/hide frontmatter control, and a drag handle that
+  applies tocWidth to the contents panel (Contents in NoteTools.tsx is fixed width).
+- VIEW-117: src/shell/shell.css @media (hover: none) shows the hover-only actions (.proj .ib, .scm-row .ib, .keys-x, .keys-act, .note-plus, .chat-meta,
+  .sess .ib) all the time; with a mouse nothing changes. (Loaded by the paneChrome import from the T-267 App.tsx patch.)
+- VIEW-118: found built in SourceControlPanel.tsx (scm-bulk toolbar: count, Stage/Unstage with counts, Clear, Escape, selection pruned to drawn rows).
+
+GATES (G:/Temp/shell-v3-logs/)
+- t310-tsc.log: tsc exit 0 with the four patches applied (after the T-267 patches). t310-vitest.log: src/shell src/projects src/scm src/editor src/terminal src/chrome
+  157 files, 1068 tests (after one test-string fix: 1 failed then, t310-vitest2.log src/shell 8 files 31 tests pass).
+- No Rust changed: cargo skipped.
+
+PATCHES (apply order: after shell-T-267-App.tsx.patch for App.tsx; each checked with git apply --check)
+  shell-T-310-App.tsx.patch, -WorktreePalette.tsx.patch, -LineNotes.tsx.patch, -EditorPane.tsx.patch
+
+LIVE PROOF PENDING (batched)
+1. Open the palette with a query that matches 50 rows in one section: 20 rows and "30 more"; press it: 40 rows. Open from a terminal, Esc: typing goes to that terminal.
+2. Source Control > review notes with 3 notes: Clear all asks "Clear 3 notes?"; Keep leaves them; Clear removes them.
+3. Dispatch window event "kolux-about" (DevTools console: window.dispatchEvent(new Event("kolux-about"))): the panel lists Safe Graphics Mode before Graphics.
+4. Open a .md file, open Contents, close the tab and reopen: Contents is open again.
+5. On a touch-only display (or DevTools device mode with touch): row actions in the sidebar and Source Control show without hover.

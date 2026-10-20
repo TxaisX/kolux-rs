@@ -1,0 +1,36 @@
+diff --git a/src/scm/LineNotes.tsx b/src/scm/LineNotes.tsx
+index b959f454..005e26b1 100644
+--- a/src/scm/LineNotes.tsx
++++ b/src/scm/LineNotes.tsx
+@@ -6,6 +6,7 @@ import { Close, Trash } from "../chrome/icons";
+ import { lineLabel, noteBlocks, notesByFile, shortPath, type LineNote } from "../editor/diffNotes";
+ import { emptyNotesHint } from "../editor/fileNotes";
+ import { useLabel } from "../keys/KeymapContext";
++import ConfirmClear from "../shell/ConfirmClear";
+ 
+ type Props = {
+   dir: string;
+@@ -64,9 +65,9 @@ export default function LineNotes({ dir, notes, onOpen, onDrop: drop, onClearSen
+                 Clear sent
+               </button>
+             )}
+-            <button className="btn" onClick={() => onDrop(notes.map((n) => n.id))}>
++            <ConfirmClear count={notes.length} onConfirm={() => onDrop(notes.map((n) => n.id))}>
+               Clear all
+-            </button>
++            </ConfirmClear>
+           </div>
+           {notesByFile(notes).map(([path, ns]) => (
+             <div key={path} className="scm-note-file">
+@@ -74,9 +75,9 @@ export default function LineNotes({ dir, notes, onOpen, onDrop: drop, onClearSen
+                 <span className="name" title={path}>
+                   {shortPath(path, dir)}
+                 </span>
+-                <button className="ib" title={`Clear the notes on ${shortPath(path, dir)}`} aria-label={`Clear notes on ${shortPath(path, dir)}`} onClick={() => onDrop(ns.map((n) => n.id))}>
++                <ConfirmClear className="ib" count={ns.length} where={shortPath(path, dir)} title={`Clear the notes on ${shortPath(path, dir)}`} ariaLabel={`Clear notes on ${shortPath(path, dir)}`} onConfirm={() => onDrop(ns.map((n) => n.id))}>
+                   <Close />
+-                </button>
++                </ConfirmClear>
+               </div>
+               {ns.map((n) => (
+                 <div key={n.id} className="scm-note" data-note={n.id}>

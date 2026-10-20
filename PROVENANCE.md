@@ -905,3 +905,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · shell T-258 · spec/03 TERM-056, spec/04 STAT-035 rules; React docs (react.dev); this tree's own App.tsx tabName, chrome/Tip.tsx; no outside code
 > 2026-10-20 · shell T-285 · spec/17 SET-042/SET-060/SET-062, spec/19 APP-054 rules; React docs (react.dev); this tree's own src/status/manage.tsx, ResourceManager.tsx, terminal.rs kill; no outside code
 > 2026-10-20 · shell T-267 · spec/03 TERM-011/026/057/102 rules; MDN (developer.mozilla.org: ::-webkit-scrollbar, wheel event), xterm.js docs (xtermjs.org: minimumContrastRatio); this tree's own styles.css, theme.ts, text.ts; no outside code
+> 2026-10-20 · shell T-310 · spec/05 VIEW-039/072/106/113/117/118 rules; MDN (developer.mozilla.org: hover media feature, WebGL debug renderer info), React docs (react.dev); this tree's own WorktreePalette.tsx, LineNotes.tsx, EditorPane.tsx, menu.rs, recovery.rs; no outside code

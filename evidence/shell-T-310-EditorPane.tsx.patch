@@ -1,0 +1,23 @@
+diff --git a/src/editor/EditorPane.tsx b/src/editor/EditorPane.tsx
+index 861adfa9..050a59a5 100644
+--- a/src/editor/EditorPane.tsx
++++ b/src/editor/EditorPane.tsx
+@@ -52,6 +52,7 @@ import { matchEvent } from "../keys/keymap";
+ import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
+ import { replaceInRich } from "./notefind";
+ import { outline } from "./toc";
++import { mdPrefs, setMdPrefs } from "../shell/mdPrefs";
+ import { followClick, type LinkHandler } from "./linkClicks";
+ import { hasSpot, jumpSpot, onReveal, revealAt, spotRange, takeSpot } from "./search";
+ import "./editor-extras.css";
+@@ -231,7 +232,9 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
+   // EDIT-016 / EDIT-017: the rich view's find bar and contents panel, and the note text they read
+   // (taken from the buffer a moment after typing stops).
+   const [noteFind, setNoteFind] = useState<FindOpen | null>(null);
+-  const [toc, setToc] = useState(false);
++  // VIEW-113: the contents panel stays open or shut for this file.
++  const [toc, setToc] = useState(() => mdPrefs(path).toc);
++  useEffect(() => void setMdPrefs(path, { toc }), [path, toc]);
+   const [noteText, setNoteText] = useState("");
+   const noteTimer = useRef(0);
+ 

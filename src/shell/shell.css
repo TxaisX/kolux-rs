@@ -8,3 +8,20 @@ html[data-pane-density="compact"] .pane-head .title { font-weight: 500; }
 .tabs[role="tablist"]:hover::-webkit-scrollbar { height: 3px; }
 .tabs[role="tablist"]::-webkit-scrollbar-thumb { background: var(--line-focus); border-radius: 2px; }
 .tabs[role="tablist"]::-webkit-scrollbar-track { background: transparent; }
+
+/* VIEW-117: where nothing can hover (touch, pen) the actions a mouse user sees on hover are shown all the time. */
+@media (hover: none) {
+  html .proj .ib, html .scm-row .ib, html .keys-x, html .keys-act, html .cm-note-gutter .note-plus, html .chat-msg .chat-meta { opacity: 1; }
+  html .sess .ib { display: inline-flex; }
+}
+
+/* VIEW-072: the confirm step beside the clear buttons of review notes. */
+.confirm-clear { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.confirm-clear .confirm-q { color: var(--fg-muted); font-size: 12px; }
+
+/* VIEW-106: the About panel. */
+.about-panel { top: 20%; left: 50%; transform: translateX(-50%); z-index: 60; min-width: 320px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.about-rows { margin: 0; display: grid; gap: 6px; }
+.about-row { display: grid; grid-template-columns: 11rem 1fr; gap: 10px; font-size: 12px; }
+.about-row dt { color: var(--fg-muted); }
+.about-row dd { margin: 0; color: var(--fg); }
