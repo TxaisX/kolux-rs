@@ -409,9 +409,7 @@ pub fn resume_args(id: &str, session: Option<&str>) -> Vec<String> {
 
 /// SET-027, SESS-027: the built-in arguments that skip an agent's permission prompts; Manual leaves
 /// them out. Claude Code, Codex (sandboxed, DT-C46), Gemini CLI (`--yolo`) and Aider (`--yes-always`).
-// ponytail: Goose gets its mode through an environment variable, not a flag; the variable's name
-// waits on a firewall-allowlist entry only the coordinator adds (COMPAT.md 6.1), so Goose starts
-// without a no-prompt mode until that lands (PLAN.md T-056-b).
+/// Goose gets its mode through an environment variable, not a flag: `add_mode_env` (T-056-b).
 fn prompt_skips(id: &str) -> &'static [&'static str] {
     match id {
         "claude" => &["--permission-mode", "auto"],
@@ -582,7 +580,20 @@ pub fn start_line_as(settings: &serde_json::Value, id: &str, extra: &[String], p
     let mut line = line_for(id, own.as_deref(), yolo, &extra, &resume, prompt)?;
     line.program = field("command").map(str::to_string);
     line.env = field("env").map(parse_env).unwrap_or_default();
+    if yolo {
+        add_mode_env(id, &mut line.env);
+    }
     Ok(line)
+}
+
+/// SESS-027: Goose takes no flag for its no-prompt mode; its mode variable is set to auto in the
+/// start line's environment (COMPAT 6.1). The user's own value for it, from the Agents page, stays.
+const GOOSE_MODE: (&str, &str) = ("GOOSE_MODE", "auto");
+
+fn add_mode_env(id: &str, env: &mut Vec<(String, String)>) {
+    if id == "goose" && !env.iter().any(|(k, _)| k == GOOSE_MODE.0) {
+        env.insert(0, (GOOSE_MODE.0.to_string(), GOOSE_MODE.1.to_string()));
+    }
 }
 
 /// The agent credited with a running program, from its command line (SESS-051): letter case,
@@ -915,10 +926,34 @@ mod tests {
         let list = catalogue();
         let by = |id: &str| list.iter().find(|a| a.id == id).unwrap().args.clone();
         assert_eq!((by("gemini"), by("aider")), (s(&["--yolo"]), s(&["--yes-always"])));
-        // an agent that is not listed here stays without a no-prompt switch (Goose waits on its variable)
+        // an agent that is not listed here stays without a no-prompt switch (Goose uses a variable, below)
         for id in ["goose", "kilo", "amp", "cursor", "grok"] {
             assert!(by(id).is_empty(), "{id}");
         }
+    }
+
+    #[test]
+    fn sess_027_goose_starts_in_auto_mode_through_its_environment_variable() {
+        let none = serde_json::json!({});
+        let var = |v: &serde_json::Value, id: &str| start_line(v, id, &[], "", true).unwrap().env;
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert_eq!(var(&none, "goose"), vec![pair("GOOSE_MODE", "auto")]);
+        // no flag is added, and the other agents get no variable
+        let manual = serde_json::json!({ "agentPermissions": "manual" });
+        assert_eq!(start_line(&none, "goose", &[], "", true).unwrap().args, start_line(&manual, "goose", &[], "", true).unwrap().args);
+        for id in ["claude", "codex", "gemini", "aider", "kilo"] {
+            assert!(var(&none, id).is_empty(), "{id}");
+        }
+        // Manual mode leaves the variable out; the user's other variables stay either way
+        let manual_own = serde_json::json!({ "agentPermissions": "manual", "agentOptions": { "goose": { "env": "A=1" } } });
+        assert_eq!(var(&manual_own, "goose"), vec![pair("A", "1")]);
+        let mine = serde_json::json!({ "agentOptions": { "goose": { "env": "A=1" } } });
+        assert_eq!(var(&mine, "goose"), vec![pair("GOOSE_MODE", "auto"), pair("A", "1")]);
+        // the user's own value for it wins
+        let own = serde_json::json!({ "agentOptions": { "goose": { "env": "GOOSE_MODE=approve" } } });
+        assert_eq!(var(&own, "goose"), vec![pair("GOOSE_MODE", "approve")]);
+        // a restored tab gets it too
+        assert_eq!(start_line_as(&none, "goose", &[], "", true, Start::Restore(Some("sid"))).unwrap().env, vec![pair("GOOSE_MODE", "auto")]);
     }
 
     #[test]

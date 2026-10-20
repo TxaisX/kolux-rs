@@ -1,0 +1,30 @@
+T-056-b (SESS-027): Goose starts in auto mode through its mode environment variable.
+lane/launch from 7149bb38 (main after MERGE 243) · 2026-10-20 · Sonnet 5.5
+
+Firewall allowlist: no patch needed. scripts/firewall-allowlist.txt already carries the pattern
+for names starting GOOSE_ (line with CLAUDE|CODEX|...|GOOSE|...), and COMPAT.md 6.1 already names
+the variable and its value (auto). No outside docs were read, so PROVENANCE.md is unchanged, and
+scripts/** was not touched (no -WriteBaseline).
+
+Built (src-tauri/src/agents.rs)
+- start_line_as: when the permission mode is not Manual, add_mode_env puts GOOSE_MODE=auto first in
+  the start line's environment for the goose agent only. The environment already reaches the pane
+  (StartLine.env -> Pane.env in App.tsx / main.tsx / startArgs.ts), so no frontend change.
+- The user's own environment lines from the Agents page stay; their own GOOSE_MODE value wins.
+- Manual mode leaves the variable out. A restored tab gets it too (same function).
+- The old "waits on the allowlist" comments were replaced.
+
+Test (agents::tests): sess_027_goose_starts_in_auto_mode_through_its_environment_variable
+  (default, no flag added, other agents get none, Manual omits it, user's other variables kept,
+  user's own GOOSE_MODE wins, restored tab).
+
+Gates (logs in G:/Temp/launch-v3-logs, slot "launch")
+- cargo test --lib agents::  40 passed, 0 failed
+- cargo clippy --all-targets -- -D warnings: rc 0; cargo build: rc 0
+- pnpm exec tsc --noEmit: rc 0 (no TypeScript touched)
+
+LIVE PROOF PENDING (batched)
+1. Agents page: open a new Goose tab with the default permission mode; in its terminal, the
+   environment shows GOOSE_MODE=auto and Goose does not ask before running tools.
+2. Switch Agents > Permissions to Manual and open a new Goose tab: GOOSE_MODE is not set by Kolux.
+3. Put GOOSE_MODE=approve in Goose's Environment box: that value is used, not auto.
