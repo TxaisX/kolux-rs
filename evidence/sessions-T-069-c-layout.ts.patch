@@ -1,0 +1,37 @@
+diff --git a/src/terminal/layout.test.ts b/src/terminal/layout.test.ts
+index 28d7ef8d..745de2e2 100644
+--- a/src/terminal/layout.test.ts
++++ b/src/terminal/layout.test.ts
+@@ -104,3 +104,10 @@ test("T-066-c: the restore loop asks for an agent line only for an agent tab, ne
+   expect(ask("shell", "gemini", null)).toBe(false); // an unstarted chooser
+   expect(ask("claude", "claude", "claude", "editor")).toBe(false); // not a terminal tab
+ });
++
++test("view107: tabs saved out of session order are restored in the order they were opened, in one pass", () => {
++  const saved = { panes: [shell(5, "C:/w/b"), shell(2, "C:/w/a"), shell(9, "C:/w/a"), shell(1, "C:/w/b")], activeTab: {}, focused: 9, activeDir: "C:/w/a", stacked: {} };
++  const l = restoreLayout(saved)!;
++  expect(l.panes.map((p) => p.key)).toEqual([1, 2, 5, 9]);
++  expect(l.focused).toBe(9);
++});
+diff --git a/src/terminal/layout.ts b/src/terminal/layout.ts
+index dcae809a..6efab2fa 100644
+--- a/src/terminal/layout.ts
++++ b/src/terminal/layout.ts
+@@ -8,6 +8,7 @@
+ import type { Agent } from "../chrome/VendorMark";
+ import { focusIn, panesIn } from "../workspaces";
+ import { resumeId, uniqueOwners } from "../sessions/ownership";
++import { sessionOrder } from "../sessions/restoreOrder";
+ 
+ export const LAYOUT_FIELD = "savedLayout";
+ 
+@@ -125,7 +126,8 @@ export function restoreLayout(value: unknown): SavedLayout | null {
+   if (o.stacked && typeof o.stacked === "object") {
+     for (const [d, s] of Object.entries(o.stacked as Record<string, unknown>)) if (typeof s === "boolean") stacked[d] = s;
+   }
+-  return tidy(uniqueOwners(panes), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
++  // VIEW-107 (T-069-c): the tabs come back in session order, in this one pass.
++  return tidy(uniqueOwners(sessionOrder(panes)), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
+ }
+ 
+ /** Drops the tabs whose folder is gone; the active workspace and tab come back only while they exist. */
