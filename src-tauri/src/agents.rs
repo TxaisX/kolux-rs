@@ -163,7 +163,7 @@ pub fn search_dirs() -> Vec<PathBuf> {
 }
 
 #[cfg(windows)]
-const MACHINE_ENVIRONMENT: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+pub(crate) const MACHINE_ENVIRONMENT: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 
 /// The search path a shell opened now would get: on Windows the machine Path then the user Path
 /// from the registry, the way the system builds a new process's PATH, expanded. A read that
@@ -189,7 +189,7 @@ fn shell_path_dirs() -> Vec<PathBuf> {
 /// One string value from the registry, a `%VAR%` reference expanded. `None` when the key or the
 /// value is missing, is not a string, or cannot be read.
 #[cfg(windows)]
-fn registry_string(root: windows_sys::Win32::System::Registry::HKEY, subkey: &str, value: &str) -> Option<String> {
+pub(crate) fn registry_string(root: windows_sys::Win32::System::Registry::HKEY, subkey: &str, value: &str) -> Option<String> {
     use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
     use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
     let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();

@@ -1,0 +1,41 @@
+diff --git a/src-tauri/src/shell_marks.rs b/src-tauri/src/shell_marks.rs
+index b8988578..571b707f 100644
+--- a/src-tauri/src/shell_marks.rs
++++ b/src-tauri/src/shell_marks.rs
+@@ -176,10 +176,14 @@ fn fish_shim() -> String {
+     s
+ }
+ 
+-/// The PowerShell script run with -NoExit after the profile: wraps the prompt function so each
+-/// prompt carries the marks, then runs the startup command once (the encoded route of ACCT-047).
++/// The PowerShell script run with -NoExit after the profile: TERM-120 first switches the console
++/// to UTF-8 (its input and output code pages and the pipe encoding to native programs: a console
++/// started by ConPTY keeps the system's OEM code page, so Unicode from git, node and the like
++/// would otherwise print as mojibake), then wraps the prompt function so each prompt carries the
++/// marks, then runs the startup command once (the encoded route of ACCT-047).
+ pub fn powershell_hook(startup: Option<&str>) -> String {
+-    let mut s = String::from("$global:__koluxPrompt = $function:prompt\n");
++    let mut s = String::from("$__koluxUtf8 = [System.Text.UTF8Encoding]::new($false)\n[Console]::InputEncoding = $__koluxUtf8\n[Console]::OutputEncoding = $__koluxUtf8\n$global:OutputEncoding = $__koluxUtf8\n");
++    s.push_str("$global:__koluxPrompt = $function:prompt\n");
+     s.push_str("function global:prompt { $e = [char]27; $b = [char]7; $c = if ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 0 }; \"$e]133;D;$c$b$e]133;A$b\" + (& $global:__koluxPrompt) }\n");
+     if let Some(cmd) = startup.map(str::trim).filter(|c| !c.is_empty()) {
+         s.push_str(cmd);
+@@ -365,6 +369,18 @@ mod tests {
+         assert_eq!(encoded_powershell("hi"), "aABpAA==");
+     }
+ 
++    /// TERM-120: the PowerShell hook switches the console to UTF-8 before anything else runs, both
++    /// code pages and the encoding of what is piped to native programs.
++    #[test]
++    fn term120_the_powershell_hook_switches_the_console_to_utf8_first() {
++        let script = powershell_hook(None);
++        assert!(script.starts_with("$__koluxUtf8 = [System.Text.UTF8Encoding]::new($false)\n"), "{script}");
++        for line in ["[Console]::InputEncoding = $__koluxUtf8", "[Console]::OutputEncoding = $__koluxUtf8", "$global:OutputEncoding = $__koluxUtf8"] {
++            assert!(script.contains(&format!("{line}\n")), "{line}");
++        }
++        assert!(script.find("[Console]::OutputEncoding").unwrap() < script.find("function global:prompt").unwrap(), "UTF-8 before the prompt wrapper");
++    }
++
+     #[test]
+     fn acct047_long_or_quoted_commands_are_not_typed() {
+         assert!(typed_as_is("claude"));

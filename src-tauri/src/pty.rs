@@ -99,6 +99,41 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
     joined.filter(|p| p.is_dir()).or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
 }
 
+/// TERM-120: the PATH a new terminal gets, built the way Windows builds one for a program started
+/// from the desktop: the machine Path, then the user Path, as the registry holds them now with
+/// `%VAR%`s expanded (RegGetValueW does that for a REG_EXPAND_SZ asked for as RRF_RT_REG_SZ). It is
+/// read again for every terminal, so a folder added in Windows settings reaches the next pane
+/// without restarting Kolux. When neither value can be read, the last good read is kept, and before
+/// any good read the PATH Kolux itself inherited stands. Empty entries are dropped; the order and
+/// duplicates are left as the user set them, the way the system does.
+pub fn terminal_path(machine: Option<&str>, user: Option<&str>, last_good: &Mutex<Option<std::ffi::OsString>>, inherited: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    if machine.is_none() && user.is_none() {
+        return last_good.lock().ok().and_then(|g| g.clone()).or(inherited).unwrap_or_default();
+    }
+    let dirs: Vec<PathBuf> = machine.into_iter().chain(user).flat_map(|p| std::env::split_paths(p).collect::<Vec<_>>()).filter(|d| !d.as_os_str().is_empty()).collect();
+    let joined = std::env::join_paths(&dirs).unwrap_or_else(|_| dirs.iter().map(|d| d.as_os_str().to_string_lossy()).collect::<Vec<_>>().join(";").into());
+    if let Ok(mut g) = last_good.lock() {
+        *g = Some(joined.clone());
+    }
+    joined
+}
+
+/// TERM-120: the fresh PATH for a terminal started now (see `terminal_path`); elsewhere than
+/// Windows the inherited PATH is it, the login shell reads its own files.
+#[cfg(windows)]
+pub fn fresh_terminal_path(inherited: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    static LAST_GOOD: Mutex<Option<std::ffi::OsString>> = Mutex::new(None);
+    let machine = crate::agents::registry_string(HKEY_LOCAL_MACHINE, crate::agents::MACHINE_ENVIRONMENT, "Path");
+    let user = crate::agents::registry_string(HKEY_CURRENT_USER, "Environment", "Path");
+    terminal_path(machine.as_deref(), user.as_deref(), &LAST_GOOD, inherited)
+}
+
+#[cfg(not(windows))]
+pub fn fresh_terminal_path(inherited: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    inherited.unwrap_or_default()
+}
+
 /// ACCT-049: whether a pane may start in `dir`. A folder that is gone, or on a drive that is not
 /// connected, gets a message instead of a silent start somewhere else, and an `agent` never
 /// starts by itself in the root of a drive. The check stops waiting after two seconds, so a
@@ -837,6 +872,52 @@ mod tests {
         for n in ["PATH", "CARGO_HOME", "NPM_CONFIG_PREFIX", "CONDA_EXE", "HOME", "KOLUX_TERMINAL_HANDLE"] {
             assert!(!inherited_noise(n), "{n}");
         }
+    }
+
+    /// TERM-120: a new terminal's PATH is the machine Path then the user Path as the registry holds
+    /// them now, so a folder added in Windows settings reaches the next pane; the folders a dev run
+    /// put on Kolux's own PATH are not carried over.
+    #[test]
+    fn term120_a_new_terminals_path_is_the_machine_then_user_path_read_now() {
+        let last = Mutex::new(None);
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let machine = ["C:\\Windows\\system32", "C:\\Windows", ""].join(sep);
+        let user = ["C:\\Users\\me\\AppData\\Local\\Programs\\newtool", "C:\\Users\\me\\.cargo\\bin"].join(sep);
+        let inherited: std::ffi::OsString = ["G:\\dev\\kolux\\node_modules\\.bin", "C:\\Windows\\system32"].join(sep).into();
+        let got = terminal_path(Some(&machine), Some(&user), &last, Some(inherited));
+        let dirs: Vec<PathBuf> = std::env::split_paths(&got).collect();
+        assert_eq!(dirs, [PathBuf::from("C:\\Windows\\system32"), "C:\\Windows".into(), "C:\\Users\\me\\AppData\\Local\\Programs\\newtool".into(), "C:\\Users\\me\\.cargo\\bin".into()]);
+        // the next pane sees the folder added to the user Path in between (nothing is cached while the registry reads)
+        let user2 = format!("{user}{sep}D:\\tools\\just-installed");
+        let again: Vec<PathBuf> = std::env::split_paths(&terminal_path(Some(&machine), Some(&user2), &last, None)).collect();
+        assert_eq!(again.last(), Some(&PathBuf::from("D:\\tools\\just-installed")));
+        // a user with no user Path value still gets the machine Path, and that counts as a good read
+        let only: Vec<PathBuf> = std::env::split_paths(&terminal_path(Some(&machine), None, &last, None)).collect();
+        assert_eq!(only, [PathBuf::from("C:\\Windows\\system32"), "C:\\Windows".into()]);
+    }
+
+    /// TERM-120: when the registry cannot be read, the last known good PATH is kept, and before any good
+    /// read the PATH Kolux inherited stands.
+    #[test]
+    fn term120_an_unreadable_registry_keeps_the_last_known_good_path() {
+        let last = Mutex::new(None);
+        let inherited: std::ffi::OsString = "C:\\inherited".into();
+        assert_eq!(terminal_path(None, None, &last, Some(inherited.clone())), inherited, "no good read yet: the inherited PATH");
+        assert_eq!(terminal_path(None, None, &last, None), std::ffi::OsString::new());
+        let good = terminal_path(Some("C:\\Windows\\system32"), Some("C:\\Users\\me\\bin"), &last, Some(inherited.clone()));
+        assert_eq!(terminal_path(None, None, &last, Some(inherited)), good, "a failed read keeps the last good PATH, not the inherited one");
+        assert_eq!(*last.lock().unwrap(), Some(good));
+    }
+
+    /// TERM-120 (this machine): the fresh PATH comes expanded from the registry and holds system32.
+    #[cfg(windows)]
+    #[test]
+    fn term120_the_fresh_path_on_this_machine_comes_from_the_registry_expanded() {
+        let got = fresh_terminal_path(Some("C:\\only-inherited".into()));
+        let s = got.to_string_lossy().to_lowercase();
+        assert!(!s.contains('%'), "not expanded: {s}");
+        assert!(s.contains("system32"), "{s}");
+        assert!(!s.contains("only-inherited"), "the registry read replaces the inherited PATH: {s}");
     }
 
     #[test]

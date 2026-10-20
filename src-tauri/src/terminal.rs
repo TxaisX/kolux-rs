@@ -706,6 +706,15 @@ impl Terminals {
             }
             command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
             command.env("KOLUX_PANE_KEY", &key);
+            // TERM-120: a new terminal's PATH is the one Windows would give a program started from the
+            // desktop now (the machine then the user Path from the registry, expanded), so a folder added
+            // in Windows settings reaches the next pane without restarting Kolux and the folders a dev run
+            // put on Kolux's own PATH stay out; an unreadable registry keeps the last good read. The CLI
+            // folder below goes in front of it, and the user's own variables (SET-027) still win after.
+            if cfg!(windows) {
+                let fresh = crate::pty::fresh_terminal_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+                command.env("PATH", fresh);
+            }
             // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
             // registered system-wide, and it is told which app folder to call. An installed copy keeps
             // its CLI in the bin folder of the install (CLI-006); a development build runs kolux-dev

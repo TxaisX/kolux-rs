@@ -881,3 +881,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · watch T-275 · spec/04 STAT-031 as given in the brief; this tree own src/status/useAgentStatus.ts and status.rs; no outside source
 > 2026-10-19 · watch T-259 · spec/04 STAT-036 as given in the brief; no outside source
 > 2026-10-19 · watch T-309-b · spec/04 STAT-038 as given in the brief; no outside source
+> 2026-10-20 · core T-223-b · spec/03 TERM-120 as given in the brief; Microsoft Learn public docs: RegGetValueW (RRF_RT_REG_SZ expands REG_EXPAND_SZ), Windows Registry environment keys (HKLM Session Manager\Environment, HKCU\Environment), System.Console.OutputEncoding / $OutputEncoding (learn.microsoft.com, read 2026-10-20); no other outside source
