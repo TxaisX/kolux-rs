@@ -859,3 +859,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · editor T-073-d · spec/12 EDIT-002, EDIT-003 and EDIT-004 cards; this tree's own diskChange.ts, autosave.ts, drafts.ts and EditorPane.tsx; no outside source
 > 2026-10-19 · editor T-234-b piece 5 · spec/12 EDIT-010 and EDIT-011 cards; this tree's own markdown.ts, richFormat.ts and EditorPane.tsx; Lexical docs for ElementNode, MultilineElementTransformer and key commands; GitHub Flavored Markdown table syntax; no outside source
 > 2026-10-19 · editor T-235-b piece 2 · spec/12 EDIT-029 and EDIT-030 cards; this tree's own PreviewPane.tsx and markdown pipeline; MDN iframe sandbox and Content-Security-Policy; Mermaid and KaTeX public docs for settings names only; no outside source
+> 2026-10-19 · editor T-323-b piece 1 · spec/13 SET-038 card; this tree's own editorPrefs.ts, DiffPane.tsx and EditorPane.tsx; no outside source

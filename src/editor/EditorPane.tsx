@@ -186,10 +186,15 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   // EDIT-006: wrapping is on by default; the saved setting decides once it has loaded, Alt+Z flips it.
   const { settings, save: saveSetting } = useSettings();
   const [wrap, setWrap] = useState(true);
+  const [spell, setSpell] = useState(true); // SET-038: Settings > General > spelling underlines in notes
   const wrapOn = useRef(true);
   wrapOn.current = wrap;
   useEffect(() => {
-    if (settings) setWrap(readEditorPrefs(settings).wordWrap);
+    if (settings) {
+      const p = readEditorPrefs(settings);
+      setWrap(p.wordWrap);
+      setSpell(p.spellcheck);
+    }
   }, [settings === null]);
   const richHost = useRef<HTMLDivElement>(null);
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
@@ -693,7 +698,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       )}
       {md && shown === "rich" && !comparing && <SlashMenu view={slashView} onPick={(id) => rich.current?.pickSlash(id)} />}
       {md && shown === "rich" && !comparing && <TableMenu editor={richEditor} />}
-      {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
+      {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );
 }
