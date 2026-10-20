@@ -1,8 +1,6 @@
-diff --git a/src/App.tsx b/src/App.tsx
-index 6c0a20e9..90b5b8ba 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -104,6 +104,9 @@ import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
+@@ -106,6 +106,9 @@
  import { useCloseGuard } from "./editor/CloseDialog";
  import { trashUnusedNotes } from "./editor/trashUnused";
  import AgentsPanel from "./sessions/AgentsPanel";
@@ -12,7 +10,7 @@ index 6c0a20e9..90b5b8ba 100644
  import { useWindowSync } from "./sessions/windowSync";
  import type { ResumePlan } from "./sessions/resume";
  import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
-@@ -480,7 +483,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -483,7 +486,12 @@
      saveChanged(settings, next).catch((err) => setNotice(String(err)));
    };
    // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
@@ -26,7 +24,7 @@ index 6c0a20e9..90b5b8ba 100644
    const leftWidth = dragLeft ?? readLeft(settings);
    const explorerOpen = right.open && right.tab === "explorer";
    const scmOpen = right.open && right.tab === "scm";
-@@ -3137,7 +3145,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -3157,7 +3165,13 @@
              })}
            </div>
          </div>
@@ -41,7 +39,7 @@ index 6c0a20e9..90b5b8ba 100644
            const used = clampWidth(w, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0);
            setDragWidth(done ? null : used);
            if (done) saveRight({ width: used });
-@@ -3160,6 +3174,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -3180,6 +3194,8 @@
          {right.open && right.tab === "agents" && (
            <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projects={projects} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeIn(s.agent, plan)} />
          )}
@@ -49,4 +47,4 @@ index 6c0a20e9..90b5b8ba 100644
 +        {right.open && right.tab === "prchecks" && activeDir !== null && <FolderChecksTab folder={activeDir} worktrees={wsKind.worktrees} />}
          {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
          {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
-         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
+         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} onOpenTerminal={openTerminalIn} onWake={() => showRight("explorer")} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}

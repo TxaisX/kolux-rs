@@ -12,6 +12,7 @@ import { ago, filterSessions, groupSessions, MAX_QUERY, parseQuery, shortLabel, 
 import { chooseScope, DEFAULT_VIEW, DEPTHS, differing, effectiveScope, readScope, readView, SCOPE_KEY, VIEW_KEY, type Scope, type ViewPrefs } from "./prefs";
 import { AFTER_START_MS, publishDelay, recall, remember, RescanLimiter } from "./refresh";
 import { dragPayload, planFor, resumeBlock, SESSION_DRAG, type ResumePlan } from "./resume";
+import { chatResumeBlock } from "./chatResume";
 
 export type PanelProps = {
   /** The window's settings and the way to save one (the view options and the scope live there, so every window sees them). */
@@ -28,6 +29,8 @@ export type PanelProps = {
   /** The program of the shell the new tab runs, so the copied command is written for it. */
   shell: string | null;
   onResume: (s: Session, plan: ResumePlan) => void;
+  /** VIEW-086 (T-146-d): resume in a new tab and bring the Agents (chat) screen to the front; the button shows only when this is given. */
+  onResumeChat?: (s: Session, plan: ResumePlan) => void;
 };
 
 /** What the back end is asked for under the saved scope and depth. */
@@ -71,14 +74,15 @@ function AgentsPanel(props: PanelProps) {
   latest.current = props;
   const onSave = useCallback((key: string, value: unknown) => latest.current.onSave(key, value), []);
   const onResume = useCallback((s: Session, plan: ResumePlan) => latest.current.onResume(s, plan), []);
-  return <AgentsView {...props} onSave={onSave} onResume={onResume} />;
+  const onResumeChat = useCallback((s: Session, plan: ResumePlan) => latest.current.onResumeChat?.(s, plan), []);
+  return <AgentsView {...props} onSave={onSave} onResume={onResume} onResumeChat={props.onResumeChat ? onResumeChat : undefined} />;
 }
 
 const AgentsView = memo(AgentsPanelBody, (a, b) => sameShown(a, b));
 export default AgentsPanel;
 
 function AgentsPanelBody(props: PanelProps) {
-  const { settings, onSave, activeDir, projectDirs, rescanKey, visible, shell, onResume } = props;
+  const { settings, onSave, activeDir, projectDirs, rescanKey, visible, shell, onResume, onResumeChat } = props;
   const projects = props.projects ?? NO_PROJECTS;
   const { dirs, all, depth, scope } = request(settings, activeDir, projectDirs);
   const view = readView(settings[VIEW_KEY]);
@@ -156,6 +160,13 @@ function AgentsPanelBody(props: PanelProps) {
     setNote(null);
     planFor(s, activeDir, shell).then(
       (plan) => onResume(s, plan),
+      (err) => setNote(String(err)),
+    );
+  };
+  const resumeChat = (s: Session) => {
+    setNote(null);
+    planFor(s, activeDir, shell).then(
+      (plan) => onResumeChat?.(s, plan),
       (err) => setNote(String(err)),
     );
   };
@@ -298,6 +309,14 @@ function AgentsPanelBody(props: PanelProps) {
                 <button type="button" className="btn" disabled={block !== null} title={block ?? "Open a terminal and continue this session"} onClick={() => resume(s)}>
                   Resume
                 </button>
+                {onResumeChat && (() => {
+                  const chatBlock = block ?? chatResumeBlock(s, activeDir);
+                  return (
+                    <button type="button" className="btn" disabled={chatBlock !== null} title={chatBlock ?? "Continue this session in the Agents chat"} onClick={() => resumeChat(s)}>
+                      Resume as chat
+                    </button>
+                  );
+                })()}
                 <button type="button" className="btn" title="Copy the command that resumes this session" onClick={() => copy(s)}>
                   Copy command
                 </button>
