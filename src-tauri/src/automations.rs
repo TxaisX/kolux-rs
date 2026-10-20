@@ -679,14 +679,31 @@ pub fn claim(store: &Store, terminal: u32, pane_key: Option<u32>, cwd: &str, age
 /// agent was seen at work since launch: a finish at a session boundary (start, resume, clear), an
 /// old idle state or a ready prompt already on screen never counts, nor does a sub-agent's finish.
 /// Returns the run that completed.
-pub fn on_status(store: &Store, terminal: Option<u32>, pane_key: u32, state: &str, boundary: bool, child: bool, now: u64) -> Result<Option<String>, String> {
-    if boundary || child {
+/// T-140-e: `session` is the agent's own session id as the hook status carries it (SESS-030); the
+/// run keeps it as `sessionId` so T-140-c can match the run's usage by id. The newest id wins (a
+/// clear starts a new session in the same pane); a sub-agent's event never sets it.
+#[allow(clippy::too_many_arguments)] // one more field of the same status; a struct would only rename the call
+pub fn on_status(store: &Store, terminal: Option<u32>, pane_key: u32, state: &str, boundary: bool, child: bool, session: Option<&str>, now: u64) -> Result<Option<String>, String> {
+    if child {
         return Ok(None);
     }
     let mut runs = load(store, RUNS_KEY)?;
     let mine = |r: &Value| tracked(r) && !r["terminal"].is_null() && terminal.map_or(r["paneKey"] == pane_key, |t| r["terminal"] == t);
     let Some(i) = runs.iter().position(mine) else { return Ok(None) };
+    let noted = match session {
+        Some(s) if runs[i]["sessionId"] != s => {
+            runs[i]["sessionId"] = json!(s);
+            true
+        }
+        _ => false,
+    };
     match state {
+        _ if boundary => {
+            if noted {
+                save(store, RUNS_KEY, &runs)?;
+            }
+            Ok(None)
+        }
         "working" | "permission" | "waiting" if runs[i]["worked"] != true => {
             runs[i]["worked"] = json!(true);
             save(store, RUNS_KEY, &runs)?;
@@ -698,7 +715,12 @@ pub fn on_status(store: &Store, terminal: Option<u32>, pane_key: u32, state: &st
             save(store, RUNS_KEY, &runs)?;
             Ok(id)
         }
-        _ => Ok(None),
+        _ => {
+            if noted {
+                save(store, RUNS_KEY, &runs)?;
+            }
+            Ok(None)
+        }
     }
 }
 
@@ -2228,6 +2250,39 @@ mod tests {
     }
 
     #[test]
+    fn t140e_the_agent_session_id_reaches_the_run_and_the_newest_one_wins() {
+        let dir = temp("t140e");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("claude")).unwrap();
+        let session = || load(&store, RUNS_KEY).unwrap().into_iter().find(|r| r["id"] == "run-1").unwrap()["sessionId"].clone();
+        // The session start reports at its boundary and carries the id: kept, nothing finished.
+        assert_eq!(on_status(&store, Some(6), 60, "done", true, false, Some("sess-a"), 10).unwrap(), None);
+        assert_eq!(session(), json!("sess-a"));
+        assert_eq!(status_of(&store, "run-1").0, "dispatched");
+        // A sub-agent's event never sets it; an event without an id leaves it.
+        on_status(&store, Some(6), 60, "working", false, true, Some("sess-child"), 11).unwrap();
+        on_status(&store, Some(6), 60, "working", false, false, None, 12).unwrap();
+        assert_eq!(session(), json!("sess-a"));
+        // A new session in the same pane (a clear) replaces it, on a boundary or a plain status.
+        on_status(&store, Some(6), 60, "done", true, false, Some("sess-b"), 13).unwrap();
+        assert_eq!(session(), json!("sess-b"));
+        on_status(&store, Some(6), 60, "permission", false, false, Some("sess-c"), 14).unwrap();
+        assert_eq!(session(), json!("sess-c"));
+        // The finish still completes the run, and the id stays on it.
+        assert_eq!(on_status(&store, Some(6), 60, "done", false, false, Some("sess-c"), 15).unwrap().as_deref(), Some("run-1"));
+        assert_eq!(status_of(&store, "run-1").0, "completed");
+        assert_eq!(session(), json!("sess-c"));
+        // Another pane's status never writes on this run.
+        dispatched(&store, &ws, 2, "claude");
+        on_status(&store, Some(7), 70, "working", false, false, Some("sess-x"), 16).unwrap();
+        assert_eq!(session(), json!("sess-c"));
+    }
+
+    #[test]
     fn auto014_a_finished_run_keeps_its_pane_text_clean_once_and_only_the_latest_past_the_limit() {
         // A Codex-style progress bar redrawn with carriage returns, colours, a title change and blank lines.
         let mut log = crate::terminal::OutputLog::default();
@@ -2255,8 +2310,8 @@ mod tests {
         // Still going: nothing is saved yet.
         assert_eq!(keep_output(&store, "run-1", "partial", false).unwrap(), None);
         claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("codex")).unwrap();
-        on_status(&store, Some(6), 60, "working", false, false, 10).unwrap();
-        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        on_status(&store, Some(6), 60, "working", false, false, None, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, None, 11).unwrap();
         // Nothing on screen saves nothing; then the text is kept, once.
         assert_eq!(keep_output(&store, "run-1", "  \n", false).unwrap(), None);
         assert_eq!(keep_output(&store, "run-1", "Done: 3 files changed", false).unwrap().as_deref(), Some("run-1"));
@@ -2334,8 +2389,8 @@ mod tests {
         let finish = |terminal: u32, pane: u32| {
             let s = store.lock().unwrap();
             claim(&s, terminal, Some(pane), &ws.to_string_lossy(), Some("claude")).unwrap();
-            on_status(&s, Some(terminal), pane, "working", false, false, 10).unwrap();
-            assert!(on_status(&s, Some(terminal), pane, "done", false, false, 11).unwrap().is_some());
+            on_status(&s, Some(terminal), pane, "working", false, false, None, 10).unwrap();
+            assert!(on_status(&s, Some(terminal), pane, "done", false, false, None, 11).unwrap().is_some());
         };
         let reuse = |on: bool| {
             let s = store.lock().unwrap();
@@ -2362,9 +2417,9 @@ mod tests {
         assert_eq!((starts(), panes.sent.lock().unwrap().clone()), (2, vec![(7, "check".to_string())]));
         {
             let s = store.lock().unwrap();
-            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, 20).unwrap(), None, "the earlier done does not count before the agent worked");
-            on_status(&s, Some(7), 70, "working", false, false, 21).unwrap();
-            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, 22).unwrap().as_deref(), third["id"].as_str());
+            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, None, 20).unwrap(), None, "the earlier done does not count before the agent worked");
+            on_status(&s, Some(7), 70, "working", false, false, None, 21).unwrap();
+            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, None, 22).unwrap().as_deref(), third["id"].as_str());
         }
 
         // The agent is busy (or the tab was closed or is another pane): a new session opens.
@@ -2434,8 +2489,8 @@ mod tests {
         claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("claude")).unwrap();
         // Still going: nothing is kept.
         assert_eq!(keep_transcript(&store, "run-1", "said", false).unwrap(), None);
-        on_status(&store, Some(6), 60, "working", false, false, 10).unwrap();
-        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        on_status(&store, Some(6), 60, "working", false, false, None, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, None, 11).unwrap();
         // The pane's text first, as the exit keeps it; then the transcript replaces it, once.
         keep_output(&store, "run-1", "$ claude\nscreen noise", false).unwrap();
         assert_eq!(list(&store).unwrap()["runs"][0]["outputFrom"], "screen");
@@ -2477,8 +2532,8 @@ mod tests {
         seed(&store, &ws);
         dispatched(&store, &ws, 1, "codex");
         claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("codex")).unwrap();
-        on_status(&store, Some(6), 60, "working", false, false, 10).unwrap();
-        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        on_status(&store, Some(6), 60, "working", false, false, None, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, None, 11).unwrap();
         let big = "y".repeat(RUN_OUTPUT_CHARS);
         keep_output(&store, "run-1", &big, true).unwrap();
         // The runs list every hook status reads stays small; the text sits under the run's own key.
@@ -2527,16 +2582,16 @@ mod tests {
         // A second claude pane in the same folder takes nothing: the run already has its pane.
         assert_eq!(claim(&store, 7, Some(70), &ws.to_string_lossy(), Some("claude")).unwrap(), None);
         // The session boundary (start, resume, clear) and an idle prompt at launch never finish it.
-        on_status(&store, Some(6), 60, "working", true, false, 10).unwrap();
-        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        on_status(&store, Some(6), 60, "working", true, false, None, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, None, 11).unwrap();
         assert_eq!(status_of(&store, "run-1").0, "dispatched", "a ready prompt already on screen is not a finish");
-        on_status(&store, Some(6), 60, "done", true, false, 12).unwrap();
+        on_status(&store, Some(6), 60, "done", true, false, None, 12).unwrap();
         assert_eq!(status_of(&store, "run-1").0, "dispatched", "a finish at a session boundary is not a finish");
         // Real work, a sub-agent finishing on the way, then the lead's own finish.
-        on_status(&store, Some(6), 60, "working", false, false, 13).unwrap();
-        on_status(&store, Some(6), 60, "done", false, true, 14).unwrap();
+        on_status(&store, Some(6), 60, "working", false, false, None, 13).unwrap();
+        on_status(&store, Some(6), 60, "done", false, true, None, 14).unwrap();
         assert_eq!(status_of(&store, "run-1").0, "dispatched", "a sub-agent finishing is not the run finishing");
-        assert_eq!(on_status(&store, Some(6), 60, "done", false, false, 15).unwrap().as_deref(), Some("run-1"));
+        assert_eq!(on_status(&store, Some(6), 60, "done", false, false, None, 15).unwrap().as_deref(), Some("run-1"));
         let r = load(&store, RUNS_KEY).unwrap().remove(0);
         assert_eq!((r["status"].as_str(), r["finishedAt"].as_u64()), (Some("completed"), Some(15)));
         // Closing the pane afterwards leaves the finished run alone.
@@ -2557,13 +2612,13 @@ mod tests {
         dispatched(&store, &ws, 2, "claude");
         claim(&store, 3, Some(30), &ws.to_string_lossy(), Some("claude")).unwrap();
         claim(&store, 4, Some(40), &ws.to_string_lossy(), Some("claude")).unwrap();
-        on_status(&store, Some(3), 30, "working", true, false, 5).unwrap();
+        on_status(&store, Some(3), 30, "working", true, false, None, 5).unwrap();
         assert_eq!(pane_ended(&store, 3, None, 6).unwrap().as_deref(), Some("run-1"));
         let (st, why) = status_of(&store, "run-1");
         assert_eq!(st, "failed");
         assert!(why.contains("before it began working"), "{why}");
         // One that had started working and was stopped mid-way failed too, with its own reason.
-        on_status(&store, Some(4), 40, "working", false, false, 7).unwrap();
+        on_status(&store, Some(4), 40, "working", false, false, None, 7).unwrap();
         pane_ended(&store, 4, None, 8).unwrap();
         let (st, why) = status_of(&store, "run-2");
         assert_eq!(st, "failed");
@@ -2589,7 +2644,7 @@ mod tests {
         seed(&store, &ws);
         dispatched(&store, &ws, 1, "claude");
         claim(&store, 3, Some(30), &ws.to_string_lossy(), Some("claude")).unwrap();
-        on_status(&store, Some(3), 30, "working", false, false, 4).unwrap();
+        on_status(&store, Some(3), 30, "working", false, false, None, 4).unwrap();
         tidy(&store, 1_000).unwrap();
         let after_tidy = load(&store, RUNS_KEY).unwrap()[0].clone();
         assert!(after_tidy["terminal"].is_null() && after_tidy["lastTerminal"] == 3 && after_tidy["lastPaneKey"] == 30 && after_tidy["settleBy"].is_u64(), "{after_tidy}");
@@ -2613,8 +2668,8 @@ mod tests {
         // Nothing closes it at settling time, its old terminal still ends it, and its finish
         // completes it with the real end text replacing the replay.
         assert!(settle(&store, 1_000 + SETTLE_MS + 1).unwrap().is_empty());
-        on_status(&store, Some(3), 30, "working", false, false, 2_000).unwrap();
-        on_status(&store, Some(3), 30, "done", false, false, 2_001).unwrap();
+        on_status(&store, Some(3), 30, "working", false, false, None, 2_000).unwrap();
+        on_status(&store, Some(3), 30, "done", false, false, None, 2_001).unwrap();
         assert_eq!(status_of(&store, "run-1").0, "completed");
         assert_eq!(keep_output(&store, "run-1", "all done", false).unwrap().as_deref(), Some("run-1"));
         let shown = with_output(&store, load(&store, RUNS_KEY).unwrap()[0].clone());
@@ -2671,7 +2726,7 @@ mod tests {
         dispatched(&store, &other, 2, "claude");
         // Before the restart run-1 had its pane and its agent was at work.
         claim(&store, 3, Some(30), &ws.to_string_lossy(), Some("claude")).unwrap();
-        on_status(&store, Some(3), 30, "working", false, false, 4).unwrap();
+        on_status(&store, Some(3), 30, "working", false, false, None, 4).unwrap();
         tidy(&store, 1_000).unwrap();
         // The old terminal number means nothing in the new process.
         assert_eq!(pane_ended(&store, 3, None, 1_001).unwrap(), None);
@@ -2685,8 +2740,8 @@ mod tests {
         assert_eq!(st, "failed");
         assert!(why.contains("restarted"), "{why}");
         // Tracking carried on: the work seen before the restart counts, and its finish completes it.
-        on_status(&store, Some(1), 10, "working", true, false, 2_000).unwrap();
-        on_status(&store, Some(1), 10, "done", false, false, 2_001).unwrap();
+        on_status(&store, Some(1), 10, "working", true, false, None, 2_000).unwrap();
+        on_status(&store, Some(1), 10, "done", false, false, None, 2_001).unwrap();
         assert_eq!(status_of(&store, "run-1").0, "completed");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

@@ -54,9 +54,14 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
+// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
+// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
+#[allow(dead_code)]
+mod protected_custom;
 mod ports;
 mod resources;
 mod projects;
+mod prompt_answer;
 mod prompt_scan;
 mod scm;
 mod pr_review;
@@ -414,6 +419,9 @@ pub fn run() {
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
             protected::protected_rules,
+            protected_custom::protected_rule_check,
+            protected_custom::protected_attempts,
+            protected_custom::protected_attempts_clear,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -513,6 +521,8 @@ pub fn run() {
             agents::inventory::session_tabs,
             orchestration::task_reset,
             orchestration::worker_labels,
+            prompt_answer::prompt_read,
+            prompt_answer::prompt_answer,
             prompt_scan::prompt_scan,
             prompt_scan::prompt_scan_restored,
             prompt_scan::prompt_scan_pruned,
