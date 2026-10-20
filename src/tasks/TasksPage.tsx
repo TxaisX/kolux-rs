@@ -21,6 +21,7 @@ import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } 
 import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, type PickerProject, type PickerRow, pickerLabel, pickerRows, REPOS_SETTING, type RemoteRead, repoAdded, repoWarnings, rowKey, savedChoice, toggled } from "./repoPicker";
 import ProjectsView from "./ProjectsView";
 import PullRequestPage from "./PullRequestPage";
+import { itemOfTarget, pasteLine, pastedWork, rowForNumber } from "./pasteWork";
 import { parseGitHubUrl, type Target } from "./prModel";
 import TaskDialog from "./TaskDialog";
 import { existingWorkspace, linkKey, workItem, type WorkItem, workLabel } from "./workStart";
@@ -104,6 +105,8 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
   const [note, setNote] = useState<string | null>(null);
   const [pr, setPr] = useState<Target | null>(null);
   const [pasted, setPasted] = useState("");
+  // GIT-059 (T-232-d): a pasted issue address, with its title once read, ready to start or resume work on.
+  const [pastedItem, setPastedItem] = useState<{ target: Target; title: string | null } | null>(null);
   const seq = useRef(0);
   const [gh, setGh] = useState<GhRepo | null | undefined>(undefined);
   const [login, setLogin] = useState<string | null>(null);
@@ -237,18 +240,48 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
   };
   useEffect(loadLinked, [groupsKey, result]);
   const resumeDir = (t: Task) => existingWorkspace(linked[linkKey(t.host ?? gh?.host ?? "", t.repo)] ?? [], t.number);
-  const work = (t: Task) => {
-    const dir = resumeDir(t);
-    if (dir) return onResume ? onResume(dir) : setNote(`Workspace already made for #${t.number}: ${dir}`);
-    const item = workItem(t, gh?.host ?? "github.com");
-    if (!item) return setNote(`${t.repo} is not a repository name Kolux can start from.`);
+  /** The workspace already made for a pasted address (only known for the repositories chosen above). */
+  const resumeTarget = (x: Target) => existingWorkspace(linked[linkKey(x.host, x.repo)] ?? [], x.number);
+  const workOn = (dir: string | null, item: WorkItem | null, repo: string, number: number) => {
+    if (dir) return onResume ? onResume(dir) : setNote(`Workspace already made for #${number}: ${dir}`);
+    if (!item) return setNote(`${repo} is not a repository name Kolux can start from.`);
     if (onStart) return onStart(item);
     invoke<{ path: string }>("workspace_from_item", { item })
       .then((made) => {
-        setNote(`Workspace made for #${t.number}: ${made.path}`);
+        setNote(`Workspace made for #${number}: ${made.path}`);
         loadLinked();
       })
       .catch((e) => setNote(String(e)));
+  };
+  const work = (t: Task) => workOn(resumeDir(t), workItem(t, gh?.host ?? "github.com"), t.repo, t.number);
+  const workTarget = (x: Target) => workOn(resumeTarget(x), itemOfTarget(x), x.repo, x.number);
+  const workOfTarget = (x: Target) => ({ label: workLabel(resumeTarget(x), { kind: x.kind === "issue" ? "issue" : "pr" }), run: () => workTarget(x) });
+  /** GIT-059: what a paste into the address box starts. A pull request address opens its page, an issue
+   * address shows its strip, `#12` opens the one item on screen with that number. Returns false for ordinary text. */
+  const takePaste = (text: string): boolean => {
+    const got = pastedWork(text);
+    if (!got) return false;
+    setNote(null);
+    setPasted("");
+    if (got.kind === "refused") {
+      setNote(got.reason);
+    } else if (got.kind === "item" && got.target.kind === "pull") {
+      setPastedItem(null);
+      setPr(got.target);
+    } else if (got.kind === "item") {
+      setPastedItem({ target: got.target, title: null });
+      void invoke<{ title: string }>("scm_task_detail", { host: got.target.host, repo: got.target.repo, number: got.target.number }).then(
+        (d) => setPastedItem((c) => (c && c.target.number === got.target.number && c.target.repo === got.target.repo ? { ...c, title: d.title } : c)),
+        (e) => setNote(String(e)),
+      );
+    } else {
+      const hit = rowForNumber(result?.items ?? [], got.number);
+      if (hit) {
+        setPastedItem(null);
+        setOpen(hit);
+      } else setNote(`#${got.number} is not the only item with that number on screen. Paste its address instead.`);
+    }
+    return true;
   };
   useLayoutEffect(() => {
     if (result && list.current && restore.current) {
@@ -380,6 +413,9 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
         aria-label="Paste a GitHub address"
         placeholder="Paste a pull request or issue address…"
         value={pasted}
+        onPaste={(e) => {
+          if (takePaste(e.clipboardData.getData("text"))) e.preventDefault();
+        }}
         onChange={(e) => {
           const hit = parseGitHubUrl(e.target.value);
           if (hit && hit.kind === "pull") {
@@ -388,6 +424,17 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           } else setPasted(e.target.value);
         }}
       />
+      {pastedItem && (
+        <div className="note" role="status" data-pasted-item>
+          {pasteLine(pastedItem.target, pastedItem.title)}{" "}
+          <button className="btn primary" onClick={() => workTarget(pastedItem.target)}>
+            {workOfTarget(pastedItem.target).label}
+          </button>{" "}
+          <button className="btn" onClick={() => setPastedItem(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {gh && (
         <div className="tasks-filters" data-filters>
           {FILTERS.map((f) => (
@@ -516,7 +563,7 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           }}
         />
       )}
-      {pr && <PullRequestPage key={`${pr.host}/${pr.repo}#${pr.number}`} target={pr} added={repoAdded(rows, pr.host, pr.repo)} onClose={() => setPr(null)} />}
+      {pr && <PullRequestPage key={`${pr.host}/${pr.repo}#${pr.number}`} target={pr} added={repoAdded(rows, pr.host, pr.repo)} onClose={() => setPr(null)} workspace={resumeTarget(pr)} work={workOfTarget(pr)} />}
       {open && gh && (
         <TaskDialog
           task={applyEdits([open], edits)[0]}

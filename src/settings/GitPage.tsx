@@ -12,6 +12,7 @@ import WriterPicker from "../scm/WriterPicker";
 import { autoBranchOn, autoBranchPatch } from "../scm/autoBranch";
 import SetupPolicyRow from "./SetupPolicyRow";
 import { RENAME_FOLDERS_KEY, renamesFolders } from "../projects/folderRename";
+import AiRecipesSection from "./AiRecipesSection";
 
 const REFRESH_FIELD = "refreshBaseFirst";
 /** SET-031 / PROJ-039: branches are renamed after the work; on unless saved as false. */
@@ -166,6 +167,7 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
         <p className="conn-detail">With this off, a workspace with nothing uncommitted is deleted at once. One with changes, a lock or another workspace inside it always asks.</p>
       </section>
       <SetupPolicyRow settings={settings} save={save} />
+      <AiRecipesSection settings={settings} save={save} />
     </>
   );
 }

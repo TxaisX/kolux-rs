@@ -68,6 +68,9 @@ mod projects;
 mod prompt_answer;
 mod prompt_scan;
 mod scm;
+mod scm_open;
+mod scm_recipe;
+mod scm_stack;
 mod pr_review;
 mod skills;
 mod star;
@@ -85,6 +88,7 @@ mod shell_history;
 mod skill_delete;
 mod state;
 mod status;
+mod sub_work;
 mod term_import;
 mod sysmem;
 mod terminal;
@@ -607,6 +611,7 @@ pub fn run() {
             scm::scm_task_detail,
             scm::scm_repo_labels,
             github::github_repo_parent,
+            github::github_repo_lineage,
             github::github_people,
             github::github_project,
             github::github_projects,
@@ -622,12 +627,22 @@ pub fn run() {
             github::pull_requests::pr_checks,
             github::pull_requests::pr_threads,
             github::pull_requests::pr_set_state,
+            github::pull_requests::pr_viewed,
+            github::pull_requests::pr_set_viewed,
+            github::pull_requests::pr_editors,
             github::pull_requests::pr_rerun,
             github::pull_requests::pr_reviewers,
             github::pull_requests::pr_assignees,
             github::pull_requests::pr_react,
             github::pull_requests::pr_reply,
             github::pull_requests::pr_merge,
+            pr_checkout::scm_push_target,
+            scm_open::scm_open_with,
+            scm_recipe::scm_recipe_commit,
+            scm_recipe::scm_recipe_fix,
+            scm_stack::scm_stack_create,
+            scm_stack::scm_stack_record,
+            pr_review::scm_stack_prs,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,

@@ -1684,14 +1684,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     }
   };
   // GIT-004: a refused commit can be handed to the default agent with the hook's own words.
-  const fixWithAI = (output: string) => {
-    const a = agents.find((x) => x.id === defaultId && x.installed);
+  // GIT-019 (T-313-b): the fix recipe may name its own agent and extra start arguments.
+  const fixWithAI = (output: string, launch?: { agent: string; extra: string[]; prompt: string }) => {
+    const id = launch?.agent ?? defaultId;
+    const a = agents.find((x) => x.id === id && x.installed);
     if (!a || activeDir === null) {
-      setNotice(`The default agent (${defaultId}) is not installed.`);
+      setNotice(`The ${launch ? "recipe's" : "default"} agent (${id}) is not installed.`);
       return;
     }
-    const prompt = `A git action in this workspace failed. Find the cause, fix it, and finish the action.\n\nGit said:\n${output}`;
-    void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
+    const prompt = launch?.prompt ?? `A git action in this workspace failed. Find the cause, fix it, and finish the action.\n\nGit said:\n${output}`;
+    void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true, launch?.extra ?? []);
   };
   const projectFor = (projectId: string | null): string | null => projectId ?? projectOf(panes.find((p) => p.key === focused)?.cwd ?? null) ?? projects[0]?.id ?? null;
 

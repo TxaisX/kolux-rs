@@ -1422,7 +1422,11 @@ pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result
     }
     // PROJ-072: a folder that is already gone has no changes to lose; deleting it is cleanup.
     let missing = !Path::new(&target.path).exists();
-    let changes = if missing { Vec::new() } else { git.status_lines(Path::new(&target.path))? };
+    let mut changes = if missing { Vec::new() } else { git.status_lines(Path::new(&target.path))? };
+    // GIT-013: work inside the worktree's submodules goes with it, so it is named in the changes.
+    if !missing {
+        changes = crate::sub_work::annotate(changes, &crate::sub_work::unsaved(Path::new(&target.path)).unwrap_or_default());
+    }
     let here = Path::new(&target.path);
     // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
     let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();
@@ -1446,7 +1450,8 @@ pub fn removal_refused(now: &RemoveCheck, force: bool, asked: &str) -> Option<St
     }
     if !now.changes.is_empty() && !force {
         let n = now.changes.len();
-        return Some(format!("{n} uncommitted or untracked change{} would be lost. Tick Delete my changes too to delete it anyway.", if n == 1 { "" } else { "s" }));
+        let subs = crate::sub_work::note(&now.changes).map(|w| format!(" {w}")).unwrap_or_default();
+        return Some(format!("{n} uncommitted or untracked change{} would be lost.{subs} Tick Delete my changes too to delete it anyway.", if n == 1 { "" } else { "s" }));
     }
     None
 }

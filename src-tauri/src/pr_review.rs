@@ -547,6 +547,58 @@ pub async fn scm_pr_conflicts(worktree: String, url: String) -> Result<Conflicts
     .map_err(|e| e.to_string())?
 }
 
+// ---- GIT-034: the open pull requests of a stack ------------------------------------------------
+
+/// One open pull request as the stack view needs it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StackRow {
+    pub number: u64,
+    pub head: String,
+    pub base: String,
+    pub state: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// The open pull requests and the repository's trunk branch.
+#[derive(Clone, Debug, Serialize)]
+pub struct StackList {
+    pub trunk: String,
+    pub prs: Vec<StackRow>,
+}
+
+/// The rows of `gh pr list --json number,url,headRefName,baseRefName,state,title`; drafts stay in (they still sit in a stack).
+pub fn stack_rows(text: &str) -> Result<Vec<StackRow>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    let s = |x: &serde_json::Value, k: &str| x[k].as_str().unwrap_or_default().to_string();
+    Ok(v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    let number = r["number"].as_u64()?;
+                    let (head, base) = (s(r, "headRefName"), s(r, "baseRefName"));
+                    (!head.is_empty() && !base.is_empty()).then(|| StackRow { number, head, base, state: s(r, "state"), url: s(r, "url"), title: s(r, "title") })
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// GIT-034: the open pull requests of the repository the worktree belongs to, for the stack view.
+#[tauri::command]
+pub async fn scm_stack_prs(worktree: String) -> Result<StackList, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let gh = scm::gh_program()?;
+        let text = scm::gh_run(&gh, dir, &["pr", "list", "--state", "open", "--limit", "100", "--json", "number,url,headRefName,baseRefName,state,title"], None)?;
+        let trunk = scm::gh_run(&gh, dir, &["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"], None).map(|t| t.trim().to_string()).ok().filter(|t| !t.is_empty()).unwrap_or_else(|| "main".to_string());
+        Ok(StackList { trunk, prs: stack_rows(&text)? })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,5 +822,15 @@ mod tests {
         assert!(conflicts_of(scm::Clash::Clean, "main").prompt.is_none());
         assert!(p.contains("a.rs, b/c.ts") && p.contains("origin/main") && p.contains("Do not push"), "{p}");
         assert!(!resolve_prompt("dev", &[]).contains("Files that conflict"));
+    }
+
+    #[test]
+    fn git034_the_open_list_becomes_stack_rows_and_skips_rows_without_a_branch() {
+        let text = r#"[{"number":1,"url":"https://github.com/o/r/pull/1","headRefName":"a","baseRefName":"main","state":"OPEN","title":"A"},{"number":2,"url":"u","headRefName":"","baseRefName":"a","state":"OPEN","title":"x"},{"number":3,"url":"https://github.com/o/r/pull/3","headRefName":"b","baseRefName":"a","state":"OPEN","title":"B"}]"#;
+        let rows = stack_rows(text).unwrap();
+        assert_eq!(rows.iter().map(|r| (r.number, r.head.as_str(), r.base.as_str())).collect::<Vec<_>>(), [(1, "a", "main"), (3, "b", "a")]);
+        assert_eq!(rows[1].title, "B");
+        assert!(stack_rows("{}").unwrap().is_empty());
+        assert!(stack_rows("nope").unwrap_err().contains("cannot read"));
     }
 }
