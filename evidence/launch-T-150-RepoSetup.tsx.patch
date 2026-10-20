@@ -1,0 +1,36 @@
+diff --git a/src/settings/RepoSetup.tsx b/src/settings/RepoSetup.tsx
+index 3ba45d15..6f01b180 100644
+--- a/src/settings/RepoSetup.tsx
++++ b/src/settings/RepoSetup.tsx
+@@ -9,6 +9,7 @@ export interface SetupActions {
+   onRemove: () => void;
+   onChoice: (value: string) => void;
+   onWait: (wait: boolean) => void;
++  onMode?: (mode: string) => void;
+ }
+ 
+ export function RepoSetupView({ setup, notice, actions }: { setup: RepoSetup; notice?: string | null; actions: SetupActions }) {
+@@ -104,6 +105,15 @@ export function RepoSetupView({ setup, notice, actions }: { setup: RepoSetup; no
+         <input type="checkbox" aria-label="Wait for setup" checked={setup.wait} onChange={(e) => actions.onWait(e.target.checked)} />
+         The agent waits for setup to finish before it starts
+       </label>
++      <label className="check">
++        Setup opens in{" "}
++        <select aria-label="Setup opens in" value={setup.mode ?? "tab"} onChange={(e) => actions.onMode?.(e.target.value)}>
++          <option value="tab">a new tab</option>
++          <option value="right">a split to the right</option>
++          <option value="down">a split below</option>
++          <option value="ask">ask for each workspace (no bulk launch)</option>
++        </select>
++      </label>
+       <p className="conn-detail">The New workspace dialog can still send setup to a split instead of a tab.</p>
+       {notice && (
+         <p className="conn-detail warn" role="alert">
+@@ -141,6 +151,7 @@ export default function RepoSetupSection({ path }: { path: string }) {
+           if (c) void write("repo_setup_policy_set", { policy: c.policy });
+         },
+         onWait: (wait) => void write("repo_setup_wait_set", { wait }),
++        onMode: (mode) => void write("repo_setup_mode_set", { mode }),
+       }}
+     />
+   );

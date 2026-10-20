@@ -1,0 +1,70 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 34172b00..792ac2bb 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
+ import SettingsPage from "./settings/SettingsPage";
+ import Ask from "./chrome/Ask";
+ import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
++import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
+ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+ import { returnTab, type Which } from "./terminal/tabClose";
+ import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestion } from "./terminal/pin";
+@@ -1152,9 +1153,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       if (missing) throw new Error(`${missing.agent} is not installed.`);
+       const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
+       const pid = projectOf(chooser.cwd) ?? projectFor(null);
++      // SESS-026 (T-150): a launch that makes new workspaces settles their setup before any agent
++      // starts, and is refused before anything is made when the project asks about setup each time.
++      const proj = projects.find((p) => p.id === pid);
++      const makes = picked.some(Boolean) && (separate || chooser.cwd === null);
++      const repo = makes && proj ? await invoke<{ mode?: string; wait?: boolean }>("repo_setup_get", { path: proj.path }).catch(() => null) : null;
++      const refused = bulkRefusal(proj?.name ?? "This project", setupMode(repo?.mode), makes);
++      if (refused) throw new Error(refused);
++      const madeNew: NewPlace[] = [];
++      const setupTrouble: string[] = [];
+       const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
+         if (!pid) throw new Error("Add a project first: an agent needs a project folder to work in.");
+         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
++        madeNew.push({ cwd: wt.path, branch: wt.branch });
+         return { cwd: wt.path, branch: wt.branch };
+       };
+       const places: { cwd: string | null; branch: string | null }[] = [];
+@@ -1165,6 +1176,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         else places.push((shared ??= chooser.cwd === null ? await fresh() : { cwd: chooser.cwd, branch: chooser.branch }));
+       }
+       const batch = key;
++      await settleSetups(madeNew, setupMode(repo?.mode), repo?.wait === true, {
++        line: (dir) => trustedSetup(dir),
++        open: (dir, branch, line, where) => new Promise<void>((done) => startSetup(dir, branch, line, where, false, () => done())),
++        say: (m) => setupTrouble.push(m),
++      });
+       for (const id of new Set(picked.flatMap((a) => (a ? [a.id] : [])))) await pretrust(id, picked.map((a, i) => (a?.id === id ? places[i].cwd : null)));
+       // SESS-051: each agent's start line comes from the catalogue, prompt route included; a
+       // refused line (Hermes past its limit) stops the whole Start before any pane is made.
+@@ -1203,7 +1219,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       setActiveDir(made[0].cwd);
+       setFocused(made[0].key);
+       setRefresh((n) => n + 1);
+-      setNotice(null);
++      setNotice(setupTrouble.length ? setupTrouble.join(" ") : null);
+     } catch (err) {
+       setNotice(String(err));
+     } finally {
+@@ -1492,11 +1508,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         return;
+       }
+       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
+-      if (a) void cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate);
+-      else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
+       // PROJ-033: a workspace made from the command line runs its setup script in a background tab
+-      // unless it was told to skip it.
+-      if (p.setup !== "skip") void cli.current.runSetup(p.worktree.path, p.worktree.branch);
++      // unless it was told to skip it. SESS-026 (T-150): the setup settles (asked, opened or said
++      // why not) before its agent starts.
++      const setup = p.setup !== "skip" ? cli.current.runSetup(p.worktree.path, p.worktree.branch) : Promise.resolve();
++      if (a) void setup.then(() => cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate));
++      else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
+     });
+     return () => {
+       off.then((f) => f()).catch(() => undefined);
