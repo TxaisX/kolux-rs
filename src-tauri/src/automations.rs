@@ -62,6 +62,12 @@ fn has_output(r: &Value) -> bool {
     r["outputSaved"] == true || r.get("output").is_some_and(|o| !o.is_null())
 }
 
+/// May this run still take its final output? Yes with none saved, and yes when what it holds is
+/// the replay a restart put there (T-085-h): the finish's own text replaces it.
+fn output_open(r: &Value) -> bool {
+    !has_output(r) || r["outputFrom"] == "replay"
+}
+
 /// Moves a row's inline `output` into its own key and leaves `outputSaved` in its place.
 fn stash_output(store: &Store, row: &mut Value) -> Result<(), String> {
     let Some(text) = row.get("output").and_then(Value::as_str).map(String::from) else { return Ok(()) };
@@ -509,10 +515,15 @@ pub fn tidy(store: &Store, now: u64) -> Result<(), String> {
     }
     // AUTO-012 (T-072-b): a dispatched run's terminal number belonged to the last process; it waits
     // for its pane to open again in its worktree and is closed by `settle` if none does in time.
+    // T-085-h: the old numbers are kept aside, so `reconnect` can ask the terminal service for them.
     for r in runs.iter_mut().filter(|r| tracked(r)) {
         if let Some(row) = r.as_object_mut() {
-            row.remove("terminal");
-            row.remove("paneKey");
+            if let Some(t) = row.remove("terminal").filter(|t| !t.is_null()) {
+                row.insert("lastTerminal".into(), t);
+            }
+            if let Some(p) = row.remove("paneKey").filter(|p| !p.is_null()) {
+                row.insert("lastPaneKey".into(), p);
+            }
             row.insert("settleBy".into(), json!(now + SETTLE_MS));
         }
     }
@@ -639,6 +650,69 @@ pub fn pane_ended(store: &Store, terminal: u32, code: Option<u32>, now: u64) -> 
     Ok(id)
 }
 
+/// T-085-h: what the terminal service knows about a terminal a run was following before the
+/// restart: whether it is still running there, and what it has shown so far (text, cut flag).
+pub struct Held {
+    pub alive: bool,
+    pub output: Option<(String, bool)>,
+}
+
+/// AUTO-011 / AUTO-012 (T-085-h): right after `tidy`, every run still dispatched is looked for
+/// at the terminal service by the terminal and hook pane it had before the restart. One the
+/// service still holds alive is reconnected at once: it is followed through that terminal again,
+/// its settling period is over, and what the terminal has shown so far is replayed onto the run
+/// so the Runs page shows it. One the service knows ended while Kolux was away is closed as
+/// failed with that reason, with the terminal's last text. One the service does not know (the
+/// usual case today: a new process starts its terminal numbers over) is left to `claim` and
+/// `settle`. Returns the runs that moved.
+pub fn reconnect(store: &Store, held: &dyn Fn(u32, Option<u32>) -> Option<Held>, now: u64) -> Result<Vec<String>, String> {
+    let mut runs = load(store, RUNS_KEY)?;
+    let mut moved = Vec::new();
+    for r in runs.iter_mut().filter(|r| tracked(r) && r["terminal"].is_null()) {
+        let Some(terminal) = r["lastTerminal"].as_u64().and_then(|t| u32::try_from(t).ok()) else { continue };
+        let pane_key = r["lastPaneKey"].as_u64().and_then(|p| u32::try_from(p).ok());
+        let Some(found) = held(terminal, pane_key) else { continue };
+        let Some(row) = r.as_object_mut() else { continue };
+        if found.alive {
+            row.insert("terminal".into(), json!(terminal));
+            row.insert("paneKey".into(), json!(pane_key));
+            row.remove("settleBy");
+            row.insert("reconnected".into(), json!(true));
+            row.insert("detail".into(), json!("Reconnected to its terminal after Kolux restarted"));
+            if let Some((text, cut)) = found.output.filter(|(t, _)| !t.trim().is_empty()) {
+                row.insert("output".into(), json!(text));
+                row.insert("outputFrom".into(), json!("replay"));
+                row.insert("outputCut".into(), json!(cut));
+            }
+        } else {
+            row.remove("settleBy");
+            if let Some((text, cut)) = found.output.filter(|(t, _)| !t.trim().is_empty()) {
+                row.insert("output".into(), json!(text));
+                row.insert("outputFrom".into(), json!("screen"));
+                row.insert("outputCut".into(), json!(cut));
+            }
+            row.insert("paneEnded".into(), json!(true));
+            finish(r, "failed", Some("Kolux restarted and this run's terminal had already ended"), now);
+        }
+        stash_output(store, r)?;
+        moved.extend(r["id"].as_str().map(String::from));
+    }
+    if !moved.is_empty() {
+        save(store, RUNS_KEY, &runs)?;
+    }
+    Ok(moved)
+}
+
+/// T-085-h: the app's terminal service asked about a terminal from before the restart, through
+/// what it already tells: a session it still runs is alive and its log is the replay; a pane whose
+/// newest program is over is ended; anything else is unknown.
+fn held_in(ts: &crate::terminal::Terminals, terminal: u32, pane_key: Option<u32>) -> Option<Held> {
+    if ts.started(terminal).is_some() {
+        return Some(Held { alive: true, output: ts.read(terminal, None, Some(RUN_OUTPUT_LINES)).map(|r| screen_text(&r)) });
+    }
+    pane_key.and_then(|p| ts.of_pane(p)).filter(|run| !run.alive).map(|_| Held { alive: false, output: None })
+}
+
 /// After a restart, the dispatched runs whose pane has not come back by the end of the settling
 /// period are closed as failed. Returns the runs closed.
 pub fn settle(store: &Store, now: u64) -> Result<Vec<String>, String> {
@@ -720,7 +794,7 @@ pub fn keep_output(store: &Store, run_id: &str, text: &str, cut: bool) -> Result
         return Ok(None);
     }
     let mut runs = load(store, RUNS_KEY)?;
-    let Some(r) = runs.iter_mut().find(|r| r["id"] == run_id && !in_progress(r) && !has_output(r)) else { return Ok(None) };
+    let Some(r) = runs.iter_mut().find(|r| r["id"] == run_id && !in_progress(r) && output_open(r)) else { return Ok(None) };
     if let Some(row) = r.as_object_mut() {
         row.insert("output".into(), json!(text));
         row.insert("outputFrom".into(), json!("screen"));
@@ -740,7 +814,7 @@ fn keep_screen(app: &tauri::AppHandle, state: &Mutex<Store>, run_id: &str) {
         .ok()
         .and_then(|s| load(&s, RUNS_KEY).ok())
         .and_then(|runs| runs.into_iter().find(|r| r["id"] == run_id))
-        .filter(|r| !in_progress(r) && !has_output(r))
+        .filter(|r| !in_progress(r) && output_open(r))
         .and_then(|r| r["terminal"].as_u64())
         .and_then(|t| u32::try_from(t).ok());
     let Some(pane) = pane else { return };
@@ -1080,6 +1154,13 @@ pub fn start_clock(app: tauri::AppHandle) {
         // AUTO-021: a history saved too large is cut down as Kolux loads it.
         if let Err(e) = launch_for(&app, |l| tidy(&*l.store.lock().map_err(|e| e.to_string())?, now_ms())) {
             eprintln!("automations history: {e}");
+        }
+        // T-085-h: runs still going at the last quit are found again at the terminal service.
+        if let Some(ts) = tauri::Manager::try_state::<crate::terminal::Terminals>(&app) {
+            match launch_for(&app, |l| reconnect(&*l.store.lock().map_err(|e| e.to_string())?, &|t, p| held_in(&ts, t, p), now_ms())) {
+                Ok(moved) => moved.iter().for_each(|id| drop(tauri::Emitter::emit(&app, EVENT, json!({ "runId": id })))),
+                Err(e) => eprintln!("automations reconnect: {e}"),
+            }
         }
         loop {
             std::thread::sleep(std::time::Duration::from_secs(30));
@@ -1949,6 +2030,84 @@ mod tests {
         pane_ended(&store, 8, Some(0), 9).unwrap();
         pane_ended(&store, 9, Some(1), 9).unwrap();
         assert_eq!((status_of(&store, "run-3").0.as_str(), status_of(&store, "run-4").0.as_str()), ("completed", "failed"));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t085h_after_a_restart_a_run_the_terminal_service_still_holds_is_reconnected_with_its_output_replayed() {
+        let dir = temp("t085h-held");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        claim(&store, 3, Some(30), &ws.to_string_lossy(), Some("claude")).unwrap();
+        on_status(&store, Some(3), 30, "working", false, false, 4).unwrap();
+        tidy(&store, 1_000).unwrap();
+        let after_tidy = load(&store, RUNS_KEY).unwrap()[0].clone();
+        assert!(after_tidy["terminal"].is_null() && after_tidy["lastTerminal"] == 3 && after_tidy["lastPaneKey"] == 30 && after_tidy["settleBy"].is_u64(), "{after_tidy}");
+        // The fake terminal service still runs terminal 3 and has what it printed so far.
+        let asked = RefCell::new(Vec::<(u32, Option<u32>)>::new());
+        let service = |t: u32, p: Option<u32>| {
+            asked.borrow_mut().push((t, p));
+            (t == 3).then(|| Held { alive: true, output: Some(("$ claude\nWorking on it...".to_string(), false)) })
+        };
+        assert_eq!(reconnect(&store, &service, 1_001).unwrap(), vec!["run-1".to_string()]);
+        assert_eq!(*asked.borrow(), vec![(3, Some(30))]);
+        let r = load(&store, RUNS_KEY).unwrap()[0].clone();
+        assert_eq!((r["status"].as_str(), r["terminal"].as_u64(), r["paneKey"].as_u64(), r["reconnected"].as_bool()), (Some("dispatched"), Some(3), Some(30), Some(true)));
+        assert!(r["settleBy"].is_null(), "no settling for a run found again: {r}");
+        assert!(r["detail"].as_str().unwrap().contains("Reconnected"), "{r}");
+        // The replay is on the run for the page, under its own key like any saved output.
+        let shown = with_output(&store, r.clone());
+        assert_eq!((shown["output"].as_str(), shown["outputFrom"].as_str()), (Some("$ claude\nWorking on it..."), Some("replay")));
+        // Asking again does nothing: the run is followed, not waiting.
+        assert!(reconnect(&store, &service, 1_002).unwrap().is_empty());
+        // Nothing closes it at settling time, its old terminal still ends it, and its finish
+        // completes it with the real end text replacing the replay.
+        assert!(settle(&store, 1_000 + SETTLE_MS + 1).unwrap().is_empty());
+        on_status(&store, Some(3), 30, "working", false, false, 2_000).unwrap();
+        on_status(&store, Some(3), 30, "done", false, false, 2_001).unwrap();
+        assert_eq!(status_of(&store, "run-1").0, "completed");
+        assert_eq!(keep_output(&store, "run-1", "all done", false).unwrap().as_deref(), Some("run-1"));
+        let shown = with_output(&store, load(&store, RUNS_KEY).unwrap()[0].clone());
+        assert_eq!((shown["output"].as_str(), shown["outputFrom"].as_str()), (Some("all done"), Some("screen")));
+        // Saved once, the end text stays: a second save does not replace it.
+        assert_eq!(keep_output(&store, "run-1", "later", false).unwrap(), None);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t085h_after_a_restart_a_run_whose_terminal_is_gone_ends_with_the_reason_and_an_unknown_one_waits() {
+        let dir = temp("t085h-gone");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        dispatched(&store, &ws, 2, "claude");
+        dispatched(&store, &ws, 3, "claude");
+        claim(&store, 5, Some(50), &ws.to_string_lossy(), Some("claude")).unwrap();
+        claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("claude")).unwrap();
+        // run-3 was dispatched but no pane ever claimed it: nothing to ask the service about.
+        tidy(&store, 1_000).unwrap();
+        // The service knows terminal 5 ended while Kolux was away, and nothing of terminal 6.
+        let service = |t: u32, _: Option<u32>| (t == 5).then(|| Held { alive: false, output: Some(("bye".to_string(), true)) });
+        assert_eq!(reconnect(&store, &service, 1_001).unwrap(), vec!["run-1".to_string()]);
+        let (st, why) = status_of(&store, "run-1");
+        assert_eq!(st, "failed");
+        assert!(why.contains("restarted") && why.contains("already ended"), "{why}");
+        let r = with_output(&store, load(&store, RUNS_KEY).unwrap()[0].clone());
+        assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool(), r["paneEnded"].as_bool(), r["finishedAt"].as_u64()), (Some("bye"), Some("screen"), Some(true), Some(true), Some(1_001)));
+        // The unknown one keeps waiting for its pane: still dispatched, still settling.
+        let r2 = load(&store, RUNS_KEY).unwrap()[1].clone();
+        assert_eq!((r2["status"].as_str(), r2["settleBy"].is_u64(), r2["terminal"].is_null()), (Some("dispatched"), true, true));
+        // Its pane coming back claims it; the other unknown one closes at settling with the usual reason.
+        assert_eq!(claim(&store, 1, Some(10), &ws.to_string_lossy(), Some("claude")).unwrap().as_deref(), Some("run-2"));
+        assert_eq!(settle(&store, 1_000 + SETTLE_MS + 1).unwrap(), vec!["run-3".to_string()]);
+        assert!(status_of(&store, "run-3").1.contains("could not be found again"));
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
