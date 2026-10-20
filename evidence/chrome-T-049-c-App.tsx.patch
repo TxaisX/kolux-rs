@@ -1,0 +1,12 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 3ac0fd55..8ff03517 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1978,6 +1978,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         }
+         screen={screen}
+         classic={classic}
++        sidebarWidth={leftWidth}
+         appMenu
+         uiZoom={zoomFactor()}
+         onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />

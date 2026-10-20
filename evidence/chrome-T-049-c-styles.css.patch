@@ -1,0 +1,18 @@
+diff --git a/src/styles.css b/src/styles.css
+index b2b2533f..1306c377 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -1126,7 +1126,12 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
+ .status-tick { display: flex; align-items: center; gap: 6px; color: var(--fg); font-size: 12px; cursor: pointer; }
+ .status-tick input { accent-color: var(--done); }
+ .status-tick.off { opacity: 0.5; cursor: default; }
+-.topbar .app-name { margin: 0 6px 0 2px; color: var(--fg-muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
++.titlebar .app-name, .topbar .app-name { margin: 0 6px 0 2px; color: var(--fg-muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
++/* T-049-c / VIEW-003: Classic's title header. Its left cell is as wide as the sidebar card (TopBar sets the width inline from the sidebar width);
++   the search hint, bell, usage pill and the window's own buttons stay at the far end of the same 36 px row. No switcher, no full-width top bar. */
++.titlebar { position: relative; flex: none; display: flex; align-items: center; height: 36px; background: var(--surface); border-bottom: 1px solid var(--line-strong); }
++.titlebar .topbar-left { flex: none; min-width: 0; border-right: 1px solid var(--line-strong); }
++.titlebar .topbar-right { margin-left: auto; }
+ /* ACCT-002: "Other ways to connect" sits next to Connect and opens a short list under it. */
+ .btn-row:has(.conn-more) { flex-wrap: wrap; align-items: flex-start; }
+ .conn-more { display: inline-block; }
