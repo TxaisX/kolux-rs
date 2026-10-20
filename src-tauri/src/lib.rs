@@ -6,6 +6,7 @@ mod awake;
 mod capture;
 mod chat;
 mod chat_tools;
+mod clipboard;
 mod browser;
 mod cap;
 pub mod cli;
@@ -19,6 +20,7 @@ mod diag;
 mod editor_search;
 mod fence;
 mod files;
+pub mod final_save;
 mod fsops;
 mod fonts;
 mod git;
@@ -101,7 +103,9 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
 
 /// Writes only the settings the window changed (`set`, and `remove` for ones it cleared) over what
 /// is on disk, so a key Kolux itself wrote meanwhile (a printed pull request link) is kept.
-#[tauri::command]
+/// T-075 (APP-048): `async`, so the synced write (two files, fsync each) runs off the window's
+/// thread; typing never waits on the profile drive.
+#[tauri::command(async)]
 fn settings_patch(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, set: serde_json::Map<String, serde_json::Value>, remove: Vec<String>) -> Result<(), String> {
     write_settings(&app, &store, |old| state::patched(old, &set, &remove))
 }
@@ -293,7 +297,10 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(5));
-                activity::save(&handle.state::<Mutex<Store>>(), false);
+                // T-075 (APP-050): nothing queues behind the final save.
+                if !final_save::quitting() {
+                    activity::save(&handle.state::<Mutex<Store>>(), false);
+                }
             });
             // STAT-045: a working agent that prints nothing for the chosen minutes is reported once
             // per silent spell. Silence is the terminal's own output, never the hooks.
@@ -317,6 +324,14 @@ pub fn run() {
             }
             artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req)
         })
+        // T-033-e (FIX-1): a reload of the main page (F5 / Ctrl+R) destroys no window, and the old
+        // page never gets to release its git watches, so they are all let go as the new page starts
+        // loading (the new page subscribes afresh); at the first load there is nothing to let go.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                scm::watch::unwatch_all();
+            }
+        })
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
             // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
@@ -324,6 +339,8 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
                     window.state::<Terminals>().kill_all();
+                    // T-033-e: no git watch outlives the window either (nothing is waited for here).
+                    scm::watch::unwatch_all();
                     if let Some(t) = window.app_handle().get_webview_window("tower") {
                         let _ = t.close();
                     }
@@ -354,6 +371,8 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             terminal::terminal_spawn,
             terminal::terminal_write,
+            terminal::terminal_service_info,
+            terminal::terminal_attach,
             chat::chat_support,
             chat::chat_read,
             chat::chat_close,
@@ -484,6 +503,8 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_go,
             browser::browser_close,
+            browser::browser_probe,
+            browser::browser_diagnose,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
@@ -584,6 +605,9 @@ pub fn run() {
             fsops::fs_copy,
             fsops::fs_move,
             fsops::clip_write,
+            clipboard::clip_copy_text,
+            clipboard::clip_copy_files,
+            clipboard::feedback_facts,
             diag::diag_bundle,
             diag::diag_review,
             diag::diag_review_discard,
@@ -599,23 +623,43 @@ pub fn run() {
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                // USAGE-011: open turns end and the counts are written; no batched save follows.
-                activity::save(&app.state::<Mutex<Store>>(), true);
-                // STAT-037: the agents still mid-task are recorded before their terminals end.
-                if let Ok(store) = app.state::<Mutex<Store>>().lock() {
-                    hooks::agent_hooks::saved::at_quit(&store);
-                }
-                // ACCT-015: no sign-in or install keeps running after Kolux quits.
-                claude_key::cancel_all(std::time::Duration::from_secs(2));
-                // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's,
-                // each step given two seconds. Settings need no step: every change is already on disk.
-                if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
-                    let steps = [codex_accounts::sign_in_files(&store, &profile), claude_accounts::sign_in_files(&store, &profile)];
-                    drop(store);
-                    for pairs in steps {
-                        let p = profile.clone();
-                        let _ = secrets::within(std::time::Duration::from_secs(2), move || secrets::save_changed(&pairs, &p));
+                // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
+                // batched savers, each step runs on its own thread and is waited for only as long as
+                // the deadline leaves, so a stalled profile drive caps the wait and never freezes the
+                // quit. Settings need no step: every change is already on disk (APP-048).
+                final_save::begin();
+                let seal = |app: tauri::AppHandle, files: fn(&Store, &std::path::Path) -> Vec<(std::path::PathBuf, std::path::PathBuf)>| {
+                    move || {
+                        if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
+                            let pairs = files(&store, &profile);
+                            drop(store);
+                            let _ = secrets::save_changed(&pairs, &profile);
+                        }
                     }
+                };
+                let (a1, a2) = (app.clone(), app.clone());
+                let report = final_save::run(
+                    final_save::QUIT_DEADLINE,
+                    vec![
+                        // USAGE-011: open turns end and the counts are written; no batched save follows.
+                        final_save::step("activity counts", move || activity::save(&a1.state::<Mutex<Store>>(), true)),
+                        // STAT-037: the agents still mid-task are recorded before their terminals end.
+                        final_save::step("agent status", move || {
+                            if let Ok(store) = a2.state::<Mutex<Store>>().lock() {
+                                hooks::agent_hooks::saved::at_quit(&store);
+                            }
+                        }),
+                        // ACCT-015: no sign-in or install keeps running after Kolux quits.
+                        final_save::step("sign-ins cancelled", || {
+                            claude_key::cancel_all(std::time::Duration::from_secs(2));
+                        }),
+                        // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's.
+                        final_save::step("codex sign-in sealed", seal(app.clone(), codex_accounts::sign_in_files)),
+                        final_save::step("claude sign-in sealed", seal(app.clone(), claude_accounts::sign_in_files)),
+                    ],
+                );
+                if let Ok(dir) = app.path().app_data_dir() {
+                    diag::write(&dir, &report.line());
                 }
                 app.state::<Terminals>().kill_all();
                 // T-552: the window's WebView2 processes let go of the profile folder before the app
