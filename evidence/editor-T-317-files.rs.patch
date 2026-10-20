@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/files.rs b/src-tauri/src/files.rs
+index 716f769d..b70fb43b 100644
+--- a/src-tauri/src/files.rs
++++ b/src-tauri/src/files.rs
+@@ -1348,6 +1348,15 @@ pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
+     cmd == "code" || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+ }
+ 
++/// T-317 (EDIT-048): the branches of the repository a worktree belongs to (local ones, then remote ones
++/// by short name), for the pull request composer's searchable Base box. The worktree must pass the
++/// fence like any folder open_in opens; a branch list is read-only.
++#[tauri::command(async)]
++pub fn worktree_branches(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<String>, String> {
++    let dir = open_target(&path, |p| fence.allow(p, &store, &git, false))?;
++    crate::projects::branches(&dir)
++}
++
+ #[cfg(test)]
+ mod open_in_tests {
+     use super::*;

@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index bc5bd058..487cb224 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -810,6 +810,7 @@ pub fn run() {
+             skills::installer::skills_install_command,
+             skills::skills_reveal,
+             files::open_in,
++            files::worktree_branches,
+             files::file_list,
+             files::md_new,
+             files::md_templates,
