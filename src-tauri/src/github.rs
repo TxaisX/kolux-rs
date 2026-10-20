@@ -5,6 +5,12 @@
 use crate::scm::{gh_program, gh_run, gh_words};
 use std::path::Path;
 
+// T-232-c: the pull request page's reads and writes live in their own file, mounted here so lib.rs
+// needs no new `mod` line (only the command names in its handler list: evidence/tasks-T-232-c-lib.patch).
+#[allow(dead_code)] // until the handler list names the commands (the patch above)
+#[path = "pull_requests.rs"]
+pub(crate) mod pull_requests;
+
 /// One person on a GitHub host, with their avatar address (empty when GitHub gave none, so the
 /// page falls back to initials, which is also what GitHub Enterprise without avatars gets).
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -15,7 +21,7 @@ pub struct Person {
 
 /// `owner/name` checked to plain GitHub names, and the host to a plain host name; anything else is
 /// refused before gh sees it.
-fn repo_path(host: &str, repo: &str) -> Result<String, String> {
+pub(crate) fn repo_path(host: &str, repo: &str) -> Result<String, String> {
     if !host_ok(host) {
         return Err("This repository's GitHub host cannot be read".into());
     }
@@ -46,7 +52,7 @@ pub fn login_ok(login: &str) -> bool {
         && !login.contains("--")
 }
 
-fn gh_json(gh: &Path, host: &str, path: &str, extra: &[&str]) -> Result<serde_json::Value, String> {
+pub(crate) fn gh_json(gh: &Path, host: &str, path: &str, extra: &[&str]) -> Result<serde_json::Value, String> {
     host_allowed(gh, host)?;
     let args: Vec<&str> = ["api", path, "--hostname", host].into_iter().chain(extra.iter().copied()).collect();
     let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
@@ -361,7 +367,7 @@ fn graphql(gh: &Path, host: &str, query: &str, variables: serde_json::Value) -> 
     Ok(v["data"].clone())
 }
 
-fn s(v: &serde_json::Value) -> String {
+pub(crate) fn s(v: &serde_json::Value) -> String {
     v.as_str().unwrap_or("").to_string()
 }
 

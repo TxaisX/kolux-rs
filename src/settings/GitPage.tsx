@@ -10,8 +10,12 @@ import { useSettings } from "./useSettings";
 import { WRITER_INSTRUCTIONS_KEY } from "../scm/generate";
 import WriterPicker from "../scm/WriterPicker";
 import { autoBranchOn, autoBranchPatch } from "../scm/autoBranch";
+import SetupPolicyRow from "./SetupPolicyRow";
 
 const REFRESH_FIELD = "refreshBaseFirst";
+/** SET-031 / PROJ-039: branches are renamed after the work; on unless saved as false. */
+export const RENAME_FIELD = "renameBranches";
+export const renamesBranches = (s: Record<string, unknown>) => s[RENAME_FIELD] !== false;
 
 type BudgetView = { rows: Budget[] | null; error: string | null; at: number };
 
@@ -63,6 +67,15 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
           </p>
         )}
         {mode === "user" && check && !check.prefix && <p className="conn-detail">No git user name or gh login was found, or it is too long, so new branches get the bare name.</p>}
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" aria-label="Rename branches after the work" checked={renamesBranches(settings)} onChange={(e) => void save({ [RENAME_FIELD]: e.target.checked })} />
+          Rename branches after the work
+        </label>
+        <p className="conn-detail" data-rename-note>
+          {renamesBranches(settings)
+            ? "When the agent starts real work in a workspace that still has the name Kolux suggested, its branch (and the name shown for it) is renamed to a short description of that work. A name you typed or edited is never replaced, and the folder keeps its name."
+            : "Off: a workspace keeps the branch name Kolux suggested, whatever work is done in it."}
+        </p>
       </section>
       <section className="conn-card" data-section="base">
         <h2 className="conn-name">Base branch</h2>
@@ -140,6 +153,7 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
         </label>
         <p className="conn-detail">With this off, a workspace with nothing uncommitted is deleted at once. One with changes, a lock or another workspace inside it always asks.</p>
       </section>
+      <SetupPolicyRow settings={settings} save={save} />
     </>
   );
 }

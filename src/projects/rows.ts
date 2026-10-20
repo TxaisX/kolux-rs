@@ -9,7 +9,9 @@ import { shortcodes } from "./model";
 export type AgentState = "permission" | "blocked" | "waiting" | "interrupted" | "working" | "queued" | "done" | "idle";
 export type PrState = "open" | "draft" | "merged" | "closed" | "suppressed" | null;
 /** `cache`: when the prompt cache of its idle Claude agents runs out (SET-059), null when none counts. */
-export type RowInfo = { state: AgentState; changed: number; pr: PrState; cache?: number | null };
+export type RowInfo = { state: AgentState; changed: number; pr: PrState; cache?: number | null;
+  /** STAT-036: how many agents are working in the workspace, split panes counted apart (status/working). */
+  working?: number };
 export type GroupBy = "none" | "project" | "status" | "pr";
 /** "manual" is PROJ-049's Manual order; "activity" is PROJ-051's Recent; the old stored "recent" is PROJ-050's and moves to Smart once. */
 export type SortBy = "smart" | "name" | "activity" | "manual";

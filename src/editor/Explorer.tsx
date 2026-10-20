@@ -384,7 +384,15 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         const chosen = tops(sel.size ? [...sel] : at ? [at] : []);
         if (!chosen.length) break;
         setClip(chosen);
-        setNote({ text: `${chosen.length === 1 ? baseName(chosen[0]) : `${chosen.length} items`} ready to paste with Ctrl+V into a folder` });
+        {
+          const what = chosen.length === 1 ? baseName(chosen[0]) : `${chosen.length} items`;
+          setNote({ text: `${what} ready to paste with Ctrl+V into a folder` });
+          // T-249-c: the files also go on the system clipboard, so a paste in another program (a mail, a chat, the desktop) gets them.
+          void invoke("clip_copy_files", { paths: chosen }).then(
+            () => setNote({ text: `${what} ready to paste with Ctrl+V here or in another program` }),
+            (err) => setNote({ text: `${what} ready to paste with Ctrl+V into a folder (not on the system clipboard: ${String(err)})` }),
+          );
+        }
         break;
       }
       case "Mod+V":

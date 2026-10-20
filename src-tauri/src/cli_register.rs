@@ -1,7 +1,7 @@
 //! CLI-008: make the `kolux` command (`kolux-dev` in a development build) available in terminals
 //! outside Kolux, or take it away again. Windows adds the CLI folder to the user's PATH in the
-//! registry; Linux (and macOS, until its system-wide link lands) writes a launcher script in the
-//! per-user programs folder. Nothing that is not Kolux's own is ever overwritten or deleted.
+//! registry; Linux writes a launcher script in the per-user programs folder (steady for an
+//! AppImage); macOS links into /usr/local/bin, asking for administrator rights when it must. Nothing that is not Kolux's own is ever overwritten or deleted.
 //! The state is read again after a change, and a change that did not take never shows success.
 
 use serde::Serialize;
@@ -235,9 +235,201 @@ impl UserPath for Registry {
 
 const MARK: &str = "# written by Kolux: kolux command launcher";
 
-/// The launcher script: it runs the installed program with the arguments it was given.
+/// The launcher script: it runs the installed program with the arguments it was given. An AppImage
+/// gets the steady kind (`appimage_script`).
 pub fn launcher_script(exe: &Path) -> String {
+    if is_appimage(exe) {
+        return appimage_script(exe);
+    }
     format!("#!/bin/sh\n{MARK}\nexec \"{}\" \"$@\"\n", exe.display().to_string().replace('"', "\\\""))
+}
+
+/// Whether the program is an AppImage file (it runs from a temporary mount, so its own path is no
+/// place to point a launcher at).
+pub fn is_appimage(exe: &Path) -> bool {
+    exe.extension().is_some_and(|e| e.eq_ignore_ascii_case("appimage"))
+}
+
+/// The program a launcher or link should run: the AppImage file itself when Kolux runs from one
+/// (`APPIMAGE` names it), otherwise the running program.
+pub fn launch_exe(appimage_env: Option<String>, current: PathBuf) -> PathBuf {
+    match appimage_env.filter(|v| !v.trim().is_empty()) {
+        Some(v) => PathBuf::from(v),
+        None => current,
+    }
+}
+
+/// A word safe inside a POSIX shell command: single-quoted, with its own quotes closed and reopened.
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// CLI-008, AppImage: the launcher stays put while the image moves or is replaced. It runs the image it
+/// was written for; while that file is missing (a newer version is being put in place, or the old name is
+/// gone) it runs the newest sibling whose name starts the same way, so it moves to the new version once
+/// that exists. Kolux rewrites it for the new image on its next start (`launcher_follow`).
+pub fn appimage_script(image: &Path) -> String {
+    format!(
+        "#!/bin/sh\n{MARK}\nimg={}\nif [ ! -x \"$img\" ]; then\n  dir=$(dirname \"$img\"); name=$(basename \"$img\"); prefix=${{name%%[-_0-9]*}}\n  for c in \"$dir/$prefix\"*.AppImage; do [ -x \"$c\" ] && img=$c; done\nfi\nexec \"$img\" \"$@\"\n",
+        sh_quote(&image.display().to_string())
+    )
+}
+
+/// Kolux started from an AppImage that is not where its launcher points: the launcher Kolux wrote moves
+/// to this image. Nothing else is touched (a foreign file, or no launcher at all, stays as it is).
+pub fn launcher_follow(target: &Path, exe: &Path, on_path: bool) -> Option<Registration> {
+    if !is_appimage(exe) {
+        return None;
+    }
+    match inspect(target, &launcher_script(exe)) {
+        Target::Ours { current: false } => launcher_register(target, exe, on_path).ok(),
+        _ => None,
+    }
+}
+
+// ------------------------------------------------------------------------ macOS: a link in /usr/local/bin
+
+/// The system-wide folder for locally installed programs.
+pub const MAC_LINK_DIR: &str = "/usr/local/bin";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkKind {
+    Missing,
+    /// A symbolic link, and where it points.
+    Link(PathBuf),
+    /// A file, folder or anything else that is not a link.
+    Other,
+}
+
+/// The file operations the macOS link needs, so the logic can be tested without a Mac or admin rights.
+pub trait Links {
+    fn kind(&self, at: &Path) -> LinkKind;
+    fn link(&self, exe: &Path, at: &Path) -> std::io::Result<()>;
+    fn unlink(&self, at: &Path) -> std::io::Result<()>;
+    /// Run a shell command with administrator rights (the system asks the person); an error says why not.
+    fn elevated(&self, shell: &str) -> Result<(), String>;
+}
+
+/// Kolux's own link: it points at a program named like this one (an older install path counts as ours,
+/// an outdated link to replace); anything else is somebody else's.
+fn link_is_ours(to: &Path, exe: &Path) -> bool {
+    to.file_name().is_some() && to.file_name() == exe.file_name()
+}
+
+pub fn mac_state(links: &dyn Links, at: &Path, exe: &Path, on_path: bool) -> Registration {
+    let place = at.display().to_string();
+    match links.kind(at) {
+        LinkKind::Missing => view("not-registered", &place, None),
+        LinkKind::Link(to) if link_is_ours(&to, exe) && to == exe => view("registered", &place, (!on_path).then(|| format!("{} is not on your PATH yet; add it to your shell profile", at.parent().map(|p| p.display().to_string()).unwrap_or_default()))),
+        LinkKind::Link(to) if link_is_ours(&to, exe) => view("not-registered", &place, None),
+        _ => view("conflict", &place, Some(conflict(at))),
+    }
+}
+
+/// The shell text of an administrator step: make the folder, then the link (replacing only a link of ours).
+pub fn mac_link_shell(exe: &Path, at: &Path, replace: bool) -> String {
+    let dir = at.parent().map(|d| d.display().to_string()).unwrap_or_default();
+    format!("mkdir -p {} && ln -s{} {} {}", sh_quote(&dir), if replace { "fn" } else { "" }, sh_quote(&exe.display().to_string()), sh_quote(&at.display().to_string()))
+}
+
+/// The arguments for osascript that run `shell` with an administrator prompt.
+pub fn osascript_args(shell: &str) -> Vec<String> {
+    let quoted = shell.replace('\\', "\\\\").replace('"', "\\\"");
+    vec!["-e".to_string(), format!("do shell script \"{quoted}\" with administrator privileges")]
+}
+
+fn mac_check(links: &dyn Links, at: &Path, exe: &Path, on_path: bool) -> Result<Registration, String> {
+    let now = mac_state(links, at, exe, on_path);
+    if now.state == "conflict" {
+        return Err(conflict(at));
+    }
+    Ok(now)
+}
+
+/// Register: link directly when the folder lets us, otherwise ask for administrator rights. The link
+/// is looked at again afterwards; a file somebody put there meanwhile is reported and left alone.
+pub fn mac_register(links: &dyn Links, at: &Path, exe: &Path, on_path: bool) -> Result<Registration, String> {
+    let before = mac_state(links, at, exe, on_path);
+    match before.state {
+        "conflict" => return Err(conflict(at)),
+        "registered" => return Ok(before),
+        _ => {}
+    }
+    let replace = links.kind(at) != LinkKind::Missing;
+    let direct = (if replace { links.unlink(at) } else { Ok(()) }).and_then(|()| links.link(exe, at));
+    if direct.is_err() {
+        // The folder cannot be written (or the old link cannot go): the system asks for rights.
+        links.elevated(&mac_link_shell(exe, at, replace)).map_err(|e| format!("the administrator step did not finish: {e}"))?;
+    }
+    let after = mac_check(links, at, exe, on_path)?;
+    if after.state != "registered" {
+        return Err(format!("{} does not hold the link after creating it", at.display()));
+    }
+    Ok(after)
+}
+
+pub fn mac_remove(links: &dyn Links, at: &Path, exe: &Path, on_path: bool) -> Result<Registration, String> {
+    let before = mac_state(links, at, exe, on_path);
+    match before.state {
+        "conflict" => return Err(conflict(at)),
+        "not-registered" if links.kind(at) == LinkKind::Missing => return Ok(before),
+        _ => {}
+    }
+    if links.unlink(at).is_err() {
+        links.elevated(&format!("rm {}", sh_quote(&at.display().to_string()))).map_err(|e| format!("the administrator step did not finish: {e}"))?;
+    }
+    // The link may have been put back by someone else between the steps: that is a conflict, not a success.
+    let after = mac_check(links, at, exe, on_path)?;
+    if links.kind(at) != LinkKind::Missing {
+        return Err(format!("{} is still there after removing it", at.display()));
+    }
+    Ok(after)
+}
+
+/// The real thing: symbolic links on disk, and osascript for the administrator prompt (ten minutes at most).
+pub struct RealLinks;
+
+impl Links for RealLinks {
+    fn kind(&self, at: &Path) -> LinkKind {
+        match std::fs::symlink_metadata(at) {
+            Err(_) => LinkKind::Missing,
+            Ok(m) if m.file_type().is_symlink() => std::fs::read_link(at).map(LinkKind::Link).unwrap_or(LinkKind::Other),
+            Ok(_) => LinkKind::Other,
+        }
+    }
+    fn link(&self, exe: &Path, at: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            if let Some(dir) = at.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::os::unix::fs::symlink(exe, at)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (exe, at);
+            Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "links are made on macOS only"))
+        }
+    }
+    fn unlink(&self, at: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(at)
+    }
+    fn elevated(&self, shell: &str) -> Result<(), String> {
+        let mut child = std::process::Command::new("osascript").args(osascript_args(shell)).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("cannot start osascript: {e}"))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+        loop {
+            match child.try_wait() {
+                Ok(Some(s)) if s.success() => return Ok(()),
+                Ok(Some(_)) => return Err("it was cancelled or refused".to_string()),
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    return Err("timed out waiting for the administrator prompt".to_string());
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -311,7 +503,8 @@ pub fn launcher_remove(target: &Path, exe: &Path, on_path: bool) -> Result<Regis
 // ------------------------------------------------------------------------ the app's three commands
 
 fn folder_and_exe() -> Result<(PathBuf, PathBuf), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Kolux cannot find its own program: {e}"))?;
+    let current = std::env::current_exe().map_err(|e| format!("Kolux cannot find its own program: {e}"))?;
+    let exe = launch_exe(std::env::var("APPIMAGE").ok(), current);
     let dir = exe.parent().map(Path::to_path_buf).ok_or("Kolux cannot find its own folder")?;
     Ok((dir, exe))
 }
@@ -326,7 +519,7 @@ fn command_file(dir: &Path) -> Result<(), String> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn launcher_target() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or("HOME is not set")?;
     Ok(home.join(".local").join("bin").join(crate::orchestration::CLI))
@@ -338,6 +531,11 @@ fn target_on_path(target: &Path) -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| Some(d) == dir))
 }
 
+#[cfg(target_os = "macos")]
+fn mac_target() -> PathBuf {
+    Path::new(MAC_LINK_DIR).join(crate::orchestration::CLI)
+}
+
 pub fn state_now() -> Result<Registration, String> {
     let (dir, exe) = folder_and_exe()?;
     #[cfg(windows)]
@@ -345,11 +543,22 @@ pub fn state_now() -> Result<Registration, String> {
         let _ = exe;
         Ok(windows_state(&Registry, &dir.display().to_string(), &real_env))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = dir;
+        let t = mac_target();
+        Ok(mac_state(&RealLinks, &t, &exe, target_on_path(&t)))
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let _ = dir;
         let t = launcher_target()?;
-        Ok(launcher_state(&t, &exe, target_on_path(&t)))
+        let on_path = target_on_path(&t);
+        // An AppImage that was moved or updated: the launcher Kolux wrote follows it.
+        if let Some(moved) = launcher_follow(&t, &exe, on_path) {
+            return Ok(moved);
+        }
+        Ok(launcher_state(&t, &exe, on_path))
     }
 }
 
@@ -369,7 +578,12 @@ pub fn cli_register() -> Result<Registration, String> {
         let _ = exe;
         windows_register(&Registry, &dir.display().to_string(), &real_env)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let t = mac_target();
+        mac_register(&RealLinks, &t, &exe, target_on_path(&t))
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let t = launcher_target()?;
         launcher_register(&t, &exe, target_on_path(&t))
@@ -385,8 +599,15 @@ pub fn cli_unregister() -> Result<Registration, String> {
         let _ = exe;
         windows_remove(&Registry, &dir.display().to_string(), &real_env)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
+        let _ = dir;
+        let t = mac_target();
+        mac_remove(&RealLinks, &t, &exe, target_on_path(&t))
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        let _ = dir;
         let t = launcher_target()?;
         launcher_remove(&t, &exe, target_on_path(&t))
     }
@@ -511,6 +732,144 @@ mod tests {
         // A folder that is not on PATH is a warning on a registered launcher, not a failure.
         let r = launcher_register(&target, &exe, false).unwrap();
         assert!(r.note.unwrap().contains("not on your PATH"));
+    }
+
+    /// An in-memory folder: one path, what is at it, whether writing needs rights, what the admin step does.
+    struct Mac {
+        at: RefCell<LinkKind>,
+        needs_rights: bool,
+        admin: RefCell<Vec<String>>,
+        admin_fails: bool,
+        /// Someone else's file appears while the admin step runs.
+        race: bool,
+        at_path: PathBuf,
+        exe: PathBuf,
+    }
+    impl Mac {
+        fn new(at: LinkKind, needs_rights: bool) -> Mac {
+            Mac { at: RefCell::new(at), needs_rights, admin: RefCell::new(Vec::new()), admin_fails: false, race: false, at_path: PathBuf::from("/usr/local/bin/kolux"), exe: PathBuf::from("/Applications/Kolux.app/Contents/MacOS/Kolux") }
+        }
+    }
+    impl Links for Mac {
+        fn kind(&self, _: &Path) -> LinkKind {
+            self.at.borrow().clone()
+        }
+        fn link(&self, exe: &Path, _: &Path) -> std::io::Result<()> {
+            if self.needs_rights {
+                return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+            }
+            *self.at.borrow_mut() = LinkKind::Link(exe.to_path_buf());
+            Ok(())
+        }
+        fn unlink(&self, _: &Path) -> std::io::Result<()> {
+            if self.needs_rights {
+                return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+            }
+            *self.at.borrow_mut() = LinkKind::Missing;
+            Ok(())
+        }
+        fn elevated(&self, shell: &str) -> Result<(), String> {
+            self.admin.borrow_mut().push(shell.to_string());
+            if self.admin_fails {
+                return Err("timed out waiting for the administrator prompt".into());
+            }
+            *self.at.borrow_mut() = if self.race {
+                LinkKind::Other
+            } else if shell.starts_with("rm ") {
+                LinkKind::Missing
+            } else {
+                LinkKind::Link(self.exe.clone())
+            };
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cli008_macos_links_directly_asks_for_rights_only_when_the_folder_cannot_be_written() {
+        let m = Mac::new(LinkKind::Missing, false);
+        assert_eq!(mac_state(&m, &m.at_path, &m.exe, true).state, "not-registered");
+        assert_eq!(mac_register(&m, &m.at_path, &m.exe, true).unwrap().state, "registered");
+        assert!(m.admin.borrow().is_empty(), "a writable folder never prompts");
+        assert_eq!(mac_remove(&m, &m.at_path, &m.exe, true).unwrap().state, "not-registered");
+        // A folder that needs rights: one admin step, quoted, and the link is looked at again.
+        let m = Mac::new(LinkKind::Missing, true);
+        assert_eq!(mac_register(&m, &m.at_path, &m.exe, true).unwrap().state, "registered");
+        assert_eq!(m.admin.borrow().as_slice(), ["mkdir -p '/usr/local/bin' && ln -s '/Applications/Kolux.app/Contents/MacOS/Kolux' '/usr/local/bin/kolux'"]);
+        assert_eq!(mac_remove(&m, &m.at_path, &m.exe, true).unwrap().state, "not-registered");
+        assert_eq!(m.admin.borrow().last().unwrap(), "rm '/usr/local/bin/kolux'");
+        // Removing what is not there changes nothing and asks nothing.
+        let n = m.admin.borrow().len();
+        assert_eq!(mac_remove(&m, &m.at_path, &m.exe, true).unwrap().state, "not-registered");
+        assert_eq!(m.admin.borrow().len(), n);
+    }
+
+    #[test]
+    fn cli008_macos_a_file_or_link_of_unknown_origin_is_a_conflict_and_an_old_link_of_ours_is_replaced() {
+        let other = Mac::new(LinkKind::Other, false);
+        let e = mac_register(&other, &other.at_path, &other.exe, true).unwrap_err();
+        assert!(e.contains("/usr/local/bin/kolux") && e.contains("not written by Kolux"), "{e}");
+        assert!(mac_remove(&other, &other.at_path, &other.exe, true).is_err());
+        assert_eq!(*other.at.borrow(), LinkKind::Other, "left as it was");
+        assert!(other.admin.borrow().is_empty());
+        let foreign = Mac::new(LinkKind::Link(PathBuf::from("/opt/homebrew/bin/kolux-cli")), false);
+        assert_eq!(mac_state(&foreign, &foreign.at_path, &foreign.exe, true).state, "conflict");
+        // A link to this program under an older place counts as ours and is replaced (with an admin step if need be).
+        let old = Mac::new(LinkKind::Link(PathBuf::from("/Users/me/Downloads/Kolux")), true);
+        assert_eq!(mac_state(&old, &old.at_path, &old.exe, true).state, "not-registered");
+        assert_eq!(mac_register(&old, &old.at_path, &old.exe, true).unwrap().state, "registered");
+        assert!(old.admin.borrow()[0].contains("ln -sfn"));
+    }
+
+    #[test]
+    fn cli008_macos_a_failed_or_raced_admin_step_never_shows_success_and_deletes_nothing() {
+        let mut m = Mac::new(LinkKind::Missing, true);
+        m.admin_fails = true;
+        let e = mac_register(&m, &m.at_path, &m.exe, true).unwrap_err();
+        assert!(e.contains("timed out"), "{e}");
+        assert_eq!(*m.at.borrow(), LinkKind::Missing);
+        // Somebody else's file arrives while the prompt is open: reported, not deleted.
+        let mut r = Mac::new(LinkKind::Missing, true);
+        r.race = true;
+        assert!(mac_register(&r, &r.at_path, &r.exe, true).unwrap_err().contains("not written by Kolux"));
+        assert_eq!(*r.at.borrow(), LinkKind::Other);
+        let mut g = Mac::new(LinkKind::Link(PathBuf::from("/Applications/Kolux.app/Contents/MacOS/Kolux")), true);
+        g.race = true;
+        assert!(mac_remove(&g, &g.at_path, &g.exe, true).is_err());
+        assert_eq!(*g.at.borrow(), LinkKind::Other);
+    }
+
+    #[test]
+    fn cli008_macos_shell_and_prompt_text_are_quoted() {
+        assert_eq!(sh_quote("it's here"), "'it'\\''s here'");
+        let a = osascript_args("rm '/a \"b\"'");
+        assert_eq!(a[0], "-e");
+        assert_eq!(a[1], "do shell script \"rm '/a \\\"b\\\"'\" with administrator privileges");
+        assert!(mac_link_shell(Path::new("/x y/Kolux"), Path::new("/usr/local/bin/kolux"), false).contains("'/x y/Kolux'"));
+    }
+
+    #[test]
+    fn cli008_an_appimage_launcher_names_the_image_falls_back_to_a_newer_sibling_and_follows_a_move() {
+        let img = Path::new("/home/me/Apps/Kolux-0.15.0.AppImage");
+        assert!(is_appimage(img) && !is_appimage(Path::new("/opt/kolux/kolux")));
+        let s = launcher_script(img);
+        assert!(s.contains("img='/home/me/Apps/Kolux-0.15.0.AppImage'") && s.contains("prefix=${name%%[-_0-9]*}") && s.contains("*.AppImage; do"), "{s}");
+        // APPIMAGE wins over the temporary mount path the program runs from.
+        assert_eq!(launch_exe(Some("/home/me/Apps/K.AppImage".into()), PathBuf::from("/tmp/.mount_x/kolux")), PathBuf::from("/home/me/Apps/K.AppImage"));
+        assert_eq!(launch_exe(Some(" ".into()), PathBuf::from("/opt/kolux")), PathBuf::from("/opt/kolux"));
+        // Moved: the launcher Kolux wrote follows to the new image; a foreign file and a missing launcher are left alone.
+        let d = scratch("appimage");
+        let target = d.join("bin").join("kolux");
+        let old = d.join("old").join("Kolux-0.15.0.AppImage");
+        let new = d.join("new").join("Kolux-0.16.0.AppImage");
+        assert!(launcher_follow(&target, &new, true).is_none());
+        launcher_register(&target, &old, true).unwrap();
+        assert!(launcher_follow(&target, &old, true).is_none(), "already current");
+        assert_eq!(launcher_follow(&target, &new, true).unwrap().state, "registered");
+        assert!(std::fs::read_to_string(&target).unwrap().contains("Kolux-0.16.0.AppImage"));
+        std::fs::write(&target, "#!/bin/sh\necho mine\n").unwrap();
+        assert!(launcher_follow(&target, &old, true).is_none());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "#!/bin/sh\necho mine\n");
+        assert!(launcher_follow(&target, Path::new("/opt/kolux/kolux"), true).is_none(), "only an AppImage follows");
     }
 
     #[cfg(windows)]

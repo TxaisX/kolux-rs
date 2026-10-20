@@ -721,6 +721,31 @@ mod tests {
         assert_eq!((tries, waits.len()), (1, 0));
     }
 
+    /// T-552 (reliability, 2026-10-19): a profile folder that is busy and then fails for another
+    /// reason (the folder vanished, access denied) ends the wait right there with that reason, so
+    /// the user reads the real cause and never sits out the whole 10 s for a folder that is not busy.
+    #[test]
+    fn t552_a_busy_folder_that_then_fails_for_another_reason_stops_waiting_and_says_why() {
+        const DENIED: &str = "failed to create webview: WebView2 error: WindowsError(Error { code: HRESULT(0x80070005), message: \"Access is denied.\" })";
+        let mut tries = 0;
+        let mut waits = Vec::new();
+        let got = open_retrying(
+            || {
+                tries += 1;
+                if tries < 3 {
+                    Err(BUSY)
+                } else {
+                    Err(DENIED)
+                }
+            },
+            |d| waits.push(d),
+        );
+        assert_eq!(got, Err(DENIED.to_string()), "the later, non-busy reason comes back as is");
+        assert_eq!(tries, 3, "two busy tries were retried, the third was not");
+        assert_eq!(waits, vec![Duration::from_millis(250), Duration::from_millis(500)], "no wait after the non-busy error");
+        assert_eq!(startup_message(DENIED), format!("Kolux could not start: {DENIED}"), "and the message names it, not 'still closing'");
+    }
+
     #[test]
     fn t552_busy_is_read_from_the_error_text_and_the_message_is_plain() {
         assert!(webview_busy(BUSY));

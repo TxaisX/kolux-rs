@@ -1,0 +1,61 @@
+// T-183: the page's side of recovery, mounted once in App.tsx (evidence/reliability-T-183-App.tsx.patch).
+// APP-042: a heartbeat every two seconds to the watch in recovery.rs; an error page or a frozen
+// script sends none, so the watch reloads it. APP-043: every lost graphics context is reported;
+// when the burst fires the flag is already saved and the page offers Restart in safe graphics or
+// Keep Running; a launch that is already in safe graphics asks whether to stay (stay preselected).
+// APP-039: the crash report dialog.
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import CrashReportDialog from "./CrashReportDialog";
+import { afterBurst, HEARTBEAT_MS, launchPrompt, type GraphicsPrompt } from "./model";
+
+export default function RecoveryMount() {
+  const [g, setG] = useState<GraphicsPrompt>(null);
+
+  useEffect(() => {
+    const beat = () => void invoke("ui_heartbeat").catch(() => {});
+    beat();
+    const t = setInterval(beat, HEARTBEAT_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    invoke<{ version: string; chosen: boolean } | null>("graphics_launch_choice").then((f) => setG((cur) => cur ?? launchPrompt(f)), () => {});
+    const lost = () => {
+      invoke<boolean>("graphics_crash_noted").then((fired) => setG((cur) => afterBurst(cur, fired)), () => {});
+    };
+    window.addEventListener("webglcontextlost", lost, true);
+    return () => window.removeEventListener("webglcontextlost", lost, true);
+  }, []);
+
+  if (!g) return <CrashReportDialog />;
+  const stay = g.kind === "launch" && g.stay;
+  return (
+    <>
+      <CrashReportDialog />
+      <div className="notice" role="alertdialog" aria-label="Graphics" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {g.kind === "burst" ? (
+          <>
+            <span>Kolux's graphics crashed several times in a minute. Safe graphics (no hardware acceleration) usually stops that; your terminals keep running.</span>
+            <button className="btn" autoFocus onClick={() => void invoke("graphics_restart_safe").catch(() => {})}>
+              Restart in safe graphics
+            </button>
+            <button className="btn" onClick={() => void invoke("graphics_keep_running").catch(() => {}).then(() => setG(null))}>
+              Keep Running
+            </button>
+          </>
+        ) : (
+          <>
+            <span>Kolux is running in safe graphics after repeated graphics crashes. Stay in safe graphics?</span>
+            <button className="btn" autoFocus={stay} onClick={() => void invoke("graphics_choose", { stay: true }).catch(() => {}).then(() => setG(null))}>
+              Stay in safe graphics
+            </button>
+            <button className="btn" autoFocus={!stay} onClick={() => void invoke("graphics_choose", { stay: false }).catch(() => {})}>
+              Try hardware again
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}

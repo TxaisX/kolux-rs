@@ -1,0 +1,27 @@
+diff --git a/src-tauri/src/hooks.rs b/src-tauri/src/hooks.rs
+index 7d588d76..d0585f9a 100644
+--- a/src-tauri/src/hooks.rs
++++ b/src-tauri/src/hooks.rs
+@@ -359,19 +359,9 @@ pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
+     if path == "/antigravity/PreToolUse" {
+         return json!({ "decision": "allow" }).to_string();
+     }
+-    let ask = || {
+-        if path != "/claude" {
+-            return None;
+-        }
+-        let event: Value = serde_json::from_slice(body).ok()?;
+-        if event.get("hook_event_name")?.as_str()? != "PreToolUse" || !matches!(event.get("tool_name")?.as_str()?, "Bash" | "PowerShell") {
+-            return None;
+-        }
+-        let base = crate::protected::Base::from_env(event.get("cwd").and_then(Value::as_str));
+-        let rule = crate::protected::check(event.get("tool_input")?.get("command")?.as_str()?, &base, settings)?;
+-        Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": crate::protected::reason(rule.name) } }).to_string())
+-    };
+-    ask().unwrap_or_else(|| "{}".into())
++    // T-156-b: the rules in force for the command's folder (built-ins, the user's own, per project)
++    // and the recent-attempts list, both in protected_custom.rs.
++    crate::protected_custom::listen(path, body, settings).unwrap_or_else(|| "{}".into())
+ }
+ 
+ /// One rate-limit window as Claude Code's status line reports it (STAT-040), reset in ms.
