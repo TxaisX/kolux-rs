@@ -24,6 +24,11 @@ import { ChevronDown, Close, List } from "../chrome/icons";
 import FileIcon from "./FileIcon";
 import CsvTable from "./CsvTable";
 import NotebookView from "./NotebookView";
+import SvgView from "./SvgView";
+import { insertError, insertPastedPicture, pastedPicture } from "./pictureBytes";
+import { applyImage } from "./richFormat";
+import ImageView from "./ImageView";
+import { isPicture, isSvg } from "./imageFiles";
 import { isNotebook } from "./notebook";
 import { isTable } from "./csv";
 import { useSettings } from "../settings/useSettings";
@@ -192,7 +197,7 @@ export const look = EditorView.theme(
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
 type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; /** EDIT-026: a log tab that keeps adding lines as the file grows (give it readOnly too). */ follow?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number; col?: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
 
-export default function EditorPane({ id, path, root = null, readOnly = false, follow = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
+function TextEditorPane({ id, path, root = null, readOnly = false, follow = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -215,7 +220,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const wantFocus = useRef(focused);
   wantFocus.current = focused;
   const md = isMarkdown(path);
-  const grid = isTable(path) || isNotebook(path); // EDIT-023: a CSV or TSV file opens as a table, a notebook (EDIT-024) as cells, with Source beside it
+  const grid = isTable(path) || isNotebook(path) || isSvg(path); // EDIT-023: a CSV or TSV file opens as a table, a notebook (EDIT-024) as cells, an SVG file (EDIT-029) as its picture, with Source beside it
   const [table, setTable] = useState(grid);
   const [changesOn, setChangesOn] = useState(false); // EDIT-056: the Changes view (last commit beside the working file)
   const tableOn = grid && table;
@@ -466,7 +471,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   // A new file in this tab starts over: rich again, and Open anyway forgotten.
   useEffect(() => {
     setMode(isMarkdown(path) ? "rich" : "source");
-    setTable(isTable(path));
+    setTable(isTable(path) || isSvg(path));
     setChangesOn(false);
     setBigOk(false);
     setBanner(null);
@@ -715,8 +720,25 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   }, [id, path, root, shown]);
   const railed = useMemo(() => (md ? railNotes(notes, path) : []), [md, notes, path]);
   const railShown = shown === "rich" && railed.length > 0;
+  // EDIT-009 (T-234-b): a picture pasted into a note (a screenshot, a copied image, or one picture path) is saved beside the note and linked there.
+  const pastePicture = (e: React.ClipboardEvent) => {
+    if (!md || readOnly || (shown !== "rich" && shown !== "source")) return;
+    const got = pastedPicture(e.clipboardData);
+    if (!got) return;
+    e.preventDefault();
+    e.stopPropagation();
+    insertPastedPicture(path, got, invoke).then(
+      (link) => {
+        const cm = view.current;
+        if (shownRef.current === "rich" && richEditor) {
+          if (!applyImage(richEditor, link)) onToast?.("Put the caret in the note first, then paste the picture.");
+        } else if (cm) cm.dispatch(cm.state.replaceSelection(link));
+      },
+      (err) => onToast?.(insertError(err)),
+    );
+  };
   return (
-    <section style={tocShown ? (tocVar(tocWidth) as CSSProperties) : undefined} className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}${railShown ? " rail-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
+    <section style={tocShown ? (tocVar(tocWidth) as CSSProperties) : undefined} className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}${railShown ? " rail-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} onPasteCapture={pastePicture} data-kind="editor" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="File">
           <FileIcon name={name} size={13} />
@@ -753,7 +775,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
           <span className="view-switch" role="group" aria-label="View">
             {views.map((v) => (
               <button key={v} aria-pressed={current === v} onClick={() => pick(v)} title={offer.why?.[v] ?? `${VIEW_LABEL[v]} view`}>
-                {v === "rendered" && isNotebook(path) ? "Cells" : VIEW_LABEL[v]}
+                {v === "rendered" && isNotebook(path) ? "Cells" : v === "rendered" && isSvg(path) ? "Picture" : VIEW_LABEL[v]}
               </button>
             ))}
           </span>
@@ -851,7 +873,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       {changesOn && <DiffPane embedded against="head" id={id} path={path} root={root} staged={false} hidden={hidden || comparing} focused={focused} onFocus={onFocus} onToast={onToast} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
-      {grid && (isNotebook(path) ? <NotebookView path={path} loaded={ready} hidden={shown !== "table" || comparing} readOnly={readOnly} onText={(t) => { const cm = view.current; if (cm) cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: t } }); }} /> : <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />)}
+      {grid && (isSvg(path) ? <SvgView path={path} loaded={ready} hidden={shown !== "table" || comparing} /> : isNotebook(path) ? <NotebookView path={path} loaded={ready} hidden={shown !== "table" || comparing} readOnly={readOnly} onText={(t) => { const cm = view.current; if (cm) cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: t } }); }} /> : <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />)}
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
         <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
           {copyKey} copies with path and lines
@@ -873,4 +895,9 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );
+}
+
+// EDIT-029 (T-235-b): a PNG, JPEG or similar file opens in the image viewer instead of the text editor (it would be refused as binary); everything else is the text editor.
+export default function EditorPane(props: Props) {
+  return isPicture(props.path) ? <ImageView id={props.id} path={props.path} hidden={props.hidden} focused={props.focused} onFocus={props.onFocus} onClose={props.onClose} onToast={props.onToast} /> : <TextEditorPane {...props} />;
 }

@@ -62,3 +62,36 @@ LIVE PROOF PENDING (batched)
 2. Click in a paragraph with $E=mc^2$ or a $$ block: the rendered maths shows in a panel under it; "costs $5 and $10" shows nothing.
 STILL OPEN IN T-235-b: image viewer and PDF viewer (need a file-bytes read in files.rs, a reliability-lane file, and a PDF library
   that is not on main), CI check tab (waits on the Checks panel's data).
+
+PIECE 4 (lane/editor, 2026-10-20, batch H; from merge e4be1027 of main 5a4c4e35): the image viewer and the file-bytes read.
+BUILT:
+- Rust, as PATCHES (files.rs and lib.rs are the reliability lane's / shared; apply in this order, files first):
+  evidence/editor-T-235-b-files.rs.patch (166 lines) adds file_bytes (bounded read of any file inside the fence, raw bytes
+  back through tauri::ipc::Response, 32 MB cap, refuses a folder) and file_write_picture (raw body is the picture, path in the
+  x-file-path header, same fence, WRITES lock; ONLY a new file with a picture ending (png jpg jpeg gif webp bmp), never over an
+  existing file, never an empty or over-16-MB body, a missing folder reports instead of being made, a partial file is removed
+  on a write error); evidence/editor-T-235-b-lib.rs.patch registers both in generate_handler! (2 lines after files::file_write).
+  Both `git apply --check` clean on lane/editor at e4be1027.
+- ImageView.tsx (tab for PNG, JPEG, GIF, WebP, BMP, ICO, AVIF; bytes via file_bytes into a blob address let go on close;
+  header with name, path, Copy, Retry on failure, Close), ImageCanvas.tsx (a small picture opens at 100%, a big one fits;
+  Ctrl/Cmd+wheel zooms toward the pointer between 5% and 3200%; plain wheel and drag move it; two-finger pinch zooms with the
+  same limits; - + 100% Fit buttons; the size line; a failure or undecodable file says why in words instead of a blank tab),
+  imageFiles.ts (the rules: types, zoom maths, error words), pictureBytes.ts (bytes layer, Tauri call injected).
+- SvgView.tsx: an SVG file is a picture and text. viewSwitch gives it Source and Picture; the picture is drawn from the tab's
+  open text through an <img> (scripts never run), so Source can be edited and diffed as any text file.
+- EditorPane.tsx: default export now chooses ImageView for a raster picture, else the text editor (renamed TextEditorPane); SVG
+  uses the existing CSV/notebook "grid" slot. No App.tsx change: openFile already hands any path to EditorPane.
+DECISIONS (coordinator default; Txais may overrule): read cap 32 MB; picture write cap 16 MB; new-file-only writes; SVG opens
+  on its picture with Source one click away.
+TESTS: imageFiles.test.ts 17, pictureBytes.test.ts 16, viewSwitch.test.ts +1 (SVG gets Source and Picture).
+GATES (g = G:/Temp/editor-v3-logs/): cargo build exit 0 and clippy --all-targets -D warnings exit 0 and `cargo test files::`
+  43 passed 0 failed, all with the two patches applied (h-build.log, h-clippy.log, h-test.log), tree reverted after;
+  tsc --noEmit exit 0 (h-tsc.log); vitest run src/editor 66 files 455 tests passed (h-vitest.log); vite build exit 0 (h-vite.log).
+LIVE PROOF PENDING (batched) - after the resolver applies both patches:
+1. Open a PNG from the explorer: it opens in an image tab; a small one at 100%, a large one fitted. Ctrl+wheel zooms toward the
+   pointer and stops at 5% and 3200%; drag and plain wheel move it; the 100% and Fit buttons work; the size line reads
+   "W x H px, N KB". Close the tab: nothing is left over.
+2. Rename a copy of a text file to .png and open it: the tab says the file is not a picture this window understands (no blank).
+   Delete the file while its tab is open, press Retry: it says the file is not there any more.
+3. Open a .svg: it shows the drawing; Source shows its text; type in Source and switch back: the picture follows without saving.
+STILL OPEN IN T-235-b: PDF viewer (no PDF library is approved or on main; none added), CI check tab (waits on the Checks panel's data).

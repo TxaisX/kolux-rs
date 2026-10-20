@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index cbe3026c..f4641cc9 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -768,6 +768,8 @@ pub fn run() {
+             star::star_put,
+             files::file_read,
+             files::file_write,
++            files::file_bytes,
++            files::file_write_picture,
+             files::file_stamps,
+             files::file_pick,
+             floating_trust::floating_trusted,

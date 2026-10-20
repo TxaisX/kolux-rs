@@ -138,3 +138,13 @@
 .nb-add { display: flex; gap: 4px; justify-content: center; padding: 2px 0; opacity: 0.45; }
 .nb-add:hover, .nb-add:focus-within { opacity: 1; }
 .nb-long > button { margin: 0 8px 6px; }
+/* EDIT-029: the image viewer and an SVG's picture side */
+.image-view { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.image-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border, color-mix(in srgb, var(--fg) 14%, transparent)); font-size: 12px; flex-wrap: wrap; }
+.image-zoom { min-width: 4.5em; text-align: center; font-variant-numeric: tabular-nums; }
+.image-facts { margin-left: auto; color: var(--fg-muted); }
+.image-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; cursor: grab; touch-action: none; background-image: conic-gradient(color-mix(in srgb, var(--fg) 7%, transparent) 25%, transparent 0 50%, color-mix(in srgb, var(--fg) 7%, transparent) 0 75%, transparent 0); background-size: 16px 16px; }
+.image-stage:active { cursor: grabbing; }
+.image-stage > img { position: absolute; left: 0; top: 0; max-width: none; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; image-rendering: auto; }
+.image-wait { margin: 16px; color: var(--fg-muted); }
+.image-why { margin: 16px; padding: 6px 10px; border-left: 3px solid var(--warn); color: var(--fg); }

@@ -14,6 +14,7 @@ import { outline } from "./toc";
 import { followClick, type LinkHandler } from "./linkClicks";
 import { drawDiagrams, loadRenderers, renderNote, watchRenderers } from "./diagrams";
 import { filterDataPictures } from "./notePictures";
+import { showPicturesIn } from "./pictureDom";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import "./editor-extras.css";
@@ -48,6 +49,8 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
       alive = false;
     };
   }, [html]);
+  // EDIT-009: the note's own pictures (beside it on disk) are read through the file fence and shown as they scroll in.
+  useEffect(() => (page.current ? showPicturesIn(page.current, path) : undefined), [html, path]);
   const hasHeadings = useMemo(() => outline(text ?? "").length > 0, [text]);
 
   useEffect(() => {
