@@ -2,6 +2,12 @@
 /* BROW-006: the slot is the address bar's place in the toolbar. In a pane under 360 px the bar is compact; while it
    has focus it floats across the whole toolbar, and the buttons under it keep their place because the slot stays in flow. */
 .pane.browser { container-type: inline-size; }
+/* T-240 (BROW-034): the Viewport Size menu sits with the toolbar's icon buttons. */
+.pane.browser .pane-head select.viewport { height: 20px; font: inherit; font-size: 11px; color: var(--fg-muted); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0 2px; max-width: 84px; }
+.pane.browser .pane-head select.viewport:hover, .pane.browser .pane-head select.viewport:focus-visible { color: var(--fg); }
+@container (max-width: 359px) {
+  .pane.browser .pane-head select.viewport, .pane.browser .pane-head .ib.cookies { display: none; }
+}
 .pane.browser .pane-head { position: relative; }
 .pane.browser .pane-head .address-slot { flex: 1; min-width: 0; display: flex; }
 .pane.browser .pane-head .address-slot .address { text-overflow: ellipsis; }

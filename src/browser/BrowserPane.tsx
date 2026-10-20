@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop, Target } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
 import { chordPlan, openerRefocus, windowHasFocus } from "./chord";
@@ -42,6 +43,10 @@ export const openDetail = (d: OpenInBrowser): { url: string; title?: string } =>
 
 /** T-241 (BROW-039): what a tab's address previews, when it is a worktree document of ours. */
 type Preview = { folder: string; file: string; path: string; granted: boolean };
+/** T-240 (BROW-034): the Viewport Size menu; the names are the compat list's, the sizes live in browser_cli.rs DEVICES. */
+export const VIEWPORTS = ["Default", "Mobile S", "Mobile M", "Mobile L", "Tablet", "Laptop", "Laptop L", "Desktop"] as const;
+/** T-240 (BROW-028): what a cookie import reports. */
+type CookieReport = { imported: number; sites: number; skipped: number; google: number; reasons: string[] };
 
 /** T-241 (BROW-044): `kolux tab create` asks the window for a tab; one listener for the whole
  * window, started by the first pane, so a tab opens once however many panes there are. */
@@ -504,6 +509,28 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (text) invoke("browser_go", { id, what: back ? "findBack" : "find", text }).catch((err) => setNote(String(err)));
   };
   // BROW-005: the toolbar; a reload is the same page, so it leaves the history alone.
+  // T-240 (BROW-034): the chosen preset; it holds across loads because the backend re-applies it
+  // on every load's start (cli::emu_state), so the pane only remembers the name.
+  const [viewport, setViewport] = useState<string>(VIEWPORTS[0]);
+  const pickViewport = (name: string) => {
+    setViewport(name);
+    invoke<string>("browser_viewport", { id, name: name === VIEWPORTS[0] ? null : name }).catch((err) => setNote(String(err)));
+  };
+  // T-240 (BROW-028): the user picks a JSON list file; the report says what came in and what did not.
+  const importCookies = async () => {
+    const picked = await openDialog({ multiple: false, directory: false, title: "Import cookies from a JSON list", filters: [{ name: "Cookie list (JSON)", extensions: ["json", "txt"] }] }).catch(() => null);
+    if (typeof picked !== "string") return;
+    try {
+      const r = await invoke<CookieReport>("browser_cookies_import", { id, path: picked });
+      const parts = [`${r.imported} cookie${r.imported === 1 ? "" : "s"} for ${r.sites} site${r.sites === 1 ? "" : "s"} imported`];
+      if (r.skipped) parts.push(`${r.skipped} skipped (${r.reasons.join("; ")})`);
+      if (r.google) parts.push(`${r.google} Google sign-in cookie${r.google === 1 ? "" : "s"} left out`);
+      setNote(parts.join("; "));
+    } catch (err) {
+      setNote(String(err));
+    }
+  };
+
   const act = (what: "back" | "forward" | "reload" | "stop") => {
     // BROW-005 / BROW-008 / BROW-009: on a failed or crashed page every reload trigger is a Retry.
     if (what === "reload" && overlay) return retry();
@@ -640,6 +667,18 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         <button hidden data-go="zoomOut" onClick={() => zoomBy("out")} />
         <button hidden data-go="zoomReset" onClick={() => zoomBy("reset")} />
         <span className="right">
+          {/* T-240 (BROW-034): the page at a device size; Default is the pane's own size again. */}
+          <select className="viewport" value={viewport} onChange={(e) => pickViewport(e.target.value)} title="Viewport size" aria-label="Viewport size">
+            {VIEWPORTS.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+          {/* T-240 (BROW-028): cookies from a JSON list file go into this tab's profile. */}
+          <button className="ib cookies" onClick={importCookies} title="Import cookies from a file (JSON list)" aria-label="Import cookies">
+            <Globe size={12} />
+          </button>
           {/* BROW-037: pick elements in the page and write notes on them for an agent. */}
           <button className={`ib${picking ? " on" : ""}`} data-go="annotate" onClick={togglePicking} title={picking ? "Stop picking elements" : "Annotate: pick elements and write notes for an agent"} aria-label="Annotate" aria-pressed={picking}>
             <Target size={12} />

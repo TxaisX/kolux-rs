@@ -28,6 +28,9 @@ pub mod profiles;
 pub mod preview;
 #[path = "browser_ports.rs"]
 pub mod ports;
+// T-240: BROW-028 cookies brought in from a file (BROW-029 keeps Google sign-ins out).
+#[path = "browser_cookies.rs"]
+pub mod cookies;
 // T-238-b: BROW-004 the address bar's history suggestions and BROW-013 downloads.
 #[path = "browser_history.rs"]
 pub mod history;
@@ -889,7 +892,18 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
     let download_app = app.clone();
-    let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile)
+    // T-240 (BROW-033): every tab of every profile goes through the configured proxy; a value the
+    // engine cannot take leaves the tab unopened rather than going direct.
+    let proxy = match app.try_state::<Mutex<crate::state::Store>>() {
+        Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy")?,
+        None => None,
+    };
+    let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
+    let builder = match proxy_of(proxy.as_deref())? {
+        Some(u) => builder.proxy_url(u),
+        None => builder,
+    };
+    let builder = builder
         .focused(false)
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
         .zoom_hotkeys_enabled(false)
@@ -1138,6 +1152,45 @@ fn step_history(v: &Webview, id: u32, what: &str) -> Result<(), String> {
         }
     })
     .map_err(err)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
+pub async fn browser_viewport(id: u32, name: Option<String>) -> Result<String, String> {
+    // T-240 (BROW-034): the toolbar's Viewport Size. Async: the page's answer comes on the main
+    // thread, so the wait must not happen there.
+    cli::preset(id, name.as_deref()).map(|v| v["summary"].as_str().unwrap_or_default().to_string()).map_err(|f| f.message)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
+pub async fn browser_cookies_import(app: AppHandle, id: u32, path: String) -> Result<cookies::Report, String> {
+    // T-240 (BROW-028): a cookie file the user picked goes into this tab's engine (its profile's
+    // cookie store), one site at a time; a site that fails gets its old cookies back.
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?;
+    if meta.len() > cookies::FILE_MAX {
+        return Err(format!("{path} is {} MB; a cookie file is read up to {} MB", meta.len() / (1024 * 1024), cookies::FILE_MAX / (1024 * 1024)));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let (entries, mut report) = cookies::parse(&text, now)?;
+    let page = view(&app, id)?;
+    cookies::apply(&page, &entries, &mut report)?;
+    Ok(report)
+}
+
+/// BROW-033: the sealed `httpProxy` setting as the engine takes it. Empty means the system's own
+/// proxy (OD-18's default); anything else must be an http:// or socks5:// address with a host, or
+/// the tab is not opened. The value itself never goes into a message: it may carry credentials
+/// (SAFE-026 seals it for that reason).
+pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
+    let Some(v) = setting.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    match Url::parse(v) {
+        Ok(u) if matches!(u.scheme(), "http" | "socks5") && u.host_str().is_some() => Ok(Some(u)),
+        _ => Err("the HTTP proxy setting is not an http:// or socks5:// address with a host; the tab stays closed until the setting is fixed or cleared".into()),
+    }
 }
 
 #[tauri::command]
@@ -2412,5 +2465,17 @@ mod t074_tests {
             assert!(CHORD_SCRIPT.contains(needle), "{needle}");
         }
         assert_eq!(emu_script(r#"{"offline":true}"#), r#"window.__kxEmu && window.__kxEmu(JSON.parse("{\"offline\":true}"))"#);
+    }
+
+    #[test]
+    fn brow033_the_proxy_setting_is_empty_for_the_system_proxy_an_http_or_socks5_address_or_refused_unquoted() {
+        assert_eq!(proxy_of(None), Ok(None));
+        assert_eq!(proxy_of(Some("  ")), Ok(None));
+        assert_eq!(proxy_of(Some("http://127.0.0.1:8080")).unwrap().map(|u| u.to_string()), Some("http://127.0.0.1:8080/".into()));
+        assert_eq!(proxy_of(Some("socks5://user:pw-secret@proxy.test:1080")).unwrap().map(|u| u.port()), Some(Some(1080)));
+        for bad in ["ftp://user:pw-secret@proxy.test", "proxy.test:8080", "http://", "not a url"] {
+            let e = proxy_of(Some(bad)).unwrap_err();
+            assert!(e.contains("http:// or socks5://") && !e.contains("secret") && !e.contains("proxy.test"), "{bad}: {e}");
+        }
     }
 }
