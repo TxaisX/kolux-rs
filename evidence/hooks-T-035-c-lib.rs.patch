@@ -1,0 +1,21 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 754c010b..908dd77d 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -57,6 +57,7 @@ mod protected;
+ mod ports;
+ mod resources;
+ mod projects;
++mod prompt_answer;
+ mod prompt_scan;
+ mod scm;
+ mod pr_review;
+@@ -474,6 +475,8 @@ pub fn run() {
+             agents::inventory::session_tabs,
+             orchestration::task_reset,
+             orchestration::worker_labels,
++            prompt_answer::prompt_read,
++            prompt_answer::prompt_answer,
+             prompt_scan::prompt_scan,
+             prompt_scan::prompt_scan_restored,
+             prompt_scan::prompt_scan_pruned,
