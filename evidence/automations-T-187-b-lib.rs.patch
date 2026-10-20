@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 4fb34e85..7648031c 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -683,6 +683,8 @@ pub fn run() {
+             automations::automation_run_now,
+             automations::automation_preview,
+             automations::automation_save,
++            automations::carry::session_carry_context,
++            automations::carry::agent_dir_ready,
+             routing::routing_catalog,
+             secrets::secret_status,
+             secrets::secrets_dropped,

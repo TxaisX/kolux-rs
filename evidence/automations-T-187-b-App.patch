@@ -1,0 +1,40 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 88b87c4e..93c69cc5 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -74,6 +74,7 @@ import { NOTHING_TO_SEND, sendRoute } from "./editor/noteCommands";
+ import { noteTarget, plainNote, useRepoless } from "./editor/fileNotes";
+ import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
+ import LineNotes from "./scm/LineNotes";
++import AgentStartHost from "./agentstart/AgentStartHost";
+ import ChecksPanel from "./scm/ChecksPanel";
+ import PreviewPane from "./editor/PreviewPane";
+ import type { Action } from "./editor/noteLinks";
+@@ -3164,6 +3165,27 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         )}
+         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
+         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
++        {/* T-187-b / T-189-b: the dialog and helpers behind "Continue with…", "Fix with an agent" and "Start with an agent". */}
++        <AgentStartHost
++          agents={agents}
++          defaultId={defaultId}
++          saved={settings[SCM_AGENT_KEY]}
++          workspace={activeDir}
++          notify={(text, failed) => (failed ? setNotice(text) : setToast(text))}
++          launch={async (id, dir, prompt, extra) => {
++            const a = agents.find((x) => x.id === id);
++            if (!a) throw new Error(`${id} is not installed here.`);
++            await openIn(a, dir, panesIn(panes, dir)[0]?.branch ?? null, prompt, true, extra);
++            return { handed: true };
++          }}
++          makeWorkspace={async (item) => {
++            const made = await invoke<Created>("workspace_from_item", { item });
++            setRefresh((n) => n + 1);
++            cli.current.select(made.path, made.branch, true);
++            void runSetup(made.path, made.branch);
++            return made;
++          }}
++        />
+         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
+         </RightSidebar>
+       </div>
