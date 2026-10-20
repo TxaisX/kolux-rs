@@ -25,6 +25,11 @@ use serde_json::Value;
 
 use crate::chat_tools::{cap, claude_step, codex_output, codex_step, Step, MAX_OUTPUT};
 
+/// T-050-c: the live-agent decision and the follower for transcripts Kolux did not start
+/// (declared here so the shared module list in lib.rs is untouched).
+#[path = "chat_live.rs"]
+pub mod live;
+
 /// CHAT-002: the agents whose sessions can be shown as chat. Grok and omp are offered once their
 /// readers exist (T-420); until then they stay terminals.
 pub const SUPPORTED: [&str; 3] = ["claude", "openclaude", "codex"];
@@ -601,7 +606,7 @@ fn modified(p: &Path) -> Option<SystemTime> {
     fs::metadata(p).and_then(|m| m.modified()).ok()
 }
 
-fn newest(files: impl Iterator<Item = PathBuf>, since: SystemTime) -> Option<PathBuf> {
+pub(crate) fn newest(files: impl Iterator<Item = PathBuf>, since: SystemTime) -> Option<PathBuf> {
     files.filter_map(|p| modified(&p).filter(|m| *m >= since).map(|m| (m, p))).max_by_key(|(m, _)| *m).map(|(_, p)| p)
 }
 
@@ -620,8 +625,23 @@ fn codex_cwd(path: &Path) -> Option<String> {
     v.pointer("/payload/cwd").and_then(Value::as_str).map(str::to_string)
 }
 
-fn jsonl_in(dir: &Path) -> impl Iterator<Item = PathBuf> {
+pub(crate) fn jsonl_in(dir: &Path) -> impl Iterator<Item = PathBuf> {
     fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+}
+
+/// Every Codex rollout under `home` that may have been written since `since`: sessions/YYYY/MM/DD,
+/// only day folders touched since the session began are opened.
+pub(crate) fn codex_rollouts(home: &Path, since: SystemTime) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let fresh = |p: &Path| modified(p).is_some_and(|m| m + Duration::from_secs(86_400) >= since);
+    for y in fs::read_dir(home.join("sessions")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
+        for m in fs::read_dir(&y).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
+            for d in fs::read_dir(&m).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
+                files.extend(jsonl_in(&d));
+            }
+        }
+    }
+    files
 }
 
 /// CHAT-007: the transcript of the session started in `cwd` at or after `since`, searched in each
@@ -630,19 +650,7 @@ pub fn find(agent: &str, homes: &[PathBuf], cwd: &str, since: SystemTime) -> Opt
     for h in homes {
         let hit = match agent {
             "claude" | "openclaude" => newest(jsonl_in(&h.join("projects").join(claude_folder(cwd))), since),
-            "codex" => {
-                // sessions/YYYY/MM/DD: only day folders touched since the session began are opened.
-                let mut files = Vec::new();
-                let fresh = |p: &Path| modified(p).is_some_and(|m| m + Duration::from_secs(86_400) >= since);
-                for y in fs::read_dir(h.join("sessions")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
-                    for m in fs::read_dir(&y).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
-                        for d in fs::read_dir(&m).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
-                            files.extend(jsonl_in(&d));
-                        }
-                    }
-                }
-                newest(files.into_iter().filter(|f| codex_cwd(f).is_some_and(|c| same_dir(&c, cwd))), since)
-            }
+            "codex" => newest(codex_rollouts(h, since).into_iter().filter(|f| codex_cwd(f).is_some_and(|c| same_dir(&c, cwd))), since),
             _ => None,
         };
         if hit.is_some() {
@@ -682,12 +690,20 @@ pub struct Follow {
     attempts: u32,
     next_try: Instant,
     sent_first: bool,
+    /// T-050-c: a session Kolux did not start; its transcript may sit under another folder.
+    loose: bool,
 }
 
 impl Follow {
     pub fn new(agent: &'static str, cwd: String, homes: Vec<PathBuf>, since: SystemTime, now: Instant) -> Self {
         let format = if agent == "codex" { Format::Codex } else { Format::Claude };
-        Follow { agent, cwd, homes, since, tail: None, parser: Parser::new(format), opened: now, attempts: 0, next_try: now, sent_first: false }
+        Follow { agent, cwd, homes, since, tail: None, parser: Parser::new(format), opened: now, attempts: 0, next_try: now, sent_first: false, loose: false }
+    }
+
+    /// T-050-c: a follower for an agent detected in the pane rather than started by Kolux: the
+    /// pane's folder is a guess (the shell may have moved), so the search widens to any folder.
+    pub fn new_loose(agent: &'static str, cwd: String, homes: Vec<PathBuf>, since: SystemTime, now: Instant) -> Self {
+        Follow { loose: true, ..Follow::new(agent, cwd, homes, since, now) }
     }
 
     fn missing(&mut self, now: Instant, working: bool) -> ChatRead {
@@ -719,7 +735,8 @@ impl Follow {
             if now < self.next_try && self.attempts > 0 {
                 return ChatRead { state: "loading", reset: false, items: Vec::new(), open: false, error: None, retry_ms: self.next_try.duration_since(now).as_millis() as u64 };
             }
-            match find(self.agent, &self.homes, &self.cwd, self.since) {
+            let found = if self.loose { live::find_loose(self.agent, &self.homes, &self.cwd, self.since) } else { find(self.agent, &self.homes, &self.cwd, self.since) };
+            match found {
                 Some(p) => self.attach(p),
                 None => return self.missing(now, working),
             }
@@ -781,11 +798,16 @@ pub struct Support {
     pub readable: bool,
 }
 
-fn support_of(run: Option<crate::terminal::PaneRun>) -> Support {
-    let Some(run) = run else { return Support { agent: None, launching: true, readable: false } };
-    let agent = chat_agent(run.agent);
-    let readable = agent.is_some_and(|a| homes(a, &run.home_env, |k| std::env::var(k).ok(), home()).iter().any(|h| h.is_dir()));
-    Support { agent, launching: !run.wrote, readable }
+/// T-050-c: what the pane goes by: `detected` is the agent the foreground poll sees in front of
+/// the pane's terminal right now (ACCT-050), over the launch record in `run`. A detected agent is
+/// past launching whatever the record says; a pane with neither is a plain shell (the window
+/// never treats one as launching).
+fn support_of(run: Option<crate::terminal::PaneRun>, detected: Option<&'static str>) -> Support {
+    let front = detected.map_or(crate::foreground::Front::Shell, crate::foreground::Front::Agent);
+    let agent = chat_agent(live::decide(front, run.as_ref().and_then(|r| r.agent)));
+    let home_env = run.as_ref().map(|r| r.home_env.clone()).unwrap_or_default();
+    let readable = agent.is_some_and(|a| homes(a, &home_env, |k| std::env::var(k).ok(), home()).iter().any(|h| h.is_dir()));
+    Support { agent, launching: detected.is_none() && run.as_ref().is_none_or(|r| !r.wrote), readable }
 }
 
 /// Runs `job` on a blocking worker, never the window's thread (the chat commands touch the disk).
@@ -793,38 +815,71 @@ async fn off_main<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -
     tauri::async_runtime::spawn_blocking(job).await.map_err(|e| e.to_string())
 }
 
+/// `terminal`: the pane's terminal session (T-050-c: the agent seen in front of it decides).
 #[tauri::command]
-pub async fn chat_support(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32) -> Result<Support, String> {
+pub async fn chat_support(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, terminal: Option<u32>) -> Result<Support, String> {
     let run = terminals.of_pane(pane_key);
-    off_main(move || support_of(run)).await
+    let detected = terminal.and_then(crate::foreground::found);
+    off_main(move || support_of(run, detected)).await
 }
 
 /// CHAT-006: one look at the pane's transcript; the window calls it again after `retryMs`.
+/// T-050-c: `terminal` and `cwd` (the pane's folder) serve a session Kolux did not start.
 #[tauri::command]
-pub async fn chat_read(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32) -> Result<ChatRead, String> {
-    let run = terminals.of_pane(pane_key).ok_or("This pane is not running an agent.")?;
-    off_main(move || read_pane(pane_key, run)).await?
+pub async fn chat_read(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, terminal: Option<u32>, cwd: Option<String>) -> Result<ChatRead, String> {
+    let run = terminals.of_pane(pane_key);
+    let detected = terminal.and_then(crate::foreground::found);
+    if run.is_none() && detected.is_none() {
+        return Err("This pane is not running an agent.".to_string());
+    }
+    off_main(move || read_pane(pane_key, run, detected, terminal.unwrap_or(0), cwd)).await?
 }
 
-fn read_pane(pane_key: u32, run: crate::terminal::PaneRun) -> Result<ChatRead, String> {
-    let agent = chat_agent(run.agent).ok_or("This pane's program cannot be shown as chat.")?;
-    let hint = crate::status::transcript_of(pane_key).map(PathBuf::from);
-    let working = crate::status::working(pane_key);
-    let now = Instant::now();
+/// The pane's follower: the one it has when it follows `agent` the same way, else a new one from
+/// `make` (T-050-c: the agent in front changed, or a hand-started agent replaced the launch's).
+fn follow_for(pane_key: u32, agent: &'static str, loose: bool, make: impl FnOnce() -> Follow) -> Arc<Mutex<Follow>> {
     // The map's lock is held only to find or make the pane's follower; the read itself holds just
     // that follower's lock, so a long first read never stalls another pane's chat.
     let mut guard = FOLLOWS.lock().unwrap_or_else(|p| p.into_inner());
-    let follow = guard.get_or_insert_with(HashMap::new).entry(pane_key).or_insert_with(|| {
-        // A little slack: the agent may have created its file a moment before Kolux noted the start.
-        let since = run.started - Duration::from_secs(5);
-        // The folder the program really started in (TERM-040 may have moved it below the workspace).
-        let cwd = run.cwd.clone().or_else(|| std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned())).unwrap_or_default();
-        Arc::new(Mutex::new(Follow::new(agent, cwd, homes(agent, &run.home_env, |k| std::env::var(k).ok(), home()), since, now)))
-    });
-    let follow = Arc::clone(follow);
-    drop(guard);
+    let map = guard.get_or_insert_with(HashMap::new);
+    // A follower mid-read (its own lock held) is kept: this look waits on it, as before.
+    let fits = map.get(&pane_key).is_some_and(|f| f.try_lock().map(|f| f.agent == agent && f.loose == loose).unwrap_or(true));
+    if !fits {
+        map.insert(pane_key, Arc::new(Mutex::new(make())));
+    }
+    Arc::clone(&map[&pane_key])
+}
+
+fn read_pane(pane_key: u32, run: Option<crate::terminal::PaneRun>, detected: Option<&'static str>, terminal: u32, pane_cwd: Option<String>) -> Result<ChatRead, String> {
+    let launched = run.as_ref().and_then(|r| r.agent);
+    let front = detected.map_or(crate::foreground::Front::Shell, crate::foreground::Front::Agent);
+    let agent = chat_agent(live::decide(front, launched)).ok_or("This pane's program cannot be shown as chat.")?;
+    // T-050-c: an agent seen in front that the launch record does not account for (typed into a
+    // shell, an orchestrator or typed-command pane, or a changed program) is followed from where
+    // it was first seen, under the folders this app and the user have, with the pane's folder as
+    // the first guess. Its process is alive as long as the poll still sees it.
+    let by_hand = detected.is_some_and(|d| Some(d) != launched);
+    let hint = crate::status::transcript_of(pane_key).map(PathBuf::from);
+    let working = crate::status::working(pane_key);
+    let now = Instant::now();
+    let here = || std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    let (follow, alive) = if by_hand {
+        let since = live::seen_since(terminal, agent, SystemTime::now());
+        let cwd = pane_cwd.filter(|c| !c.trim().is_empty()).unwrap_or_else(here);
+        (follow_for(pane_key, agent, true, || Follow::new_loose(agent, cwd, homes(agent, &[], |k| std::env::var(k).ok(), home()), since, now)), true)
+    } else {
+        let run = run.ok_or("This pane is not running an agent.")?;
+        let follow = follow_for(pane_key, agent, false, || {
+            // A little slack: the agent may have created its file a moment before Kolux noted the start.
+            let since = run.started - Duration::from_secs(5);
+            // The folder the program really started in (TERM-040 may have moved it below the workspace).
+            let cwd = run.cwd.clone().unwrap_or_else(here);
+            Follow::new(agent, cwd, homes(agent, &run.home_env, |k| std::env::var(k).ok(), home()), since, now)
+        });
+        (follow, run.alive)
+    };
     let mut follow = follow.lock().unwrap_or_else(|p| p.into_inner());
-    Ok(follow.poll(now, hint, run.alive, working))
+    Ok(follow.poll(now, hint, alive, working))
 }
 
 /// The chat view closed: its next open reads the transcript from the start again.
@@ -1126,5 +1181,61 @@ mod tests {
         fs::write(&hinted, user("u9", json!("recreated")).to_string() + "\n").unwrap();
         let r = f.poll(start + Duration::from_secs(3), Some(hinted), true, false);
         assert_eq!((r.reset, r.items.len(), r.items[0].text.as_str()), (true, 1, "recreated"));
+    }
+
+    fn run(agent: Option<&'static str>, wrote: bool) -> crate::terminal::PaneRun {
+        crate::terminal::PaneRun { agent, started: SystemTime::now(), wrote, alive: true, home_env: Vec::new(), cwd: Some("C:\\work".into()) }
+    }
+
+    #[test]
+    fn t050c_the_agent_seen_in_front_decides_the_offer_over_the_launch_record() {
+        // A shell, an orchestrator worker or a typed command: no launch record. Claude typed in: chat.
+        let s = support_of(None, Some("claude"));
+        assert_eq!((s.agent, s.launching), (Some("claude"), false), "a detected agent is never launching");
+        // Nothing in front: a plain shell (the window never treats it as launching: liveOffer).
+        assert_eq!(support_of(None, None).agent, None);
+        // Claude exited and the user typed codex: the pane follows codex now.
+        let s = support_of(Some(run(Some("claude"), true)), Some("codex"));
+        assert_eq!(s.agent, Some("codex"));
+        // A launch not seen by the poll yet keeps its record, launching until it writes.
+        let s = support_of(Some(run(Some("claude"), false)), None);
+        assert_eq!((s.agent, s.launching), (Some("claude"), true));
+        assert!(!support_of(Some(run(Some("claude"), true)), None).launching);
+        // An agent chat cannot read is a terminal even when seen in front.
+        assert_eq!(support_of(None, Some("aider")).agent, None);
+    }
+
+    #[test]
+    fn t050c_a_hand_started_claude_is_followed_from_its_own_transcript_under_the_scratch_home() {
+        // A scratch home only (never a real tool home): the user typed claude in a shell whose
+        // pane folder is C:\work, but the shell had moved to C:\elsewhere first.
+        let d = temp("chat-byhand");
+        let dir = d.join("projects").join(claude_folder("C:\\elsewhere"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("s.jsonl"), user("u1", json!("typed by hand")).to_string() + "\n").unwrap();
+        let start = Instant::now();
+        let since = SystemTime::now() - Duration::from_secs(60);
+        let mut f = Follow::new_loose("claude", "C:\\work".into(), vec![d.0.clone()], since, start);
+        let r = f.poll(start, None, true, false);
+        assert_eq!((r.state, r.items.len(), r.items[0].text.as_str()), ("ready", 1, "typed by hand"));
+        // The strict follower of a launched session stays with the pane's own folder.
+        let mut strict = Follow::new("claude", "C:\\work".into(), vec![d.0.clone()], since, start);
+        assert_eq!(strict.poll(start, None, true, false).state, "loading");
+    }
+
+    #[test]
+    fn t050c_a_pane_whose_agent_changed_gets_a_new_follower_and_the_same_agent_keeps_it() {
+        let pane = 900_301;
+        let start = Instant::now();
+        let make = |agent: &'static str, loose: bool| move || if loose { Follow::new_loose(agent, "C:\\x".into(), vec![], SystemTime::now(), start) } else { Follow::new(agent, "C:\\x".into(), vec![], SystemTime::now(), start) };
+        let a = follow_for(pane, "claude", false, make("claude", false));
+        let b = follow_for(pane, "claude", false, make("claude", false));
+        assert!(Arc::ptr_eq(&a, &b), "the same agent, followed the same way, keeps its follower");
+        let c = follow_for(pane, "codex", true, make("codex", true));
+        assert!(!Arc::ptr_eq(&a, &c), "codex typed after claude exited: a new follower");
+        assert_eq!(c.lock().unwrap().agent, "codex");
+        let d = follow_for(pane, "codex", false, make("codex", false));
+        assert!(!Arc::ptr_eq(&c, &d), "the same agent launched by Kolux instead is followed strictly again");
+        FOLLOWS.lock().unwrap().as_mut().unwrap().remove(&pane);
     }
 }

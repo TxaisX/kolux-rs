@@ -109,21 +109,23 @@ pub fn front_in(root: u32, table: &[(u32, u32, String)], credit_of: &mut dyn FnM
     }
 }
 
-/// What shell process `pid` has in front (Windows: its descendants).
+/// What process `pid` has in front (Windows: itself when it is an agent Kolux started as the
+/// pane's program, else its descendants; T-050-c).
 #[cfg(windows)]
 pub fn front(pid: u32, _group: Option<i32>) -> Front {
     let Some(table) = imp::table() else { return Front::Unknown };
     let live: std::collections::HashSet<u32> = table.iter().map(|t| t.0).collect();
     forget_gone(&|p| live.contains(&p));
-    front_in(pid, &table, &mut |p, name| credit(p, name, || imp::command_line(p)))
+    crate::chat::live::front_of(pid, &table, &mut |p, name| credit(p, name, || imp::command_line(p)))
 }
 
-/// What the pane has in front: the leader of its foreground process group, or the shell itself.
+/// What the pane has in front: the leader of its foreground process group, or the pane's own
+/// process (the shell, or an agent Kolux started as the pane's program; T-050-c).
 #[cfg(not(windows))]
 pub fn front(pid: u32, group: Option<i32>) -> Front {
     let Some(group) = group.and_then(|g| u32::try_from(g).ok()) else { return Front::Unknown };
     if group == pid {
-        return Front::Shell;
+        return imp::command_line(pid).and_then(|l| crate::agents::credited_agent(&l)).map_or(Front::Shell, Front::Agent);
     }
     // One small read per poll and pane while something runs in front; nothing to remember.
     match imp::command_line(group) {
@@ -141,6 +143,8 @@ pub fn poll(app: &tauri::AppHandle) {
         let Some(pid) = pid else { continue };
         let now = front(pid, group);
         if note(id, now, &live) {
+            // T-050-c: the chat looks for a hand-started transcript from this moment.
+            crate::chat::live::noted(id, now.agent(), std::time::SystemTime::now());
             let _ = app.emit("pane-agent", serde_json::json!({ "terminal": id, "agent": now.agent(), "unknown": now == Front::Unknown }));
         }
     }

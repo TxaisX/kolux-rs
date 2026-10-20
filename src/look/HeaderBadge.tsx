@@ -1,4 +1,4 @@
-import { PALETTE, type HeaderColour } from "./headerColour";
+import { HEADER_COLOURS_SETTING, PALETTE, headerColourOf, pickHeaderColour, type HeaderColour, type HeaderKind } from "./headerColour";
 
 /** The coloured badge at the start of a project or group header. */
 export function HeaderBadge({ colour }: { colour: HeaderColour }) {
@@ -14,4 +14,10 @@ export function HeaderSwatches({ value, onPick }: { value: string; onPick: (id: 
       ))}
     </div>
   );
+}
+
+/** The swatch row of a project or group form, wired to the `headerColours` setting: what the form
+ *  draws and what a pick saves (one setting, via the sidebar's one-key `onSetting`). */
+export function HeaderColourPicker({ settings, kind, id, onSetting }: { settings: Record<string, unknown>; kind: HeaderKind; id: string; onSetting: (key: string, value: unknown) => void }) {
+  return <HeaderSwatches value={headerColourOf(settings, kind, id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, kind, id, c))} />;
 }
