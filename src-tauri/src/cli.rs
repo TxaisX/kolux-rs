@@ -3697,8 +3697,10 @@ const SETTLE: Duration = Duration::from_millis(1000);
 const IDLE: Duration = Duration::from_secs(3);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Row 193: a list that no longer reads is kept aside (orchestration::kept) before it starts empty,
+/// so the next save_list cannot wipe it.
 fn load_list(store: &Store, key: &str) -> Vec<Value> {
-    store.get(key).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, key)
 }
 
 fn save_list(store: &Store, key: &str, list: &[Value]) -> Result<(), Fail> {
