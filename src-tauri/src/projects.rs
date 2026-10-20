@@ -263,7 +263,7 @@ pub fn set_hidden(store: &Store, path: &str, hidden: bool) -> Result<(), String>
     store.set(HIDDEN_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
-fn seen_of(store: &Store, project: &Project) -> Option<std::collections::HashSet<String>> {
+pub(crate) fn seen_of(store: &Store, project: &Project) -> Option<std::collections::HashSet<String>> {
     load_map(store, SEEN_KEY).get(&project.id).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
 }
 

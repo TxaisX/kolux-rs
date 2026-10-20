@@ -1,0 +1,54 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 7db9140..2e65ced 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -19,7 +19,8 @@
+ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+ import { projectDrop } from "../editor/desktopDrops";
+ import CacheTimer from "./CacheTimer";
+-import { asksBeforeDelete, blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
++import { asksBeforeDelete, blocker, deleteTarget, isTextField, pointerDelete, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
++import ShortcodeInput from "./ShortcodeInput";
+ import { invoke } from "@tauri-apps/api/core";
+ import { open } from "@tauri-apps/plugin-dialog";
+ import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
+@@ -839,6 +840,23 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     const hovered = [...document.querySelectorAll<HTMLElement>("[data-path]:hover")].pop()?.dataset.path ?? null;
+     const target = deleteTarget(hovered, activeDir);
+     if (deleteRequest === 0 || target === null) return;
++    if (hovered !== null) {
++      // PROJ-075: the row under the pointer; nothing on a main checkout, a row already deleting, or while a text field has focus
++      const row = projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w }))).find(({ w }) => same(hovered, w.path));
++      const act = row ? pointerDelete(row.w, { fieldFocused: isTextField(document.activeElement), deleting: new Set(busy === "removing" && confirm ? [confirm.path] : []) }) : null;
++      if (!row || act === null) return;
++      if (act.action === "forget") {
++        invoke("workspace_forget", { projectId: row.p.id, path: act.path })
++          .then(() => {
++            onRemoved(act.path);
++            say("ok", `took ${worktreeLabel(row.w)} out of Kolux; its folder stays on disk`);
++            return reload();
++          })
++          .catch(fail);
++        return;
++      }
++      return void ask(row.p.id, row.w.path, worktreeLabel(row.w));
++    }
+     for (const p of projects) {
+       const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(target, x.path));
+       if (w) return void ask(p.id, w.path, worktreeLabel(w));
+@@ -1531,13 +1549,13 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+           )}
+           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
+           {renaming === w.path ? (
+-            <input
++            <ShortcodeInput
+               className="rename"
+               autoFocus
+               aria-label="Workspace name"
+               value={renameText}
+               onClick={(e) => e.stopPropagation()}
+-              onChange={(e) => setRenameText(e.target.value)}
++              onValue={setRenameText}
+               onBlur={() => setRenaming(null)}
+               onKeyDown={(e) => {
+                 e.stopPropagation();
