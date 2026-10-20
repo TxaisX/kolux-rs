@@ -370,7 +370,10 @@ impl Attempts {
         self.turn_ended(session);
         let masked = crate::protected::mask(raw);
         let command = head(&masked, COMMAND_SHOWN).to_string();
-        self.0.push_front(Attempt { time, worktree: worktree.into(), command, rule: rule.into(), outcome: Outcome::Waiting, session: session.into(), call: call.into() });
+        // A nameless rule shows its own pattern and the folder is free text too: neither may carry a
+        // secret into the list either.
+        let (worktree, rule) = (crate::protected::mask(worktree), crate::protected::mask(rule));
+        self.0.push_front(Attempt { time, worktree, command, rule, outcome: Outcome::Waiting, session: session.into(), call: call.into() });
         self.0.truncate(ATTEMPTS);
     }
 
@@ -388,8 +391,12 @@ impl Attempts {
         }
     }
 
+    /// What the Safety page is shown: every text field masked once more on the way out (the mask
+    /// is idempotent, so a kept attempt reads the same), so nothing raw reaches the page even if a
+    /// later writer skips `paused`.
     pub fn list(&self) -> Vec<Attempt> {
-        self.0.iter().cloned().collect()
+        let m = crate::protected::mask;
+        self.0.iter().map(|a| Attempt { command: m(&a.command), rule: m(&a.rule), worktree: m(&a.worktree), ..a.clone() }).collect()
     }
 
     pub fn clear(&mut self) {
@@ -597,5 +604,54 @@ mod tests {
         let post = json!({ "hook_event_name": "PostToolUse", "session_id": "t156b-listen", "tool_use_id": "tu1" }).to_string();
         assert_eq!(listen("/claude", post.as_bytes(), &s), None, "never more than the ask");
         assert_eq!(mine(protected_attempts())[0].outcome, Outcome::Allowed);
+    }
+
+    /// SAFE-019 acceptance on the list itself (Txais 2026-10-20: the own rules switch on once the
+    /// attempts log masks secrets): tokens, env-file lines, private key blocks, credentials in an
+    /// address and Authorization headers never reach a kept attempt, its JSON for the page, its
+    /// rule text or its folder; a Stripe key shows only its prefix and last four. Fixture strings
+    /// are the mask's own test inputs, never real keys.
+    #[test]
+    fn t156b_the_attempts_list_masks_tokens_env_lines_pem_blocks_url_credentials_and_auth_headers() {
+        let tail = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4";
+        let cases: Vec<(String, Vec<&str>)> = vec![
+            (format!("gh auth login --token ghp_{tail}abcd"), vec![tail]),
+            (format!("export ANTHROPIC_API_KEY=sk-ant-api03-{tail} && claude"), vec![tail]),
+            ("aws s3 rm s3://b --recursive AKIAIOSFODNN7EXAMPLE".into(), vec!["IOSFODNN7EXAMPLE"]),
+            ("curl -d t=xoxb-1234567890-abcdefghij https://slack.com/api/x".into(), vec!["1234567890-abcdefghij"]),
+            ("cat > .env <<EOF\nDATABASE_HOST=db.internal\r\nexport SESSION_SALT=\"s a l t\"\nEOF".into(), vec!["db.internal", "s a l t"]),
+            ("echo '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----' > id".into(), vec!["MIIBOgIBAAJBAKj34Gkx"]),
+            ("psql postgres://admin:hunter2@db.example.com:5432/app -c 'drop table t'".into(), vec!["admin", "hunter2"]),
+            ("git push --force https://user:glpat-abcdef@gitlab.com/o/r.git main".into(), vec!["glpat-abcdef", "user:"]),
+            ("curl -X DELETE -H 'Authorization: Bearer abcDEF123.456_xyz' https://x".into(), vec!["abcDEF123.456_xyz"]),
+            ("curl -X DELETE -H \"Authorization: Basic dXNlcjpwYXNz\" https://x".into(), vec!["dXNlcjpwYXNz"]),
+            ("stripe refunds create --api-key sk_live_51HabcdEFGH1234567890WXYZ".into(), vec!["51HabcdEFGH1234567890"]),
+        ];
+        let mut a = Attempts::default();
+        for (i, (raw, secrets)) in cases.iter().enumerate() {
+            a.paused("m", &i.to_string(), "G:/w", raw, "r", i as u64);
+            let kept = &a.list()[0];
+            let page = serde_json::to_string(kept).unwrap();
+            for s in secrets {
+                assert!(!kept.command.contains(s) && !page.contains(s), "{s:?} leaked from {raw:?}: {}", kept.command);
+            }
+            assert!(kept.command.contains(crate::protected::HIDDEN) || kept.command.contains("...."), "{}", kept.command);
+            assert_eq!(a.list()[0], *kept, "showing twice reads the same");
+        }
+        assert!(a.list()[0].command.contains("sk_live_....WXYZ"), "Stripe keeps prefix and last four: {}", a.list()[0].command);
+        // The rule text (a nameless rule shows its pattern) and the folder go through the mask too.
+        a.paused("m", "x", "postgres://admin:hunter2@db/app", "kubectl delete pod", &format!("ghp_{tail}abcd"), 99);
+        let page = serde_json::to_string(&a.list()).unwrap();
+        assert!(!page.contains(tail) && !page.contains("hunter2"), "{page}");
+        // Through the hook path: a nameless custom rule whose pattern is a token, tripped by a
+        // command carrying an Authorization header and an env line.
+        let s = json!({ "protectedRules": [{ "id": "n1", "kind": "contains", "pattern": format!("ghp_{tail}abcd") }] });
+        let ev = json!({ "hook_event_name": "PreToolUse", "session_id": "t156b-mask", "tool_use_id": "tm1", "cwd": "G:/Dev/t156b-mask", "tool_name": "Bash",
+            "tool_input": { "command": format!("TOKEN=ghp_{tail}abcd curl -H 'Authorization: Bearer abcDEF123.456_xyz' https://x") } }).to_string();
+        assert!(listen("/claude", ev.as_bytes(), &s).is_some_and(|r| r.contains("\"ask\"")));
+        let mine: Vec<Attempt> = protected_attempts().into_iter().filter(|a| a.worktree == "G:/Dev/t156b-mask").collect();
+        let page = serde_json::to_string(&mine).unwrap();
+        assert_eq!(mine.len(), 1);
+        assert!(!page.contains(tail) && !page.contains("abcDEF123.456_xyz"), "{page}");
     }
 }

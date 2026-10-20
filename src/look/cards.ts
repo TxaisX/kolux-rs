@@ -29,7 +29,7 @@ export const DENSITY_NOTE: Record<Density, string> = {
 };
 
 /** What the sidebar knows about one workspace, for the cards to draw. */
-export type CardFacts = { agents: number; state: StatusKey; pr: PrState; changed: number; note: string | null; /** AUTO-024 (T-291-d): an automation run made this worktree. Missing means no. */ automation?: boolean };
+export type CardFacts = { agents: number; state: StatusKey; pr: PrState; changed: number; note: string | null; /** PROJ-062 (T-266-b): the ports the workspace listens on, sorted; missing or empty means none. */ ports?: readonly number[]; /** PROJ-062 (T-266-b): the issue or pull request number the workspace is linked to (its task); missing or null means none. */ task?: number | null; /** AUTO-024 (T-291-d): an automation run made this worktree. Missing means no. */ automation?: boolean };
 
 /** AUTO-024: whether a worktree was made by an automation run (the back end stamps `madeBy`). */
 export const madeByAutomation = (w: { madeBy?: string | null }): boolean => w.madeBy === "automation";
@@ -44,6 +44,15 @@ export type CardDetail = {
 };
 
 const PR_WORDS: Record<string, string> = { open: "Pull request open", draft: "Draft pull request", merged: "Pull request merged", closed: "Pull request closed" };
+
+const PORTS_SHOWN = 4;
+/** "Port 5173" / "Ports 3000, 5173" (four at most, then "+2 more"), or null for none. */
+export function portsWords(ports: readonly number[]): string | null {
+  const list = [...new Set(ports.filter((p) => Number.isInteger(p) && p > 0 && p < 65536))].sort((a, b) => a - b);
+  if (!list.length) return null;
+  const shown = list.slice(0, PORTS_SHOWN).join(", ");
+  return `${list.length === 1 ? "Port" : "Ports"} ${shown}${list.length > PORTS_SHOWN ? ` +${list.length - PORTS_SHOWN} more` : ""}`;
+}
 
 export const CARD_DETAILS: readonly CardDetail[] = [
   { id: "status", label: "Status", locked: true, line: () => null },
@@ -67,6 +76,9 @@ export const CARD_DETAILS: readonly CardDetail[] = [
       return first ? (first.length > 60 ? first.slice(0, 59) + "…" : first) : null;
     },
   },
+  // PROJ-062 (T-266-b): what Compact adds on hover. In no preset: the user ticks them to put them on the card.
+  { id: "ports", label: "Ports", line: (f) => portsWords(f.ports ?? []) },
+  { id: "task", label: "Task", line: (f) => (f.task ? `Task #${f.task}` : null) },
   // AUTO-024 (T-291-d): in no preset; the user ticks it. The tag is a worktree made by an automation run.
   { id: "automation", label: "Automation", line: (f) => (f.automation ? "Automation" : null) },
 ];

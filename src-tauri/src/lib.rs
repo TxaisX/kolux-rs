@@ -3,6 +3,7 @@ mod floating_trust;
 mod repo_scan;
 mod activity;
 mod agents;
+mod app_look;
 mod artifacts;
 mod automations;
 mod badge;
@@ -56,9 +57,6 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
-// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
-// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
-#[allow(dead_code)]
 mod protected_custom;
 mod ports;
 mod labels;
@@ -83,6 +81,7 @@ mod schedule;
 mod resume;
 mod secrets;
 mod settings_sync;
+mod session_rows;
 mod sessions;
 mod shell_marks;
 mod shell_history;
@@ -101,6 +100,7 @@ mod tray;
 mod trust;
 mod update;
 mod visibility;
+mod web_icon;
 mod usage_alerts;
 
 use state::Store;
@@ -282,6 +282,8 @@ pub fn run() {
                     move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
                 );
             }
+            // T-301 (APP-012): the saved app icon variant and window blur, before the window shows.
+            app_look::apply_saved(app.handle());
             app.manage(links::Grants::default());
             // APP-041: the app's own start-and-stop record, next to what the terminals report.
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
@@ -485,6 +487,8 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             sessions::list::sessions_list,
             sessions::list::session_resume_plan,
+            session_rows::session_row_detail,
+            session_rows::session_name,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_service_info,
@@ -595,6 +599,7 @@ pub fn run() {
             tools::editors_list,
             tools::teams_host,
             awake::keep_awake_state,
+            app_look::app_look_apply,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,

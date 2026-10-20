@@ -20,6 +20,7 @@ import { toAcknowledge } from "../notify/seen";
 import { admit, ledger } from "./gone";
 import { claim } from "../sessions/ownership";
 import { finished } from "./finished";
+import { forgetSession, onInbandTurn } from "./inbandSession";
 
 export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean };
 
@@ -293,7 +294,10 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     });
     // STAT-032: a working reading with no hook signal for 30 minutes reads No recent update, quietly.
     const offUnverified = listen<{ paneKey: number; minutes: number }>("agent-unverified", (e) => setStale((m) => ({ ...m, [e.payload.paneKey]: true })));
+    // STAT-034 (T-124-b): an in-band new turn drops the pane's stored provider session; a completion keeps it.
+    const offInbandTurn = onInbandTurn((paneKey) => setPanes((ps) => forgetSession(ps, paneKey)));
     return () => {
+      offInbandTurn();
       // The window going away takes the candidates' timers with it.
       for (const k of Object.keys(heldRef.current)) dropHeld(Number(k));
       off.then((f) => f());

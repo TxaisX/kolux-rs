@@ -729,11 +729,10 @@ pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'stat
             let file = target(profile, pi::file(home))?;
             if install { pi::install(home, &file) } else { pi::remove(&file) }
         }
-        // STAT-016: the marked config.yaml blocks and their allowlist pairs.
+        // STAT-016: the marked config.yaml blocks only; Hermes's own allowlist is never written.
         "hermes" => {
             let file = target(profile, hermes::file(home))?;
-            let allow = target(profile, hermes::allow_file(home))?;
-            if install { hermes::install(home, &file, &allow) } else { hermes::remove(home, &file, &allow) }
+            if install { hermes::install(home, &file) } else { hermes::remove(home, &file) }
         }
         _ => return Ok("left as it was"),
     }

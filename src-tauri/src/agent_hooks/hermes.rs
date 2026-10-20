@@ -3,8 +3,13 @@
 //! `config.yaml` (`~/.hermes`), keyed by event, each entry a `command` (split shell-style, no shell)
 //! with a `timeout` in seconds; the payload on stdin carries `hook_event_name`, `session_id`,
 //! `tool_name`, `tool_input` and `extra`. Hermes asks once per (event, command) before a hook first
-//! runs and keeps the answer in `shell-hooks-allowlist.json` (`approvals`: `event` + exact `command`),
-//! the file its docs give for approving hooks without a prompt.
+//! runs and keeps the answer in `shell-hooks-allowlist.json` (`approvals`: `event` + exact `command`).
+//!
+//! Txais's call (2026-10-20, "Hermes consent = let Hermes ask"): Kolux never writes that allowlist.
+//! Hermes shows its own first-use prompt and the user answers it; Kolux only reads the file to say
+//! on the status row that the prompt is still to come. Removal never touches it either: an older
+//! Kolux run kept no record of which pairs it wrote, and a pair for Kolux's command may since have
+//! been approved by the user, so every entry in it is treated as the user's.
 //!
 //! Coordinator default (2026-10-20, Txais may overrule): the card's "switched-on plugin" route is
 //! replaced by these documented shell hooks, since the plugin enable list's format is not documented.
@@ -14,8 +19,8 @@
 //! back byte for byte; a block whose lines no longer match its checksum (edited by hand) is refused,
 //! never overwritten or taken out.
 
-use super::super::super::{is_my_command, script, write_atomic, write_script as write_named, SCRIPT_DIR};
-use super::super::{backup_of, drop_created, read_opt, target_dir, was_created, BACKUP_RECORD};
+use super::super::super::{script, write_atomic, write_script as write_named, SCRIPT_DIR};
+use super::super::{backup_of, read_opt, target_dir, was_created, BACKUP_RECORD};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -269,10 +274,6 @@ pub fn with_blocks(file: &Path, base: Option<&str>, cmd: &str) -> Result<String,
     Ok(out)
 }
 
-fn is_mine(cmd: &str) -> bool {
-    is_my_command(cmd) && cmd.contains(SCRIPT)
-}
-
 /// The events whose (event, `cmd`) pair Hermes's allowlist does not hold.
 fn unapproved(allow: &Path, cmd: &str) -> Result<Vec<&'static str>, String> {
     let v: Value = match read_opt(allow)? {
@@ -283,59 +284,10 @@ fn unapproved(allow: &Path, cmd: &str) -> Result<Vec<&'static str>, String> {
     Ok(EVENTS.iter().copied().filter(|e| !list.iter().any(|a| a.get("event").and_then(Value::as_str) == Some(e) && a.get("command").and_then(Value::as_str) == Some(cmd))).collect())
 }
 
-/// Kolux's (event, command) pairs go into Hermes's allowlist, beside the user's own; an older
-/// Kolux command's pairs come out.
-fn approve(home: &Path, allow: &Path, cmd: &str) -> Result<bool, String> {
-    let text = read_opt(allow)?;
-    let mut v: Value = match text.as_deref() {
-        Some(t) => serde_json::from_str(t).map_err(|e| format!("{} is not JSON ({e}); left alone", allow.display()))?,
-        None => json!({}),
-    };
-    let Some(o) = v.as_object_mut() else { return Err(format!("{} is not a JSON object; left alone", allow.display())) };
-    let list = o.entry("approvals").or_insert_with(|| json!([]));
-    let Some(list) = list.as_array_mut() else { return Err(format!("{} has approvals that is not a list; left alone", allow.display())) };
-    let mine_already = list.iter().any(|a| a.get("command").and_then(Value::as_str).is_some_and(is_mine));
-    let before = list.len();
-    list.retain(|a| a.get("command").and_then(Value::as_str).is_none_or(|c| c == cmd || !is_mine(c)));
-    let mut changed = list.len() != before;
-    for e in EVENTS {
-        if !list.iter().any(|a| a.get("event").and_then(Value::as_str) == Some(e) && a.get("command").and_then(Value::as_str) == Some(cmd)) {
-            list.push(json!({ "event": e, "command": cmd }));
-            changed = true;
-        }
-    }
-    if !changed {
-        return Ok(false);
-    }
-    super::keep_copy(home, allow, "hermes", mine_already)?;
-    let out = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n";
-    write_atomic(allow, out.as_bytes(), text.as_deref())?;
-    Ok(true)
-}
-
-/// Kolux's pairs come out of the allowlist; a file Kolux created and left empty goes.
-fn unapprove(home: &Path, allow: &Path) -> Result<bool, String> {
-    let Some(text) = read_opt(allow)? else { return Ok(false) };
-    let Ok(mut v) = serde_json::from_str::<Value>(&text) else { return Ok(false) };
-    let Some(list) = v.get_mut("approvals").and_then(Value::as_array_mut) else { return Ok(false) };
-    let before = list.len();
-    list.retain(|a| a.get("command").and_then(Value::as_str).is_none_or(|c| !is_mine(c)));
-    if list.len() == before {
-        return Ok(false);
-    }
-    let only_empty = v.as_object().is_some_and(|o| o.len() == 1) && v["approvals"].as_array().is_some_and(Vec::is_empty);
-    if only_empty && drop_created(allow, &target_dir(home, allow).join(BACKUP_RECORD), &json!({}), &text)? {
-        return Ok(true);
-    }
-    let out = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n";
-    write_atomic(allow, out.as_bytes(), Some(&text))?;
-    Ok(true)
-}
-
-/// STAT-016: Kolux's blocks go in (an older set comes out first) and its hooks are approved in
-/// Hermes's allowlist; everything of the user's stays byte for byte. A copy is kept before the
-/// first write. A block edited by hand is refused.
-pub fn install(home: &Path, file: &Path, allow: &Path) -> Result<bool, String> {
+/// STAT-016: Kolux's blocks go in (an older set comes out first); everything of the user's stays
+/// byte for byte. A copy is kept before the first write. A block edited by hand is refused.
+/// Hermes's allowlist is not touched: Hermes asks the user once per hook (Txais, 2026-10-20).
+pub fn install(home: &Path, file: &Path) -> Result<bool, String> {
     let cmd = command(&write_script(home)?);
     let text = read_opt(file)?;
     let broken = |e: String| format!("{}: {e}", file.display());
@@ -345,19 +297,18 @@ pub fn install(home: &Path, file: &Path, allow: &Path) -> Result<bool, String> {
     };
     let mine_already = old.is_some();
     let new = with_blocks(file, old.as_deref().or(text.as_deref()), &cmd)?;
-    let mut changed = false;
-    if text.as_deref() != Some(new.as_str()) {
-        super::keep_copy(home, file, "hermes", mine_already)?;
-        write_atomic(file, new.as_bytes(), text.as_deref())?;
-        changed = true;
+    if text.as_deref() == Some(new.as_str()) {
+        return Ok(false);
     }
-    Ok(approve(home, allow, &cmd)? || changed)
+    super::keep_copy(home, file, "hermes", mine_already)?;
+    write_atomic(file, new.as_bytes(), text.as_deref())?;
+    Ok(true)
 }
 
 /// STAT-016: Kolux's blocks come out and the file is the user's again, byte for byte (a file
-/// Kolux created and left empty goes), and its allowlist pairs with them. A second removal
-/// changes nothing; a block edited by hand is refused.
-pub fn remove(home: &Path, file: &Path, allow: &Path) -> Result<bool, String> {
+/// Kolux created and left empty goes). Hermes's allowlist is left as it is: its entries are the
+/// user's answers. A second removal changes nothing; a block edited by hand is refused.
+pub fn remove(home: &Path, file: &Path) -> Result<bool, String> {
     let mut changed = false;
     if let Some(text) = read_opt(file)? {
         if let Some(rest) = without(&text).map_err(|e| format!("{}: {e}", file.display()))? {
@@ -374,11 +325,11 @@ pub fn remove(home: &Path, file: &Path, allow: &Path) -> Result<bool, String> {
             changed = true;
         }
     }
-    Ok(unapprove(home, allow)? || changed)
+    Ok(changed)
 }
 
-/// The status row for Hermes: partial while a block is broken or stale, or while Hermes has not
-/// approved Kolux's hooks (the first-use consent).
+/// The status row for Hermes: partial while a block is broken or stale, or while the user has not
+/// yet answered Hermes's first-use prompt for Kolux's hooks (the allowlist is only read).
 pub fn inspect(home: &Path, file: &Path, allow: &Path) -> (&'static str, Option<String>) {
     let text = match read_opt(file) {
         Ok(None) => return ("not installed", None),

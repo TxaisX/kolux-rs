@@ -12,6 +12,9 @@
 /// here so the shared module list in lib.rs is untouched.
 #[path = "session_list.rs"]
 pub mod list;
+/// VIEW-090 / VIEW-092 (T-276): scan reports, the on-disk summary cache, scan budgets and WSL rules.
+#[path = "session_scan.rs"]
+pub mod scan;
 
 use serde::Serialize;
 use std::fs;

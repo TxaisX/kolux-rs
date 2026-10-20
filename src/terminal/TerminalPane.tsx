@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, type Crew } from "./status";
 import { creditedLive, launchedAgent, titleGuess } from "../status/credit";
+import { inbandTurn } from "../status/inbandSession";
 import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
 import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import LinkActionMenu from "./LinkActionMenu";
@@ -452,7 +453,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // T-563: the pane's live terminal goes with it, for the activity lane. hooks FIX-3: a plain shell's
     // output never moves the dot; the sequence is still kept off the screen.
     term.parser.registerOscHandler(9999, (data) => {
-      if (inbandRef.current) invoke("status_inband", { paneKey: number, terminal: idRef.current, data }).catch(() => {});
+      if (inbandRef.current) {
+        invoke("status_inband", { paneKey: number, terminal: idRef.current, data }).catch(() => {});
+        // STAT-034 rest (T-124-b): an in-band new turn drops the stored provider session; a completion keeps it.
+        inbandTurn(number, data);
+      }
       return true;
     });
     // council D2 MERGE 31 (3): in a dev build the pane's terminal is reachable from its host element, so the
