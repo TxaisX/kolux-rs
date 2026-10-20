@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 8176ccab..50ad64cd 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -171,7 +171,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, still
+ export type ShellTarget = { dir: string | null; branch: string | null };
+ 
+ /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
+-export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; side?: "old" } };
++export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; side?: "old" } };
+ 
+ /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
+ /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */

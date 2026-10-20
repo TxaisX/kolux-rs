@@ -1,5 +1,5 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 8176ccab..91a330f3 100644
+index 8176ccab..6ce0cfc9 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
 @@ -88,6 +88,8 @@ import AllChangesPane from "./editor/AllChangesPane";
@@ -11,7 +11,7 @@ index 8176ccab..91a330f3 100644
  import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
  import { isMarkdown } from "./editor/markdown";
  import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
-@@ -1253,6 +1255,26 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1253,6 +1255,27 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      }
      return key;
    };
@@ -27,7 +27,8 @@ index 8176ccab..91a330f3 100644
 +      return setNotice(String(err));
 +    }
 +    const key = nextKey.current++;
-+    const pane: Pane = { key, cwd: dir, branch: panesIn(panes, dir)[0]?.branch ?? null, agent: paneMark(agent, plan.line), agentId: agent.id, resumed: true, ...startFields(plan.line, agent.program) };
++    const line = plan.line;
++    const pane: Pane = { key, cwd: dir, branch: panesIn(panes, dir)[0]?.branch ?? null, agent: paneMark(agent, line), agentId: agent.id, resumed: true, ...startFields(line, agent.program) };
 +    setPanes((ps) => {
 +      const free = freeCell(cellsOf(panesIn(ps, dir)));
 +      return free ? ps.map((p) => (p === free ? pane : p)) : [...ps, pane];
@@ -38,7 +39,7 @@ index 8176ccab..91a330f3 100644
    const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
    // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
    const runSetup = (dir: string, branch: string | null) =>
-@@ -2973,6 +2995,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2973,6 +2996,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
              }
            }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
          )}

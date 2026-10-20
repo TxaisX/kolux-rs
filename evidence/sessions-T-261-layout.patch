@@ -1,0 +1,70 @@
+diff --git a/src/terminal/layout.test.ts b/src/terminal/layout.test.ts
+index d28553a1..28d7ef8d 100644
+--- a/src/terminal/layout.test.ts
++++ b/src/terminal/layout.test.ts
+@@ -67,6 +67,16 @@ test("proj067: the active workspace and tab come back when they still exist, els
+   expect(gone.activeTab).toEqual({ 1: 1, 2: 2 });
+ });
+ 
++test("acct063: two saved tabs holding one session resume it once (the newest keeps it); a fork is not resumed as its source", () => {
++  const agent = (key: number, extra: Record<string, unknown>) => ({ key, cwd: "C:\\w\\a", branch: "main", agent: "claude" as const, agentId: "claude", program: "claude", args: [], ...extra });
++  const saved = { panes: [agent(2, { session: "s-1" }), agent(5, { session: "s-1" }), agent(6, { forkOf: "s-1" }), agent(7, { session: "s-1", forkOf: "s-1" })], activeTab: {}, focused: 2, activeDir: null, stacked: {} };
++  const back = restoreLayout(saved)!;
++  // key 2 and key 5 held the same session; key 7 is a fork that wrongly carries its source's id
++  expect(back.panes.map((p) => [p.key, p.session, p.forkOf])).toEqual([[2, undefined, undefined], [5, "s-1", undefined], [6, undefined, "s-1"], [7, undefined, "s-1"]]);
++  // the fork record is written down with the tab
++  expect(layoutOf([agent(6, { forkOf: "s-1", session: "s-9" })], {}, 6, null, {}).panes[0]).toMatchObject({ forkOf: "s-1", session: "s-9" });
++});
++
+ test("sess030: an agent tab with a known session comes back resumed, one without comes back at its prompt, never in a picker", () => {
+   const claude = { key: 2, cwd: "C:\\w\\a", branch: "main", agent: "claude" as const, agentId: "claude", program: "claude", args: ["--dangerously-skip-permissions", "fix the build"], session: "11111111-aaaa" };
+   const codex = { key: 3, cwd: "C:\\w\\a", branch: "main", agent: "codex" as const, agentId: "codex", program: null, args: ["--full-auto"], session: "thr_22" };
+diff --git a/src/terminal/layout.ts b/src/terminal/layout.ts
+index 09662e36..dcae809a 100644
+--- a/src/terminal/layout.ts
++++ b/src/terminal/layout.ts
+@@ -7,6 +7,7 @@
+ 
+ import type { Agent } from "../chrome/VendorMark";
+ import { focusIn, panesIn } from "../workspaces";
++import { resumeId, uniqueOwners } from "../sessions/ownership";
+ 
+ export const LAYOUT_FIELD = "savedLayout";
+ 
+@@ -24,6 +25,8 @@ export type SavedPane = {
+   args: string[];
+   /** SESS-030: the agent's own session id from its newest hook event; a restart resumes it. */
+   session?: string;
++  /** ACCT-063: the session this tab was forked from; a fork is never resumed as its source. */
++  forkOf?: string;
+   /** Never written down: main.tsx fills it from the agent's standing start line at restore. */
+   env?: [string, string][];
+   /** Never written down: TERM-107, whether main.tsx's restore line carries the agent's resume form. */
+@@ -50,6 +53,7 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
+     const s: SavedPane = { key: p.key, cwd: p.cwd, branch: p.branch, agent: p.agent, program: p.program, args: p.agent === "shell" ? p.args : [] };
+     if (p.agentId !== undefined) s.agentId = p.agentId;
+     if (p.session) s.session = p.session;
++    if (p.forkOf) s.forkOf = p.forkOf;
+     if (p.account !== undefined) s.account = p.account;
+     if (p.title !== undefined) s.title = p.title;
+     if (p.group !== undefined) s.group = p.group;
+@@ -86,7 +90,9 @@ function readPane(v: unknown): SavedPane | null {
+     if (o.kind !== "browser" && o.kind !== "changes" && !str(o.path)) return null;
+   }
+   if (str(o.agentId)) p.agentId = o.agentId;
+-  if (str(o.session) && o.session !== "") p.session = o.session;
++  if (str(o.forkOf) && o.forkOf !== "") p.forkOf = o.forkOf;
++  const own = resumeId({ session: str(o.session) ? o.session : undefined, forkOf: p.forkOf });
++  if (own !== null) p.session = own;
+   if (strOrNull(o.account) && o.account !== undefined) p.account = o.account;
+   if (str(o.title)) p.title = o.title;
+   if (num(o.group)) p.group = o.group;
+@@ -119,7 +125,7 @@ export function restoreLayout(value: unknown): SavedLayout | null {
+   if (o.stacked && typeof o.stacked === "object") {
+     for (const [d, s] of Object.entries(o.stacked as Record<string, unknown>)) if (typeof s === "boolean") stacked[d] = s;
+   }
+-  return tidy(panes, activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
++  return tidy(uniqueOwners(panes), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
+ }
+ 
+ /** Drops the tabs whose folder is gone; the active workspace and tab come back only while they exist. */
