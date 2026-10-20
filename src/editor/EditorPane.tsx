@@ -37,7 +37,8 @@ import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { clampView, keepView, takeView } from "../terminal/viewKeep";
-import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
+import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, opening, relay, replaceAll, save, subscribe, textOf } from "./buffers";
+import { keepUnsaved, keptToast } from "./unsavedCopy";
 import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";
 import { isUntitled, needsName } from "./untitled";
@@ -317,14 +318,25 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
       .then((st) => ((loaded = st), loadText(() => invoke<string>("file_read", { path }))))
       .then(async (text) => {
         // EDIT-032 carries unsaved text to a moved file's new path; EDIT-004 brings a draft back.
-        const carry = takeCarried(path);
-        const draft = readOnly || carry ? null : await drafts.take(wt, path).catch(() => null);
-        const r = carry ? { text: carry.text, moved: false, stale: false } : restoreFrom(text, await hashOf(text), draft);
+        // Row 131: carried text typed over a copy that is no longer on disk is kept beside the
+        // file, never saved over it; if that copy cannot be written the tab keeps the text and
+        // its saves are checked against the old copy, so they ask first.
+        let o = opening(path, text);
+        if (o.keep !== undefined) {
+          const kept = await keepUnsaved(path, o.keep).catch((e) => (report.current.onToast?.(keptToast(baseName(path), null, e)), null));
+          if (kept) {
+            report.current.onToast?.(keptToast(baseName(path), kept));
+            o = { text, base: text };
+          }
+        }
+        const carried = o.text !== text || o.base !== text;
+        const draft = readOnly || carried ? null : await drafts.take(wt, path).catch(() => null);
+        const r = carried ? { text: o.text, moved: false, stale: false } : restoreFrom(text, await hashOf(text), draft);
         if (r.stale) void drafts.discard(wt, path);
-        return { text, shown: r.text, draftMoved: r.moved };
+        return { text, shown: r.text, base: o.base, draftMoved: r.moved };
       })
       .then(
-      ({ text, shown, draftMoved }) => {
+      ({ text, shown, base, draftMoved }) => {
         if (!alive) return;
         made = new EditorView({
           doc: shown,
@@ -349,7 +361,7 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
             made?.scrollDOM.scrollTo(v.scrollLeft, v.scrollTop);
           });
         }
-        attach(path, made, text);
+        attach(path, made, base);
         // A twin pane already holds this file: its stamp stays the one its copy came from.
         if (textOf(path) === text) remember(path, loaded);
         setNoteText(shown);
