@@ -1539,10 +1539,13 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
         let n = stopped.stuck.len();
         return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
     }
+    // FIX-2 (T-033-e review): what to keep is decided first, so the one `?` that can return early
+    // runs before the watch ends; an early return after it would drop the handle below without
+    // telling the page.
+    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
     // T-033-e: the Source Control watch on this folder ends first and its folder handles are
     // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
     let watch = crate::scm::watch::unwatch_root(Path::new(&path));
-    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
     if let Err(e) = remove_worktree(&git, &project, &path, force, keep) {
         // FIX-1: the folder stays after all, so its panel is told to watch it again.
         if let Some(w) = watch {

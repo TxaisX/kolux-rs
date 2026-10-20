@@ -6,8 +6,9 @@ lane (Txais rule): on-screen behaviour is LIVE PROOF PENDING (batched) at the en
 What the user can do now (once the three patches land): a Source Control panel never goes silent for good. A change storm
 (more than the watcher's buffer holds) still ends in one catch-up read on the same watch with ignore rules re-read; a workspace
 removal that failed (a lock on the folder) leaves its panel watching; a worktree whose folder vanished tells its panel, which
-watches again or lets go; removing a workspace never kills the watch of the project around it; a page reload (F5) leaks no
-watch; the removal command no longer joins threads on the window's thread.
+watches again at once and (FIX-2) tries again with backoff while the folder is still missing; removing a workspace never kills
+the watch of the project around it; a page reload (F5) leaks no watch (FIX-2 also refuses a watch call that finishes after the
+reload); the removal command no longer joins threads on the window's thread.
 
 Per item
 
@@ -113,7 +114,10 @@ read-tree 4de08e1c and `git apply --cached --check` on each: all three "applies 
     on remove_worktree Err: watch.tell_page() then return Err.
   evidence/watch-FIX-1-scm.rs.patch (31 lines, new): scm_watch builds `ended` (app.emit "scm-watch-ended-<id>") and calls
     watch::watch_with(.., sink, ended, log).
-  Apply order does not matter; the worktrees lane also edits projects.rs, so re-check against the merged main.
+  The three only work together (review FIX-BEFORE 1): without the scm.rs patch every app watch has a no-op `ended`, so apply all
+  three in the same merge. FIX-2 compiled them together in the lane tree (evidence/watch-FIX-2.txt, section 5) and recut the
+  projects.rs patch against f04cdeaa (`keep` before `unwatch_root`). The worktrees lane also edits projects.rs: re-check against
+  the merged main.
 
 LIVE PROOF PENDING (batched), on the merged app with all three patches in (dev app, scratch CLAUDE_CONFIG_DIR), on top of the
 seven steps in evidence/T-033-e.txt:
