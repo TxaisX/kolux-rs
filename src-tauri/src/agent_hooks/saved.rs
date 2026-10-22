@@ -120,8 +120,11 @@ pub fn note(app: &tauri::AppHandle, route: &str, body: &[u8], status: &Status) {
 }
 
 /// Folds the holding file's lines (`route|identity|config|event`) onto `rows`. Each pane's events
-/// run through a fresh session of its own, never the live ones; a broken or partial line is
-/// skipped.
+/// run through a fresh session of its own, never the live ones; a vendor's line, though, goes
+/// through `vendors::normalize`, whose ended-turn memory (STAT-062, `ENDED`) is the one the live
+/// listener shares, so a replayed end is remembered by the listener too (startup replay runs
+/// before the listener serves; the memory is not kept across a restart). A broken or partial
+/// line is skipped.
 pub fn replay(text: &str, rows: &mut Vec<Row>, now: u64) -> usize {
     let mut sessions: HashMap<u32, Session> = HashMap::new();
     let mut applied = 0;
