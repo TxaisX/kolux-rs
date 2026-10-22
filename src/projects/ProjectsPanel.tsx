@@ -1117,7 +1117,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           setBatch({ ...b, order: b.order.slice(b.order.indexOf(path)), error: `${labelOf(path)} has ${blocker(check) ?? "uncommitted changes"}; nothing after it was removed` });
           return;
         }
-        await invoke("workspace_remove", { projectId: p.id, path, force: false, stamp: check.stamp, keepBranch: false });
+        // After-list row 112: a branch Git kept because another workspace has it checked out joins the kept list too.
+        const kept = await invoke<KeptBranch | null>("workspace_remove", { projectId: p.id, path, force: false, stamp: check.stamp, keepBranch: false });
+        if (kept) setKept((old) => addKept(old, [{ ...kept, projectId: p.id }]));
         onRemoved(path);
       }
       say("ok", `removed ${b.order.length} workspaces, children first`);

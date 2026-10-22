@@ -530,6 +530,12 @@ pub fn resolve_prompt(base: &str, files: &[String]) -> String {
     format!("This branch's pull request has merge conflicts with {base}.{list} Merge origin/{base} into this branch, resolve the conflicts keeping the intent of both sides, run the tests, and commit the merge. Do not push; tell me when it is done.")
 }
 
+/// After-list row 267: the trial merge runs against the base as the remote has it now, not as of
+/// the last fetch. Only `origin/<base>` moves; false when the fetch failed (offline, no such branch).
+fn fetch_base(dir: &Path, base: &str) -> bool {
+    crate::git::run(&["fetch", "--quiet", "origin", &format!("+refs/heads/{base}:refs/remotes/origin/{base}")], Some(dir)).is_ok()
+}
+
 /// GIT-032: does the branch conflict with the pull request's base? Local trial merge, no push, no change.
 #[tauri::command]
 pub async fn scm_pr_conflicts(worktree: String, url: String) -> Result<Conflicts, String> {
@@ -540,6 +546,7 @@ pub async fn scm_pr_conflicts(worktree: String, url: String) -> Result<Conflicts
         if base.is_empty() {
             return Err("GitHub did not name the pull request's base branch".to_string());
         }
+        fetch_base(dir, &base); // offline: the last fetched base is used, as the note says
         let c = scm::clash(dir, "HEAD", &format!("origin/{base}"));
         Ok(conflicts_of(c, &base))
     })
@@ -602,6 +609,25 @@ pub async fn scm_stack_prs(worktree: String) -> Result<StackList, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row267_the_conflict_check_fetches_the_base_first() {
+        let root = std::env::temp_dir().join(format!("kolux-rs-pr267-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let up = root.join("up");
+        std::fs::create_dir_all(&up).unwrap();
+        let g = |args: &[&str], dir: &Path| crate::git::run(&[&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"][..], args].concat(), Some(dir)).unwrap();
+        g(&["init", "-q", "-b", "main"], &up);
+        g(&["commit", "-q", "--allow-empty", "-m", "one"], &up);
+        g(&["clone", "-q", up.to_str().unwrap(), "down"], &root);
+        g(&["commit", "-q", "--allow-empty", "-m", "two"], &up);
+        let down = root.join("down");
+        assert_ne!(g(&["rev-parse", "origin/main"], &down), g(&["rev-parse", "HEAD"], &up), "stale before");
+        assert!(fetch_base(&down, "main"));
+        assert_eq!(g(&["rev-parse", "origin/main"], &down), g(&["rev-parse", "HEAD"], &up));
+        assert!(!fetch_base(&down, "no-such-branch"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn pr_json(n: u64) -> String {
         format!("{{\"number\":{n},\"url\":\"https://github.com/o/r/pull/{n}\",\"state\":\"OPEN\"}}")

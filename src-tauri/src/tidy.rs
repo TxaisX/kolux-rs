@@ -24,9 +24,30 @@ static LAST: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
 /// Git's own housekeeping and nothing else: prune stale worktree records, then gc when Git itself
 /// says it is worth it. Branches, worktrees, folders and files are never touched.
 pub fn tidy_repo(repo: &Path) -> Result<(), String> {
-    crate::git::run(&["worktree", "prune"], Some(repo))?;
+    // After-list row 365: a worktree on a drive that is unplugged or a share that is offline looks
+    // gone to Git; while one is, its repository is not pruned (only gc runs).
+    if prune_safe(&crate::git::run(&["worktree", "list", "--porcelain"], Some(repo))?) {
+        crate::git::run(&["worktree", "prune"], Some(repo))?;
+    }
     crate::git::run(&["gc", "--auto", "--quiet"], Some(repo))?;
     Ok(())
+}
+
+/// Row 365: false while any unlocked worktree in Git's list (`git worktree list --porcelain`)
+/// is missing and sits on storage that cannot be reached: its drive or share root is not there,
+/// or the path is not absolute. A folder deleted from a drive that is there is a stale record.
+pub fn prune_safe(porcelain: &str) -> bool {
+    porcelain.replace("\r\n", "\n").split("\n\n").all(|block| {
+        let path = block.lines().find_map(|l| l.strip_prefix("worktree "));
+        let locked = block.lines().any(|l| l == "locked" || l.starts_with("locked "));
+        match path {
+            Some(p) if !locked => {
+                let p = Path::new(p);
+                p.exists() || (p.is_absolute() && p.ancestors().last().is_some_and(Path::exists))
+            }
+            _ => true,
+        }
+    })
 }
 
 fn mtime_secs(path: &Path) -> Option<u64> {
@@ -141,6 +162,29 @@ mod tests {
             assert!(branches.contains(b), "branch {b} survives tidy: {branches}");
         }
         assert_eq!(git(&dirty, &["status", "--porcelain"]).lines().count(), 2, "both changes are still there");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn row365_a_worktree_on_an_unplugged_drive_is_never_pruned() {
+        let root = scratch("r365");
+        let repo = root.join("main");
+        fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"]);
+        let away = root.join("away");
+        git(&repo, &["worktree", "add", "-q", "-b", "away", away.to_str().unwrap()]);
+        // the worktree now lives on a drive that is not plugged in
+        let drive = ('D'..='Z').rev().find(|d| !Path::new(&format!("{d}:\\")).exists()).expect("a free drive letter");
+        let record = fs::read_dir(repo.join(".git/worktrees")).unwrap().flatten().next().unwrap().path();
+        fs::write(record.join("gitdir"), format!("{drive}:/usb/away/.git\n")).unwrap();
+        assert!(git(&repo, &["worktree", "list", "--porcelain"]).contains(&format!("{drive}:/usb/away")));
+        assert!(!prune_safe(&git(&repo, &["worktree", "list", "--porcelain"])));
+        tidy_repo(&repo).expect("tidy runs");
+        assert!(git(&repo, &["worktree", "list", "--porcelain"]).contains(&format!("{drive}:/usb/away")), "the record of a worktree on an unplugged drive stays");
+        // a worktree deleted from a drive that is there is still a stale record
+        assert!(prune_safe(&format!("worktree {}\n\nworktree {}\nHEAD 0\n", repo.display(), root.join("deleted").display())));
+        assert!(prune_safe(&format!("worktree {drive}:/usb/x\nlocked\n")), "a locked one is never pruned by Git anyway");
         let _ = fs::remove_dir_all(&root);
     }
 

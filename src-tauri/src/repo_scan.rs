@@ -50,6 +50,8 @@ struct Rule {
     base: PathBuf,
     glob: String,
     anchored: bool,
+    /// A `!` line: re-shows what an earlier line hid.
+    negate: bool,
 }
 
 fn glob(pat: &[char], s: &[char]) -> bool {
@@ -61,17 +63,17 @@ fn glob(pat: &[char], s: &[char]) -> bool {
     }
 }
 
-/// The folder rules of one ignore file. Only rules that can hide a folder count; a `!` line is
-/// skipped. ponytail: no negation, so a folder hidden then re-shown by `!` stays hidden.
+/// The folder rules of one ignore file, in file order; a `!` line re-shows (the last match wins).
 fn rules_of(dir: &Path, file: &str) -> Vec<Rule> {
     let Ok(text) = std::fs::read_to_string(dir.join(file)) else { return Vec::new() };
     text.lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!'))
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| {
-            let l = l.trim_end_matches('/');
+            let negate = l.starts_with('!');
+            let l = l.trim_start_matches('!').trim_end_matches('/');
             let anchored = l.starts_with('/') || l.contains('/');
-            Rule { base: dir.to_path_buf(), glob: l.trim_start_matches('/').replace("**/", "").replace("**", "*"), anchored }
+            Rule { base: dir.to_path_buf(), glob: l.trim_start_matches('/').replace("**/", "").replace("**", "*"), anchored, negate }
         })
         .filter(|r| !r.glob.is_empty())
         .collect()
@@ -79,7 +81,7 @@ fn rules_of(dir: &Path, file: &str) -> Vec<Rule> {
 
 fn ignored(rules: &[Rule], child: &Path) -> bool {
     let name: Vec<char> = child.file_name().map(|n| n.to_string_lossy().chars().collect()).unwrap_or_default();
-    rules.iter().any(|r| {
+    rules.iter().rev().find(|r| {
         if r.anchored {
             let Ok(rel) = child.strip_prefix(&r.base) else { return false };
             let rel: Vec<char> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/").chars().collect();
@@ -88,6 +90,7 @@ fn ignored(rules: &[Rule], child: &Path) -> bool {
             glob(&r.glob.chars().collect::<Vec<_>>(), &name)
         }
     })
+    .is_some_and(|r| !r.negate)
 }
 
 /// For a `.git` file (a linked worktree), the main checkout it belongs to.
@@ -162,7 +165,7 @@ pub fn scan(root: &Path, limits: &Limits, stop: &dyn Fn() -> bool, on_found: &mu
             out.limit = out.limit.or(Some("depth"));
             continue;
         }
-        let mut rules = (*inherited).iter().map(|r| Rule { base: r.base.clone(), glob: r.glob.clone(), anchored: r.anchored }).collect::<Vec<_>>();
+        let mut rules = (*inherited).iter().map(|r| Rule { base: r.base.clone(), glob: r.glob.clone(), anchored: r.anchored, negate: r.negate }).collect::<Vec<_>>();
         rules.extend(rules_of(&dir, ".gitignore"));
         rules.extend(rules_of(&dir, ".ignore"));
         let rules = Rc::new(rules);
@@ -171,7 +174,7 @@ pub fn scan(root: &Path, limits: &Limits, stop: &dyn Fn() -> bool, on_found: &mu
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()))
             .map(|e| e.path())
-            .filter(|p| p.file_name().is_some_and(|n| !HEAVY.contains(&n.to_string_lossy().as_ref())) && !ignored(&rules, p))
+            .filter(|p| p.file_name().is_some_and(|n| !HEAVY.contains(&n.to_string_lossy().as_ref()) || p.join(".git").exists()) && !ignored(&rules, p))
             .collect();
         kids.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
         for k in kids {
@@ -438,6 +441,19 @@ mod tests {
         assert_eq!(rel(&root, &found), ["kept", "origin.git"]);
         assert!(found[1].bare && !found[0].bare);
         assert_eq!(found[1].name, "origin");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn row103_a_re_shown_folder_is_scanned_and_a_repository_named_like_a_dependency_folder_is_found() {
+        let root = temp("reshow");
+        fs::write(root.join(".gitignore"), "gen*\n!gen-keep\n").unwrap();
+        for n in ["gen-keep/r", "gen-x/r", "target"] {
+            repo(&root.join(n));
+        }
+        repo(&root.join("node_modules").join("pkg")); // a plain dependency folder is still not opened
+        let (found, _) = run(&root, &LIMITS, &|| false);
+        assert_eq!(rel(&root, &found), ["target", "gen-keep/r"]);
         let _ = fs::remove_dir_all(&root);
     }
 

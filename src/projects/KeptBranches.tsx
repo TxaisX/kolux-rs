@@ -4,6 +4,9 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { keptAfter, keptBatches, keptView, type BranchResult, type KeptItem } from "./cleanup";
 
+/** After-list row 129: deleting a kept branch also drops any commits on it that were never pushed or merged. */
+export const UNPUSHED_NOTE = "Commits on it that were never pushed or merged go with it.";
+
 type Props = {
   items: KeptItem[];
   /** What is still pending after a delete (the refused ones stay). */
@@ -49,11 +52,11 @@ export default function KeptBranches({ items, onChange, onSay, onDeleted = () =>
     <div className="sb-form" data-kept-branches={view}>
       {view === "toast" ? (
         <span>
-          The folder is gone and the branch <b>{items[0].branch}</b> stays. Delete the branch as well?
+          The folder is gone and the branch <b>{items[0].branch}</b> stays. Delete the branch as well? {UNPUSHED_NOTE}
         </span>
       ) : (
         <>
-          <label>These branches stayed when their workspaces went. Tick the ones to delete.</label>
+          <label>These branches stayed when their workspaces went. Tick the ones to delete. {UNPUSHED_NOTE}</label>
           {items.map((k) => (
             <label className="check" key={keyOf(k)}>
               <input type="checkbox" aria-label={`delete branch ${k.branch}`} checked={isTicked(k)} onChange={(e) => setTicked({ ...ticked, [keyOf(k)]: e.target.checked })} />
