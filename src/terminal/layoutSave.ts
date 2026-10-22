@@ -8,8 +8,9 @@ import type { SavedLayout } from "./layout";
 export type LayoutWriter = {
   /** The layout as it is now; written after `ms` of quiet. */
   set(l: SavedLayout): void;
-  /** Writes what is pending right away (the quit path). A no-op when nothing is pending. */
-  flush(): void;
+  /** Writes what is pending right away (the quit path). A no-op when nothing is pending. Settles when the write
+   *  has landed or failed (after-list #37: the window waits for it before it closes). */
+  flush(): Promise<void>;
   /** Whether a write is waiting. */
   pending(): boolean;
 };
@@ -17,20 +18,35 @@ export type LayoutWriter = {
 type Timers = { set: (f: () => void, ms: number) => unknown; clear: (t: unknown) => void };
 const real: Timers = { set: (f, ms) => setTimeout(f, ms), clear: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) };
 
-export function layoutWriter(write: (l: SavedLayout) => void, ms = 400, timers: Timers = real): LayoutWriter {
+/** `write` may return a promise; a write that throws or rejects is not counted as written (after-list #39): the
+ *  layout stays pending and goes again at the next change or flush. */
+export function layoutWriter(write: (l: SavedLayout) => unknown, ms = 400, timers: Timers = real): LayoutWriter {
   let timer: unknown = null;
   let waiting: SavedLayout | null = null;
   let last = "";
-  const flush = () => {
+  const flush = (): Promise<void> => {
     if (timer !== null) timers.clear(timer);
     timer = null;
     const l = waiting;
     waiting = null;
-    if (l === null) return;
+    if (l === null) return Promise.resolve();
     const text = JSON.stringify(l);
-    if (text === last) return;
+    if (text === last) return Promise.resolve();
+    const before = last;
     last = text;
-    write(l);
+    let out: unknown;
+    try {
+      out = write(l);
+    } catch (e) {
+      out = Promise.reject(e);
+    }
+    return Promise.resolve(out).then(
+      () => undefined,
+      () => {
+        if (last === text) last = before;
+        if (waiting === null) waiting = l;
+      },
+    );
   };
   return {
     set(l) {

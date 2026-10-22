@@ -67,6 +67,12 @@ impl Store {
         })
     }
 
+    /// after-list #38: a free `settings.json.corrupt-<ms>[-n]` name, so a second set-aside never replaces the first.
+    fn corrupt_path(&self) -> PathBuf {
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        (0..).map(|n| self.settings_path.with_extension(if n == 0 { format!("json.corrupt-{ms}") } else { format!("json.corrupt-{ms}-{n}") })).find(|p| !p.exists()).unwrap_or_default()
+    }
+
     fn bak_path(&self) -> PathBuf {
         self.settings_path.with_extension("json.bak")
     }
@@ -136,14 +142,20 @@ impl Store {
             Read::File(bytes, old) => {
                 let bak = self.bak_path();
                 if !bak.exists() || old.as_object().is_some_and(|o| !o.is_empty()) {
-                    write_synced(&bak, &bytes)?;
+                    // after-list #39: the backup goes in by tmp + rename too, so a crash mid-write never leaves a half .bak
+                    let bak_tmp = self.settings_path.with_extension("json.bak.tmp");
+                    write_synced(&bak_tmp, &bytes)?;
+                    fs::rename(&bak_tmp, &bak)?;
                 }
             }
             // T-075 (APP-048): the save is built on the last good copy, so that copy stays as it is
             // until the main file reads again; the corrupt bytes are set aside, never deleted.
             Read::Backup(_) => {
-                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-                let _ = fs::rename(&self.settings_path, self.settings_path.with_extension(format!("json.corrupt-{secs}")));
+                // after-list #38: the corrupt file must be set aside before the save may land; a failed move refuses
+                // the save (the corrupt bytes are never overwritten), and two set-asides in one second get two names.
+                if self.settings_path.exists() {
+                    fs::rename(&self.settings_path, self.corrupt_path()).map_err(|e| self.refused(format!("it could not be set aside: {e}"), e.kind()))?;
+                }
             }
             Read::None => {}
         }
@@ -250,6 +262,25 @@ mod tests {
     /// T-075 (APP-048): a corrupt or half-written settings.json falls back to the last good copy.
     /// Reads give the backup's settings, a save lays the change over them and sets the corrupt bytes
     /// aside (never deletes them), and the backup is not replaced until the main file reads again.
+    /// after-list #38: two corrupt files set aside within one second are both kept (no name collision), and no
+    /// `.bak.tmp` is left behind by the backup write.
+    #[test]
+    fn after38_two_corrupt_set_asides_in_one_second_are_both_kept() {
+        let dir = temp_dir("after38");
+        let s = Store::open(&dir).unwrap();
+        s.save_settings(&serde_json::json!({ "theme": "classic" })).unwrap();
+        s.save_settings(&serde_json::json!({ "theme": "classic", "zoom": 2 })).unwrap();
+        for planted in [&b"first corrupt"[..], b"second corrupt"] {
+            fs::write(dir.join("settings.json"), planted).unwrap();
+            s.patch_settings(&serde_json::Map::from_iter([("uiLook".into(), serde_json::json!("new"))]), &[]).unwrap();
+        }
+        let mut kept: Vec<Vec<u8>> = fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("settings.json.corrupt-")).map(|e| fs::read(e.path()).unwrap()).collect();
+        kept.sort();
+        assert_eq!(kept, [b"first corrupt".to_vec(), b"second corrupt".to_vec()]);
+        assert!(!dir.join("settings.json.bak.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn t075_a_corrupt_or_half_written_settings_fall_back_to_the_last_good_copy_without_wiping_it() {
         let dir = temp_dir("t075-bak");

@@ -249,8 +249,35 @@ fn now_ms() -> u64 {
 
 /// Reads last run's counts; called once at start, before any pane reports.
 pub fn start(store: &Store) {
-    let saved = store.get(KEY).ok().flatten();
+    let saved = saved_counts(store);
     with(|a| *a = Activity::load(saved.as_deref(), now_ms()));
+}
+
+/// The saved counts text, or None when there is none or it no longer reads (then it is kept aside first).
+fn saved_counts(store: &Store) -> Option<String> {
+    let text = store.get(KEY).ok().flatten()?;
+    read_or_aside::<Counts>(store, KEY, &text, None).map(|_| text)
+}
+
+/// audit-t193 (row-193 pattern; coordinator default, Txais may overrule): a saved value that no longer reads is
+/// copied to `<key>.corrupt-<ms>` before the key starts fresh (`fresh` written over it when given), so the next save
+/// never writes over the only copy. When the copy cannot be written the key is left as it is.
+fn read_or_aside<T: serde::de::DeserializeOwned>(store: &Store, key: &str, text: &str, fresh: Option<&str>) -> Option<T> {
+    let err = match serde_json::from_str(text) {
+        Ok(v) => return Some(v),
+        Err(e) => e,
+    };
+    let aside = format!("{key}.corrupt-{}", now_ms());
+    match store.set(&aside, text) {
+        Ok(()) => {
+            eprintln!("kolux-rs: {key} could not be read ({err}); kept as {aside}, starting fresh");
+            if let Some(f) = fresh {
+                let _ = store.set(key, f);
+            }
+        }
+        Err(e) => eprintln!("kolux-rs: {key} could not be read ({err}) nor kept aside ({e})"),
+    }
+    None
 }
 
 /// A pane state from `terminal` (the terminal the pane's hooks last reported for, when known).
@@ -294,7 +321,8 @@ pub fn key(path: &str) -> String {
 }
 
 pub fn workspace_times(store: &Store) -> BTreeMap<String, u64> {
-    store.get(WORKSPACE_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    let Some(text) = store.get(WORKSPACE_KEY).ok().flatten() else { return BTreeMap::new() };
+    read_or_aside(store, WORKSPACE_KEY, &text, Some("{}")).unwrap_or_default()
 }
 
 pub fn touch(store: &Store, path: &str) -> Result<(), String> {
@@ -851,6 +879,45 @@ mod tests {
         let map = workspace_times(&Store::open(&dir).unwrap());
         assert_eq!(map.len(), 2, "both spellings of Old share a key: {map:?}");
         assert!(map["c:/repo/old"] > map["c:/repo/new"], "working in Old again moves it above New");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `<key>.corrupt-*` copies in the store, read straight from its table.
+    fn asides(dir: &std::path::Path, key: &str) -> Vec<String> {
+        let conn = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        let mut q = conn.prepare("SELECT value FROM kv WHERE key LIKE ?1 ORDER BY key").unwrap();
+        q.query_map([format!("{key}.corrupt-%")], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// audit-t193 (row-193 pattern): unreadable workspace times are copied aside before the key starts fresh, so
+    /// the next touch never writes over the only copy; a second read does not copy them again.
+    #[test]
+    fn audit_t193_unreadable_workspace_times_are_kept_aside_before_the_key_starts_fresh() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-activity-t193w-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = Store::open(&dir).unwrap();
+        s.set(WORKSPACE_KEY, "{\"c:/repo\": oops").unwrap();
+        assert!(workspace_times(&s).is_empty());
+        touch(&s, "C:\\Repo\\New").unwrap();
+        assert!(workspace_times(&s).contains_key("c:/repo/new"));
+        drop(s);
+        assert_eq!(asides(&dir, WORKSPACE_KEY), ["{\"c:/repo\": oops"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// audit-t193: unreadable activity counts are copied aside at start, before the first save replaces them.
+    #[test]
+    fn audit_t193_unreadable_counts_are_kept_aside_at_start() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-activity-t193c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = Store::open(&dir).unwrap();
+        s.set(KEY, "not counts").unwrap();
+        assert_eq!(saved_counts(&s), None);
+        let good = serde_json::to_string(&Counts { since: 5, ..Counts::default() }).unwrap();
+        s.set(KEY, &good).unwrap();
+        assert_eq!(saved_counts(&s).as_deref(), Some(good.as_str()));
+        drop(s);
+        assert_eq!(asides(&dir, KEY), ["not counts"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

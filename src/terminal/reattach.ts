@@ -43,6 +43,12 @@ export async function reattach(service: Service, paneKey: number, known: Service
   return { kind: "fresh", service: info };
 }
 
+/** after-list #378 (ACCT-063): the terminal a reattach took back for a pane that closed while it waited; the pane kills it,
+ *  as it kills a terminal it just started after closing, so nothing keeps running that no tab shows. */
+export function orphanOf(back: Reattached | null, alive: boolean): number | null {
+  return !alive && back?.kind === "attached" ? back.id : null;
+}
+
 /** Whether an output chunk comes from the run of the service this pane's terminal belongs to; a chunk without a generation, or a pane not yet bound to a run, passes. */
 export function fromThisService(generation: number | undefined, service: ServiceInfo | null): boolean {
   return generation === undefined || service === null || generation === service.generation;

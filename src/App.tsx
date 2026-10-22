@@ -1509,14 +1509,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const quitting = useRef(false);
   // T-075 (APP-048 / APP-050): a burst of layout changes is one write, and the pending one is
   // flushed before the window closes, so a change made right before quitting is back on relaunch.
-  const layoutSaver = useRef(layoutWriter((l: SavedLayout) => void saveLayout(l, (v) => saveChanged({}, { [LAYOUT_FIELD]: v })).catch((err) => setNotice(String(err))))).current;
+  const layoutSaver = useRef(layoutWriter((l: SavedLayout) => saveLayout(l, (v) => saveChanged({}, { [LAYOUT_FIELD]: v })).catch((err) => { setNotice(String(err)); throw err; }))).current;
   useEffect(() => {
     const off = getCurrentWindow().onCloseRequested(async (e) => {
       // T-182 (APP-006): the page answers at once; a page that cannot is closed for by the Rust side.
       void invoke("close_alive").catch(() => {});
       screenWriter.flush();
-      layoutSaver.flush();
-      if (quitting.current) return;
+      const saved = layoutSaver.flush();
+      if (quitting.current) {
+        // after-list #37: the window closes only once the last layout write has landed (or failed).
+        await saved;
+        return;
+      }
       // APP-007: with "Closing the window keeps Kolux in the tray" on, the window hides instead (tray.rs
       // decides: Windows, option on, tray icon present, no quit under way); nothing is lost, so the
       // unsaved-changes question is skipped. Quit from the tray and File > Exit report `quitting` and
@@ -1527,9 +1531,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         return;
       }
       const l = losable(unsaved.current, busyAgents.current);
-      if (!l) return;
-      e.preventDefault();
-      setQuitAsk(l);
+      if (l) {
+        e.preventDefault();
+        setQuitAsk(l);
+        return;
+      }
+      // after-list #37: the window closes only once the last layout write has landed (or failed).
+      await saved;
     });
     return () => void off.then((f) => f()).catch(() => {});
   }, []);

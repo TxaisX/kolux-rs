@@ -25,11 +25,11 @@ import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { notePrinted } from "../browser/preview";
-import { encodeHistory, replay, restoreTail, viewTop } from "./history";
+import { encodeHistory, replay, replayGate, restoreTail, viewTop } from "./history";
 import { claimsClick } from "./linkClick";
 import { modeView, resetAfterExit } from "./modeReset";
 import { dragWantsHint, SHIFT_HINT, shownAgain, WheelDrain, type KeptView } from "./mouseFeel";
-import { fromThisService, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
+import { fromThisService, orphanOf, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
 import { batchAcks, memoryProfile } from "./flow";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
@@ -451,7 +451,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // T-325-c (CHAT-010/011): the chat reads the running turn's reply off this terminal.
     const unturn = number !== undefined ? registerTurnSource(number, xtermSource(term)) : () => {};
     // STAT-033: the title the program sets stands in for its state while no hook reports.
-    term.onTitleChange((t) => setGuess((g) => titleGuess(launchedRef.current, t) ?? g));
+    // after-list #195: a title in replayed history belongs to the program that is gone; it never moves the guess.
+    const replayed = replayGate();
+    term.onTitleChange(replayed.live((t: string) => setGuess((g) => titleGuess(launchedRef.current, t) ?? g)));
     // STAT-034: a status printed in band (OSC 9999) goes to Rust; xterm never draws the sequence.
     // T-563: the pane's live terminal goes with it, for the activity lane. hooks FIX-3: a plain shell's
     // output never moves the dot; the sequence is still kept off the screen.
@@ -980,10 +982,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           if (!alive) return;
           const text = replay(saved);
           if (text) {
-            await new Promise<void>((done) => term.write(text, done));
+            await replayed.during(() => new Promise<void>((done) => term.write(text, done)));
             if (!alive) return;
             const tail = restoreTail(term.buffer.normal, term.rows);
-            await new Promise<void>((done) => term.write(tail, done));
+            await replayed.during(() => new Promise<void>((done) => term.write(tail, done)));
             if (!alive) return;
             await invoke("terminal_history_append", { paneKey: number, data: encodeHistory(tail) }).catch(() => {});
             if (!alive) return;
@@ -997,6 +999,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         // to answer, up to a hard limit; no answer or too old a service fails the pane in plain words.
         // A pane without a key (nothing saved for it) has no terminal to ask for.
         const back = number === undefined ? null : await reattach(tauriService, number, serviceRef.current);
+        const orphan = orphanOf(back, alive);
+        if (orphan !== null) invoke("terminal_kill", { id: orphan }).catch(() => {});
         if (!alive) return;
         if (back !== null) {
           if (back.kind === "refused" || back.kind === "timeout") {

@@ -319,6 +319,12 @@ impl History {
         }
     }
 
+    /// after-list 698: the newest `n` bytes on disk (nothing when the file cannot be read).
+    fn end(&self, n: usize) -> Vec<u8> {
+        let all = std::fs::read(&self.path).unwrap_or_default();
+        all[all.len().saturating_sub(n)..].to_vec()
+    }
+
     fn compact(&mut self) {
         let Ok(all) = std::fs::read(&self.path) else { return };
         let kept = trim_history(&all, HISTORY_KEEP);
@@ -860,10 +866,7 @@ impl Terminals {
             Some(dir) => crate::shell_history::plan(&commands, dir, crate::shell_history::system_fish_dir(), &|name| own_env.iter().chain(env.iter()).any(|(k, _)| k == name)),
             None => vec![None; commands.len()],
         };
-        let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
-        inner.next_id += 1;
-        let id = inner.next_id;
-        inner.fresh_incarnation(id);
+        let (mut inner, id) = self.claim_id()?;
         let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
         let label = program.clone().unwrap_or_else(|| "shell".to_string());
         let exit_app = app;
@@ -1356,6 +1359,19 @@ impl Terminals {
         self.inner.lock().map(|i| i.sessions.contains_key(&id)).unwrap_or(false)
     }
 
+    /// after-list 697: a new terminal's id, taken only once the service's terminals were taken back,
+    /// so an adopted terminal keeps the id its programs and their hooks know it by (the hook
+    /// identity names it, and VIEW-025 types an approval into the terminal it names). A pane that
+    /// started while the link was still starting used to take that id and push the adopted one off it.
+    fn claim_id(&self) -> Result<(std::sync::MutexGuard<'_, Inner>, u32), String> {
+        self.wait_linked(LINK_WAIT);
+        let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
+        inner.next_id += 1;
+        let id = inner.next_id;
+        inner.fresh_incarnation(id);
+        Ok((inner, id))
+    }
+
     /// T-184-b: the link to the background terminal service, while it is up.
     fn linked(&self) -> Option<Arc<crate::pty::link::Link>> {
         match &*self.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
@@ -1395,7 +1411,7 @@ impl Terminals {
             let state = match linked {
                 Ok((link, rows)) => {
                     LINKED.store(link.generation(), std::sync::atomic::Ordering::SeqCst);
-                    me.adopt(&app, &link, &rows, &crate::pty::link::read_seen(&dir, link.generation()));
+                    me.adopt(&app, &link, &rows, &crate::pty::link::take_seen(&dir, link.generation()));
                     crate::diag::write(&dir, &format!("terminal service linked ({} terminals taken back)", rows.len()));
                     Linking::Linked(link)
                 }
@@ -1431,7 +1447,9 @@ impl Terminals {
                 let cwd = meta["cwd"].as_str().map(str::to_string);
                 let (seq, tail) = (row["seq"].as_u64().unwrap_or(0), row_tail(row));
                 if let Some(mut h) = pane.and_then(|k| dir.as_deref().and_then(|d| History::open(d, k))) {
-                    h.append(missed(seen.get(&remote.id).copied(), seq, &tail));
+                    // after-list 698: without a clean quit's record the saved output's own end says where it stopped.
+                    let saved = h.end(crate::pty::link::PROBE);
+                    h.append(missed(seen.get(&remote.id).copied(), seq, &tail, &saved));
                     inner.hist.insert(id, h);
                 }
                 inner.snaps.insert(id, Snap::seeded(seq, &tail));
@@ -1803,6 +1821,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+
+    /// after-list 697: a terminal started while the window is still taking the service's terminals
+    /// back waits for that, so it never takes the id an adopted terminal (and its hooks) carry.
+    #[test]
+    fn after697_a_new_terminal_waits_for_the_adoption_and_never_takes_an_adopted_id() {
+        let t = Terminals::default();
+        *t.service.state.lock().unwrap() = Linking::Starting;
+        let early = t.clone();
+        let claim = std::thread::spawn(move || early.claim_id().map(|(_, id)| id).unwrap());
+        std::thread::sleep(Duration::from_millis(150));
+        {
+            // what `adopt` does for a terminal the service kept: it keeps its id 1
+            let mut inner = t.inner.lock().unwrap();
+            let id = crate::pty::link::adopted_id(Some(1), &|i| inner.sessions.contains_key(&i), inner.next_id + 1);
+            assert_eq!(id, 1, "the adopted terminal keeps the id its hooks know");
+            inner.next_id = inner.next_id.max(id);
+            inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())).into());
+        }
+        *t.service.state.lock().unwrap() = Linking::Off;
+        t.service.ready.notify_all();
+        assert_eq!(claim.join().unwrap(), 2, "the pane that asked meanwhile gets the next free id");
+    }
 
     /// TERM-137: hook files of one build go to a folder named after their contents; a folder another build
     /// left beside it is kept exactly as it was when this build writes its hooks again.
@@ -2367,19 +2407,15 @@ pub fn terminal_history_append(app: AppHandle, pane_key: u32, data: String) -> R
 /// window is asked to move to the next installed keyboard layout, as the OS language hotkey does
 /// (WM_INPUTLANGCHANGEREQUEST with HKL_NEXT, both from Microsoft Learn). The pane keeps the chord, so nothing of it
 /// reaches the terminal.
-// lib.rs registers it through evidence/core-T-306-lib.rs.patch; until then nothing calls it
-#[allow(dead_code)]
 #[tauri::command]
 pub fn terminal_next_input_source() -> Result<(), String> {
     next_input_source()
 }
 
 /// HKL_NEXT: "the next locale identifier in the list" for a layout change request (Microsoft Learn).
-#[allow(dead_code)]
 pub const HKL_NEXT: isize = 1;
 
 #[cfg(windows)]
-#[allow(dead_code)]
 fn next_input_source() -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO,
@@ -2404,7 +2440,6 @@ fn next_input_source() -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-#[allow(dead_code)]
 fn next_input_source() -> Result<(), String> {
     Err("switching the input source is built for Windows only".into())
 }

@@ -3,13 +3,13 @@ import { dropSummary, dropText, isImage, overRect, quotePath, shellKind } from "
 
 describe("TERM-074 drop files onto a terminal", () => {
   it("quotes a path with spaces for each shell and types no Enter", () => {
-    const p = "C:\\Users\\Txais\\My Files\\report (final).txt";
-    expect(quotePath(p, "powershell")).toBe("'C:\\Users\\Txais\\My Files\\report (final).txt'");
-    expect(quotePath(p, "cmd")).toBe('"C:\\Users\\Txais\\My Files\\report (final).txt"');
-    expect(quotePath(p, "posix")).toBe("'C:/Users/Txais/My Files/report (final).txt'");
-    expect(quotePath(p, "other")).toBe('"C:\\Users\\Txais\\My Files\\report (final).txt"');
+    const p = "C:\\Users\\someone\\My Files\\report (final).txt";
+    expect(quotePath(p, "powershell")).toBe("'C:\\Users\\someone\\My Files\\report (final).txt'");
+    expect(quotePath(p, "cmd")).toBe('"C:\\Users\\someone\\My Files\\report (final).txt"');
+    expect(quotePath(p, "posix")).toBe("'C:/Users/someone/My Files/report (final).txt'");
+    expect(quotePath(p, "other")).toBe('"C:\\Users\\someone\\My Files\\report (final).txt"');
     const { text } = dropText([p, "D:\\b.png"], "powershell");
-    expect(text).toBe("'C:\\Users\\Txais\\My Files\\report (final).txt' 'D:\\b.png'");
+    expect(text).toBe("'C:\\Users\\someone\\My Files\\report (final).txt' 'D:\\b.png'");
     expect(text).not.toMatch(/[\r\n]/);
   });
 
