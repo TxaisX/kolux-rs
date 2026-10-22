@@ -20,7 +20,7 @@ setup: G:\Temp\council-fable-T-542-b\repo added as a project; 1 shell pane shown
 flow 1: PASS: grid 4 -> 6 (3 shells + 1 empty -> 3 shells + 3 empty); all 3 shells echoed the marker set before the change (same PTY processes)
 flow 2: PASS: Mod+S wrote notes.txt: disk now holds "typed by smoke 1791919329183" plus the original line (42 bytes)
 flow 3: PASS: Discard asked first ("Discard changes to notes.txt?", buttons Cancel / Discard); after "Cancel" notes.txt and git status are unchanged
-flow 4: PASS: Claude pane's dot reads "status: Working" after the stand-in posted SessionStart + UserPromptSubmit; hook installed into the scratch G:\Temp\council-fable-T-542-b\claude-config\settings.json, script C:/Users/XiongT/.kolux-rs/agent-hooks/claude.cmd on disk
+flow 4: PASS: Claude pane's dot reads "status: Working" after the stand-in posted SessionStart + UserPromptSubmit; hook installed into the scratch G:\Temp\council-fable-T-542-b\claude-config\settings.json, script %USERPROFILE%/.kolux-rs/agent-hooks/claude.cmd on disk
 flow 5: PASS [report-only]: live: 2 shells, 1 Claude stand-in pane, needsStrip=false; settings.json 1896 bytes
   · quit: window close over CDP, exited in 2.7 s; pre-close tree 17 (msedgewebview2.exe x6, conhost.exe x5, powershell.exe x4, cmd.exe x1, PING.EXE x1); survivors 0 (none)
   · come back: settings.json byte-identical; needsStrip=false holds; 2/2 shells restored, 2 echoed a marker; 1 Claude pane back

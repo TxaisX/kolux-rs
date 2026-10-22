@@ -31,3 +31,16 @@ on the same pane, no reload -> Zoom In x2: 20px (cell 12x23) -> Zoom Out: 19px (
 reading after reset is stale because nothing was typed after it; the glyph font shows 18px).
 Note: while Settings is open the pane is hidden, so resize() skips the fit; the cell grows when the pane shows again.
 No old Kolux source read, nothing copied.
+
+
+--- audit-9 re-run (appended) ---
+T-144-d audit-9 re-run reading (2026-10-20, lane/fix-audit at 1f2307e9, scratch HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/KOLUX_KEYBINDINGS_HOME under a throwaway folder, build slot held)
+Task commit(s): c476ed3a
+Scope: the unit tests that commit added or changed, run again on this lane. Live behaviour is not re-proved here; where the task line says "live proof pending" that stays pending.
+
+Command 1: pnpm exec vitest run src/theme.test.ts
+Exit code: 0
+Reading: Test Files 1 passed (1); Tests 19 passed (19)
+  src/theme.test.ts
+
+Result: PASS

@@ -25,7 +25,7 @@ diagnostics section: Diagnostics Kolux keeps a short log of its own starts, exit
 1791871786 pane env ANTHROPIC_API_KEY=sk-ant-PLANTED1234567890 DATABASE_URL=postgres://admin:PLANTEDPASS@db.example/app
 
 == who may read the logs folder (icacls) ==
-C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.core\logs TxaisX\XiongT:(I)(OI)(CI)(F)
+%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.core\logs TxaisX\XiongT:(I)(OI)(CI)(F)
 (one entry, the user, inherited from the profile folder the sealing pass restricts)
 
 == 2. Copy diagnostics (second run, after the scrubber stopped masking the word after a "secrets:" prefix) ==

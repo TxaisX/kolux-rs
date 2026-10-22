@@ -1,6 +1,6 @@
-ÿþnode.exe : $ node scripts/evidence/smoke.mjs "--port" "1426" "--cdp" "9246" "--identifier" 
+ï¿½ï¿½node.exe : $ node scripts/evidence/smoke.mjs "--port" "1426" "--cdp" "9246" "--identifier" 
 "com.txaisxiong.kolux-rs.look.smoke" "--temp" "G:/Temp/smoke-look"
-At C:\Users\XiongT\.local\bin\pnpm.ps1:24 char:5
+At %USERPROFILE%\.local\bin\pnpm.ps1:24 char:5
 +     & "node$exe"  "$basedir/../../../../Program Files/nodejs/node_mod ...
 +     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: ($ node scripts/...emp/smoke-look":String) [], RemoteException

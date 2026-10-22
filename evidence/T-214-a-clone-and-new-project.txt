@@ -5,7 +5,7 @@ Throwaway repos: G:\Temp\worktrees-T-214\src\demo-src (3 commits), G:\Temp\workt
 Dev app started with KOLUX_WORKSPACES_DIR=%USERPROFILE%\kolux-rs\workspaces-worktrees.
 
 1. Add project > Copy from a web address. Pasted https://me:ghp_FAKEtoken123@127.0.0.1:9/owner/demo.git
-   Folder field filled itself with: C:\Users\XiongT\kolux-rs\demo
+   Folder field filled itself with: %USERPROFILE%\kolux-rs\demo
    (the folder above the workspaces folder, plus the project name without .git)
 2. Folder changed to G:\Temp\worktrees-T-214\home\demo-net, Copy. Git's complete text shown in the dialog:
    Cloning into 'G:\Temp\worktrees-T-214\home\demo-net'...
@@ -16,7 +16,7 @@ Dev app started with KOLUX_WORKSPACES_DIR=%USERPROFILE%\kolux-rs\workspaces-work
 3. Address file:///G:/Temp/worktrees-T-214/src/demo-src into G:/Temp/worktrees-T-214/home/demo-copy, Copy:
    dialog closed, sidebar shows demo-copy > main (synced), terminal opened in it, no setup question.
    git log in the copy: 7d62092 commit 3 / ee46578 commit 2 / 6d4164e commit 1
-4. Add project > New project: "Goes in" prefilled with C:\Users\XiongT (home folder), no problem line
+4. Add project > New project: "Goes in" prefilled with %USERPROFILE% (home folder), no problem line
    (Git installed, name and email set).
    Name "full" under G:\Temp\worktrees-T-214\home, Create:
    "G:\Temp\worktrees-T-214\home\full already has files in it; choose another name or folder"

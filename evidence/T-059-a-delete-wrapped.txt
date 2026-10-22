@@ -32,7 +32,7 @@ pane=term-1 cwd=G:\Dev\kolux-rs-lanes\core TEMP=G:\Temp
 [18:35:41.179] PowerShell powershell -ExecutionPolicy Bypass -Command "Write-Host hi"    -> {}
 
 == the same script run twice before, from other folders ==
-cwd=C:\Users\XiongT (the home folder, 18:34:40): `rm -rf .git` asked, `rm -rf ~/Documents/old` and `cd && rm -rf build`
+cwd=%USERPROFILE% (the home folder, 18:34:40): `rm -rf .git` asked, `rm -rf ~/Documents/old` and `cd && rm -rf build`
 answered {} because the workspace was the home folder itself, so both lay inside it; everything else as above.
 cwd=G:\Temp\core-T-025\repo (the lane's registered repository, 18:35:09): `rm -rf .git` answered {} because that
 repository sits under TEMP=G:\Temp and the card makes temp locations never ask; everything else as above.
