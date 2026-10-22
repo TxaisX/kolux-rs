@@ -96,3 +96,13 @@ test("SESS-026: a bulk launch that makes workspaces in an ask-each-time project 
   expect(bulkRefusal("shop", "tab", true)).toBeNull();
   expect(bulkRefusal("shop", "down", true)).toBeNull();
 });
+
+// AFTER row 369: the New workspace dialog starts its setup-where choice at the repository's own mode.
+test("the dialog's setup-where starts at the repository's mode; ask and unknown start at a tab", async () => {
+  const { dialogWhere } = await import("./launchOrder");
+  expect(dialogWhere("right")).toBe("right");
+  expect(dialogWhere("down")).toBe("down");
+  expect(dialogWhere("tab")).toBe("tab");
+  expect(dialogWhere("ask")).toBe("tab");
+  expect(dialogWhere(setupMode("sideways"))).toBe("tab");
+});

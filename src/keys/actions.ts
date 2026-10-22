@@ -129,6 +129,7 @@ export const actions: Action[] = [
   a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),
   a("tab.previousAllTypes", "Previous tab (all types)", "tabs", ["Mod+Shift+BracketLeft"], { terminalSafe: true }),
   a("tab.previousRecent", "Previous recent tab", "tabs", ["Ctrl+Tab"], { terminalSafe: true }),
+  a("tab.nextRecent", "Next recent tab", "tabs", ["Ctrl+Shift+Tab"], { terminalSafe: true }),
   a("tab.nextTerminal", "Next terminal tab", "tabs", ["Ctrl+PageDown"], { terminalSafe: true }),
   a("tab.previousTerminal", "Previous terminal tab", "tabs", ["Ctrl+PageUp"], { terminalSafe: true }),
   a("tab.selectByIndex", "Select Tab 1–9", "tabs", ["Alt+1"], { darwin: ["Ctrl+1"], index: true, terminalSafe: true }),

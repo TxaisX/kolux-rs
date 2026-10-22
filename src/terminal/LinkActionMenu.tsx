@@ -14,6 +14,16 @@ type Props = {
   onDismiss: () => void;
 };
 
+/** The row to focus after `key` when `at` of `count` rows has focus (-1: none), or null when the key is not a menu key. */
+export function menuStep(count: number, at: number, key: string): number | null {
+  if (count === 0) return null;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  if (key === "ArrowDown") return at < 0 ? 0 : (at + 1) % count;
+  if (key === "ArrowUp") return at < 0 ? count - 1 : (at - 1 + count) % count;
+  return null;
+}
+
 export default function LinkActionMenu({ at, destination, items, onPick, onDismiss }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const first = useRef<HTMLButtonElement>(null);
@@ -21,7 +31,16 @@ export default function LinkActionMenu({ at, destination, items, onPick, onDismi
   const [copied, setCopied] = useState<null | boolean>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape") {
+        // T-307-b: arrows move between the rows (wrapping), Home and End jump to the ends.
+        const rows = Array.from(box.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+        const to = menuStep(rows.length, rows.indexOf(document.activeElement as HTMLElement), e.key);
+        if (to === null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        rows[to].focus();
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       onDismiss();

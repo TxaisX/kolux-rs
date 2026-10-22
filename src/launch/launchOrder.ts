@@ -16,6 +16,11 @@ export function setupMode(v: unknown): SetupMode {
   return MODES.includes(v as SetupMode) ? (v as SetupMode) : DEFAULT_SETUP_MODE;
 }
 
+/** Where the New workspace dialog's "setup opens in" starts: the repository's own mode; the dialog is itself the ask, so `ask` starts at a tab. */
+export function dialogWhere(mode: SetupMode): SetupWhere {
+  return mode === "ask" ? "tab" : mode;
+}
+
 /** The error a bulk launch shows, or null when it may go ahead. Only a launch that makes new
  *  workspaces is refused: seats in a workspace that already exists run no setup. */
 export function bulkRefusal(project: string, mode: SetupMode, makesWorkspaces: boolean): string | null {

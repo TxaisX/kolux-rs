@@ -16,6 +16,16 @@ export const KINDS = [
 ] as const;
 export type KindKey = (typeof KINDS)[number]["key"];
 export const SUPPRESS_FOCUSED_FIELD = "notifySuppressFocused";
+/** The key an earlier build of the hook read; the page never wrote it. Read once as a fallback so a choice saved there is not lost. */
+export const LEGACY_QUIET_FIELD = "notifyQuietWhenFocused";
+
+/** STAT-042: whether a focused window stays quiet. The page's key wins, then the old key, else on. One reader for the page and the status hook. */
+export function suppressFocused(s: Record<string, unknown>): boolean {
+  const v = s[SUPPRESS_FOCUSED_FIELD];
+  if (typeof v === "boolean") return v;
+  const old = s[LEGACY_QUIET_FIELD];
+  return typeof old === "boolean" ? old : true;
+}
 export const SOUND_FIELD = "notificationSound";
 export const VOLUME_FIELD = "notificationVolume";
 export const CUSTOM_FIELD = "notificationCustomFile";
@@ -62,7 +72,7 @@ export function readNotifications(s: Record<string, unknown>) {
   const sound = SOUNDS.some((o) => o.id === s[SOUND_FIELD]) ? (s[SOUND_FIELD] as Sound) : "system";
   const f = s[CUSTOM_FIELD];
   const customFile = typeof f === "string" && f.trim() !== "" && audioTypeAllowed(f) ? f : null;
-  return { kinds, suppressFocused: s[SUPPRESS_FOCUSED_FIELD] !== false, sound, volume, customFile, closeToTray: s[CLOSE_TO_TRAY_FIELD] === true };
+  return { kinds, suppressFocused: suppressFocused(s), sound, volume, customFile, closeToTray: s[CLOSE_TO_TRAY_FIELD] === true };
 }
 
 /** APP-007: the close button hides the window to the tray instead of quitting (Windows; off by

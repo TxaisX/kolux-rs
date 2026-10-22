@@ -12,7 +12,7 @@ const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
 
 test("every command is listed under its area with its chords and badges", () => {
   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
-  expect(all.length).toBe(136); // every command, Reopen closed tab included again (T-239), view.space added (T-146-e)
+  expect(all.length).toBe(135); // every command, Reopen closed tab included again (T-239), view.space added (T-146-e)
   expect(ids(all)).toContain("tab.reopenClosed");
   const by = (id: string) => all.find((r) => r.id === id)!;
   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
@@ -29,7 +29,7 @@ test("every command is listed under its area with its chords and badges", () => 
 
 test("filters: all, modified, unassigned, conflicting", () => {
   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
-  expect(filterRows(all, "all", "").length).toBe(136);
+  expect(filterRows(all, "all", "").length).toBe(135);
   expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
   expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);
   expect(ids(filterRows(all, "unassigned", ""))).toContain("zoom.in");
@@ -91,4 +91,14 @@ test("SET-019 (T-246-c): the interface zoom has its own keys, apart from the ter
   for (const id of ["ui.zoomIn", "ui.zoomOut", "ui.zoomReset"]) expect(actions.find((a) => a.id === id)).toMatchObject({ scope: "global", terminalSafe: true, group: "menu" });
   expect(ids(filterRows(all, "all", "bigger"))).toContain("ui.zoomIn");
   expect(ids(filterRows(all, "all", "Reset Interface"))).toEqual(["ui.zoomReset"]);
+});
+
+// AFTER row 382 (T-164-b): a command nothing runs yet is not offered as a row to rebind.
+test("commands with no handler yet are not listed, wired ones still are", () => {
+  const ids = rows().map((r) => r.id);
+  expect(ids).not.toContain("browser.hardReload");
+  expect(ids).not.toContain("browser.grabElement");
+  expect(ids).toContain("browser.find");
+  expect(ids).toContain("editor.replace");
+  expect(ids).toContain("editor.toggleWordWrap");
 });

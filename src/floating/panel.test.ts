@@ -1,6 +1,6 @@
 // TERM-059 / TERM-061 / TERM-052 / T-093-a: the floating panel's tabs, close rules and keys.
 import { expect, test } from "vitest";
-import { add, answer, asked, close, closeKey, empty, focused, isTrusted, KEY_BASE, programExited, reorder, route, saveTarget, select, selectNumber, setDirty, show, hide, startFolder, step, toggle, trust, type Panel } from "./panel";
+import { add, answer, asked, close, closeKey, empty, focused, isTrusted, KEY_BASE, programExited, reorder, route, saved, saveTarget, select, selectNumber, setDirty, show, hide, startFolder, step, toggle, trust, type Panel } from "./panel";
 
 const three = (): Panel => {
   let p = empty();
@@ -154,4 +154,33 @@ test("TERM-059/060: the panel commands work anywhere; tab commands only inside t
   expect(route("tab.reopenClosed", undefined, true, true)).toEqual({ op: "none" });
   expect(route("app.settings", undefined, true, true)).toBeNull();
   expect(route("tab.nextAllTypes", undefined, true, true)).toEqual({ op: "step", by: 1, mode: "all" });
+});
+
+// After-list row 142: Save in the close question read the panel's mirrored dirty flag right after the save
+// (which can lag) and discarded whatever tab was asked about by then.
+test("TERM-061: Save closes the asked tab once its buffer is clean, even while the panel's own flag still says unsaved", () => {
+  let p = empty();
+  p = add(p, { kind: "markdown", path: "a.md" });
+  const a = p.tabs[0].key;
+  p = close(setDirty(p, a, true), [a]);
+  expect(asked(p)?.key).toBe(a);
+  const after = saved(p, a, false); // the buffer is clean; the panel flag has not caught up
+  expect(after.tabs).toHaveLength(0);
+  expect(asked(after)).toBeNull();
+  // A refused or unnamed save keeps the question and the tab.
+  expect(saved(p, a, true)).toBe(p);
+});
+
+test("TERM-061: Save never closes a different tab when the question moved on during the save", () => {
+  let p = empty();
+  p = add(p, { kind: "markdown", path: "a.md" });
+  p = add(p, { kind: "markdown", path: "b.md" });
+  const [a, b] = p.tabs.map((t) => t.key);
+  p = close(setDirty(setDirty(p, a, true), b, true), [a, b]);
+  expect(asked(p)?.key).toBe(a);
+  const moved = answer(p, "discard"); // Don't save on a while its save was still running; b is asked now
+  expect(asked(moved)?.key).toBe(b);
+  const after = saved(moved, a, false); // a's save finishes late
+  expect(after.tabs.map((t) => t.key)).toEqual([b]);
+  expect(asked(after)?.key).toBe(b);
 });

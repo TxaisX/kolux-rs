@@ -37,6 +37,31 @@ export const ADD_PROJECT = "kolux-add-project";
 /** ONB-006: Escape asks whether to leave, unless something inside already handled it or a composition is running. */
 export const leaveKey = (e: { key: string; isComposing: boolean; defaultPrevented: boolean }) => e.key === "Escape" && !e.isComposing && !e.defaultPrevented;
 
+type EscapeEvent = { key: string; isComposing: boolean; defaultPrevented: boolean; target: EventTarget | null; preventDefault(): void; stopPropagation(): void };
+
+/**
+ * ONB-006 (install trial): Escape must reach the wizard even when the key starts outside it. A focused
+ * terminal behind the dialog swallows Escape before a bubble-phase window listener sees it, so this
+ * listens in the capture phase. A key that starts inside the dialog is left to the dialog's own
+ * bubble-phase listener, so its controls still come first; `held` (the leave question is up) leaves it
+ * to that question. Returns the cleanup.
+ */
+export function escapeLeaves(
+  win: { addEventListener(t: "keydown", f: (e: EscapeEvent) => void, capture: boolean): void; removeEventListener(t: "keydown", f: (e: EscapeEvent) => void, capture: boolean): void },
+  inside: (t: EventTarget | null) => boolean,
+  held: () => boolean,
+  leave: () => void,
+): () => void {
+  const key = (e: EscapeEvent) => {
+    if (held() || inside(e.target) || !leaveKey(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    leave();
+  };
+  win.addEventListener("keydown", key, true);
+  return () => win.removeEventListener("keydown", key, true);
+}
+
 export type Outcome = "completed" | "dismissed";
 
 /** ONB-009: the help menu's Onboarding item asks the window to start the wizard over through this event. */

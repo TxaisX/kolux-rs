@@ -19,3 +19,10 @@ test("nothing shows when no key was cleared", () => {
   expect(html).toContain("Open Accounts &amp; keys");
   expect(html).toContain("Dismiss");
 });
+
+// AFTER row 658: every stored secret field has a name in the note, none falls back to "A stored key".
+test("every secret field the app stores has a label in the note", async () => {
+  const { SECRET_KEYS } = await import("./settingsSync");
+  for (const k of SECRET_KEYS) expect(lostText([k]), k).toContain("Your ");
+  expect(lostText(["moonshotApiKey", "minimaxApiKey"])).toContain("Moonshot key and MiniMax key");
+});
