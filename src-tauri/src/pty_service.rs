@@ -150,6 +150,9 @@ struct Inner {
     next_term: u32,
     windows: BTreeMap<u64, Sender<String>>,
     next_conn: u64,
+    /// AFTER-696: an update asked the service to end (`stop`), so the installer can replace the
+    /// program it runs from.
+    stopping: bool,
 }
 
 impl Inner {
@@ -291,6 +294,10 @@ impl Service {
                 t.session.kill();
                 Ok(json!({}))
             }),
+            "stop" => {
+                self.lock().stopping = true;
+                Ok(json!({}))
+            }
             other => Err(format!("unknown request {other:?}")),
         }
     }
@@ -401,7 +408,7 @@ impl Service {
                 Err(e) => return Err(e),
             }
             let (panes, windows) = self.counts();
-            if idle.tick(now(), panes, windows) {
+            if idle.tick(now(), panes, windows) || self.lock().stopping {
                 break;
             }
         }
@@ -501,6 +508,33 @@ impl Client {
         let line = self.lines.next().ok_or("the terminal service closed the connection")?.map_err(|e| e.to_string())?;
         serde_json::from_str(&line).map_err(|e| e.to_string())
     }
+}
+
+/// AFTER-696: ends the running service (and with it every shell it holds) before an update
+/// replaces the program it runs from. True once nothing answers and its process is gone; a
+/// service too old to know `stop` is ended by its pid.
+pub fn stop(dir: &Path, wait: Duration) -> bool {
+    let Probe::Ready(ep, mut c) = probe(dir, PROBE_WAIT) else { return true };
+    let _ = c.request(json!({ "op": "stop" }), &mut Vec::new());
+    drop(c);
+    let own = ep.pid == std::process::id();
+    let gone = |until: Instant| loop {
+        if matches!(probe(dir, PROBE_WAIT.min(wait)), Probe::None) && (own || crate::procs::wait_gone(&[ep.pid], POLL).is_empty()) {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(POLL);
+    };
+    if gone(Instant::now() + wait) {
+        return true;
+    }
+    if own {
+        return false;
+    }
+    crate::procs::kill_tree(ep.pid);
+    gone(Instant::now() + wait)
 }
 
 /// What a look at the data folder finds.
@@ -671,6 +705,29 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         s.thread.take().unwrap().join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn after696_an_update_stops_the_service_even_while_it_holds_a_terminal() {
+        let dir = scratch("after696");
+        let mut s = start(&dir, PROTOCOL, Duration::from_millis(300));
+        let mut ctl = Client::connect(&s.ep, Duration::from_secs(5)).unwrap();
+        ctl.request(json!({ "op": "spawn", "cols": 80, "rows": 24 }), &mut Vec::new()).unwrap();
+        drop(ctl);
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(!s.thread.as_ref().unwrap().is_finished(), "a held terminal keeps the idle rule from ending it");
+        assert!(stop(&dir, Duration::from_secs(10)), "stop reports the service gone");
+        // In-process, `stop` sees the listener go a hair before the run thread has returned.
+        let until = Instant::now() + Duration::from_secs(2);
+        while !s.thread.as_ref().unwrap().is_finished() {
+            assert!(Instant::now() < until, "the run loop ended on the stop request");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(matches!(probe(&dir, Duration::from_secs(2)), Probe::None), "nothing answers afterwards");
+        s.thread.take().unwrap().join().unwrap();
+        // No service at all: nothing to stop.
+        assert!(stop(&dir, Duration::from_secs(1)));
         let _ = std::fs::remove_dir_all(dir);
     }
 

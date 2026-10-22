@@ -1,0 +1,23 @@
+diff --git a/src-tauri/src/update.rs b/src-tauri/src/update.rs
+index a86535b9..87935e36 100644
+--- a/src-tauri/src/update.rs
++++ b/src-tauri/src/update.rs
+@@ -407,7 +407,9 @@ fn installer_hook(end_terminals: impl Fn() + Send + Sync + 'static, cleanup: imp
+ /// Every terminal ends and the end is written down as Kolux's own (T-286-b, APP-040), right
+ /// before the installer takes over.
+ fn end_for_installer(app: &AppHandle) {
+-    app.state::<Terminals>().kill_all();
++    // AFTER-696: the background terminal service runs from the program the installer replaces, so
++    // it and the shells it holds end too, not only the panes this window runs.
++    app.state::<Terminals>().end_for_update();
+     crate::resources::recovery::note_self_end(app, "installer starts (APP-029)");
+ }
+ 
+@@ -415,6 +417,7 @@ fn end_for_installer(app: &AppHandle) {
+ pub fn install_on_quit(app: &AppHandle) {
+     let ready = app.state::<Updates>().ready.lock().ok().and_then(|mut r| r.take());
+     if let Some((update, bytes)) = ready {
++        app.state::<Terminals>().end_for_update();
+         record_attempt(app, &update);
+         let _ = update.restart_after_install(false).install(&bytes);
+     }

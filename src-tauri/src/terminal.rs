@@ -1499,6 +1499,17 @@ impl Terminals {
         self.let_go();
     }
 
+    /// AFTER-696: the restart to update. The installer replaces the program the background service
+    /// runs from, so the service and its shells end too (update_restart: "the shells end") instead
+    /// of holding the old program open. Coordinator default; Txais may overrule.
+    pub fn end_for_update(&self) {
+        let dir = self.service.dir.lock().ok().and_then(|d| d.clone());
+        self.kill_all();
+        if let Some(dir) = dir {
+            crate::pty::service::stop(&dir, std::time::Duration::from_secs(5));
+        }
+    }
+
     /// `kill_all` without the app-wide quitting flag (a test runs it alone).
     fn let_go(&self) {
         let link = match std::mem::take(&mut *self.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
