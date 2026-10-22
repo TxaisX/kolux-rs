@@ -406,3 +406,14 @@ fn stat_021_pi_extension_is_koluxs_own_file() {
     assert_eq!(read(&file), user, "a file Kolux did not write is never touched");
     assert_eq!(super::pi::inspect(&home, &file).0, "error");
 }
+
+/// After-list row 481: neither Cursor nor Factory says which shell runs a hook command on Windows,
+/// so a plain script path is written bare (cmd, POSIX shells and PowerShell all run it); a path that
+/// needs quoting (a space, a shell character, a backslash) keeps its double quotes.
+#[test]
+fn row_481_a_plain_script_path_is_written_bare_so_any_shell_runs_it() {
+    assert_eq!(quoted("C:/Users/someone/.kolux-rs/hooks/cursor.cmd"), "C:/Users/someone/.kolux-rs/hooks/cursor.cmd");
+    for odd in ["C:/Users/some one/hooks/cursor.cmd", "C:/a&b/cursor.cmd", r"C:\Users\someone\cursor.cmd", "C:/a(1)/droid.cmd"] {
+        assert_eq!(quoted(odd), format!("\"{odd}\""), "{odd}");
+    }
+}

@@ -571,6 +571,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), status.change.session.as_deref(), crate::automations::now_ms()));
                 // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
                 crate::automations::on_finish(app, status.pane_key, status.terminal, status.change.state, status.change.boundary, status.child.is_some(), status.interrupted);
+                rename_on_prompt(app, &status);
                 let _ = app.emit(EVENT, status);
             }
             if code == 200 {
@@ -587,6 +588,42 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     }
     let _ = write!(stream, "HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = stream.flush();
+}
+
+/// T-116-b (row 213, PROJ-039): what the window hears after a hook-started rename, with the
+/// workspace folder and the answer, or the complete error when the rename failed.
+pub const RENAMED_EVENT: &str = "workspace-renamed-after-work";
+
+/// The submitted prompt that begins the work in a pane, for the branch rename; a slash command or
+/// an empty prompt is not work. Coordinator default (Txais may overrule): the user's prompt names
+/// the work until the agent-proposed name (the AI recipe, after-list) exists.
+fn work_prompt(change: &Change) -> Option<&str> {
+    change.prompt.as_deref().map(str::trim).filter(|p| !p.is_empty() && !p.starts_with('/'))
+}
+
+/// Renames the branch of the workspace at `dir` from `prompt` when it is a Kolux-suggested one
+/// (projects::rename_after_work makes every check, so only the first work renames it); `None` when
+/// no project knows the folder.
+pub fn rename_after_prompt(git: &crate::git::Git, store: &Mutex<crate::state::Store>, dir: &str, prompt: &str) -> Option<Result<crate::projects::RenameAnswer, String>> {
+    let project = crate::projects::project_for_path(git, &*store.lock().ok()?, dir)?;
+    Some(crate::projects::rename_after_work(git, store, &project, dir, prompt))
+}
+
+/// The listener's side of `rename_after_prompt`: the pane's folder is the one its terminal started
+/// in, and Git runs on its own thread so no hook answer waits behind it.
+fn rename_on_prompt(app: &AppHandle, status: &crate::status::Status) {
+    let Some(prompt) = work_prompt(&status.change).map(str::to_string) else { return };
+    let Some(dir) = status.terminal.and_then(|t| app.try_state::<crate::terminal::Terminals>()?.dir_of(&format!("term-{t}"))) else { return };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let (Some(git), Some(store)) = (app.try_state::<crate::git::Git>(), app.try_state::<Mutex<crate::state::Store>>()) else { return };
+        let answer = match rename_after_prompt(&git, &store, &dir, &prompt) {
+            Some(Ok(a)) if a.renamed => json!({ "path": dir, "answer": a }),
+            Some(Err(e)) => json!({ "path": dir, "error": e }),
+            _ => return,
+        };
+        let _ = app.emit(RENAMED_EVENT, answer);
+    });
 }
 
 /// Opens the listener on a loopback port and writes the endpoint file; hooks answer on a thread.
@@ -674,7 +711,7 @@ pub(crate) const SPOOL_LINE: &str = concat!(
     r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
     r#"$ErrorActionPreference='Stop'; try { $t=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8); $o=[ordered]@{}; $ok=$true; "#,
     r#"try { $e=ConvertFrom-Json -InputObject $t; "#,
-    r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','fullyIdle') "#,
+    r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','conversation_id','fullyIdle') "#,
     r#"{ $v=$e.$k; if ($v -is [string]) { $o[$k]=$v.Substring(0,[Math]::Min($v.Length,300)) } elseif ($v -is [bool]) { $o[$k]=$v } }; "#,
     r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
     r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } } } "#,
@@ -1435,9 +1472,9 @@ mod tests {
     fn the_settings_get_one_kolux_group_per_event_and_keep_everything_else() {
         let mut s = ev(r#"{"permissions":{"allow":["Bash"]},"hooks":{
             "PreToolUse":[{"matcher":"Bash|PowerShell","hooks":[{"type":"command","command":"node guard.js","timeout":5}]},
-                          {"matcher":"*","hooks":[{"type":"command","command":"C:/Users/me/.kolux/agent-hooks/claude-hook.cmd || echo {","timeout":10}]},
+                          {"matcher":"*","hooks":[{"type":"command","command":"C:/Users/someone/.other-app/agent-hooks/claude-hook.cmd || echo {","timeout":10}]},
                           {"matcher":"*","hooks":[{"type":"command","command":"C:/old/.kolux-rs/agent-hooks/claude.cmd || exit 0","timeout":10}]}],
-            "Stop":[{"hooks":[{"type":"command","command":"C:/Users/me/.kolux/agent-hooks/claude-hook.cmd || echo {","timeout":10}]}],
+            "Stop":[{"hooks":[{"type":"command","command":"C:/Users/someone/.other-app/agent-hooks/claude-hook.cmd || echo {","timeout":10}]}],
             "PreCompact":[{"hooks":[{"type":"command","command":"other"}]}]}}"#);
         let cmd = "\"C:/Users/me/.kolux-rs/agent-hooks/claude.cmd\" || exit 0";
         assert!(install_claude_hooks(&mut s, cmd));
@@ -1452,7 +1489,7 @@ mod tests {
         let pre = hooks["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 3);
         assert_eq!(pre[0]["matcher"], "Bash|PowerShell");
-        assert!(pre[1]["hooks"][0]["command"].as_str().unwrap().contains(".kolux/agent-hooks"));
+        assert!(pre[1]["hooks"][0]["command"].as_str().unwrap().contains(".other-app/agent-hooks"));
         assert_eq!(pre[2]["hooks"][0]["command"], cmd, "a stale Kolux RS path is replaced in place");
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(hooks["PreCompact"].as_array().unwrap().len(), 1, "PreCompact is never installed");
@@ -1628,5 +1665,46 @@ mod tests {
         let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).unwrap();
         assert_eq!((get("KOLUX_AGENT_HOOK_PORT"), get("KOLUX_PANE_KEY"), get("KOLUX_TERMINAL_HANDLE")), ("5", "9", "4"));
         assert_eq!(identity(get("KOLUX_HOOK_IDENTITY")), Some((9, Some(4))));
+    }
+
+    #[test]
+    fn row_213_the_first_prompt_in_a_suggested_workspace_renames_its_branch_once() {
+        use crate::{git::Git, projects, state::Store};
+        let git = Git::detect().unwrap();
+        let base = std::env::temp_dir().join(format!("kolux-rs-hooks-r213-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (profile, repo, root) = (base.join("profile"), base.join("repo"), base.join("root"));
+        for d in [&profile, &repo, &root] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let run = |args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(&repo).output().unwrap().status.success(), "git {args:?}");
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "first"]);
+        let store = Store::open(&profile).unwrap();
+        let mut settings = store.settings();
+        settings["workspacesDir"] = json!(root.to_string_lossy());
+        store.save_settings(&settings).unwrap();
+        let project = projects::add_project(&git, &store, &repo).unwrap();
+        let store = Mutex::new(store);
+        let made = projects::create_fresh_from(&git, &store, &project.id, None).unwrap();
+        // Which prompts count: a slash command or an empty prompt is not the work beginning.
+        let change = |p: Option<&str>| Change { state: "working", prompt: p.map(str::to_string), ..Change::default() };
+        assert_eq!(work_prompt(&change(Some("  /clear  "))), None);
+        assert_eq!(work_prompt(&change(Some("   "))), None);
+        assert_eq!(work_prompt(&change(None)), None);
+        assert_eq!(work_prompt(&change(Some("Fix the login bug"))), Some("Fix the login bug"));
+        // A folder no project knows: nothing is renamed and nothing fails.
+        assert!(rename_after_prompt(&git, &store, &base.join("elsewhere").to_string_lossy(), "Fix it").is_none());
+        // The first prompt renames the suggested branch; a later one leaves it alone.
+        let first = rename_after_prompt(&git, &store, &made.path, "Fix the login bug").unwrap().unwrap();
+        assert!(first.renamed, "{first:?}");
+        assert!(first.branch.as_deref().is_some_and(|b| b.ends_with("fix-the-login-bug")), "{first:?}");
+        let again = rename_after_prompt(&git, &store, &made.path, "Something else entirely").unwrap().unwrap();
+        assert!(!again.renamed, "{again:?}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

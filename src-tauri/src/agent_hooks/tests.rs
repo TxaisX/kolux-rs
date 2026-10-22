@@ -44,7 +44,7 @@ fn stat_005_kolux_entries_are_spotted_in_every_form() {
     assert!(names_mine(&json!({ "command": ["C:\\Users\\me\\.kolux-rs\\agent-hooks\\claude.cmd"] })), "the command as a list of words");
     assert!(names_mine(&json!({ "command": "cmd.exe", "args": ["/c", "C:/Users/me/.kolux-rs/agent-hooks/claude.cmd"] })), "the argument-list form");
     assert!(!names_mine(&json!({ "command": "node guard.js", "args": ["--fast"] })));
-    assert!(!names_mine(&json!({ "command": "C:/Users/me/.kolux/agent-hooks/claude-hook.cmd" })), "the old app's entries stay its own while both apps are installed (DT-C1)");
+    assert!(!names_mine(&json!({ "command": "C:/Users/someone/.other-app/agent-hooks/claude-hook.cmd" })), "another app's entries stay its own (DT-C1)");
 }
 
 #[test]
@@ -491,6 +491,22 @@ mod script_runs {
         let out = run(&dir, &env, r#"{"Path":1,"path":2}"#);
         assert!(out.status.success(), "{out:?}");
         assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), 1);
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    /// After-list row 485: Cursor names its session `conversation_id`; the held line keeps it, so a
+    /// Cursor event replayed after Kolux was closed still carries its session.
+    #[test]
+    fn row_485_the_held_line_keeps_cursors_conversation_id() {
+        let (spool, data, env) = closed_kolux("r485-conv", 14);
+        let dir = scripts("r485-conv");
+        let out = run(&dir, &env, r#"{"hook_event_name":"stop","conversation_id":"c-485","status":"completed"}"#);
+        assert!(out.status.success(), "{out:?}");
+        let held = fs::read_to_string(&spool).unwrap_or_default();
+        let lines: Vec<_> = held.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 1, "{held:?}");
+        let body = ev(lines[0].splitn(4, '|').nth(3).unwrap());
+        assert_eq!(body["conversation_id"].as_str(), Some("c-485"), "{body}");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -1011,7 +1027,7 @@ fn t_152_2_the_first_write_keeps_a_hashed_copy_and_a_failed_copy_stops_the_insta
 fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
     let dir = temp("t152-merge");
     let (home, file) = (dir.join("home"), dir.join("settings.json"));
-    let older = "\"C:/Users/me/.kolux/agent-hooks/claude.cmd\" || exit 0";
+    let older = "\"C:/Users/someone/.other-app/agent-hooks/claude.cmd\" || exit 0";
     let mut user: Value = ev(&shaped());
     user["hooks"]["Stop"][0]["hooks"].as_array_mut().unwrap().push(json!({ "type": "command", "command": older }));
     let user_text = serde_json::to_string_pretty(&user).unwrap() + "\n";
@@ -1021,7 +1037,7 @@ fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
     for e in CLAUDE_EVENTS {
         let groups = after["hooks"][e].as_array().unwrap();
         let theirs: Vec<&Value> = groups.iter().filter(|g| !is_mine(g)).collect();
-        assert_eq!(theirs, user["hooks"][e].as_array().unwrap().iter().collect::<Vec<_>>(), "{e}: the user's groups untouched, the old app's entry included");
+        assert_eq!(theirs, user["hooks"][e].as_array().unwrap().iter().collect::<Vec<_>>(), "{e}: the user's groups untouched, the other app's entry included");
         assert_eq!(groups.iter().filter(|g| is_mine(g)).count(), 1, "{e}");
         assert!(groups.iter().filter(|g| is_mine(g)).all(|g| g.to_string().contains(".kolux-rs/agent-hooks")));
     }
@@ -1439,6 +1455,33 @@ fn t_152_c_4_a_hooked_file_without_its_copy_is_refused_and_nothing_is_written() 
 
 fn one_var(name: &'static str, value: &'static str) -> impl Fn(&str) -> Option<std::ffi::OsString> {
     move |n| (n == name).then(|| value.into())
+}
+
+/// Fix-phase scratch-HOME runs: the four install tests failed under `HOME=<root>\home` with TEMP
+/// left at `<root>`'s parent, because that TEMP holds the home folder. The supported layout puts
+/// TEMP at `<root>\tmp`, beside the home; the guard is unchanged and still refuses the home side.
+#[test]
+fn fix_hooks_scratch_temp_beside_home_admits_marked_temp_and_still_refuses_any_home() {
+    let root = temp("scratch-layout");
+    let (tmp, home) = (root.join("tmp"), root.join("home"));
+    let (cfg, home_claude) = (tmp.join("cfg"), home.join(".claude"));
+    for d in [&cfg, &home_claude] {
+        fs::create_dir_all(d).unwrap();
+    }
+    fs::write(cfg.join(SCRATCH_MARKER), "").unwrap();
+    fs::write(home.join(SCRATCH_MARKER), "").unwrap();
+    // TEMP beside HOME: a marked folder under TEMP is admitted.
+    assert!(scratch_only(&cfg.join("settings.json"), &tmp, &home).is_ok());
+    // The home's own settings are never under TEMP, so they are refused even with a marker there.
+    assert!(scratch_only(&home_claude.join("settings.json"), &tmp, &home).unwrap_err().contains("left alone"));
+    // A real-looking home with no marker at all is refused too.
+    let real = root.join("Users").join("someone").join(".claude");
+    fs::create_dir_all(&real).unwrap();
+    assert!(scratch_only(&real.join("settings.json"), &tmp, &home).unwrap_err().contains("left alone"));
+    // The old failing layout (TEMP one level above HOME) is still refused, marker or not.
+    let err = scratch_only(&cfg.join("settings.json"), &root, &home).unwrap_err();
+    assert!(err.contains("holds the home folder"), "{err}");
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

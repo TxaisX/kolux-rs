@@ -335,7 +335,13 @@ pub fn event<'a>(memory: &mut Memory, name: &str, event: &'a Value) -> Option<(&
             if let Some(s) = session {
                 memory.tool(s, tool_name);
             }
-            ("PreToolUse", tool(tool_name, input))
+            // STAT-061 (row 170): Grok's ask-the-user tool has no permission step, so its start is
+            // the question; its end or failure is plain tool work again (the arm below).
+            let normalized = tool(tool_name, input);
+            match crate::grok_status::change(&json!({ "hook_event_name": "PreToolUse", "tool_name": tool_name, "tool_input": input })) {
+                Some(t) if t.state == "waiting" => ("PreToolUse", json!({ "kolux_ask": t.question.unwrap_or_else(|| "Grok is asking you something".into()) })),
+                _ => ("PreToolUse", normalized),
+            }
         }
         "PostToolUse" | "PostToolUseFailure" => ("PostToolUse", tool(tool_name, None)),
         // STAT-018: a failed stop and a session end both mean done.
@@ -477,6 +483,26 @@ mod tests {
         o.profile = Some(dir.join("gone").display().to_string());
         assert!(still_runs(&o, &me, |_| Some(false)), "profile cannot be checked");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_170_stat_061_grok_ask_tool_reaches_the_status_as_a_question() {
+        // Through the listener's own entry (the `/grok/<event>` route) to the status change.
+        let mut m = Memory::default();
+        let run = |m: &mut Memory, path: &str, v: Value| super::super::normalize_with(m, path, &v).and_then(|n| super::super::change(&n)).flatten();
+        let ask = run(&mut m, "/grok/PreToolUse", json!({ "sessionId": "s9", "toolName": "ask_user", "toolInput": { "question": "Which branch should I use?", "choices": ["main", "dev"] } })).unwrap();
+        assert_eq!((ask.state, ask.ask.as_deref()), ("waiting", Some("Which branch should I use?")), "the ask tool starting is a question");
+        // The end of that tool, or its failure (a cancelled question), is working again with no question.
+        for end in ["/grok/PostToolUse", "/grok/PostToolUseFailure"] {
+            let c = run(&mut m, end, json!({ "sessionId": "s9", "toolName": "ask_user" })).unwrap();
+            assert_eq!((c.state, c.ask.is_none()), ("working", true), "{end}");
+        }
+        // An ask tool with no readable question still waits, with a stock line.
+        let bare = run(&mut m, "/grok/PreToolUse", json!({ "sessionId": "s9", "toolName": "AskQuestion" })).unwrap();
+        assert_eq!((bare.state, bare.ask.as_deref()), ("waiting", Some("Grok is asking you something")));
+        // Any other tool start is plain work.
+        let work = run(&mut m, "/grok/PreToolUse", json!({ "sessionId": "s9", "toolName": "Bash", "toolInput": { "command": "ls" } })).unwrap();
+        assert_eq!((work.state, work.ask.is_none()), ("working", true));
     }
 
     #[test]
