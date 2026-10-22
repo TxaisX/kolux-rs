@@ -698,8 +698,26 @@ pub const HIDDEN: &str = "[hidden]";
 
 const STRIPE_PREFIXES: [&str; 5] = ["sk_live_", "sk_test_", "rk_live_", "rk_test_", "whsec_"];
 
+/// The passes are run again until a run changes nothing (fix-hooks AFTER, masking fuzz): a hidden
+/// value's `]` can give a secret glued right after it the word start it lacked, so one run could
+/// leave that secret showing and a second hide it. Each extra run only hides more; MASK_RUNS caps
+/// the loop.
 #[allow(dead_code)] // the recent-attempts list (T-156-b, SAFE-018) is its first caller
 pub fn mask(text: &str) -> String {
+    let mut t = mask_once(text);
+    for _ in 1..MASK_RUNS {
+        let next = mask_once(&t);
+        if next == t {
+            break;
+        }
+        t = next;
+    }
+    t
+}
+
+const MASK_RUNS: usize = 8;
+
+fn mask_once(text: &str) -> String {
     let t = stripe_keys(text);
     let t = pem_blocks(&t);
     let t = url_credentials(&t);
@@ -2709,5 +2727,41 @@ mod tests {
         for c in ["echo $PASS | sudo -S ls", "echo $(cat pw.txt) | sudo -S ls", "echo pw 2>&1 | grep x", "{ echo hi; } | cat", "cat <<EOF | grep x\nhello\nEOF", "echo pw | ssh host \"ls; cat\"", "echo 'a`b' | cat", "gh auth login --with-token < token.txt", "cp mysql.log /bak -pr"] {
             assert_eq!(stable(c), c, "{c}");
         }
+    }
+
+    /// fix-hooks AFTER (masking fuzz, kolux-rs-after.md): on any input, garbage included, a second
+    /// mask over mask's own answer changes nothing. The inputs are generated from shell, header,
+    /// key and quoting fragments by a fixed-seed xorshift, so a failure names its input and repeats.
+    #[test]
+    fn safe019_mask_is_idempotent_on_generated_input() {
+        const PARTS: &[&str] = &[
+            " ", " ", "  ", "\n", "\t", "=", ":", ";", "|", "||", "&", "&&", ">", "2>&1", "<", "<<", "<<<", "(", ")", "{", "}", "[", "]", "'", "'", "\"", "\"", "`", "\\", "$", "$(", "${", "#", ",", "-", "--", "/", "@", "!", "*", ".", "....",
+            "echo", "printf", "cat", "sudo", "-S", "ssh", "host", "bash", "-c", "pwsh", "env", "export", "set", "curl", "-u", "-H", "--header", "-d", "--data", "mysql", "-p", "-ppw", "psql", "docker", "login", "--password", "--password-stdin", "--token", "--with-token", "--api-key", "--secret", "-k", "gh", "auth",
+            "password", "PASSWORD", "pass", "pw", "token", "TOKEN", "secret", "api_key", "API_KEY", "apiKey", "AWS_SECRET_ACCESS_KEY", "client_secret", "Authorization", "Bearer", "Basic", "X-Api-Key", "Cookie", "ConvertTo-SecureString", "-AsPlainText", "-Force",
+            "sk_live_51HabcdEFGH1234567890WXYZ", "sk_test_", "whsec_8f3a9c1d2e4b5a6c7d8e9f0a", "sk_live_....WXYZ", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github_pat_11ABCDEFG0123456789_abcdefghij", "xoxb-1234-5678-abcdefgh", "AKIAIOSFODNN7EXAMPLE", "sk-ant-api03-abcdefghijklmnop", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc",
+            "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----", "https://", "http://u:p@h", "user:pa55@", "example.com", "[hidden]", "[hidden]'", "\"[hidden]\"",
+            "hunter2", "s3cr3t", "x", "abc", "1234", "EOF", "a.txt", "C:\\x", "~/.ssh/id_rsa", "\u{e9}", "\u{1f511}", "{\"password\":", "\"token\": \"", "\"}", "key=", "PW=", "--password=", "-p=", "Bearer abcdefghijklmnopqrstuvwxyz012345",
+        ];
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut broken = Vec::new();
+        for _ in 0..20_000 {
+            let len = 1 + (next() % 24) as usize;
+            let input: String = (0..len).map(|_| PARTS[(next() % PARTS.len() as u64) as usize]).collect();
+            let once = mask(&input);
+            let twice = mask(&once);
+            if twice != once {
+                broken.push((input, once, twice));
+            }
+        }
+        for (input, once, twice) in broken.iter().take(5) {
+            println!("input {input:?}\n once {once:?}\ntwice {twice:?}");
+        }
+        assert!(broken.is_empty(), "{} of 20000 generated inputs changed on a second mask", broken.len());
     }
 }
