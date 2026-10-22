@@ -35,7 +35,7 @@ pub struct Source {
 }
 
 fn load(store: &Store) -> Value {
-    store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null)
+    crate::orchestration::kept::or_default::<Value>(store, KEY)
 }
 
 fn save(store: &Store, v: &Value) -> Result<(), String> {

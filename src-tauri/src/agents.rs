@@ -690,11 +690,9 @@ pub fn command_check(name: &str, program: Option<&str>, find: impl Fn(&str) -> O
 /// SESS-032: the terminals that already took (or are taking) their opening prompt in this run of
 /// the service. A pane that mounts again on the same terminal (a window reload, StrictMode's double
 /// mount, a second caller) finds its terminal here and types nothing.
-#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 static OPENED: std::sync::Mutex<std::collections::BTreeSet<u32>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 /// True the first time terminal `id` is claimed for its opening prompt; false ever after.
-#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 pub fn claim_opening(id: u32) -> bool {
     OPENED.lock().unwrap_or_else(|p| p.into_inner()).insert(id)
 }
@@ -702,7 +700,6 @@ pub fn claim_opening(id: u32) -> bool {
 /// How the opening prompt's hand-over ended, for the window to say.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 pub struct PromptSent {
     /// `sent`; `duplicate` (this terminal was served already, nothing typed); `failed` (typing
     /// failed); or the send-once word for a prompt that went in without Enter or not at all:
@@ -713,14 +710,12 @@ pub struct PromptSent {
 }
 
 impl PromptSent {
-    #[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
     pub fn duplicate() -> PromptSent {
         PromptSent { outcome: "duplicate".to_string(), why: None }
     }
 }
 
 /// The words for a send that did not end with Enter; none for one that did.
-#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 pub fn prompt_why(outcome: &so::Outcome) -> Option<String> {
     match outcome {
         so::Outcome::Sent | so::Outcome::TextOnly => None,
@@ -733,7 +728,6 @@ pub fn prompt_why(outcome: &so::Outcome) -> Option<String> {
 }
 
 /// What one send-once run means for the opening prompt.
-#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 pub fn prompt_result(run: Result<so::Delivery, String>) -> PromptSent {
     match run {
         Ok(d) => PromptSent { why: prompt_why(&d.outcome), outcome: d.outcome.word().to_string() },
@@ -744,12 +738,10 @@ pub fn prompt_result(run: Result<so::Delivery, String>) -> PromptSent {
 /// SESS-032: when the agent last wrote, as the opening prompt's send sees it. An agent that has
 /// written nothing yet is still starting, not settled: it reads as "wrote just now", so the paste
 /// waits for its first output to go quiet (capped by the send's own longest wait).
-#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 pub fn opening_last_output(quiet_for: Option<std::time::Duration>, now_ms: u64) -> Option<u64> {
     Some(quiet_for.map_or(now_ms, |q| now_ms.saturating_sub(q.as_millis() as u64)))
 }
 
-#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -761,7 +753,6 @@ fn now_ms() -> u64 {
 /// Windows; Enter is held back when a permission prompt shows, when the user or another sender
 /// writes first, or when the program ends. A terminal already served answers `duplicate` and is
 /// not touched. Runs on a worker thread: the wait can be a few seconds.
-#[allow(dead_code)] // T-163: registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
 #[tauri::command(async)]
 pub fn agent_prompt_send(terminals: tauri::State<'_, crate::terminal::Terminals>, id: u32, text: String) -> PromptSent {
     if !claim_opening(id) {

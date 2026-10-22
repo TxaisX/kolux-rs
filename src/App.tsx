@@ -53,6 +53,7 @@ import { cacheDue, cacheMinutes } from "./projects/cache";
 import { startFields, startTail } from "./projects/startArgs";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
+import { pasteHosts } from "./tasks/pasteHosts";
 import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
 import FolderRenameAsk from "./projects/FolderRenameAsk";
 import AboutPanel from "./shell/AboutPanel";
@@ -2539,6 +2540,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
             onClose={() => setPalette(false)}
             linked={linkedPrs(settings[SCM_LINKED_PR_KEY])}
+            hosts={pasteHosts(linkedPrs(settings[SCM_LINKED_PR_KEY]))}
             onItem={openInBrowser}
           />
         )}

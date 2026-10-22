@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatItem } from "./model";
-import { choicesFor, clean, confirmModel, controlsOff, effortsFor, failChange, loadSaved, modelCommand, modelFromWords, opensPicker, readModel, routeOf, saveChoice, savedArgs, sentChange, statusText, type Change } from "./controls";
+import { seatArgs } from "../launch/seats";
+import { choicesFor, clean, confirmModel, controlsOff, effortsFor, failChange, loadSaved, modelCommand, modelFromWords, opensPicker, readModel, routeOf, saveChoice, savedArgs, savedSeat, sentChange, statusText, type Change } from "./controls";
 
 const mem = () => {
   const m = new Map<string, string>();
@@ -110,6 +111,15 @@ describe("CHAT-024 saved launch choices", () => {
   it("fast mode is kept only for a model that offers it", () => {
     expect(clean({ claude: { model: "sonnet", fast: true } })).toEqual({ claude: { model: "sonnet" } });
     expect(clean({ claude: { model: "opus", fast: true } })).toEqual({ claude: { model: "opus", fast: true } });
+  });
+  it("row 389: picking an agent in the launch pane starts from its saved choice, so the launch carries its arguments", () => {
+    const s = mem();
+    saveChoice("claude", { model: "sonnet", effort: "high" }, s);
+    const seat = { agent: "claude", ...savedSeat("claude", loadSaved(s)) };
+    expect(seat).toEqual({ agent: "claude", model: "sonnet", effort: "high", fast: undefined });
+    expect(seatArgs(seat)).toEqual(savedArgs("claude", loadSaved(s)));
+    // Nothing saved: the seat still waits for an explicit model pick.
+    expect(savedSeat("codex", loadSaved(s))).toEqual({ model: null, effort: undefined, fast: undefined });
   });
   it("broken storage gives an empty set", () => {
     const s = mem();

@@ -17,6 +17,8 @@ pub mod setup_gate;
 pub mod restart;
 /// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
 pub mod upgrade;
+/// Row 193: a saved blob that no longer reads is kept aside, never saved over.
+pub mod kept;
 /// ORCH-062..064 (T-312): the runtime commands agents call for files, git and GitHub, past sessions
 /// and automations.
 pub mod runtime;
@@ -60,6 +62,10 @@ pub struct Mail {
     /// ORCH-030: requests that take a while (a worker start) and have not finished, with when they
     /// began and the process that runs them.
     pub pending: BTreeMap<String, Value>,
+    /// Row 193: the store could not be read when this was loaded, so it is not what is saved there
+    /// and a save would wipe it. Saves refuse while this is set.
+    #[serde(skip)]
+    pub unread: bool,
 }
 
 /// ORCH-030: how long a finished request's receipt is kept for a retry to find.
@@ -744,7 +750,6 @@ pub fn stop_warning(receipt: &mut Value) {
 /// CLI-036: a terminal command aimed at a worker that has no terminal is refused by name, with
 /// the way to read it instead. `handle` is what the command was given: a dispatch id or a
 /// terminal handle; a handle that is no worker's passes through unchanged.
-#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
 pub fn terminal_for(dispatches: &[Value], handle: &str) -> Result<String, Fail> {
     match dispatches.iter().find(|d| d["id"] == handle) {
         Some(d) => terminal_of(d).ok_or_else(|| Fail::new("no_terminal", format!("{handle} has no terminal, so terminal commands cannot reach it; read it with {CLI} orchestration worker-read --dispatch {handle} --source transcript"))),
@@ -888,12 +893,11 @@ pub fn labels_by_terminal(tasks: &[Value], dispatches: &[Value]) -> Value {
 }
 
 /// ORCH-066: the task name for each worker's terminal, for the Agents view and Board (T-129-d).
-#[allow(dead_code)] // registered in lib.rs by the coordinator (evidence/T-129-c.patch)
 #[tauri::command]
 pub fn worker_labels(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Value, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    let load = |k: &str| -> Vec<Value> { store.get(k).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() };
-    Ok(labels_by_terminal(&load(TASKS_KEY), &load(DISPATCHES_KEY)))
+    let load = |k: &str| kept::load::<Vec<Value>>(&store, k);
+    Ok(labels_by_terminal(&load(TASKS_KEY)?, &load(DISPATCHES_KEY)?))
 }
 
 /// ORCH-040: the open dispatches tied to one worktree, by the folder they were started in or by a
@@ -911,11 +915,16 @@ pub fn workers_in(dispatches: &[Value], here: &dyn Fn(&str) -> bool, homed: &dyn
 }
 
 impl Mail {
+    /// The saved mail. A blob that does not read is kept aside first (row 193, `kept`); a store that
+    /// cannot be read at all loads empty but marked `unread`, so it is never saved over.
     pub fn load(store: &crate::state::Store) -> Mail {
-        store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        kept::load(store, KEY).unwrap_or_else(|_| Mail { unread: true, ..Mail::default() })
     }
 
     pub fn save(&self, store: &crate::state::Store) -> Result<(), Fail> {
+        if self.unread {
+            return Err(Fail::new("failed", "the orchestration mail could not be read, so nothing was saved over it; try again"));
+        }
         let text = serde_json::to_string(self).map_err(|e| Fail::new("failed", e.to_string()))?;
         store.set(KEY, &text).map_err(|e| Fail::new("failed", e.to_string()))
     }
@@ -1592,8 +1601,8 @@ pub fn breaker_reset(tasks: &[Value], dispatches: &mut [Value], task: &str, run:
 #[tauri::command]
 pub fn task_reset(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, task: String, run: Option<String>) -> Result<Value, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    let load = |k: &str| -> Vec<Value> { store.get(k).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() };
-    let (tasks, mut dispatches) = (load(TASKS_KEY), load(DISPATCHES_KEY));
+    let load = |k: &str| kept::load::<Vec<Value>>(&store, k);
+    let (tasks, mut dispatches) = (load(TASKS_KEY)?, load(DISPATCHES_KEY)?);
     let out = breaker_reset(&tasks, &mut dispatches, &task, run.as_deref(), wall_ms()).map_err(|e| format!("{}: {}", e.code, e.message))?;
     store.set(DISPATCHES_KEY, &Value::Array(dispatches).to_string()).map_err(|e| e.to_string())?;
     Ok(out)

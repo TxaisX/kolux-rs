@@ -21,6 +21,7 @@ import { KitIcon, openKits } from "../kits/Kits";
 import { KITS, VENDOR_NAME, assignRoles, type Vendor } from "../kits/catalog";
 import { canLaunch, FEATURED, type AgentPass } from "./agents";
 import { useKeymap } from "../keys/KeymapContext";
+import { savedSeat } from "../chat/controls";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
 
 /** SESS-017: a link to the agent's own documentation, when Kolux knows it (agents.rs `install_page`). */
@@ -122,7 +123,9 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
   // A program with no model list has nothing to pick: its seat uses the program's own default.
   const pickAgent = (i: number, id: string) => {
     const only = modelsFor(id).length === 1;
-    setSeat(i, { agent: id, model: id !== TERMINAL && only ? DEFAULT_MODEL : null, effort: undefined, fast: undefined });
+    // Row 389: a choice saved for this agent (CHAT-024) is the starting pick; the user can still change it.
+    const saved = id === TERMINAL ? null : savedSeat(id);
+    setSeat(i, { agent: id, model: id !== TERMINAL && only ? DEFAULT_MODEL : null, effort: undefined, fast: undefined, ...(saved?.model ? saved : {}) });
   };
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const searched = !pass || canLaunch(pass);

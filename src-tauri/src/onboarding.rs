@@ -38,7 +38,7 @@ fn none_finished() -> i32 {
 }
 
 fn raw(store: &Store) -> Option<Onboarding> {
-    store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
+    crate::orchestration::kept::or_default::<Option<Onboarding>>(store, KEY)
 }
 
 /// ONB-008 (T-208-c): the version that had a view-choice screen after the welcome. Coordinator
@@ -259,7 +259,7 @@ fn known(v: Vec<String>, ids: &[&str]) -> Vec<String> {
 
 /// The stored record; tips this build no longer knows are dropped and each tip counts once.
 fn guide_load(store: &Store) -> Guide {
-    let mut g: Guide = store.get(GUIDE).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let mut g: Guide = crate::orchestration::kept::or_default(store, GUIDE);
     g.tips_seen = known(std::mem::take(&mut g.tips_seen), TIPS);
     g.tours_seen = known(std::mem::take(&mut g.tours_seen), TOURS);
     g

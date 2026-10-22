@@ -388,7 +388,7 @@ pub fn on_poll(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr]) {
 const CHECKS_SEEN_KEY: &str = "automations.checksSeen";
 
 fn load_checks_seen(store: &Store) -> std::collections::HashMap<String, String> {
-    store.get(CHECKS_SEEN_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, CHECKS_SEEN_KEY)
 }
 
 /// AUTO-004 (T-085-d): the open pull requests whose checks went from pending (or passing) to

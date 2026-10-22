@@ -972,7 +972,9 @@ pub fn add(all: &mut Vec<Crash>, mut inc: Crash) -> String {
 
 /// Reads the store, merges `inc` and saves it (retrying a briefly locked file); the report it landed in.
 pub fn record(dir: &Path, inc: Crash) -> Crash {
-    let mut all = crashes_read(dir);
+    // Row 589: a file held by a scanner is read again, a damaged one is kept aside, and one that
+    // still cannot be read is left alone (this report is not saved) rather than saved over.
+    let Ok(mut all) = crashes_load(dir) else { return inc };
     let fallback = inc.clone();
     let id = add(&mut all, inc);
     let _ = crashes_write(dir, &all);
@@ -1051,6 +1053,38 @@ pub fn previous_run_crash(log: &str) -> Option<String> {
 
 pub fn crashes_read(dir: &Path) -> Vec<Crash> {
     fs::read(dir.join(CRASHES)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Row 589: the crash list for a save. A briefly held file is read again (as `write_retry` writes
+/// again); a damaged one is copied to `crashes.json.corrupt-<ms>` and the list starts empty; a
+/// file that still cannot be read is an error, so the caller does not save over it.
+fn crashes_load(dir: &Path) -> Result<Vec<Crash>, String> {
+    let path = dir.join(CRASHES);
+    let mut last = String::new();
+    for attempt in 0..SAVE_TRIES {
+        match fs::read(&path) {
+            Ok(b) => {
+                if let Ok(all) = serde_json::from_slice(&b) {
+                    return Ok(all);
+                }
+                let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+                fs::write(dir.join(format!("{CRASHES}.corrupt-{ms}")), &b).map_err(|e| e.to_string())?;
+                return Ok(Vec::new());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                let locked = e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33);
+                last = e.to_string();
+                if !locked {
+                    break;
+                }
+                if attempt + 1 < SAVE_TRIES {
+                    std::thread::sleep(SAVE_PAUSE);
+                }
+            }
+        }
+    }
+    Err(last)
 }
 
 /// APP-040: the store survives damaged files (crashes_read starts empty) and a save retries when
@@ -1458,11 +1492,11 @@ mod tests {
         assert!(own_install(Path::new("C:/Users/u/Apps/Kolux"), None, Some(profile)));
         assert!(!own_install(Path::new("C:/Program Files/Kolux RS"), Some(local), Some(profile)));
         assert!(!own_install(Path::new("C:/Program Files/Kolux RS"), None, None));
-        let steps = repair_steps(Path::new("C:/x/a.dll"), "txais");
+        let steps = repair_steps(Path::new("C:/x/a.dll"), "someone");
         assert_eq!(steps.len(), 3);
         assert_eq!(steps[0][1], "/reset", "inherited defaults first");
-        assert_eq!(&steps[1][1..3], &["/remove:d".to_string(), "txais".to_string()], "then the deny entries");
-        assert_eq!(steps[2][2], "txais:(F)", "then an explicit grant");
+        assert_eq!(&steps[1][1..3], &["/remove:d".to_string(), "someone".to_string()], "then the deny entries");
+        assert_eq!(steps[2][2], "someone:(F)", "then an explicit grant");
         assert!(steps.iter().all(|s| s[0] == "C:/x/a.dll" && s.contains(&"/C".to_string()) && s.contains(&"/Q".to_string())));
     }
 
@@ -1675,8 +1709,8 @@ mod tests {
         let older = "1 kolux-rs: config: a\n2 fatal error: old\n3 kolux-rs: config: a\n4 app exit\n5 kolux-rs: config: a\n";
         assert_eq!(previous_run_crash(older), None);
         // the report never carries the user's folder name
-        assert_eq!(scrub_report("panicked at C:\\Users\\txais\\src\\x.rs:1 boom"), "panicked at <home>\\src\\x.rs:1 boom");
-        assert_eq!(scrub_report("in /home/txais/dev and /Users/txais/dev"), "in <home>/dev and <home>/dev");
+        assert_eq!(scrub_report("panicked at C:\\Users\\someone\\src\\x.rs:1 boom"), "panicked at <home>\\src\\x.rs:1 boom");
+        assert_eq!(scrub_report("in /home/someone/dev and /Users/someone/dev"), "in <home>/dev and <home>/dev");
         assert_eq!(scrub_report("token=abcdefghijklmnop plain words"), crate::diag::scrub("token=abcdefghijklmnop plain words"), "secrets still masked");
         assert_eq!(scrub_report("nothing to hide"), "nothing to hide");
     }
@@ -1686,9 +1720,9 @@ mod tests {
         let dir = temp("crashes");
         assert_eq!(startup_scan(&dir), None, "no log, no record");
         fs::create_dir_all(dir.join("logs")).unwrap();
-        fs::write(dir.join("logs").join("kolux.log"), "1 kolux-rs: config: a\n2 fatal error: panicked at C:\\Users\\txais\\src\\x.rs: boom\n3 kolux-rs: config: a\n").unwrap();
+        fs::write(dir.join("logs").join("kolux.log"), "1 kolux-rs: config: a\n2 fatal error: panicked at C:\\Users\\someone\\src\\x.rs: boom\n3 kolux-rs: config: a\n").unwrap();
         let c = startup_scan(&dir).expect("a record");
-        assert!(!c.summary.contains("txais"), "paths are scrubbed: {}", c.summary);
+        assert!(!c.summary.contains("someone"), "paths are scrubbed: {}", c.summary);
         let all = crashes_read(&dir);
         assert_eq!(pending(&all), Some(&c), "it prompts");
         let mut all = all;
@@ -1793,6 +1827,15 @@ mod tests {
         assert!(crashes_read(&dir).is_empty(), "a damaged file starts empty");
         let c = record(&dir, Crash::new(Kind::App, 5, "boom"));
         assert_eq!(crashes_read(&dir), vec![c], "and takes new reports");
+        // Row 589: the damaged file was kept aside byte for byte, not saved over.
+        let kept: Vec<_> = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with(&format!("{CRASHES}.corrupt-"))).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(fs::read(kept[0].path()).unwrap(), b"{ not json");
+        // Row 589: a crash list that cannot be read (here a folder where the file goes) is not saved over.
+        let held = temp("store-held");
+        fs::create_dir_all(held.join(CRASHES)).unwrap();
+        let _ = record(&held, Crash::new(Kind::App, 6, "unsaved"));
+        assert!(held.join(CRASHES).is_dir(), "left alone");
         // two sharing violations, then the save goes through
         let mut calls = 0;
         let r = write_retry(&dir.join("x.json"), b"1", &mut |p, b| {

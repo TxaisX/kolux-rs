@@ -152,6 +152,13 @@ export function savedArgs(agent: string, saved: Saved = loadSaved()): string[] {
   return seatArgs({ agent: base(agent), model: c.model ?? null, effort: c.effort, fast: c.fast });
 }
 
+/** Row 389: the seat fields the launch pane starts from when `agent` is picked: its saved model, effort
+ * and fast mode (cleaned by loadSaved), or no model so the pick stays explicit when nothing is saved. */
+export function savedSeat(agent: string, saved: Saved = loadSaved()): { model: string | null; effort?: string; fast?: boolean } {
+  const c = saved[agent];
+  return { model: c?.model ?? null, effort: c?.effort, fast: c?.fast };
+}
+
 function safeStorage(): Storage | undefined {
   try {
     return typeof localStorage === "undefined" ? undefined : localStorage;

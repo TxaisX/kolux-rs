@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   completedState, COOLDOWN_MS, createStar, dismissed, emptyScreen, finishedTask, fresh, hidden, landingStar, onboardingToast, QUIET_MS, showing, stateOf, STAR_THRESHOLD,
-  starAfterClose, STAR_EVENT, thresholdDue, withVersion, type Ctx, type StarState,
+  starAfterClose, STAR_EVENT, thresholdDue, withVersion, createStarFeed, type Ctx, type StarState,
 } from "./star";
 
 const ok: Ctx = { now: 1_000_000, starred: false, window: true };
@@ -208,5 +208,62 @@ describe("the onboarding-finished hook (T-208-c)", () => {
     starAfterClose("completed");
     expect(heard).toEqual([{ kind: "onboarding-done" }]);
     vi.unstubAllGlobals();
+  });
+});
+
+// Row 308 (T-322-b rest): the agents' own status reports feed the prompt its launch and finished-task moments.
+describe("star feed", () => {
+  const rig = () => {
+    let t = 0;
+    const told: unknown[] = [];
+    const timers: { at: number; fn: () => void }[] = [];
+    const feed = createStarFeed((e) => told.push(e), () => t, (fn, ms) => {
+      const job = { at: t + ms, fn };
+      timers.push(job);
+      return () => timers.splice(timers.indexOf(job), 1);
+    });
+    const advance = (ms: number) => {
+      t += ms;
+      for (const job of timers.filter((j) => j.at <= t)) {
+        timers.splice(timers.indexOf(job), 1);
+        job.fn();
+      }
+    };
+    return { feed, told, advance };
+  };
+
+  it("a started agent counts as one launch; a sub-agent's start does not", () => {
+    const { feed, told } = rig();
+    feed.hook({ paneKey: 1, state: "idle", fresh: true });
+    feed.hook({ paneKey: 1, state: "idle", fresh: true, child: "helper" });
+    feed.hook({ paneKey: 1, state: "working" });
+    expect(told).toEqual([{ kind: "launch" }]);
+  });
+
+  it("a prompted turn that finishes clean is told once the other panes and typing are quiet", () => {
+    const { feed, told, advance } = rig();
+    feed.hook({ paneKey: 1, state: "working" });
+    advance(5_000);
+    feed.hook({ paneKey: 1, state: "done" });
+    advance(QUIET_MS - 1);
+    feed.typed();
+    feed.hook({ paneKey: 2, state: "working" });
+    advance(QUIET_MS - 1);
+    expect(told).toEqual([]);
+    advance(1);
+    expect(told).toEqual([{ kind: "task-finished", clean: true, quietMs: QUIET_MS }]);
+  });
+
+  it("an interrupted turn is not clean, and a finish with no prompt says nothing", () => {
+    const { feed, told, advance } = rig();
+    feed.hook({ paneKey: 3, state: "done" });
+    advance(QUIET_MS * 2);
+    expect(told).toEqual([]);
+    feed.hook({ paneKey: 3, state: "working" });
+    feed.hook({ paneKey: 3, state: "interrupted" });
+    feed.hook({ paneKey: 3, state: "working" });
+    feed.hook({ paneKey: 3, state: "done" });
+    advance(QUIET_MS);
+    expect(told).toEqual([{ kind: "task-finished", clean: false, quietMs: QUIET_MS }]);
   });
 });

@@ -373,6 +373,8 @@ pub fn run() {
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 secrets::sealing_pass(&handle.state::<Mutex<Store>>(), &dir);
+                // Row 144: old pasted images go at start-up, not only at the next paste.
+                pasted_image::sweep_profile(&dir);
             });
             // USAGE-007: the resumes the previous run left waiting, then the timer that types them.
             if let Ok(store) = app.state::<Mutex<Store>>().lock() {

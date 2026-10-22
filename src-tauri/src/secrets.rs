@@ -238,7 +238,7 @@ pub fn drop_unreadable(store: &Store, dir: &Path) -> Vec<String> {
 
 /// ACCT-010: the secret fields waiting for a reconnect, for the note in the main window.
 pub fn dropped(store: &Store) -> Vec<String> {
-    store.get(DROPPED_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, DROPPED_KEY)
 }
 
 pub fn dismiss_dropped(store: &Store) {
@@ -521,7 +521,32 @@ pub fn clear_setting(store: &Store, key: &str) -> Result<(), String> {
     if let Some(obj) = settings.as_object_mut() {
         obj.remove(key);
     }
-    store.save_settings(&settings).map_err(|e| e.to_string())
+    store.save_settings(&settings).map_err(|e| e.to_string())?;
+    forget_in_backup(&store.dir().join("settings.json.bak"), key)
+}
+
+/// After-list row 655: the save above made the file from before the forget the last good copy,
+/// so the key is taken out of that copy too (written beside it, then moved into place). The rest
+/// of the copy stays; a copy that does not read as a JSON object, or has no such key, is left as it is.
+fn forget_in_backup(bak: &Path, key: &str) -> Result<(), String> {
+    let Ok(bytes) = fs::read(bak) else { return Ok(()) };
+    let Ok(mut copy) = serde_json::from_slice::<Value>(&bytes) else { return Ok(()) };
+    if copy.as_object_mut().and_then(|o| o.remove(key)).is_none() {
+        return Ok(());
+    }
+    let tmp = bak.with_extension("bak.tmp");
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(&serde_json::to_vec_pretty(&copy)?)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, bak)
+    };
+    write().map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("the key was removed from settings, but its old copy in {} could not be cleared: {e}", bak.display())
+    })
 }
 
 #[cfg(test)]
@@ -585,6 +610,32 @@ mod tests {
         assert_eq!(drop_unreadable(&store, &dir), ["xaiApiKey"]);
         dismiss_dropped(&store);
         assert!(dropped(&store).is_empty());
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // After-list row 655 (T-547 review): Forget must not leave the sealed key in the last good copy.
+    #[test]
+    fn a_forgotten_key_is_gone_from_the_backup_and_the_other_settings_stay_in_it() {
+        let dir = temp_dir("forget-bak");
+        let store = Store::open(&dir).unwrap();
+        write_setting(&store, "xaiApiKey", "xai-FORGET").unwrap();
+        let mut s = store.settings();
+        s["theme"] = "classic".into();
+        store.save_settings(&s).unwrap();
+        write_setting(&store, "claudeOauthToken", "sk-ant-oat01-KEEP").unwrap();
+        let bak = dir.join("settings.json.bak");
+        let sealed = store.settings()["xaiApiKey"].as_str().unwrap().to_string();
+        assert!(fs::read_to_string(&bak).unwrap().contains(&sealed), "the backup holds the key before the forget");
+        clear_setting(&store, "xaiApiKey").unwrap();
+        let after: Value = serde_json::from_slice(&fs::read(&bak).unwrap()).unwrap();
+        assert!(after.get("xaiApiKey").is_none(), "{after}");
+        assert_eq!(after["theme"], "classic", "the rest of the last good copy stays");
+        assert!(!fs::read_to_string(dir.join("settings.json")).unwrap().contains(&sealed));
+        assert!(!dir.join("settings.json.bak.tmp").exists());
+        // A second forget of the same key (nothing left to take out) still works.
+        clear_setting(&store, "xaiApiKey").unwrap();
+        assert!(!fs::read_to_string(&bak).unwrap().contains(&sealed));
         drop(store);
         fs::remove_dir_all(&dir).unwrap();
     }

@@ -6,6 +6,7 @@
 // App.tsx mounts, so the screen mounts its own `CrashFeedback` beside the button
 // (evidence/core-T-249-c-ScreenBoundary.tsx.patch).
 import FeedbackDialog, { requestFeedback } from "./feedback/FeedbackDialog";
+import { scrub } from "./feedback/scrub";
 
 /** How many stack lines go into the report (the top of the stack names the broken part). */
 export const STACK_LINES = 12;
@@ -17,7 +18,9 @@ export function crashText(error: unknown, stackLines = STACK_LINES): string {
   const lines = ["The interface crashed (Kolux hit a problem).", "", `Error: ${message}`];
   if (stack.length) lines.push("", "Stack:", ...stack.slice(0, stackLines).map((l) => `  ${l}`));
   lines.push("", "What I was doing:", "");
-  return lines.join("\n");
+  // Row 566: the message and the frames can name local paths (a dev build) or carry a secret, so the
+  // text is scrubbed the way the feedback box scrubs what leaves, before the user ever sees it.
+  return scrub(lines.join("\n"));
 }
 
 /** Opens the Send Feedback box with the crash text in it. */

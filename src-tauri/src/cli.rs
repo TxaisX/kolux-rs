@@ -1793,6 +1793,7 @@ pub fn main(words: Vec<String>) -> i32 {
     if !json && parsed.command == "terminal.list" {
         parsed.args.insert("includeVisualLayouts".into(), Value::Bool(true));
     }
+    caller_distro(&mut parsed.args, std::env::var("WSL_DISTRO_NAME").ok());
     let retry_word = CHANGES.contains(&parsed.command.as_str()).then(|| {
         let id = parsed.args.get("retryRequest").and_then(Value::as_str).map(str::to_string).unwrap_or_else(uuid);
         parsed.args.insert("retryRequest".into(), json!(id));
@@ -2273,7 +2274,8 @@ fn terminal_rows(ctx: &Ctx) -> Result<Vec<Value>, Fail> {
         }
     }
     // T-262-b: the rows are the session tab inventory (the same list the app and the agents read).
-    Ok(crate::agents::inventory::tabs(ctx.terminals)
+    // Row 256: as served over the socket, each program line is cut to its name (no keys or tokens).
+    Ok(crate::agents::inventory::tabs_for_socket(ctx.terminals)
         .into_iter()
         .map(|t| {
             let home = t.cwd.as_deref().and_then(|d| trees.iter().filter(|(w, _)| under(w, d)).max_by_key(|(w, _)| w.len()));
@@ -2560,7 +2562,7 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
     }
     // Each open session goes to the innermost worktree its folder is in.
     // T-262-b: the sessions come from the session tab inventory; a tab with no start folder has no worktree.
-    let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
+    let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs_for_socket(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
     let home = |dir: &str| lists.iter().flat_map(|(_, all, _)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
     let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
     let dispatches = load_list(&*lock()?, DISPATCHES_KEY);
@@ -3697,8 +3699,10 @@ const SETTLE: Duration = Duration::from_millis(1000);
 const IDLE: Duration = Duration::from_secs(3);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Row 193: a list that no longer reads is kept aside (orchestration::kept) before it starts empty,
+/// so the next save_list cannot wipe it.
 fn load_list(store: &Store, key: &str) -> Vec<Value> {
-    store.get(key).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, key)
 }
 
 fn save_list(store: &Store, key: &str, list: &[Value]) -> Result<(), Fail> {
@@ -4111,9 +4115,16 @@ fn session_now(terminals: &Terminals, t: u32) -> (Option<Option<String>>, Option
 /// start; a pane that acts in another Run is turned away by each of them (ORCH-033: it may read
 /// that Run, never change it).
 fn start_failed_run(receipt: &mut Value, run: Option<&str>) {
+    start_failed_run_for(receipt, run, cfg!(windows));
+}
+
+/// Row 343: the offered lines quote a value the way the shell they will be pasted into reads it
+/// (automations_cli::shell_word: double quotes on Windows, single quotes elsewhere).
+fn start_failed_run_for(receipt: &mut Value, run: Option<&str>, windows: bool) {
     let lead = format!("{} orchestration worker-", crate::orchestration::CLI);
     let retry = format!("{lead}start ");
-    let word = |v: &str| if v.chars().any(|c| c.is_whitespace() || "@,=".contains(c)) { format!("\"{v}\"") } else { v.to_string() };
+    // `safe` below keeps every value shell_word refuses out of the offered lines.
+    let word = |v: &str| automations_cli::shell_word(v, windows).unwrap_or_default();
     let tiered = receipt["tier"].as_str().is_some_and(|t| !t.trim().is_empty());
     let mut who = String::new();
     let flags: &[&str] = if tiered { &["agent", "tier"] } else { &["agent", "model", "effort"] };
@@ -4841,9 +4852,29 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Row 220: a client run inside WSL names its distribution, so the app can read a Linux-form
+/// path (/home/...) against it; a value the caller gave is kept.
+fn caller_distro(args: &mut Map<String, Value>, distro: Option<String>) {
+    if let Some(d) = distro.filter(|d| !d.trim().is_empty()) {
+        args.entry("callerDistro").or_insert(json!(d));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row220_the_client_sends_the_wsl_distribution_it_runs_in() {
+        let mut a = Map::new();
+        caller_distro(&mut a, None);
+        caller_distro(&mut a, Some(" ".into()));
+        assert!(a.is_empty());
+        caller_distro(&mut a, Some("Ubuntu".into()));
+        assert_eq!(a["callerDistro"], "Ubuntu");
+        caller_distro(&mut a, Some("Debian".into()));
+        assert_eq!(a["callerDistro"], "Ubuntu", "a value already given is kept");
+    }
     use std::process::Command;
 
     fn words(s: &str) -> Vec<String> {
@@ -6936,6 +6967,12 @@ mod tests {
         let line = r["next"][1].as_str().unwrap().to_string();
         assert!(line.contains("--model \"my model\" --effort high --run run-1"), "{line}");
         assert_eq!(request(&line).args["model"], "my model");
+        // Row 343: on a POSIX shell the same value is single-quoted.
+        let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "claude", "model": "my model", "effort": "high", "tier": null, "terminals": [], "worktree": { "path": "/w", "created": false } });
+        crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+        start_failed_run_for(&mut r, Some("run 1"), false);
+        let line = r["next"][1].as_str().unwrap().to_string();
+        assert!(line.contains("--model 'my model' --effort high --run 'run 1'"), "{line}");
         // cli FIX-5 (council AFTER 1): a value a shell would act on is never offered; the stop and
         // release lines still are.
         for bad in ["m\"x", "m;rm", "a&b", "a|b", "$env:X", "a`b", "a>b"] {
@@ -8121,7 +8158,7 @@ mod tests {
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
         let wd = repo.display().to_string();
         terminals.fake_session(21, &wd, None);
-        terminals.fake_session(22, &wd, Some("claude --permission-mode auto"));
+        terminals.fake_session(22, &wd, Some("claude --permission-mode auto --token tok-secret-256"));
         terminals.set_layout(vec![
             json!({ "handle": "term-21", "dir": wd, "cell": 1, "tab": 1, "title": "pwsh", "custom": null, "shown": false, "ask": null }),
             json!({ "handle": "term-22", "dir": wd, "cell": 1, "tab": 2, "title": "Claude", "custom": null, "shown": true, "ask": null }),
@@ -8143,6 +8180,9 @@ mod tests {
         let ps = dispatch(&ctx, &req).unwrap();
         let listed: Vec<String> = ps["worktrees"].as_array().unwrap().iter().flat_map(|w| w["sessions"].as_array().unwrap().iter().map(|s| s["terminal"].as_str().unwrap().to_string())).collect();
         assert_eq!(listed, inventory);
+        // Row 256: neither list carries the arguments of a program line (a key or token may sit there).
+        let wire = format!("{} {}", serde_json::to_string(&rows).unwrap(), ps);
+        assert!(!wire.contains("tok-secret-256"), "{wire}");
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

@@ -66,6 +66,12 @@ pub fn sweep(dir: &Path, now_ms: u128) {
     }
 }
 
+/// The sweep of a profile's pasted images; it runs at every paste and once at start-up (row 144),
+/// so old pastes go even when nothing is pasted again.
+pub fn sweep_profile(profile: &Path) {
+    sweep(&profile.join(FOLDER), now_ms());
+}
+
 fn now_ms() -> u128 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis())
 }
@@ -78,10 +84,9 @@ pub fn paste_image_save(app: tauri::AppHandle, request: tauri::ipc::Request<'_>)
         return Err("The clipboard image did not arrive; nothing was pasted.".into());
     };
     let kind = request.headers().get("x-image-kind").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join(FOLDER);
-    let now = now_ms();
-    sweep(&dir, now);
-    save_into(&dir, kind, bytes, now).map(|p| p.to_string_lossy().into_owned())
+    let profile = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    sweep_profile(&profile);
+    save_into(&profile.join(FOLDER), kind, bytes, now_ms()).map(|p| p.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -138,5 +143,17 @@ mod tests {
         std::fs::write(&other, "x").unwrap();
         sweep(&dir, now);
         assert!(!old.exists() && fresh.exists() && other.exists());
+    }
+
+    #[test]
+    fn row144_the_start_up_sweep_clears_old_pastes_with_no_new_paste() {
+        // Row 144: old pastes go at start-up too, not only when the next paste happens.
+        let profile = temp("startup");
+        let old = save_into(&profile.join(FOLDER), "png", &[1], 1_000).unwrap();
+        let fresh = save_into(&profile.join(FOLDER), "png", &[1], now_ms() - 1_000).unwrap();
+        sweep_profile(&profile);
+        assert!(!old.exists() && fresh.exists());
+        // A profile that never pasted anything is fine.
+        sweep_profile(&temp("never"));
     }
 }
