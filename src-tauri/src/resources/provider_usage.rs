@@ -87,6 +87,16 @@ impl Provider {
 #[allow(dead_code)]
 pub struct Secret(String);
 
+/// Row 657: the key's bytes are overwritten when it is dropped, so it does not linger in freed
+/// memory (best effort: no copy the standard library made earlier is reachable from here).
+impl Drop for Secret {
+    fn drop(&mut self) {
+        let mut bytes = std::mem::take(&mut self.0).into_bytes();
+        bytes.fill(0);
+        std::hint::black_box(&bytes);
+    }
+}
+
 impl Secret {
     pub fn new(plain: String) -> Secret {
         Secret(plain)
@@ -242,6 +252,7 @@ pub fn set_key(store: &Store, p: Provider, value: &str) -> Result<(), String> {
     if key.chars().any(|c| c.is_whitespace() || c.is_control() || !c.is_ascii()) {
         return Err("A key is one line of letters, digits and symbols with no spaces".into());
     }
+    // Rows 653/654: write_setting checks the same rule and the length cap for every writer.
     secrets::write_setting(store, p.key_field(), key)
 }
 

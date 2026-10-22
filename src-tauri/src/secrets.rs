@@ -177,6 +177,28 @@ pub fn read_setting(store: &Store, key: &str) -> Result<Option<String>, String> 
     }
 }
 
+/// Rows 653/654: the fields that hold one API key, which goes into an Authorization header.
+pub const API_KEY_FIELDS: &[&str] = &["moonshotApiKey", "minimaxApiKey"];
+/// Rows 654: the longest an API key may be (bytes).
+pub const API_KEY_MAX: usize = 512;
+
+/// Rows 653/654: an API key field only ever stores one short line of visible characters, whoever
+/// writes it (the Accounts page, the usage page or the generic secret command), so a pasted line
+/// break cannot reach a header and a huge paste cannot fill the settings file. Other secret
+/// fields, and an already sealed value, are not checked here.
+pub fn check_api_key(key: &str, plain: &str) -> Result<(), String> {
+    if !API_KEY_FIELDS.contains(&key) || is_sealed(plain) {
+        return Ok(());
+    }
+    if plain.len() > API_KEY_MAX {
+        return Err(format!("A key is at most {API_KEY_MAX} characters"));
+    }
+    if plain.chars().any(|c| c.is_whitespace() || c.is_control() || !c.is_ascii()) {
+        return Err("A key is one line of letters, digits and symbols with no spaces".into());
+    }
+    Ok(())
+}
+
 /// Stores a secret settings field sealed. Refuses to store it in the clear: while the secret
 /// store is down the save fails and the value saved earlier stays as it was (SAFE-026). Callers
 /// hold the store lock across the seal and the write, so a slower save can never land after a
@@ -185,6 +207,7 @@ pub fn write_setting(store: &Store, key: &str, plain: &str) -> Result<(), String
     if !SECRET_SETTINGS.contains(&key) {
         return Err(format!("{key} is not a secret field"));
     }
+    check_api_key(key, plain)?;
     let sealed = seal(plain).map_err(|e| format!("{e}; nothing was saved"))?;
     let mut settings = store.settings();
     if !settings.is_object() {
@@ -555,6 +578,23 @@ mod tests {
 
     // ACCT-025: on quit a sign-in the agent renewed is sealed again; an unchanged or missing one
     // is left alone, and a step that hangs is given up after its time limit.
+    // Rows 653/654: the generic path refuses what the usage page refuses, and a key has a length cap.
+    #[test]
+    fn row653_an_api_key_field_refuses_line_breaks_spaces_and_a_huge_paste() {
+        let dir = temp_dir("row653");
+        let store = Store::open(&dir).unwrap();
+        for bad in ["sk-moon\r\nX-Evil: 1", "two parts", "tab\tkey", "caf\u{e9}-key"] {
+            assert!(write_setting(&store, "moonshotApiKey", bad).is_err(), "{bad:?}");
+            assert!(write_setting(&store, "minimaxApiKey", bad).is_err(), "{bad:?}");
+        }
+        assert!(write_setting(&store, "moonshotApiKey", &"k".repeat(API_KEY_MAX + 1)).is_err(), "over the cap");
+        assert!(store.settings().get("moonshotApiKey").is_none(), "a refused key stores nothing");
+        // Other secret fields (a cookie can be long and has spaces) are not held to the key rule.
+        write_setting(&store, "minimaxCookie", &format!("a=1; b={}", "x".repeat(2000))).unwrap();
+        write_setting(&store, "moonshotApiKey", &"k".repeat(API_KEY_MAX)).unwrap();
+        assert_eq!(read_setting(&store, "moonshotApiKey").unwrap().map(|k| k.len()), Some(API_KEY_MAX));
+    }
+
     #[test]
     fn renewed_sign_ins_are_sealed_again_on_quit_and_a_hung_step_is_dropped() {
         let dir = crate::test_dir::temp("quit-save");

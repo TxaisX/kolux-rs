@@ -75,7 +75,7 @@ pub fn codex_account_label(app: AppHandle, store: tauri::State<'_, Mutex<Store>>
 }
 
 pub fn load(store: &Store) -> Vec<Account> {
-    store.get(LIST_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    crate::claude_accounts::load_kept(store, LIST_KEY)
 }
 
 /// The active account, if it is still listed and its home is on disk.
@@ -576,23 +576,96 @@ const SHARED_FILES: [&str; 2] = ["AGENTS.md", "AGENTS.override.md"];
 /// How long one launch spends copying before it goes on (the rest follows at the next launch).
 pub const SHARE_LIMIT: Duration = Duration::from_secs(2);
 
+/// Row 174: what Kolux copied into a home, by path relative to the home, with the modified time the
+/// copy was given. It lives in the home (`SHARED_LIST`), so removing the account removes it too.
+type Shared = std::collections::BTreeMap<String, u64>;
+const SHARED_LIST: &str = ".kolux-shared.json";
+
+fn stamp(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+}
+
+/// The list, or an empty one when it is missing or unreadable (the safe way round: nothing is
+/// then removed, and the copies are recorded again as they are made).
+fn read_shared(home: &Path) -> Shared {
+    fs::read_to_string(home.join(SHARED_LIST)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn write_shared(home: &Path, list: &Shared) {
+    if let Ok(text) = serde_json::to_string(list) {
+        let _ = fs::write(home.join(SHARED_LIST), text);
+    }
+}
+
+/// A list entry is only ever a path inside one of the fixed shared names.
+fn shared_path_ok(rel: &str) -> bool {
+    let mut parts = Path::new(rel).components();
+    let first = match parts.next() {
+        Some(std::path::Component::Normal(f)) => f.to_string_lossy().into_owned(),
+        _ => return false,
+    };
+    (SHARED_DIRS.contains(&first.as_str()) || SHARED_FILES.contains(&first.as_str())) && parts.all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Row 174: a file the user has deleted goes from the home too, but only one Kolux copied and the
+/// home has not changed since (its modified time is still the one the copy was given). An edited
+/// copy stays and is no longer tracked. Nothing is removed unless the user's Codex folder is there
+/// and the source is plainly gone, so a folder that is unplugged or locked costs nothing.
+fn prune_shared(user: &Path, home: &Path, list: &mut Shared) {
+    if !user.is_dir() {
+        return;
+    }
+    for rel in list.keys().cloned().collect::<Vec<_>>() {
+        if !shared_path_ok(&rel) || !matches!(user.join(&rel).try_exists(), Ok(false)) {
+            continue;
+        }
+        let target = home.join(&rel);
+        match fs::metadata(&target).and_then(|m| m.modified()) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                list.remove(&rel);
+            }
+            Err(_) => {}
+            Ok(t) => {
+                let ours = list.get(&rel).is_some_and(|s| *s == stamp(t));
+                if !ours || fs::remove_file(&target).is_ok() {
+                    list.remove(&rel);
+                }
+                if ours {
+                    let mut dir = target.parent();
+                    while let Some(d) = dir.filter(|d| *d != home && d.starts_with(home)) {
+                        if fs::remove_dir(d).is_err() {
+                            break;
+                        }
+                        dir = d.parent();
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// ACCT-021: copies one file when the user's is newer than the home's (or the home has none yet),
-/// and gives the copy the user's modified time so an untouched file is skipped next time.
-fn share_file(from: &Path, to: &Path) -> std::io::Result<bool> {
+/// and gives the copy the user's modified time so an untouched file is skipped next time. The
+/// second value is the stamp of a copy that is Kolux's: made now, or an earlier one that matches the
+/// user's file exactly (row 174 adopts those).
+fn share_file(from: &Path, to: &Path) -> std::io::Result<(bool, Option<u64>)> {
     let mine = fs::metadata(from)?.modified()?;
-    if fs::metadata(to).and_then(|m| m.modified()).is_ok_and(|theirs| theirs >= mine) {
-        return Ok(false);
+    if let Ok(theirs) = fs::metadata(to).and_then(|m| m.modified()) {
+        if theirs >= mine {
+            return Ok((false, (theirs == mine).then(|| stamp(mine))));
+        }
     }
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::copy(from, to)?;
     fs::File::options().write(true).open(to)?.set_modified(mine)?;
-    Ok(true)
+    Ok((true, Some(stamp(mine))))
 }
 
-/// Copies a folder's files and sub-folders across; links are skipped, never followed.
-fn share_tree(from: &Path, to: &Path, deadline: std::time::Instant, copied: &mut usize) -> std::io::Result<()> {
+/// Copies a folder's files and sub-folders across; links are skipped, never followed. `rel` is the
+/// folder's path in the home and `list` records each copy that is Kolux's.
+fn share_tree(from: &Path, to: &Path, deadline: std::time::Instant, copied: &mut usize, rel: &str, list: &mut Shared) -> std::io::Result<()> {
     for entry in fs::read_dir(from)? {
         if std::time::Instant::now() >= deadline {
             return Ok(());
@@ -600,10 +673,15 @@ fn share_tree(from: &Path, to: &Path, deadline: std::time::Instant, copied: &mut
         let entry = entry?;
         let kind = entry.file_type()?;
         let target = to.join(entry.file_name());
+        let here = format!("{rel}/{}", entry.file_name().to_string_lossy());
         if kind.is_dir() {
-            share_tree(&entry.path(), &target, deadline, copied)?;
-        } else if kind.is_file() && share_file(&entry.path(), &target)? {
-            *copied += 1;
+            share_tree(&entry.path(), &target, deadline, copied, &here, list)?;
+        } else if kind.is_file() {
+            let (did, ours) = share_file(&entry.path(), &target)?;
+            *copied += usize::from(did);
+            if let Some(s) = ours {
+                list.insert(here, s);
+            }
         }
     }
     Ok(())
@@ -621,10 +699,13 @@ pub fn share_user_files(user: &Path, home: &Path, deadline: std::time::Instant) 
         return Ok(0);
     }
     let mut note = |what: &str, e: std::io::Error| problem = problem.take().or(Some(format!("Codex's {what} could not be shared with the accounts (antivirus or another program may have a file locked): {e}")));
+    let before = read_shared(home);
+    let mut list = before.clone();
+    prune_shared(user, home, &mut list);
     for name in SHARED_DIRS {
         let from = user.join(name);
         if from.is_dir() {
-            if let Err(e) = share_tree(&from, &home.join(name), deadline, &mut copied) {
+            if let Err(e) = share_tree(&from, &home.join(name), deadline, &mut copied, name, &mut list) {
                 note(name, e);
             }
         }
@@ -633,11 +714,18 @@ pub fn share_user_files(user: &Path, home: &Path, deadline: std::time::Instant) 
         let from = user.join(name);
         if from.is_file() && std::time::Instant::now() < deadline {
             match share_file(&from, &home.join(name)) {
-                Ok(true) => copied += 1,
-                Ok(false) => {}
+                Ok((did, ours)) => {
+                    copied += usize::from(did);
+                    if let Some(s) = ours {
+                        list.insert(name.to_string(), s);
+                    }
+                }
                 Err(e) => note(name, e),
             }
         }
+    }
+    if list != before {
+        write_shared(home, &list);
     }
     problem.map_or(Ok(copied), Err)
 }
@@ -821,6 +909,21 @@ mod tests {
 
     fn temp(name: &str) -> crate::test_dir::TempDir {
         crate::test_dir::temp(&format!("codex-acct-{name}"))
+    }
+
+    // Row 193 (audit-a193-1): the Codex list is kept aside when it no longer reads, never saved over.
+    #[test]
+    fn row193_an_unreadable_codex_list_is_kept_aside_and_a_label_save_cannot_wipe_it() {
+        let dir = temp("row193");
+        let store = Store::open(&dir).unwrap();
+        let broken = "[{\"id\":\"c1\",\"email\":\"sam@exa\u{0}\u{fffd} half";
+        store.set(LIST_KEY, broken).unwrap();
+        assert!(load(&store).is_empty());
+        assert_eq!(crate::claude_accounts::test_asides(&store, LIST_KEY), vec![broken.to_string()]);
+        assert!(load(&store).is_empty());
+        assert_eq!(crate::claude_accounts::test_asides(&store, LIST_KEY).len(), 1, "not set aside twice");
+        assert!(set_label(&store, "c1", "Work").is_err(), "nothing to label in the fresh list");
+        assert_eq!(crate::claude_accounts::test_asides(&store, LIST_KEY), vec![broken.to_string()], "the old bytes stay");
     }
 
     fn token(email: &str) -> String {
@@ -1188,6 +1291,56 @@ mod tests {
         assert_eq!(share_user_files(&user, &dir.join("no-home"), later), Ok(0));
         assert!(!dir.join("no-home").exists(), "a missing home is never created for this");
         assert_eq!(share_user_files(&user, &user, later), Ok(0));
+    }
+
+    // Row 174 (T-171-c): a skill or prompt the user deletes goes from the home too, but only a file
+    // Kolux copied and the home has not edited since; the home's own files and a missing user
+    // folder never cost anything.
+    #[test]
+    fn row174_a_file_the_user_deletes_leaves_the_homes_copy_but_only_what_kolux_copied() {
+        let dir = crate::test_dir::temp("codex-share-prune");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        for name in ["skills/a/SKILL.md", "skills/b/SKILL.md", "skills/c/SKILL.md", "prompts/fix.md"] {
+            put(&user.join(name), name, 600);
+        }
+        put(&home.join("skills/own/SKILL.md"), "the home's own", 600);
+        let later = std::time::Instant::now() + Duration::from_secs(60);
+        assert_eq!(share_user_files(&user, &home, later), Ok(4));
+        // Codex edits one copy; the user deletes a, c and the prompt.
+        put(&home.join("skills/c/SKILL.md"), "home edit", 5);
+        fs::remove_dir_all(user.join("skills/a")).unwrap();
+        fs::remove_dir_all(user.join("skills/c")).unwrap();
+        fs::remove_file(user.join("prompts/fix.md")).unwrap();
+        assert_eq!(share_user_files(&user, &home, later), Ok(0));
+        assert!(!home.join("skills/a").exists(), "a deleted skill goes from the home, folder and all");
+        assert!(!home.join("prompts").exists(), "a folder that empties goes too");
+        assert_eq!(read(&home.join("skills/c/SKILL.md")).as_deref(), Some("home edit"), "an edited copy stays");
+        assert_eq!(read(&home.join("skills/b/SKILL.md")).as_deref(), Some("skills/b/SKILL.md"));
+        assert_eq!(read(&home.join("skills/own/SKILL.md")).as_deref(), Some("the home's own"), "never copied, never removed");
+        // No user folder at all (unplugged, renamed): nothing is removed.
+        assert_eq!(share_user_files(&dir.join("nobody"), &home, later), Ok(0));
+        assert!(home.join("skills/b/SKILL.md").exists());
+        // The user's folder is there but a source is only unreadable-looking: still present means kept.
+        assert_eq!(share_user_files(&user, &home, later), Ok(0));
+        assert!(home.join("skills/b/SKILL.md").exists());
+    }
+
+    // Row 174: copies an earlier release made (no list yet) are adopted when they match the user's
+    // file exactly, so they too go when the user deletes the original.
+    #[test]
+    fn row174_copies_made_before_the_list_existed_are_adopted() {
+        let dir = crate::test_dir::temp("codex-share-adopt");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        put(&user.join("skills/old/SKILL.md"), "old", 600);
+        fs::create_dir_all(home.join("skills/old")).unwrap();
+        fs::copy(user.join("skills/old/SKILL.md"), home.join("skills/old/SKILL.md")).unwrap();
+        let at = fs::metadata(user.join("skills/old/SKILL.md")).unwrap().modified().unwrap();
+        fs::File::options().write(true).open(home.join("skills/old/SKILL.md")).unwrap().set_modified(at).unwrap();
+        let later = std::time::Instant::now() + Duration::from_secs(60);
+        assert_eq!(share_user_files(&user, &home, later), Ok(0));
+        fs::remove_dir_all(user.join("skills/old")).unwrap();
+        assert_eq!(share_user_files(&user, &home, later), Ok(0));
+        assert!(!home.join("skills/old").exists());
     }
 
     // ACCT-021: a launch spends only so long copying; the rest follows at the next one.
