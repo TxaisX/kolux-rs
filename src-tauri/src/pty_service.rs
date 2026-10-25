@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use crate::lifecycle::{claim_named, Claim, Instance};
 use crate::pty::PtySession;
-use crate::terminal::{generation, Snap, PROTOCOL};
+use crate::terminal::{generation, Flow, Snap, PROTOCOL};
 
 /// The command-line switch the app program runs the service under: `--terminal-service <identifier> <data folder>`.
 pub const FLAG: &str = "--terminal-service";
@@ -153,6 +153,9 @@ struct Inner {
     /// AFTER-696: an update asked the service to end (`stop`), so the installer can replace the
     /// program it runs from.
     stopping: bool,
+    /// AFTER-699 (ACCT-054): how far each terminal's output has run ahead of the window's pane; its
+    /// reader waits on it while a window is attached.
+    flows: BTreeMap<u32, Arc<Flow>>,
 }
 
 impl Inner {
@@ -176,6 +179,21 @@ pub struct Config {
 
 fn b64(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+/// AFTER-699 (ACCT-054): a terminal's reader counts `bytes` just sent and, past the high mark, waits
+/// for the window's pane to catch up, but only while a window is attached: with none there is no
+/// pane to wait for (the output goes to the tail alone), so the count is dropped instead.
+fn hold(flow: &Flow, attached: bool, bytes: u64) {
+    hold_within(flow, attached, bytes, crate::terminal::FLOW_WAIT);
+}
+
+fn hold_within(flow: &Flow, attached: bool, bytes: u64, wait: Duration) {
+    if attached {
+        flow.sent_within(bytes, wait);
+    } else {
+        flow.release();
+    }
 }
 
 impl Service {
@@ -220,6 +238,7 @@ impl Service {
             g.next_term += 1;
             let id = g.next_term;
             g.snaps.insert(id, Snap::default());
+            g.flows.insert(id, Arc::new(Flow::default()));
             id
         };
         let out = self.inner.clone();
@@ -233,11 +252,21 @@ impl Service {
                 let Some(seq) = g.snaps.get_mut(&id).map(|s| s.push(chunk)) else { return };
                 let line = json!({ "ev": "output", "id": id, "data": b64(chunk), "seq": seq, "generation": generation() }).to_string();
                 g.broadcast(&line);
+                let (flow, attached) = (g.flows.get(&id).cloned(), !g.windows.is_empty());
+                drop(g);
+                // AFTER-699: after the bookkeeping and outside the lock, this terminal's own reader
+                // waits for the window's pane to catch up.
+                if let Some(f) = flow {
+                    hold(&f, attached, chunk.len() as u64);
+                }
             },
             move |code| {
                 let mut g = gone.lock().unwrap_or_else(PoisonError::into_inner);
                 let ended = g.terms.remove(&id);
                 g.snaps.remove(&id);
+                if let Some(f) = g.flows.remove(&id) {
+                    f.release();
+                }
                 let line = json!({ "ev": "exit", "id": id, "code": code }).to_string();
                 g.broadcast(&line);
                 drop(g);
@@ -298,6 +327,15 @@ impl Service {
                 self.lock().stopping = true;
                 Ok(json!({}))
             }
+            // AFTER-699: the window's pane drew `bytes` more of a terminal's output; `behind` is true
+            // once after this terminal's reader gave up waiting for the pane (ORCH-057: a snapshot is
+            // due). A terminal that is gone has nothing to count: not behind.
+            "ack" => {
+                let id = req["id"].as_u64().and_then(|i| u32::try_from(i).ok()).ok_or("no terminal id")?;
+                let bytes = req["bytes"].as_u64().ok_or("no byte count")?;
+                let flow = self.lock().flows.get(&id).cloned();
+                Ok(json!({ "behind": flow.is_some_and(|f| f.ack(bytes)) }))
+            }
             other => Err(format!("unknown request {other:?}")),
         }
     }
@@ -323,7 +361,14 @@ impl Service {
     }
 
     fn detach(&self, conn: u64) {
-        self.lock().windows.remove(&conn);
+        let mut g = self.lock();
+        g.windows.remove(&conn);
+        // AFTER-699: with no window left there is no pane to wait for; every paused reader goes on.
+        if g.windows.is_empty() {
+            for f in g.flows.values() {
+                f.release();
+            }
+        }
     }
 
     fn next_conn(&self) -> u64 {
@@ -706,6 +751,49 @@ mod tests {
         }
         s.thread.take().unwrap().join().unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn after699_a_flood_in_a_service_terminal_waits_for_the_window_and_for_nobody_when_no_window_is_attached() {
+        use crate::terminal::FLOW_HIGH;
+        let service = Service::default();
+        let flow = Arc::new(Flow::default());
+        service.lock().flows.insert(7, flow.clone());
+        // No window attached: a flood is never held (nothing would ever acknowledge it).
+        let t = Instant::now();
+        hold_within(&flow, false, FLOW_HIGH * 3, Duration::from_secs(5));
+        assert!(t.elapsed() < Duration::from_millis(200), "held with no window: {:?}", t.elapsed());
+        // A window attached: past the high mark the reader waits until the window's pane acknowledges.
+        let (tx, _rx) = mpsc::channel::<String>();
+        service.lock().windows.insert(1, tx);
+        let acker = service.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            acker.answer(&json!({ "op": "ack", "id": 7, "bytes": FLOW_HIGH })).unwrap()
+        });
+        let t = Instant::now();
+        hold_within(&flow, true, FLOW_HIGH, Duration::from_secs(5));
+        let took = t.elapsed();
+        assert_eq!(h.join().unwrap(), json!({ "behind": false }));
+        assert!(took >= Duration::from_millis(120) && took < Duration::from_secs(4), "{took:?}");
+        // A pane that never answers holds the reader for the wait only; the next ack says a snapshot is due, once.
+        hold_within(&flow, true, FLOW_HIGH, Duration::from_millis(100));
+        assert_eq!(service.answer(&json!({ "op": "ack", "id": 7, "bytes": 1 })).unwrap(), json!({ "behind": true }));
+        assert_eq!(service.answer(&json!({ "op": "ack", "id": 7, "bytes": 1 })).unwrap(), json!({ "behind": false }));
+        // The last window going away lets a paused reader go at once.
+        let releaser = service.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            releaser.detach(1);
+        });
+        let t = Instant::now();
+        hold_within(&flow, true, FLOW_HIGH, Duration::from_secs(5));
+        h.join().unwrap();
+        assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
+        assert_eq!(service.counts(), (0, 0));
+        // An ack for a terminal that is gone counts nothing and is not an error; a malformed one is.
+        assert_eq!(service.answer(&json!({ "op": "ack", "id": 99, "bytes": 5 })).unwrap(), json!({ "behind": false }));
+        assert!(service.answer(&json!({ "op": "ack", "id": 7 })).is_err());
     }
 
     #[test]
