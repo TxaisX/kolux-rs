@@ -190,7 +190,7 @@ fn who(pane: u32) -> String {
 }
 
 fn row(pane: u32, state: &str, at: u64, session: Option<&str>) -> Row {
-    Row { pane_key: pane, agent: "claude".into(), state: state.into(), at, session_id: session.map(str::to_owned), cwd: None, stop: None }
+    Row { pane_key: pane, agent: "claude".into(), state: state.into(), at, session_id: session.map(str::to_owned), cwd: None, stop: None, hook_version: None, pid: None, children: Vec::new() }
 }
 
 #[test]
@@ -270,7 +270,7 @@ fn t167b_sleep_records_the_workspace_agents_before_clearing_their_rows_and_quit_
     saved::at_sleep(&store, &["T:/t167b/ws1".to_string()]);
     let record = |s: &crate::state::Store| saved::parse(s.get(saved::RESUMABLE_KEY).unwrap().as_deref(), now).into_iter().filter_map(|r| r.session_id).filter(|s| s.starts_with("t167b-")).collect::<Vec<_>>();
     assert_eq!(record(&store), ["t167b-s1"], "the sleeping workspace's working agent is recorded; its finished one is not; the other workspace is untouched");
-    let left: Vec<u32> = saved::agent_status_saved().into_iter().map(|r| r.pane_key).filter(|k| (71..=73).contains(k)).collect();
+    let left: Vec<u32> = saved::agent_status_saved().into_iter().map(|r| r.row.pane_key).filter(|k| (71..=73).contains(k)).collect();
     assert_eq!(left, [73], "the sleeping rows are cleared after the record");
     saved::at_quit(&store);
     let mut both = record(&store);
@@ -278,6 +278,70 @@ fn t167b_sleep_records_the_workspace_agents_before_clearing_their_rows_and_quit_
     assert_eq!(both, ["t167b-s1", "t167b-s3"], "quitting later offers both workspaces");
     drop(store);
     let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- T-167-b (Windows parts): unconfirmed restored rows, child rows kept by liveness, hook-version stamp ----
+
+fn kid(id: &str) -> saved::SavedChild {
+    saved::SavedChild { id: id.into(), kind: "worker".into(), model: None, state: "working".into() }
+}
+
+#[test]
+fn t167b_a_restored_row_is_unconfirmed_until_its_pane_reports_and_holds_nothing_to_approve() {
+    let dir = std::env::temp_dir().join(format!("kolux-t167b-unconfirmed-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let store = crate::state::Store::open(&dir).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let rows = [Row { at: now - 1000, hook_version: Some(0), ..row(81, "permission", 1, Some("t167b-u1")) }, Row { at: now - 1000, ..row(82, "working", 1, Some("t167b-u2")) }];
+    store.set(saved::SAVED_KEY, &saved::serialize(&rows)).unwrap();
+    saved::startup(&store, &dir);
+    let mine = || saved::agent_status_saved().into_iter().filter(|r| (81..=82).contains(&r.row.pane_key)).collect::<Vec<_>>();
+    let shown = mine();
+    assert_eq!(shown.len(), 2);
+    assert!(shown.iter().all(|r| r.unconfirmed), "a restored row never counts as confirmed");
+    assert_eq!((shown[0].restart, shown[1].restart), (true, false), "only the pane whose hooks are older than this build reads restart");
+    let json = serde_json::to_value(&shown[0]).unwrap();
+    assert_eq!((json["state"].as_str(), json["unconfirmed"].as_bool(), json["restart"].as_bool()), (Some("permission"), Some(true), Some(true)));
+    assert!(json.get("tool").is_none() && json.get("pending").is_none(), "nothing in a restored permission names a tool to answer");
+    saved::confirm(81);
+    assert_eq!(mine().iter().map(|r| r.row.pane_key).collect::<Vec<_>>(), [82], "a live event confirms its pane's row");
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t167b_child_rows_are_kept_only_while_the_panes_process_may_live() {
+    let with = |pane, pid| Row { pid, children: vec![kid("a"), kid("b")], ..row(pane, "working", 1, None) };
+    let mut rows = vec![with(1, Some(10)), with(2, Some(11)), with(3, None), with(4, Some(12)), row(5, "working", 1, None)];
+    saved::keep_living_children(&mut rows, |pid| match pid {
+        10 => Some(true),
+        11 => Some(false),
+        _ => None,
+    });
+    let kept = |i: usize| rows[i].children.len();
+    assert_eq!((kept(0), kept(1), kept(2), kept(3), kept(4)), (2, 0, 0, 2, 0), "alive and unprovable keep; gone and no recorded process clear");
+    assert_eq!(rows[1].state, "working", "the row itself stays");
+}
+
+#[test]
+fn t167b_the_hook_version_stamp_reads_from_the_identity_and_marks_older_panes() {
+    use base64::Engine as _;
+    let id = |v: serde_json::Value| base64::engine::general_purpose::STANDARD.encode(v.to_string());
+    assert_eq!(crate::hooks::identity_version(&id(json!({ "paneKey": 1, "hookVersion": 3 }))), Some(3));
+    assert_eq!(crate::hooks::identity_version(&id(json!({ "paneKey": 1 }))), None, "an identity without a stamp has none");
+    assert_eq!(crate::hooks::identity_version("not base64!"), None);
+    assert!(saved::outdated(Some(1), 2) && !saved::outdated(Some(2), 2) && !saved::outdated(None, 2), "unstamped rows are not accused");
+}
+
+#[test]
+fn t167b_a_save_from_before_the_new_fields_still_reads_and_the_new_fields_round_trip() {
+    let now = 10 * saved::EXPIRY_MS;
+    let old = format!(r#"{{"version":1,"rows":[{{"paneKey":1,"agent":"claude","state":"waiting","at":{}}}]}}"#, now - 5);
+    let got = saved::parse(Some(&old), now);
+    assert_eq!((got.len(), got[0].pid, got[0].hook_version, got[0].children.len()), (1, None, None, 0));
+    let full = Row { pid: Some(7), hook_version: Some(1), children: vec![kid("x")], at: now - 5, ..row(2, "working", 0, None) };
+    assert_eq!(saved::parse(Some(&saved::serialize(std::slice::from_ref(&full))), now), vec![full]);
 }
 
 #[cfg(windows)]

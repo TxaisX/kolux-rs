@@ -312,6 +312,13 @@ pub fn identity(header: &str) -> Option<(u32, Option<u32>)> {
     Some((pane, v.get("terminal").and_then(Value::as_u64).map(|t| t as u32)))
 }
 
+/// The hook version an identity header was written with (T-167-b); none for an older header without one.
+pub fn identity_version(header: &str) -> Option<u32> {
+    let raw = base64::engine::general_purpose::STANDARD.decode(header.trim()).ok()?;
+    let v: Value = serde_json::from_slice(&raw).ok()?;
+    v.get("hookVersion")?.as_u64().map(|v| v as u32)
+}
+
 /// Answers one hook: `(status code, the status to raise)`.
 /// BROW-051: the local endpoint answers only Kolux's own tools. A request from a web page (one
 /// carrying an Origin, Referer or Sec-Fetch header, which every browser adds and no tool does),
@@ -566,7 +573,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
             let (code, status) = answer(&req, token);
             if let Some(status) = status {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
-                agent_hooks::saved::note(app, &req.path, &req.body, &status);
+                agent_hooks::saved::note(app, &req.path, &req.body, &status, req.headers.get(IDENTITY_HEADER).and_then(|h| identity_version(h)));
                 // AUTO-012: an automation run in this pane completes on its agent's real finish.
                 crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), status.change.session.as_deref(), crate::automations::now_ms()));
                 // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
