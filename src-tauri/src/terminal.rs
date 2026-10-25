@@ -8,6 +8,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+// T-066-d: the session id an id-only agent prints (its own resume hint), told to the window when its pane's program exits.
+#[path = "terminal_session_id.rs"]
+pub mod session_id;
+
 pub const OUTPUT_EVENT: &str = "terminal-output";
 pub const EXIT_EVENT: &str = "terminal-exit";
 /// CLI-024: the app asks the window for a pane's visible frame; the window answers with
@@ -789,6 +793,9 @@ struct ExitPayload {
     /// ORCH-057: "exited" when the end was confirmed with an exit code, "unverifiable" when Kolux could
     /// not learn how the program ended (viewers say so instead of calling it an exit).
     outcome: &'static str,
+    /// T-066-d: the session id the agent printed in its own resume hint before it exited, when it printed one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
 }
 
 /// Terminal `id` ended, however: it exited, its pane closed, or (USAGE-011, T-067-b) the
@@ -1038,9 +1045,11 @@ impl Terminals {
                 // still listed ended by itself: Kolux's own kills take it off the list first.
                 let mut by_itself = false;
                 let mut tail = None;
+                let mut session = None;
                 if let Ok(mut inner) = registry.lock() {
                     // AUTO-014: keep the end of a followed run's output before the log goes.
                     tail = inner.logs.get(&id).map(|l| crate::automations::screen_text(&l.read(None, Some(crate::automations::RUN_OUTPUT_LINES))));
+                    session = inner.marks.get(&id).and_then(|m| m.agent).zip(tail.as_ref()).and_then(|(agent, (text, _))| session_id::hint_session(agent, text));
                     by_itself = inner.sessions.remove(&id).is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
@@ -1072,7 +1081,7 @@ impl Terminals {
                 if let Some(d) = &exit_dir {
                     crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
                 }
-                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code) });
+                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code), session });
             }),
         )
     }
@@ -2320,6 +2329,14 @@ mod tests {
         assert_eq!(every, vec![(handle_of(7), home, Some(started))]);
         assert!(t.sessions().is_empty(), "a shell with no folder is not a worktree session");
         t.inner.lock().unwrap().sessions.remove(&7).unwrap().kill();
+    }
+
+    #[test]
+    fn t066d_the_exit_event_carries_a_printed_session_id_only_when_there_is_one() {
+        let with = ExitPayload { id: 3, code: Some(0), outcome: "exited", session: Some("run-2026.10.13-a1b2c3".into()) };
+        assert_eq!(serde_json::to_value(&with).unwrap()["session"], "run-2026.10.13-a1b2c3");
+        let without = ExitPayload { id: 3, code: None, outcome: "unverifiable", session: None };
+        assert!(serde_json::to_value(&without).unwrap().get("session").is_none(), "an old window sees the payload it always saw");
     }
 
     #[test]
