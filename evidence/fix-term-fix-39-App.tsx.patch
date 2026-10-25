@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 338bcc21..ad413ed3 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -410,6 +410,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           setSettingsRead(true);
+           applyAppearance(readAppearance(s));
+           applyWindowBlur(s);
++          // after-list #39: said once when the settings came from the last good copy
++          void invoke<string | null>("settings_fallback_notice").then((m) => m && setNotice(m), () => {});
+         })
+         .catch(() => setSettings({}));
+     readSettings();
