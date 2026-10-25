@@ -1,7 +1,7 @@
 // PROJ-067: tabs and layout are saved and restored; damaged entries are dropped on their own and
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
-import { layoutOf, restoreAsks, restoreLayout, stillThere } from "./layout";
+import { layoutOf, marksOf, restoreAsks, restoreLayout, stillThere } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
 
@@ -110,4 +110,19 @@ test("view107: tabs saved out of session order are restored in the order they we
   const l = restoreLayout(saved)!;
   expect(l.panes.map((p) => p.key)).toEqual([1, 2, 5, 9]);
   expect(l.focused).toBe(9);
+});
+
+test("after100: pinned tabs and tab colours are saved with the layout and come back after a restart", () => {
+  const panes = [shell(1, "C:/w/a"), shell(2, "C:/w/a"), shell(3, "C:/w/a")];
+  const l = layoutOf(panes, {}, 1, "C:/w/a", {}, { pinned: new Set([2, 99]), colors: { 2: "red", 3: "teal", 1: "no-such-colour", 99: "blue" } });
+  expect(l.panes.map((p) => [p.key, p.pinned, p.color])).toEqual([[1, undefined, undefined], [2, true, "red"], [3, undefined, "teal"]]);
+  const back = restoreLayout(JSON.parse(JSON.stringify(l)))!;
+  expect(back).toEqual(l);
+  const marks = marksOf(back.panes);
+  expect([...marks.pinned]).toEqual([2]);
+  expect(marks.colors).toEqual({ 2: "red", 3: "teal" });
+  // A saved layout from before has neither, and a colour that is no longer in the palette is dropped on its own.
+  expect(layoutOf(panes, {}, 1, "C:/w/a", {}).panes[0]).not.toHaveProperty("pinned");
+  const old = restoreLayout({ panes: [shell(1, "C:/w/a", { color: "mauve", pinned: "yes" }), shell(2, "C:/w/a", { pinned: false, color: 4 })] })!;
+  expect(old.panes.map((p) => [p.pinned, p.color])).toEqual([[undefined, undefined], [undefined, undefined]]);
 });
