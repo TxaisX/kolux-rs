@@ -1565,8 +1565,15 @@ impl Terminals {
     }
 }
 
-/// What `terminal_spawn` answers: the session id and, for a Codex pane, the managed account it
-/// runs on (ACCT-023: the pane remembers it; none for Codex's own sign-in).
+/// T-548-b: the managed account a new pane runs under: the Codex account when there is one, else the
+/// active Claude account when the pane got that account's folder (not on the 1-year key, not on Claude's
+/// own sign-in). `claude_active` is read only for a managed Claude pane.
+pub(crate) fn spawn_account(codex: Option<String>, claude_managed: bool, claude_active: impl FnOnce() -> Option<String>) -> Option<String> {
+    codex.or_else(|| if claude_managed { claude_active() } else { None })
+}
+
+/// What `terminal_spawn` answers: the session id and, for a Codex or Claude pane, the managed account it
+/// runs on (ACCT-023: the pane remembers it; none for the agent's own sign-in).
 #[derive(serde::Serialize)]
 pub struct Spawned {
     pub id: u32,
@@ -1651,8 +1658,12 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
         let codex_home = resumed.or_else(|| crate::codex_accounts::active_home(&store));
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
-        let env: Vec<(String, String)> = crate::claude_key::pane_env(program.as_deref(), &settings, token)
-            .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
+        let by_key = crate::claude_key::pane_env(program.as_deref(), &settings, token);
+        let managed = if by_key.is_none() { crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)) } else { None };
+        // T-548-b: a Claude pane on a managed account answers which one, the way a Codex pane does.
+        let used = spawn_account(used, managed.is_some(), || crate::claude_accounts::active(&store));
+        let env: Vec<(String, String)> = by_key
+            .or(managed)
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), codex_home))
             // ACCT-008: a Grok pane gets the saved xAI key; Grok itself prefers its own sign-in.
@@ -2329,6 +2340,18 @@ mod tests {
         assert_eq!(every, vec![(handle_of(7), home, Some(started))]);
         assert!(t.sessions().is_empty(), "a shell with no folder is not a worktree session");
         t.inner.lock().unwrap().sessions.remove(&7).unwrap().kill();
+    }
+
+    #[test]
+    fn t548b_a_managed_claude_pane_answers_its_account_and_other_panes_do_not() {
+        let active = || Some("acct-1".to_string());
+        assert_eq!(spawn_account(None, true, active).as_deref(), Some("acct-1"), "a Claude pane on the managed account");
+        assert_eq!(spawn_account(None, false, active), None, "key mode, Claude's own sign-in or a shell");
+        assert_eq!(spawn_account(Some("cx-2".into()), false, active).as_deref(), Some("cx-2"), "a Codex pane keeps its own");
+        assert_eq!(spawn_account(None, true, || None), None, "no active account");
+        let mut read = false;
+        assert_eq!(spawn_account(Some("cx-2".into()), true, || { read = true; active() }).as_deref(), Some("cx-2"));
+        assert!(!read, "the Claude account is not read when Codex answered");
     }
 
     #[test]
