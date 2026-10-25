@@ -1,0 +1,58 @@
+diff --git a/src-tauri/src/files.rs b/src-tauri/src/files.rs
+index b70fb43b..59a4cc97 100644
+--- a/src-tauri/src/files.rs
++++ b/src-tauri/src/files.rs
+@@ -727,15 +727,30 @@ pub fn dir_ignored(path: String, fence: tauri::State<'_, crate::fence::Fence>, s
+ /// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not
+ /// in a project, or out through a link; EDIT-045), else following links "dir", "file" or "missing".
+ #[tauri::command]
+-pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String) -> &'static str {
++pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String, folder_only: Option<bool>) -> &'static str {
+     let roots = crate::links::roots(&store);
+     match crate::links::fence(&path, &roots, &grants.snapshot(), true) {
+         Ok(p) => kind_of(&p),
+         Err(_) if crate::links::host_path(&path, &roots) => "remote",
++        Err(_) if folder_only == Some(true) => folder_probe(&path, &roots),
+         Err(_) => "outside",
+     }
+ }
+ 
++/// after-list 383: with `folder_only`, a folder under no project answers "dir" or "missing" (never "file"
++/// or "outside"), so Reopen Closed Tab can tell that a terminal's old folder is still there. A share,
++/// a relative path or a `..` step is never looked up.
++pub fn folder_probe(path: &str, roots: &[String]) -> &'static str {
++    let p = Path::new(path);
++    if crate::links::host_path(path, roots) {
++        return "remote";
++    }
++    if crate::links::refuse_host(path, roots).is_err() || !p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
++        return "missing";
++    }
++    if p.is_dir() { "dir" } else { "missing" }
++}
++
+ pub fn kind_of(path: &Path) -> &'static str {
+     match fs::metadata(path) {
+         Ok(m) if m.is_dir() => "dir",
+@@ -774,6 +789,21 @@ mod tests {
+         let _ = fs::remove_dir_all(&d);
+     }
+ 
++    #[test]
++    fn row383_a_folder_under_no_project_is_found_as_a_folder_and_nothing_else_is_looked_up() {
++        let d = temp_dir("probe");
++        fs::write(d.join("a.txt"), "x").unwrap();
++        let (dir, file) = (d.to_string_lossy().into_owned(), d.join("a.txt").to_string_lossy().into_owned());
++        let roots: Vec<String> = Vec::new(); // the folder is under no project
++        assert_eq!(folder_probe(&dir, &roots), "dir");
++        assert_eq!(folder_probe(&file, &roots), "missing", "a file is never reported");
++        assert_eq!(folder_probe(&d.join("gone").to_string_lossy(), &roots), "missing");
++        assert_eq!(folder_probe("relative/dir", &roots), "missing");
++        assert_eq!(folder_probe(&format!("{dir}{}..", std::path::MAIN_SEPARATOR), &roots), "missing");
++        assert_eq!(folder_probe(r"\\server\share\x", &roots), "remote");
++        let _ = fs::remove_dir_all(&d);
++    }
++
+     #[test]
+     fn edit011_numbered_names_list_in_natural_order_and_ties_settle_the_same_way_every_time() {
+         let d = temp_dir("natural");

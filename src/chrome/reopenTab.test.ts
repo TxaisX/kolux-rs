@@ -1,9 +1,12 @@
 // T-164-b / TERM-047: closing three tabs and reopening three times brings all three back newest first;
 // only the ten newest are kept; a vanished folder is remapped; browser pages and terminal tabs undo in
 // the order they were closed. The window's real "does this folder exist" answer is path_kind, faked here.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import type { Pane } from "../App";
-import { closedRecord, createClosedPanes, paneFor, placement } from "./reopenTab";
+import { closedRecord, createClosedPanes, folderKind, paneFor, placement } from "./reopenTab";
 
 const pane = (key: number, cwd: string | null = "G:\\Dev\\x", extra: Partial<Pane> = {}): Pane => ({ key, cwd, branch: null, agent: "shell", program: null, args: [], ...extra });
 const dirs = (...ok: string[]) => async (p: string) => (ok.includes(p) ? "dir" : "missing");
@@ -118,4 +121,13 @@ test("the tab returns to the focused cell when it is in the same folder, else to
 test("a workspace already showing the most cells takes the tab into its first cell", () => {
   const ps = Array.from({ length: 12 }, (_, i) => pane(i + 1, "G:\\a"));
   expect(placement(ps, 99, "G:\\a")).toBe(1);
+});
+
+test("after-list 383: the folder check asks path_kind for a folder only, so a folder under no project still counts as there", async () => {
+  invoke.mockImplementation(async (_cmd: string, a: { path: string }) => (a.path === "D:/loose" ? "dir" : "missing"));
+  const c = createClosedPanes();
+  c.remember([pane(1, "D:/loose")], [1], never);
+  const r = await c.take(folderKind, "G:/home");
+  expect(invoke).toHaveBeenCalledWith("path_kind", { path: "D:/loose", folderOnly: true });
+  expect(r.kind === "terminal" && r.pane.cwd).toBe("D:/loose");
 });

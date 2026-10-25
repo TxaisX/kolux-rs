@@ -1,0 +1,22 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 338bcc21..7a0abba7 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -67,7 +67,7 @@ import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBro
+ import PreviewButton from "./browser/PreviewButton";
+ import { chordPlan } from "./browser/chord";
+ import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
+-import { closedPanes, paneFor, placement } from "./chrome/reopenTab";
++import { closedPanes, folderKind, paneFor, placement } from "./chrome/reopenTab";
+ import { writerOf } from "./scm/generate";
+ import { usePrRows } from "./scm/usePrRows";
+ import EditorPane, { editors } from "./editor/EditorPane";
+@@ -881,7 +881,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         case "tab.reopenClosed": {
+           // TERM-047 / T-239 (BROW-019): the tab closed last, terminal or browser, comes back: a terminal in
+           // its folder (or the shown workspace when that is gone), a browser page at the address it had.
+-          void closedPanes.take((path) => invoke<string>("path_kind", { path }), activeDir).then((r) => {
++          void closedPanes.take(folderKind, activeDir).then((r) => {
+             if (r.kind === "browser") {
+               const page = takeClosed();
+               if (page) openInBrowser(page.url);
