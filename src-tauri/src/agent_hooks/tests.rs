@@ -15,6 +15,23 @@ fn temp(name: &str) -> PathBuf {
 
 const MINE: &str = "\"C:/Users/me/.kolux-rs/agent-hooks/claude.cmd\" || exit 0";
 
+/// hooks FIX-2: the tests that read `CLAUDE_CONFIG_DIR` twice (t_152_*) and the one that sets it
+/// for a moment (t_134_b) take turns, so no test sees the variable change between its two reads.
+static CLAUDE_CONFIG_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs `f` with `CLAUDE_CONFIG_DIR` naming `dir`, then puts the variable back as it was.
+fn with_claude_config<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+    let _turn = CLAUDE_CONFIG_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let was = std::env::var_os("CLAUDE_CONFIG_DIR");
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir);
+    let out = f();
+    match was {
+        Some(v) => std::env::set_var("CLAUDE_CONFIG_DIR", v),
+        None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+    }
+    out
+}
+
 #[test]
 fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -320,30 +337,39 @@ mod script_runs {
 
     const STOP: &str = r#"{"hook_event_name":"Stop","session_id":"s1","cwd":"C:/w"}"#;
 
-    /// How long this PC takes right now to start a Windows PowerShell and leave it at once.
-    fn powershell_start() -> Duration {
+    /// hooks FIX-2b: a Windows PowerShell doing the held path's own work (read a JSON file, parse it,
+    /// write it back compact, append a line to a file), timed as it runs. Started beside the held run
+    /// it shares the run's load over the very same interval, so the bound below follows the load.
+    fn powershell_reference(temp: &Path) -> Duration {
         let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+        let (input, output) = (temp.join("reference-in.json"), temp.join("reference-out.txt"));
+        fs::write(&input, r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"s1"}"#).unwrap();
+        let work = format!(
+            "$t=[IO.File]::ReadAllText('{}'); $o=ConvertFrom-Json -InputObject $t; $l=(ConvertTo-Json -InputObject $o -Compress) + [char]10; [IO.File]::AppendAllText('{}', $l, (New-Object Text.UTF8Encoding $false))",
+            input.display(),
+            output.display()
+        );
         let mut cmd = Command::new(exe);
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", "exit"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &work]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         let t = Instant::now();
-        assert!(cmd.status().unwrap().success(), "a plain PowerShell starts");
+        assert!(cmd.status().unwrap().success(), "the reference PowerShell runs");
         t.elapsed()
     }
 
-    /// hooks FIX-7 (stand-in review AFTER 1): the time a held run may take, from the PowerShell
-    /// start timed before the run and the one timed after it; the slower of the two decides, so a
-    /// load spike that begins right after the first sample cannot outrun the bound.
-    fn held_run_bound(before: Duration, after: Duration) -> Duration {
-        before.max(after) * 2 + Duration::from_secs(3)
+    /// hooks FIX-7 (stand-in review AFTER 1) and FIX-2b: the time a held run may take, from the
+    /// reference PowerShell timed beside it: twice the reference, for the cmd, curl and more.com
+    /// work around PowerShell that the same load stretches, plus 3 s for curl's connect timeout
+    /// (0.5 s, 1.5 s at most) and slack. Before FIX-2b the reference was a bare PowerShell start
+    /// timed before and after the run: it left out the JSON cmdlets' loading, which load stretches
+    /// as much as the start, and a held run of 10.03 s met a bound of 9.20 s (w16 load runs).
+    fn held_run_bound(reference: Duration) -> Duration {
+        reference * 2 + Duration::from_secs(3)
     }
 
     #[test]
-    fn fix_7_the_held_run_bound_follows_the_slower_of_the_two_powershell_starts() {
-        let quick = Duration::from_millis(400);
-        let slow = Duration::from_secs(4);
-        assert_eq!(held_run_bound(quick, slow), Duration::from_secs(11), "a spike after the first sample raises the bound");
-        assert_eq!(held_run_bound(slow, quick), Duration::from_secs(11), "a spike before it does too");
-        assert_eq!(held_run_bound(quick, quick), Duration::from_millis(3800), "an idle PC keeps the tight bound");
+    fn fix_7_the_held_run_bound_follows_the_reference_powershell() {
+        assert_eq!(held_run_bound(Duration::from_secs(4)), Duration::from_secs(11), "a loaded PC raises the bound");
+        assert_eq!(held_run_bound(Duration::from_millis(400)), Duration::from_millis(3800), "an idle PC keeps the tight bound");
     }
 
     /// The script itself lives in a plain folder; only the data paths carry the awkward characters.
@@ -366,34 +392,40 @@ mod script_runs {
         // Paths with every character that breaks a careless batch script.
         let data = temp("held ) & x!");
         let dir = scripts("held");
+        // hooks FIX-2b: the script's own temporary file goes to a TEMP of this test's own, so a file
+        // another test (pane 7 is used by others too) or an earlier run left in the shared temp
+        // folder cannot fail the leftovers check below, and the check itself is per test.
+        let script_temp = temp("held-temp");
         let endpoint = data.join(super::super::super::ENDPOINT_FILE);
         let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         fs::write(&endpoint, format!("{closed} tok\n")).unwrap();
         let env = |with_vars: bool| {
             let mut v = vec![("KOLUX_PANE_KEY", "7".to_string()), ("KOLUX_HOOK_IDENTITY", who(7)), ("KOLUX_HOOK_ENDPOINT", endpoint.display().to_string()), ("CLAUDE_CONFIG_DIR", "\"C:\\Users\\me\\cfg dir\\\"".to_string())];
+            v.extend([("TEMP", script_temp.display().to_string()), ("TMP", script_temp.display().to_string())]);
             if with_vars {
                 v.extend([("KOLUX_AGENT_HOOK_PORT", closed.to_string()), ("KOLUX_AGENT_HOOK_TOKEN", "tok".to_string())]);
             }
             v
         };
-        // hooks FIX-6/FIX-7 (stand-in review FIX-SOON 3, AFTER 1-2): the bound follows how long this
-        // PC takes to start a Windows PowerShell (0.4 s idle, over 2 s with other builds running).
-        // That start is timed just before the run and again just after it, and the larger of the
-        // two counts, so a load spike on either side of the run raises the bound with it. The bound
-        // is twice that start plus a 3 s allowance: curl's 0.5 s connect timeout, the cmd and
-        // script work, and slack. The script's retry window (20 tries 100 ms apart, 2 s) is not
+        // hooks FIX-6/FIX-7 (stand-in review FIX-SOON 3, AFTER 1-2) and FIX-2b: the bound follows
+        // how long this PC takes right now for the held path's PowerShell work (0.4 s idle, many
+        // seconds with other builds running): a reference PowerShell doing that work runs beside
+        // the held run, over the same interval, so whatever load the run meets the reference meets
+        // too (`held_run_bound`). The script's retry window (20 tries 100 ms apart, 2 s) is not
         // part of the allowance: nothing uses it here because no one holds the file (hooks
         // FIX-8, stand-in review AFTER 1). A hard 30 s ceiling still catches a true hang.
-        let before = powershell_start();
         let started = Instant::now();
-        let out = run(&dir, &env(false), r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"s1"}"#);
+        let (out, reference) = std::thread::scope(|s| {
+            let reference = s.spawn(|| powershell_reference(&script_temp));
+            let out = run(&dir, &env(false), r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"s1"}"#);
+            (out, reference.join().unwrap())
+        });
         let elapsed = started.elapsed();
-        let after = powershell_start();
         assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
-        let bound = held_run_bound(before, after);
-        println!("PowerShell start before {before:?}, after {after:?}; the held run took {elapsed:?}; bound {bound:?} (the fixed bound before hooks FIX-6 was 5 s)");
+        let bound = held_run_bound(reference);
+        println!("reference PowerShell beside the run {reference:?}; the held run took {elapsed:?}; bound {bound:?} (the fixed bound before hooks FIX-6 was 5 s)");
         assert!(elapsed < Duration::from_secs(30), "a closed Kolux never holds the agent up (hang ceiling): {elapsed:?}");
-        assert!(elapsed < bound, "a closed Kolux never holds the agent up: {elapsed:?} against PowerShell starts of {before:?} and {after:?}");
+        assert!(elapsed < bound, "a closed Kolux never holds the agent up: {elapsed:?} against a reference PowerShell of {reference:?} beside it");
         // Kolux took its endpoint file away as it quit: the pane's own variables name the address.
         fs::remove_file(&endpoint).unwrap();
         let out = run(&dir, &env(true), STOP);
@@ -405,8 +437,10 @@ mod script_runs {
         let mut rows = Vec::new();
         assert_eq!(saved::replay(&held, &mut rows, 1), 2);
         assert_eq!((rows[0].pane_key, rows[0].state.as_str()), (7, "done"));
-        let leftovers = fs::read_dir(std::env::temp_dir()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("kolux-rs-hook-7-")).count();
-        assert_eq!(leftovers, 0, "the script's own temporary files are removed");
+        let leftovers: Vec<_> = fs::read_dir(&script_temp).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("kolux-rs-hook-")).collect();
+        assert!(leftovers.is_empty(), "the script's own temporary files are removed: {leftovers:?}");
+        let _ = fs::remove_dir_all(&script_temp);
+        let _ = fs::remove_dir_all(&data);
     }
 
     /// FIX-2 (S7, COMPAT 3.1): an event held while Kolux is closed keeps only what the status
@@ -940,6 +974,7 @@ fn t_152_1_a_debug_build_writes_agent_settings_only_inside_the_temp_folder() {
     let climbed = scratch.join("..").join(outside.parent().unwrap().strip_prefix(outside.ancestors().last().unwrap()).unwrap()).join("settings.json");
     assert!(scratch_only(&climbed, &scratch, &home_dir()).is_err(), "`..` cannot climb out of the temp folder");
     // Whatever this test process inherited, the resolved file is written only when it is scratch.
+    let _turn = CLAUDE_CONFIG_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let resolved = claude_settings_file();
     let profile = dir.join(PRODUCTION_ID);
     println!("resolved {} -> {:?}", resolved.display(), claude_target(&profile));
@@ -991,6 +1026,7 @@ fn t_152_b_2_test_dev_and_lane_runs_are_fenced_and_the_identifier_matches_the_ap
     assert_eq!(conf["identifier"], PRODUCTION_ID);
     // With the fence on, the user's own file (as this process resolves it) is refused unless it is
     // marked scratch; G:\Dev\claude-config holds no marker, so a run that inherited it stays out.
+    let _turn = CLAUDE_CONFIG_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let resolved = claude_settings_file();
     let scratch = std::env::temp_dir();
     assert_eq!(claude_target(Path::new(PRODUCTION_ID)).is_ok(), scratch_only(&resolved, &scratch, &home_dir()).is_ok());
@@ -1792,13 +1828,19 @@ fn fix_5_codex_a_failed_trust_write_keeps_its_own_error_when_the_rollback_fails_
 /// Kolux's: afterwards each file is byte for byte the user's again, a sibling file of the user's
 /// is untouched, status reads "not installed", a second off writes nothing, and a file that never
 /// held Kolux's entries is never written and gets no copy.
+///
+/// hooks FIX-2 (stand-in review hooks-146904a2 FIX-SOON 3): the off is `apply(.., Plan::Remove)`
+/// for every id in MANAGED, the call `clear` makes, on a scratch profile: Claude's file comes from
+/// `claude_target` (CLAUDE_CONFIG_DIR names the scratch folder for the moment of the call) and
+/// Codex's from `managed_codex_homes(profile)`, the account homes under the profile's
+/// codex-accounts folder, one with Kolux's hooks and one that never had them.
 #[test]
 fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     let dir = temp("t134b-off");
     fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
     let home = dir.join("home");
     fs::create_dir_all(&home).unwrap();
-    let profile = Path::new("kolux-rs-test-profile");
+    let profile = dir.join("profile");
     let read = |p: &Path| fs::read_to_string(p).unwrap();
     let show = |agent: &str, when: &str, p: &Path| println!("{agent} {when}: {} ({} bytes)", p.display(), fs::metadata(p).map(|m| m.len()).unwrap_or(0));
 
@@ -1812,8 +1854,10 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     assert_ne!(read(&claude), shaped(), "Kolux's entries went in");
     show("claude", "before off", &claude);
 
-    // Codex: a managed home of Kolux's, the user's own entry beside Kolux's under Stop.
-    let codex_home = dir.join("codex-home");
+    // Codex: a managed account home of Kolux's under the profile, the user's own entry beside
+    // Kolux's under Stop; and a second account home whose hooks.json never held Kolux's entries.
+    let accounts = profile.join(crate::codex_accounts::FOLDER);
+    let codex_home = accounts.join("acct-a");
     fs::create_dir_all(&codex_home).unwrap();
     let codex = codex_home.join("hooks.json");
     let codex_user = "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"keep.cmd\" }] }]\n  }\n}\n";
@@ -1822,6 +1866,11 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     assert!(write_codex_groups(&codex, Some(codex_user), &mut v, MINE).unwrap());
     assert_eq!(switch::inspect(&codex, &CODEX_EVENTS).0, "installed");
     show("codex", "before off", &codex);
+    let codex_plain = accounts.join("acct-b").join("hooks.json");
+    fs::create_dir_all(codex_plain.parent().unwrap()).unwrap();
+    let codex_plain_user = "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"theirs.cmd\" }] }]\n  }\n}\n";
+    fs::write(&codex_plain, codex_plain_user).unwrap();
+    assert_eq!(managed_codex_homes(&profile).len(), 2, "both account homes are the profile's managed Codex homes");
 
     // Gemini CLI: the user's theme and his own BeforeTool hook, plus a sibling file of his.
     let gemini = vendors::gemini_file(&home);
@@ -1830,7 +1879,7 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     fs::write(&gemini, gemini_user).unwrap();
     let gemini_sibling = gemini.with_file_name("GEMINI.md");
     fs::write(&gemini_sibling, "# mine\n").unwrap();
-    assert_eq!(apply(&home, profile, "gemini", Plan::Install), Ok("installed"));
+    assert_eq!(apply(&home, &profile, "gemini", Plan::Install), Ok("installed"));
     show("gemini", "before off", &gemini);
 
     // Antigravity: a bundle of the user's own beside Kolux's.
@@ -1838,7 +1887,7 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     fs::create_dir_all(antigravity.parent().unwrap()).unwrap();
     let antigravity_user = "{\n  \"my-bundle\": {\n    \"Stop\": [{ \"type\": \"command\", \"command\": \"my-stop.cmd\" }]\n  }\n}\n";
     fs::write(&antigravity, antigravity_user).unwrap();
-    assert_eq!(apply(&home, profile, "antigravity", Plan::Install), Ok("installed"));
+    assert_eq!(apply(&home, &profile, "antigravity", Plan::Install), Ok("installed"));
     assert!(read(&antigravity).contains(vendors::NAME) && read(&antigravity).contains("my-stop.cmd"));
     show("antigravity", "before off", &antigravity);
 
@@ -1847,7 +1896,7 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     fs::create_dir_all(amp.parent().unwrap()).unwrap();
     let amp_sibling = amp.with_file_name("mine.js");
     fs::write(&amp_sibling, "export default () => {}\n").unwrap();
-    assert_eq!(apply(&home, profile, "amp", Plan::Install), Ok("installed"));
+    assert_eq!(apply(&home, &profile, "amp", Plan::Install), Ok("installed"));
     assert!(amp.exists());
     show("amp", "before off", &amp);
     assert!(vendors::rows(&home).iter().all(|r| r["state"] == "installed"), "{:?}", vendors::rows(&home));
@@ -1858,20 +1907,30 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     let plain_user = "{\n  \"hooks\": { \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"node mine.js\" }] }] }\n}\n";
     fs::write(&plain, plain_user).unwrap();
 
-    // Off: the same calls `clear` makes for each managed agent (`apply(.., Plan::Remove)`).
-    assert_eq!(remove_claude(&claude, &claude_prev), Ok(true));
-    assert_eq!(remove_codex(&codex_home), Ok(true));
-    for id in ["gemini", "antigravity", "amp"] {
-        assert_eq!(apply(&home, profile, id, Plan::Remove), Ok("removed"), "{id}");
+    // Off: the call `clear` makes for each managed agent, `apply(.., Plan::Remove)`, on the scratch
+    // profile. Claude's target is what CLAUDE_CONFIG_DIR resolves to, so the variable names the
+    // scratch folder for that one call; Codex's targets are the profile's managed account homes.
+    for id in MANAGED {
+        let out = match id {
+            "claude" => with_claude_config(claude.parent().unwrap(), || apply(&home, &profile, id, Plan::Remove)),
+            "codex" | "gemini" | "antigravity" | "amp" => apply(&home, &profile, id, Plan::Remove),
+            other => {
+                println!("{other} is managed but has no off-path proof in this test yet (hooks FIX-2 follow-up: add its file above)");
+                continue;
+            }
+        };
+        assert_eq!(out, Ok("removed"), "{id}");
     }
     assert_eq!(remove_claude(&plain, &target_dir(&home, &plain).join(STATUS_PREV)), Ok(false));
-    for (agent, file) in [("claude", &claude), ("codex", &codex), ("gemini", &gemini), ("antigravity", &antigravity)] {
+    for (agent, file) in [("claude", &claude), ("codex", &codex), ("codex (never Kolux's)", &codex_plain), ("gemini", &gemini), ("antigravity", &antigravity)] {
         show(agent, "after off", file);
     }
 
     // Each file is byte for byte the user's again; nothing beside them moved.
     assert_eq!(read(&claude), shaped(), "Claude Code: the user's settings back exactly, his status line included");
     assert_eq!(read(&codex), codex_user, "Codex: the user's hooks.json back exactly");
+    assert_eq!(read(&codex_plain), codex_plain_user, "Codex: an account home that never held Kolux's hooks is left as it was");
+    assert!(!backup_of(&codex_plain).exists(), "and no copy of it was made");
     assert_eq!(read(&gemini), gemini_user, "Gemini CLI: the user's settings back exactly");
     assert_eq!(read(&gemini_sibling), "# mine\n", "a sibling file of the user's untouched");
     assert_eq!(read(&antigravity), antigravity_user, "Antigravity: the user's bundle back exactly");
