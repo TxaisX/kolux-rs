@@ -1,0 +1,77 @@
+diff --git a/src-tauri/src/files.rs b/src-tauri/src/files.rs
+index 8a71ece4..56614002 100644
+--- a/src-tauri/src/files.rs
++++ b/src-tauri/src/files.rs
+@@ -1352,6 +1352,22 @@ pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
+     PRESET_COMMANDS.contains(&cmd) || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+ }
+ 
++/// after-list 499: the file variant of open_in for a file the fence does not cover (the shortcuts file in
++/// the user's home): `file` opens in `command` (a preset or a saved app) and nothing else is run.
++pub fn open_file_in(file: &Path, command: &str, settings: &serde_json::Value, path_var: Option<std::ffi::OsString>) -> Result<(), String> {
++    let command = command.trim();
++    if !saved_command(settings, command) {
++        return Err(format!("{command} is not one of the apps under General settings, so it was not run"));
++    }
++    if !file.exists() {
++        return Err(format!("{} does not exist", file.display()));
++    }
++    if !file.is_file() {
++        return Err(format!("{} is not a file, so it was not opened", file.display()));
++    }
++    launch_in(file, command, path_var)
++}
++
+ /// T-317 (EDIT-048): the branches of the repository a worktree belongs to (local ones, then remote ones
+ /// by short name), for the pull request composer's searchable Base box. The worktree must pass the
+ /// fence like any folder open_in opens; a branch list is read-only.
+@@ -1540,6 +1556,24 @@ mod open_in_tests {
+         assert!(!saved_command(&custom, "explorer /e,") && !saved_command(&none, "powershell"));
+     }
+ 
++    #[test]
++    fn row499_a_single_file_opens_only_in_an_allowed_app_and_only_when_it_is_a_file() {
++        let d = temp_dir("openfile");
++        fs::write(d.join("keys.json"), "{}").unwrap();
++        let file = d.join("keys.json");
++        let none = serde_json::json!({});
++        let refused = open_file_in(&file, "cmd /c calc", &none, None).unwrap_err();
++        assert!(refused.contains("not one of the apps"), "{refused}");
++        let folder = open_file_in(&d, "zed", &none, None).unwrap_err();
++        assert!(folder.contains("not a file"), "{folder}");
++        let gone = open_file_in(&d.join("gone.json"), "zed", &none, None).unwrap_err();
++        assert!(gone.contains("does not exist"), "{gone}");
++        // allowed and a file: the launch itself is tried, and this machine has no such app on an empty PATH
++        let tried = open_file_in(&file, "zed", &none, None).unwrap_err();
++        assert!(tried.contains("zed was not found"), "{tried}");
++        let _ = fs::remove_dir_all(&d);
++    }
++
+     fn temp_dir(name: &str) -> std::path::PathBuf {
+         let d = std::env::temp_dir().join(format!("krs-files-pic-{name}-{}", std::process::id()));
+         let _ = fs::remove_dir_all(&d);
+diff --git a/src-tauri/src/keybindings.rs b/src-tauri/src/keybindings.rs
+index 14f15289..e2c527bb 100644
+--- a/src-tauri/src/keybindings.rs
++++ b/src-tauri/src/keybindings.rs
+@@ -154,7 +154,7 @@ pub fn keybindings_reload(app: tauri::AppHandle) {
+ /// SET-012: the file in the system's default app (`reveal` false) or selected in the file
+ /// manager. A missing file is created first, so there is always something to open.
+ #[tauri::command]
+-pub fn keybindings_show(app: tauri::AppHandle, reveal: bool) -> Result<(), String> {
++pub fn keybindings_show(app: tauri::AppHandle, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, reveal: bool, command: Option<String>) -> Result<(), String> {
+     let home = home(&app)?;
+     let path = path_under(&home);
+     if !path.exists() {
+@@ -163,6 +163,11 @@ pub fn keybindings_show(app: tauri::AppHandle, reveal: bool) -> Result<(), Strin
+             return Err(made.error.unwrap_or_else(|| "The shortcuts file could not be created".into()));
+         }
+     }
++    // after-list 499: with a command the file opens in that Open in app instead of the system's default
++    if let Some(c) = command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
++        let settings = store.lock().map_err(|e| e.to_string())?.settings();
++        return crate::files::open_file_in(&path, c, &settings, std::env::var_os("PATH"));
++    }
+     show_command(&path, reveal).spawn().map(|_| ()).map_err(|e| format!("Could not open {}: {e}", path.display()))
+ }
+ 
