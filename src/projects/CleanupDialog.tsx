@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   DEFAULT_VIEW,
   arrangeRows,
+  childrenFirst,
   needsSizes,
   sizeText,
   type CleanupView,
@@ -34,9 +35,11 @@ type Props = {
   onRemoved: (paths: string[]) => void;
   /** Branches left behind by removed workspaces opened on an existing branch (PROJ-073). */
   onKept: (items: KeptItem[]) => void;
+  /** T-149: a workspace's parent by path, so children are removed before their parents. */
+  parentOf?: (path: string) => string | null | undefined;
 };
 
-export default function CleanupDialog({ project, onClose, onRemoved, onKept }: Props) {
+export default function CleanupDialog({ project, onClose, onRemoved, onKept, parentOf }: Props) {
   // The previous result shows straight away while the new scan runs.
   const [scan, setScan] = useState<Scan | null>(() => lastScan(project.id));
   const [ticks, setTicks] = useState<Record<string, boolean>>(() => {
@@ -75,7 +78,7 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
   const listed = scan ? shownRows(scan, showAll) : [];
   const rows = arrangeRows(listed, view, sizes);
   const shownSet = new Set(rows.map((r) => r.path));
-  const chosen = scan ? tickedPaths(ticks, scan, showAll).filter((p) => shownSet.has(p)) : [];
+  const chosen = scan ? childrenFirst(tickedPaths(ticks, scan, showAll).filter((p) => shownSet.has(p)), parentOf) : [];
   const unread = needsSizes(view) ? listed.map((r) => r.path).filter((p) => !(p in sizes)) : [];
   useEffect(() => {
     if (unread.length === 0) return;

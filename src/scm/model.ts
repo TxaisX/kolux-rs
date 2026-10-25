@@ -7,6 +7,8 @@ export type Change = { path: string; status: string; from: string | null };
 export type Status = {
   branch: string | null;
   upstream: string | null;
+  /** The remote the upstream sits on, as Git names it (a name may hold a slash); null for a local upstream. Absent from an older back end. */
+  upstreamRemote?: string | null;
   ahead: number;
   behind: number;
   /** GIT-006: after a rebase, the upstream holds only patches HEAD already has. */
@@ -110,15 +112,15 @@ export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" |
 /** What the main button offers; `reason` is why it waits, null when it can go. */
 export type Step = { label: string; action: "stage" | "commit" | "pr" | RemoteAction; reason: string | null };
 
-/** VIEW-066: a push to a fork says so. The remote is named from the branch's upstream ("fork/feat"), so
- * it reads the same whatever form its address takes (https, ssh, scp-style). origin is the usual case and stays unnamed. */
-// ponytail: the first path segment is the remote; a remote name containing a slash would be cut short.
-export const pushTarget = (upstream: string | null): string | null => {
-  const remote = upstream?.split("/")[0] ?? "";
-  return remote !== "" && remote !== "origin" ? remote : null;
+/** VIEW-066: a push to a fork says so. The remote is the one Git names for the upstream, so a name with a slash
+ * stays whole and the label reads the same whatever form its address takes. origin is the usual case and stays unnamed.
+ * `remote` undefined (an older back end) falls back to the upstream's first segment. */
+export const pushTarget = (upstream: string | null, remote?: string | null): string | null => {
+  const name = remote === undefined ? (upstream?.split("/")[0] ?? "") : (remote ?? "");
+  return name !== "" && name !== "origin" ? name : null;
 };
-const toRemote = (upstream: string | null): string => {
-  const t = pushTarget(upstream);
+const toRemote = (s: Pick<Status, "upstream" | "upstreamRemote">): string => {
+  const t = pushTarget(s.upstream, s.upstreamRemote);
   return t === null ? "" : ` to ${t}`;
 };
 
@@ -133,7 +135,7 @@ export const nextStep = (s: Status | null, message: string): Step => {
   if (s.rewritten) return { label: "Force push with lease", action: "force", reason: null };
   if (s.ahead > 0 && s.behind > 0) return { label: `Sync \u2193${s.behind} \u2191${s.ahead}`, action: "sync", reason: null };
   if (s.behind > 0) return { label: `Pull ${s.behind}`, action: "pull", reason: null };
-  if (s.ahead > 0) return { label: `Push ${s.ahead}${toRemote(s.upstream)}`, action: "push", reason: null };
+  if (s.ahead > 0) return { label: `Push ${s.ahead}${toRemote(s)}`, action: "push", reason: null };
   return { label: "Create pull request", action: "pr", reason: null };
 };
 
@@ -234,7 +236,7 @@ export const prReason = (s: Status | null, look: PrLook): string | null => {
   if (s.branch === null) return "No branch checked out";
   if (s.base !== null && (s.base === s.branch || s.base === `origin/${s.branch}`)) return "Move to a feature branch first";
   if (s.upstream === null) return "Push the branch first";
-  if (!s.upstream.startsWith("origin/")) return `Fork head not supported: the branch tracks ${s.upstream}; push it to origin first`;
+  if (s.upstreamRemote === undefined ? !s.upstream.startsWith("origin/") : s.upstreamRemote !== "origin") return `Fork head not supported: the branch tracks ${s.upstream}; push it to origin first`;
   if (s.behind > 0) return `Sync first: the remote has ${plural(s.behind, "commit")} this copy lacks`;
   if (s.ahead > 0) return `Push ${plural(s.ahead, "commit")} first`;
   if (s.base === null) return "No base branch on the remote";
@@ -263,7 +265,7 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
   const unpublished = noBranch ?? (st.upstream === null ? "Branch unpublished" : null);
   const onBase = st.base !== null && (st.base === st.branch || st.base === `origin/${st.branch}`);
   return [
-    { id: "push", label: st.ahead > 0 ? `Push ${plural(st.ahead, "commit")}${toRemote(st.upstream)}` : "Push", reason: unpublished ?? (st.ahead === 0 ? "Nothing to push" : null) },
+    { id: "push", label: st.ahead > 0 ? `Push ${plural(st.ahead, "commit")}${toRemote(st)}` : "Push", reason: unpublished ?? (st.ahead === 0 ? "Nothing to push" : null) },
     { id: "pull", label: st.behind > 0 ? `Pull ${plural(st.behind, "commit")}` : "Pull", reason: unpublished ?? (st.behind === 0 ? "Nothing to pull" : null) },
     { id: "sync", label: `Sync \u2193${st.behind} \u2191${st.ahead}`, reason: unpublished ?? (st.ahead + st.behind === 0 ? "Already current" : null) },
     { id: "fetch", label: "Fetch", reason: noBranch },
