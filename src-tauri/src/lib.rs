@@ -130,6 +130,12 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
     Ok(secrets::without_secrets(store.lock().map_err(|e| e.to_string())?.settings()))
 }
 
+/// after-list #39: set once if settings were read from the last good copy; the window shows it in the notice bar.
+#[tauri::command]
+fn settings_fallback_notice(store: tauri::State<'_, Mutex<Store>>) -> Option<String> {
+    store.lock().ok().and_then(|s| s.take_fallback_notice())
+}
+
 /// Writes only the settings the window changed (`set`, and `remove` for ones it cleared) over what
 /// is on disk, so a key Kolux itself wrote meanwhile (a printed pull request link) is kept.
 /// T-075 (APP-048): `async`, so the synced write (two files, fsync each) runs off the window's
@@ -500,6 +506,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             get_settings,
+            settings_fallback_notice,
             settings_patch,
             notify,
             notifications::notification_test,

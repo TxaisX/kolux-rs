@@ -189,8 +189,10 @@ const LINK_WAIT: Duration = Duration::from_secs(10);
 /// `FLOW_HIGH` unacknowledged bytes the reader thread stops reading the PTY (so the program blocks
 /// on its own write) and goes on once the pane is down to `FLOW_LOW`; a pane that stops answering
 /// (its webview busy, say) holds it `FLOW_WAIT` at most, so no program is ever stuck for good.
+/// AFTER-699: the terminal service keeps one per terminal too, so a flood in a service pane pauses
+/// its reader there instead of piling up in the service's buffers for the window.
 #[derive(Default)]
-struct Flow {
+pub(crate) struct Flow {
     unacked: Mutex<u64>,
     drawn: Condvar,
     pauses: std::sync::atomic::AtomicU32,
@@ -199,17 +201,17 @@ struct Flow {
     behind: std::sync::atomic::AtomicBool,
 }
 
-const FLOW_HIGH: u64 = 512 * 1024;
+pub(crate) const FLOW_HIGH: u64 = 512 * 1024;
 const FLOW_LOW: u64 = 128 * 1024;
-const FLOW_WAIT: Duration = Duration::from_secs(2);
+pub(crate) const FLOW_WAIT: Duration = Duration::from_secs(2);
 
 impl Flow {
     /// Counts `bytes` just sent to the pane and, past the high mark, waits for it to catch up.
-    fn sent(&self, bytes: u64) {
+    pub(crate) fn sent(&self, bytes: u64) {
         self.sent_within(bytes, FLOW_WAIT);
     }
 
-    fn sent_within(&self, bytes: u64, wait: Duration) {
+    pub(crate) fn sent_within(&self, bytes: u64, wait: Duration) {
         let Ok(mut n) = self.unacked.lock() else { return };
         *n += bytes;
         if *n < FLOW_HIGH {
@@ -233,7 +235,7 @@ impl Flow {
     }
 
     /// The pane drew `bytes` more. True once after the reader gave up waiting for it (ORCH-057: resync due).
-    fn ack(&self, bytes: u64) -> bool {
+    pub(crate) fn ack(&self, bytes: u64) -> bool {
         if let Ok(mut n) = self.unacked.lock() {
             *n = n.saturating_sub(bytes);
             if *n <= FLOW_LOW {
@@ -244,7 +246,7 @@ impl Flow {
     }
 
     /// The session is ending: a paused reader goes on at once.
-    fn release(&self) {
+    pub(crate) fn release(&self) {
         if let Ok(mut n) = self.unacked.lock() {
             *n = 0;
         }
@@ -1194,8 +1196,21 @@ impl Terminals {
     /// ACCT-054: the pane drew `bytes` more of session `id`'s output. ORCH-057: when the reader gave up
     /// waiting for this pane, the answer is a fresh snapshot to redraw from (once per give-up).
     pub fn ack(&self, id: u32, bytes: u64) -> Option<Snapshot> {
-        let flow = self.inner.lock().ok().and_then(|i| i.flow.get(&id).cloned())?;
-        if !flow.ack(bytes) {
+        // AFTER-699: a service terminal's reader waits in the service, so the count goes there (its
+        // control connection is used outside the registry lock, like typing).
+        let (flow, acker) = {
+            let inner = self.inner.lock().ok()?;
+            let acker = match inner.sessions.get(&id) {
+                Some(Session::Remote(r)) => Some(r.acker()),
+                _ => None,
+            };
+            (inner.flow.get(&id).cloned(), acker)
+        };
+        let behind = match acker {
+            Some(a) => a.ack(bytes),
+            None => flow?.ack(bytes),
+        };
+        if !behind {
             return None;
         }
         let mut inner = self.inner.lock().ok()?;
@@ -1497,6 +1512,17 @@ impl Terminals {
     pub fn kill_all(&self) {
         crate::automations::QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
         self.let_go();
+    }
+
+    /// AFTER-696: the restart to update. The installer replaces the program the background service
+    /// runs from, so the service and its shells end too (update_restart: "the shells end") instead
+    /// of holding the old program open. Coordinator default; Txais may overrule.
+    pub fn end_for_update(&self) {
+        let dir = self.service.dir.lock().ok().and_then(|d| d.clone());
+        self.kill_all();
+        if let Some(dir) = dir {
+            crate::pty::service::stop(&dir, std::time::Duration::from_secs(5));
+        }
     }
 
     /// `kill_all` without the app-wide quitting flag (a test runs it alone).

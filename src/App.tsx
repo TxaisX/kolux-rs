@@ -178,7 +178,7 @@ import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
-import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
+import { LAYOUT_FIELD, layoutOf, marksOf, type SavedLayout } from "./terminal/layout";
 import { layoutWriter } from "./terminal/layoutSave";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
@@ -330,12 +330,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; confirm?: string } | null>(null);
   // TERM-046: pinned tab keys live in window state, like the strip order (terminal/pin.ts).
-  const [pinned, setPinned] = useState<Set<number>>(new Set());
+  const [pinned, setPinned] = useState<Set<number>>(() => marksOf(layout?.panes ?? []).pinned); // after-list #100: saved with the layout
   const [switcher, setSwitcher] = useState<Switcher | null>(null); // TERM-050: the Ctrl+Tab list while Ctrl is held
   const switcherRef = useRef<Switcher | null>(null);
   switcherRef.current = switcher;
   const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
-  const [tabColors, setTabColors] = useState<TabColors>({}); // TERM-049: Tab Color, window state like pinned (terminal/tabColor.ts)
+  const [tabColors, setTabColors] = useState<TabColors>(() => marksOf(layout?.panes ?? []).colors); // TERM-049: Tab Color, window state like pinned (terminal/tabColor.ts)
   // TERM-015 / TERM-054: what is being dragged (a tab, or a whole cell by its pane header) and where it would land.
   const dragging = useRef<{ tab: number } | { cell: number } | null>(null);
   const [dropHint, setDropHint] = useState<{ group: number; zone?: Zone; tab?: number; half?: "before" | "after" } | null>(null);
@@ -410,6 +410,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           setSettingsRead(true);
           applyAppearance(readAppearance(s));
           applyWindowBlur(s);
+          // after-list #39: said once when the settings came from the last good copy
+          void invoke<string | null>("settings_fallback_notice").then((m) => m && setNotice(m), () => {});
         })
         .catch(() => setSettings({}));
     readSettings();
@@ -1205,7 +1207,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const groups = cellsOf(panesIn(panes, p.cwd)).map((c) => c.group);
     if (canExpand(groups.length, classic)) setZoom((z) => toggleZoom(z, p.cwd ?? "", groupOf(p), groups.length));
   };
-  const splitPane = (key: number, dir: "right" | "down", cli?: { ask: string; command: string | null }) => {
+  const splitPane = (key: number, dir: "right" | "down", cli?: { ask: string; command: string | null }, over?: Partial<Pane>) => {
     const src = panes.find((p) => p.key === key);
     if (!src) {
       if (cli) cliFailed.current[cli.ask] = "that terminal is not in the window";
@@ -1217,7 +1219,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       else setToast(`A workspace holds up to ${MAX_PANES} panes.`);
       return;
     }
-    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [], typed: cli?.command ?? undefined, ask: cli?.ask };
+    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [], typed: cli?.command ?? undefined, ask: cli?.ask, ...over };
     // one pane split down becomes a stacked pair; a split right puts the pair side by side again
     const stack = dir === "down" && shown.length === 1;
     setStacked((st) => ({ ...st, [activeDir ?? ""]: stack }));
@@ -1551,11 +1553,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // then only the durable part is written.
   useEffect(() => {
     if (!read && !settingsRead) return;
-    const l = layoutOf(panes, activeTab, focused, activeDir, stacked);
+    const l = layoutOf(panes, activeTab, focused, activeDir, stacked, { pinned, colors: tabColors });
     if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) === JSON.stringify(l)) return;
     setSettings({ ...settings, [LAYOUT_FIELD]: l });
     layoutSaver.set(l);
-  }, [panes, activeTab, focused, activeDir, stacked]);
+  }, [panes, activeTab, focused, activeDir, stacked, pinned, tabColors]);
 
   // VIEW-046: every workspace and page shown is a stop for back and forward; a step back lands on
   // the place already current, which visit leaves alone.
@@ -3245,6 +3247,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     onRename={(name) => renamePane(p.key, name)}
                     renameAsk={askName[p.key]}
                     sessionKnown={!!p.session}
+                    session={p.session}
+                    onSessionLaunch={(l, fork) => splitPane(p.key, "right", undefined, { agent: p.agent, agentId: p.agentId, account: p.account, setup: p.setup, env: p.env, program: l.program, args: l.args, forkOf: fork ? p.session : undefined })} // after-list #117: Continue / Fork open a second pane beside this one
                     onCopyId={(what) => copyId(p, what)}
                     findHandle={findHandle}
                     typed={p.typed}

@@ -53,6 +53,19 @@ export const sessionActions = (p: SessionPane): SessionAction[] =>
       ]
     : [];
 
+export type SessionHandlers = { launch?: (l: Launch, fork: boolean) => void; copy: () => void };
+
+/** after-list #117: the menu items with what they do; Continue and Fork need the window's launch, Copy Context does not. */
+export function sessionMenuActions(p: SessionPane, h: SessionHandlers): { id: SessionAction["id"]; name: string; title: string; run: () => void }[] {
+  const out: { id: SessionAction["id"]; name: string; title: string; run: () => void }[] = [];
+  for (const a of sessionActions(p)) {
+    const go = (l: Launch | null, fork: boolean) => (h.launch && l ? () => h.launch?.(l, fork) : null);
+    const run = a.id === "copyContext" ? h.copy : a.id === "forkSession" ? go(forkLaunch(p), true) : go(continueLaunch(p), false);
+    if (run) out.push({ ...a, run });
+  }
+  return out;
+}
+
 /** The fork dialog: pressing Create while it is already working starts nothing more. */
 export type ForkDraft = { name: string; busy: boolean };
 export const newFork = (name = ""): ForkDraft => ({ name, busy: false });

@@ -8,6 +8,7 @@ import { creditedLive, launchedAgent, titleGuess } from "../status/credit";
 import { inbandTurn } from "../status/inbandSession";
 import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
 import PaneMenu, { paneMenuItems } from "./PaneMenu";
+import { contextText, sessionMenuActions, type Launch } from "./sessionFork";
 import LinkActionMenu from "./LinkActionMenu";
 import { copyTextOf, destinationOf, doorOfItem, linkMenuItems, openFailed, opensMenu, planClick, type Door, type LinkItemId } from "./linkMenu";
 import type { Chip } from "../board/chip";
@@ -182,6 +183,9 @@ type Props = {
   onClose?: () => void;
   /** SAFE-002: set while the agent waits on its plan; the header then offers Review plan. */
   onReviewPlan?: () => void;
+  /** after-list #117 (TERM-037): the agent session id, and the window opening a second pane that continues or forks it. */
+  session?: string;
+  onSessionLaunch?: (launch: Launch, fork: boolean) => void;
   /** The plus menu behind the header's "+" button. */
   agents?: AgentInfo[];
   launching?: boolean;
@@ -232,7 +236,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, session, onSessionLaunch, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -1401,6 +1405,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   const drawing = renderer === "webgl" ? "GPU renderer" : renderer === "dom" ? "plain renderer" : "";
   // TERM-116: the last 60 lines on screen plus what Kolux knows, scrubbed on the Rust side, to the
   // clipboard; every way it can fail says so in the header.
+  // after-list #117 (TERM-037): who and where plus the last lines on screen, to the clipboard.
+  const copyContext = () => {
+    const term = termRef.current;
+    const text = contextText({ agent, session, program, args, cwd, branch, title: jobTitle }, { recent: term ? screenLines(term.buffer.active) : [] });
+    navigator.clipboard.writeText(text).then(
+      () => setFlash("Context copied"),
+      (e) => setFlash(`Context could not be copied (${e instanceof Error ? e.message : String(e)})`),
+    );
+  };
   const copyDiagnostics = async () => {
     const term = termRef.current;
     const id = idRef.current;
@@ -1657,7 +1670,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
               pasteRef.current();
               termRef.current?.focus();
             },
-            agentActions: onReviewPlan ? [{ id: "reviewPlan", name: "Review plan", title: "Read the plan, comment on it, then approve or ask for changes", run: onReviewPlan }] : [],
+            agentActions: [
+              ...(onReviewPlan ? [{ id: "reviewPlan", name: "Review plan", title: "Read the plan, comment on it, then approve or ask for changes", run: onReviewPlan }] : []),
+              ...sessionMenuActions({ agent, session, program, args, cwd, branch, title: jobTitle }, { launch: onSessionLaunch, copy: copyContext }),
+            ],
             onSplit,
             onEqualize,
             onMoveToTab,

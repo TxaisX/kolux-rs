@@ -411,6 +411,26 @@ impl Remote {
     pub fn kill(&self) {
         let _ = call(&self.link, &self.ctl, json!({ "op": "kill", "id": self.id }));
     }
+
+    /// AFTER-699: what sends the pane's acknowledgements, usable outside the registry lock.
+    pub fn acker(&self) -> Acker {
+        Acker { id: self.id, ctl: self.ctl.clone(), link: self.link.clone() }
+    }
+}
+
+/// AFTER-699 (ACCT-054): the pane drew more of a service terminal's output; the service's reader for
+/// that terminal waits on these counts, as the window's own reader does for a window-run pane.
+pub struct Acker {
+    id: u32,
+    ctl: Arc<Mutex<Option<Client>>>,
+    link: Arc<Link>,
+}
+
+impl Acker {
+    /// True once after the service gave up waiting for this pane (a snapshot is due).
+    pub fn ack(&self, bytes: u64) -> bool {
+        call(&self.link, &self.ctl, json!({ "op": "ack", "id": self.id, "bytes": bytes })).is_ok_and(|v| v["behind"] == true)
+    }
 }
 
 // ---------------------------------------------------------------- pure rules
