@@ -2,6 +2,7 @@
 // (SET-002) and the terminal colours picker with "Match app theme" (SET-003). Every change shows at
 // once on the whole window; the save follows a moment later so a slider drag is one write.
 import { useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useLeaveSave } from "./leave";
 import { MAX_LEVEL, MIN_LEVEL, onZoom, percentOf, stepZoom, zoomLevel, type ZoomStep } from "./zoom";
 import { SearchFolds } from "./search";
 import { saveChanged } from "./saveChanged";
@@ -109,6 +110,7 @@ export function FontField({ label, value, placeholder, onPick }: { label: string
     setOpen(false);
     if (f.trim() !== value) onPick(f.trim());
   };
+  useLeaveSave(() => text !== value && commit(text)); // SET-036: changing page or closing keeps what was typed
   return (
     <label className="font-field">
       <span>{label}</span>
@@ -538,21 +540,29 @@ export default function AppearancePage() {
   const [error, setError] = useState<string | null>(null);
   const status = useSettings();
   const timer = useRef<number | undefined>(undefined);
+  // SET-036: a change still waiting out the pause is written when the page goes away or the window closes, not dropped.
+  const waiting = useRef<Appearance | null>(null);
+  const flush = () => {
+    window.clearTimeout(timer.current);
+    const next = waiting.current;
+    waiting.current = null;
+    if (!next) return;
+    invoke<Record<string, unknown>>("get_settings")
+      .then((s) => saveChanged(s, writeAppearance(s, next)))
+      .catch((e) => setError(String(e)));
+  };
+  useLeaveSave(flush);
   useEffect(() => {
     invoke<Record<string, unknown>>("get_settings")
       .then((s) => setLook(readAppearance(s)))
       .catch((e) => setError(String(e)));
-    return () => window.clearTimeout(timer.current);
   }, []);
   const change = (next: Appearance) => {
     setLook(next);
     applyAppearance(next);
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      invoke<Record<string, unknown>>("get_settings")
-        .then((s) => saveChanged(s, writeAppearance(s, next)))
-        .catch((e) => setError(String(e)));
-    }, 250);
+    waiting.current = next;
+    timer.current = window.setTimeout(flush, 250);
   };
   return (
     <>

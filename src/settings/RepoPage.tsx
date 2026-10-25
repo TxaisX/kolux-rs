@@ -2,6 +2,7 @@
 // (each showing the inherited value until the user overrides it), and whether workspaces made outside
 // Kolux show. Drafts save only when changed.
 import { useEffect, useState } from "react";
+import { useLeaveSave } from "./leave";
 import { invoke } from "@tauri-apps/api/core";
 import { projectLabel, type Project } from "../projects/model";
 import RepoSetupSection from "./RepoSetup";
@@ -47,6 +48,7 @@ function DraftField({ label, saved, inherited, onSave }: { label: string; saved:
     const v = draftSave(saved, draft);
     if (v !== null) onSave(v);
   };
+  useLeaveSave(commit); // SET-036: changing page or closing keeps what was typed (draftSave is null when unchanged)
   return (
     <div className="look-select">
       <span>{label}</span>

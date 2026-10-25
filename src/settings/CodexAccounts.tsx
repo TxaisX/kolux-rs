@@ -5,7 +5,8 @@
 // named, since OpenAI does not document where a sign-in says personal or business (T-138-b).
 // The Codex card above and this section read the same backend view; each change Kolux makes
 // emits codex-accounts, so both follow it.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLeaveSave } from "./leave";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AccountRow, signedInAt } from "./AccountRow";
@@ -82,22 +83,7 @@ export function CodexAccountsView({ view, error, confirming = null, naming = nul
             }}
             below={
               naming === a.id && (
-                <input
-                  className="field acct-name"
-                  aria-label={`Name for ${who(a)}`}
-                  placeholder="Personal, Work…"
-                  maxLength={NAME_MAX}
-                  defaultValue={a.label ?? ""}
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.blur();
-                    if (e.key === "Escape") {
-                      e.stopPropagation();
-                      onAction({ kind: "keep" });
-                    }
-                  }}
-                  onBlur={(e) => onAction({ kind: "label", id: a.id, label: e.currentTarget.value })}
-                />
+                <NameInput id={a.id} who={who(a)} saved={a.label ?? ""} onAction={onAction} />
               )
             }
           />
@@ -114,6 +100,38 @@ export function CodexAccountsView({ view, error, confirming = null, naming = nul
         </p>
       )}
     </section>
+  );
+}
+
+/** The account name box: Enter or leaving it saves; SET-036: so do changing page and closing the window; Escape keeps the old name. */
+function NameInput({ id, who: name, saved, onAction }: { id: string; who: string; saved: string; onAction: (a: CodexListAction) => void }) {
+  const typed = useRef(saved);
+  const done = useRef(false);
+  const label = (text: string) => {
+    if (done.current) return;
+    done.current = true;
+    onAction({ kind: "label", id, label: text });
+  };
+  useLeaveSave(() => typed.current !== saved && label(typed.current));
+  return (
+    <input
+      className="field acct-name"
+      aria-label={`Name for ${name}`}
+      placeholder="Personal, Work…"
+      maxLength={NAME_MAX}
+      defaultValue={saved}
+      autoFocus
+      onChange={(e) => (typed.current = e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          done.current = true;
+          onAction({ kind: "keep" });
+        }
+      }}
+      onBlur={(e) => label(e.currentTarget.value)}
+    />
   );
 }
 
