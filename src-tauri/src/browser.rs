@@ -28,6 +28,9 @@ pub mod profiles;
 pub mod preview;
 #[path = "browser_ports.rs"]
 pub mod ports;
+// After-list 21 (BROW-008): whether the system has a program for a link, so Open Externally can hide.
+#[path = "browser_handler.rs"]
+pub mod handler;
 // T-240: BROW-028 cookies brought in from a file (BROW-029 keeps Google sign-ins out).
 #[path = "browser_cookies.rs"]
 pub mod cookies;

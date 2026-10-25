@@ -1,0 +1,27 @@
+diff --git a/src-tauri/src/browser_handler.rs b/src-tauri/src/browser_handler.rs
+index ae38f18b..de5ca895 100644
+--- a/src-tauri/src/browser_handler.rs
++++ b/src-tauri/src/browser_handler.rs
+@@ -3,10 +3,6 @@
+ //! asks the shell's association store (AssocQueryString for the URL scheme); elsewhere the answer
+ //! is "unknown", which keeps the button as before. The command is `browser_external_handler`.
+ 
+-// Until evidence/browser-fix-21-lib.rs.patch registers the command in lib.rs nothing calls it; that
+-// patch also deletes this line.
+-#![allow(dead_code)]
+-
+ /// The scheme of an address `open_external` would let through (web and mail links), lower case.
+ pub fn scheme_of(url: &str) -> Option<&'static str> {
+     let low = url.trim_start().to_ascii_lowercase();
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 4932563c..dc7a1014 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -728,6 +728,7 @@ pub fn run() {
+             browser::browser_viewport,
+             browser::browser_cookies_import,
+             browser::cookies::browser_import_sources, // T-319-b (BROW-030)
++            browser::handler::browser_external_handler, // after-list 21 (BROW-008)
+             browser::browser_probe,
+             browser::browser_diagnose,
+             browser::certs::browser_cert,
