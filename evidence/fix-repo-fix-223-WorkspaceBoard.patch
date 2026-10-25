@@ -1,0 +1,91 @@
+diff --git a/src/board/WorkspaceBoard.tsx b/src/board/WorkspaceBoard.tsx
+index 897a832b..67c70e8c 100644
+--- a/src/board/WorkspaceBoard.tsx
++++ b/src/board/WorkspaceBoard.tsx
+@@ -7,6 +7,7 @@ import { Close, Search } from "../chrome/icons";
+ import { noteUse } from "../onboarding/features";
+ import type { Project, Worktree } from "../projects/model";
+ import { projectLabel, worktreeLabel } from "../projects/model";
++import { dropBand, parentDropMoves } from "../projects/parentDrop";
+ import {
+   buildLanes, DRAG_TYPE, dragSet, droppedPaths, escapeAction, FRESH_QUERY, laneLeft, laneRange, laneWidth, nearestLane, pick, selectLane, windowRange,
+   type BoardCard, type BoardLane, type Status, LANE_GAP,
+@@ -16,18 +17,21 @@ import "./board.css";
+ const CARD_H = 56;
+ const CARD_STEP = CARD_H + 6;
+ 
+-type Load = { statuses: Status[]; cards: BoardCard[] };
++type Load = { statuses: Status[]; cards: BoardCard[]; trees: Record<string, Worktree[]> };
+ 
+ async function load(): Promise<Load> {
+   const projects = await invoke<Project[]>("project_list");
+   const lists = await Promise.allSettled(projects.map((p) => invoke<Worktree[]>("workspace_list", { projectId: p.id })));
+   const rows: Array<{ p: Project; w: Worktree }> = [];
++  const trees: Record<string, Worktree[]> = {};
+   lists.forEach((r, i) => {
+-    if (r.status === "fulfilled") for (const w of r.value) if (!w.hidden) rows.push({ p: projects[i], w });
++    if (r.status !== "fulfilled") return;
++    trees[projects[i].id] = r.value;
++    for (const w of r.value) if (!w.hidden) rows.push({ p: projects[i], w });
+   });
+   const st = await invoke<{ list: Status[]; of: string[] }>("workspace_statuses", { paths: rows.map((r) => r.w.path) });
+   const cards = rows.map(({ p, w }, i): BoardCard => ({ path: w.path, project: projectLabel(p), projectId: p.id, label: worktreeLabel(w), branch: w.branch, status: st.of[i] ?? st.list[0]?.id ?? "", isMain: w.isMain }));
+-  return { statuses: st.list, cards };
++  return { statuses: st.list, cards, trees };
+ }
+ 
+ export default function WorkspaceBoard({ onClose }: { onClose: () => void }) {
+@@ -88,6 +92,25 @@ export default function WorkspaceBoard({ onClose }: { onClose: () => void }) {
+     void move(paths.filter((p) => known.has(p)), lanes[i].status.id);
+   };
+ 
++  // T-186-b: the middle of a card nests the dragged workspaces under it, as a sidebar row does; the edges fall through to the lane's status drop.
++  const nest = (e: React.DragEvent<HTMLElement>, card: BoardCard) => {
++    if (!data) return;
++    const r = e.currentTarget.getBoundingClientRect();
++    const moves = parentDropMoves(data.trees[card.projectId] ?? [], droppedPaths(e.dataTransfer.getData(DRAG_TYPE)), card.path, dropBand(e.clientY - r.top, r.height));
++    if (moves.length === 0) return;
++    e.preventDefault();
++    e.stopPropagation();
++    noteUse("board");
++    void (async () => {
++      try {
++        for (const m of moves) await invoke("workspace_set_parent", { projectId: card.projectId, path: m.path, parent: m.parent });
++      } catch (err) {
++        setError(String(err));
++      }
++      reload();
++    })();
++  };
++
+   const keys = (e: React.KeyboardEvent) => {
+     if (e.key !== "Escape") return;
+     e.stopPropagation();
+@@ -130,6 +153,7 @@ export default function WorkspaceBoard({ onClose }: { onClose: () => void }) {
+                   onPick={(path, add) => setSelected((s) => pick(s, path, add))}
+                   onMenu={setMenu}
+                   onMove={(paths, status) => { setMenu(null); void move(paths, status); }}
++                  onNest={nest}
+                 />
+               ))}
+             </div>
+@@ -141,9 +165,10 @@ export default function WorkspaceBoard({ onClose }: { onClose: () => void }) {
+   );
+ }
+ 
+-function Lane({ lane, left, width, statuses, selected, menu, onSelectLane, onPick, onMenu, onMove }: {
++function Lane({ lane, left, width, statuses, selected, menu, onSelectLane, onPick, onMenu, onMove, onNest }: {
+   lane: BoardLane; left: number; width: number; statuses: Status[]; selected: Set<string>; menu: string | null;
+   onSelectLane: () => void; onPick: (path: string, additive: boolean) => void; onMenu: (path: string | null) => void; onMove: (paths: string[], status: string) => void;
++  onNest: (e: React.DragEvent<HTMLElement>, card: BoardCard) => void;
+ }) {
+   const [scroll, setScroll] = useState(0);
+   const [h, setH] = useState(500);
+@@ -169,6 +194,7 @@ function Lane({ lane, left, width, statuses, selected, menu, onSelectLane, onPic
+                 e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(dragSet(selected, c.path)));
+                 e.dataTransfer.effectAllowed = "move";
+               }}
++              onDrop={(e) => onNest(e, c)}
+               onClick={(e) => onPick(c.path, e.ctrlKey || e.metaKey || e.shiftKey)}
+             >
+               <div className="board-card-title">{c.label}</div>

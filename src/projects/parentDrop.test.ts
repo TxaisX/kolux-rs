@@ -1,6 +1,6 @@
 // PROJ-048: dropping a workspace row on the middle of another makes it a child; edges reorder.
 import { expect, test } from "vitest";
-import { dropBand, parentDropTarget } from "./parentDrop";
+import { dropBand, parentDropMoves, parentDropTarget } from "./parentDrop";
 import type { Worktree } from "./model";
 
 const w = (path: string, over: Partial<Worktree> = {}): Worktree => ({ path, branch: path, head: "x", isMain: false, ...over });
@@ -30,4 +30,11 @@ test("PROJ-048 a middle drop nests under the row, but never under itself, its ow
   expect(parentDropTarget(all, "C:/ws/kid", "C:/ws/a", "parent")).toBeNull();
   expect(parentDropTarget(all, "C:/r", "C:/ws/a", "parent")).toBeNull();
   expect(parentDropTarget(all, "C:/ws/nowhere", "C:/ws/a", "parent")).toBeNull();
+});
+
+test("T-186-b a middle drop of several cards nests each that may, with the paths the back end knows them by", () => {
+  expect(parentDropMoves(all, ["c:\\ws\\B", "C:/ws/kid", "C:/ws/a"], "C:/ws/a", "parent")).toEqual([{ path: "C:/ws/b", parent: "C:/ws/a" }]);
+  expect(parentDropMoves(all, ["C:/ws/b"], "C:/ws/a", "above")).toEqual([]);
+  expect(parentDropMoves(all, ["C:/ws/a", "C:/ws/b"], "C:/ws/kid", "parent")).toEqual([{ path: "C:/ws/b", parent: "C:/ws/kid" }]);
+  expect(parentDropMoves(all, [], "C:/ws/a", "parent")).toEqual([]);
 });
