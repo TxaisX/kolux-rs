@@ -91,11 +91,13 @@ export async function run({ launch, checks }) {
   checks.note(`all ${FLOODERS} flood commands typed in ${((tStart - t0) / 1000).toFixed(1)} s`);
   // Memory is sampled in the background while the echo samples are taken.
   const mem = [];
+  const progress = [];
   let finished = false;
   const sampler = (async () => {
     while (!finished) {
       try {
         mem.push(appMemMB(await snapshot(app)));
+        progress.push(`${Math.round((Date.now() - tStart) / 1000)}s:${Array.from({ length: FLOODERS }, (_, k) => existsSync(doneFile(k))).filter(Boolean).length}/${FLOODERS}done:${Math.round(mem[mem.length - 1])}MB`);
       } catch {
         /* a sample missed is a sample missed */
       }
@@ -103,10 +105,17 @@ export async function run({ launch, checks }) {
     }
   })();
   await app.sleep(3000);
-  const flooding = await app.evalJs(echoScript(echoPane, 60, 250));
-  const floodStats = stats(flooding.filter((v) => v >= 0));
+  // 60 keys can take 60 x 5 s when every echo is lost; a page that stays silent for longer than that is frozen.
+  app.cdpTimeoutMs = 420000;
+  const tEcho = Date.now();
+  const flooding = await app.evalJs(echoScript(echoPane, 60, 250)).catch((e) => ({ frozen: `the page did not answer in ${((Date.now() - tEcho) / 1000).toFixed(0)} s (${e.message.slice(0, 80)})` }));
+  app.cdpTimeoutMs = 120000;
+  if (flooding.frozen) {
+    checks.add("echo latency in a 9th pane while 8 panes flood (60 keys, in-page key to token on screen)", "p95 <= 250 ms", `FROZEN: ${flooding.frozen}`, false);
+  }
+  const floodStats = stats(flooding.frozen ? [] : flooding.filter((v) => v >= 0));
   const stillRunning = Array.from({ length: FLOODERS }, (_, k) => !existsSync(doneFile(k))).filter(Boolean).length;
-  checks.add("echo latency in a 9th pane while 8 panes flood (60 keys, in-page key to token on screen)", "p95 <= 250 ms", `p50 ${fmt(floodStats.p50)} ms, p95 ${fmt(floodStats.p95)} ms, max ${fmt(floodStats.max)} ms; ${flooding.filter((v) => v < 0).length} keys never echoed within 5 s; ${stillRunning} of ${FLOODERS} floods still running when sampling ended`, floodStats.p95 <= 250 && !flooding.includes(-1));
+  if (!flooding.frozen) checks.add("echo latency in a 9th pane while 8 panes flood (60 keys, in-page key to token on screen)", "p95 <= 250 ms", `p50 ${fmt(floodStats.p50)} ms, p95 ${fmt(floodStats.p95)} ms, max ${fmt(floodStats.max)} ms; ${(flooding.frozen ? [] : flooding).filter((v) => v < 0).length} keys never echoed within 5 s; ${stillRunning} of ${FLOODERS} floods still running when sampling ended`, floodStats.p95 <= 250 && !flooding.includes(-1));
   let pending = 0;
   try {
     await app.waitFor("every flood to finish", () => ((pending = Array.from({ length: FLOODERS }, (_, k) => existsSync(doneFile(k))).filter((x) => !x).length) === 0), FLOOD_BUDGET_S * 1000, 2000);
@@ -118,6 +127,7 @@ export async function run({ launch, checks }) {
   await sampler;
   const secs = (tDone - tStart) / 1000;
   checks.add(`all ${FLOODERS} floods finish (each ${LINES} lines, ~${Math.round((LINES * 100) / 1e6)} MB)`, `within ${FLOOD_BUDGET_S} s`, pending === 0 ? `${secs.toFixed(0)} s (${((FLOODERS * LINES * 100) / 1e6 / secs).toFixed(1)} MB/s total)` : `${pending} of ${FLOODERS} still running after ${FLOOD_BUDGET_S} s`, pending === 0);
+  checks.note(`flood progress (seconds after start : floods done : app MB), every ~3 s, thinned: ${progress.filter((_, i) => i % 5 === 0).join(" ")}`);
   await app.sleep(10000);
   const afterMB = appMemMB(await snapshot(app));
   const peak = Math.max(...mem, baseMB);
@@ -125,17 +135,23 @@ export async function run({ launch, checks }) {
   checks.add("app memory growth 10 s after the floods ended", `<= ${MEM_AFTER_MB} MB over the pre-flood level`, `${fmt(afterMB)} MB (+${fmt(afterMB - baseMB)})`, afterMB - baseMB <= MEM_AFTER_MB);
   // The final line: the bytes were accepted (done file); the screen has to show them too.
   const missing = [];
+  let frozenEnd = null;
   for (let k = 0; k < FLOODERS; k++) {
     let ok = false;
-    for (let i = 0; i < 60 && !ok; i++) {
-      ok = ((await paneText(app, k)) ?? "").includes(`END-${k}`);
-      if (!ok) await app.sleep(500);
+    for (let i = 0; i < 60 && !ok && !frozenEnd; i++) {
+      try {
+        ok = ((await paneText(app, k)) ?? "").includes(`END-${k}`);
+      } catch (e) {
+        frozenEnd = `the page stopped answering while reading pane ${k + 1} (${e.message.slice(0, 80)})`;
+      }
+      if (!ok && !frozenEnd) await app.sleep(500);
     }
     if (!ok) missing.push(k + 1);
   }
+  if (frozenEnd) checks.note(frozenEnd);
   checks.add("pane shows its final line (END-<k>) after the flood", "8 of 8 panes", `${FLOODERS - missing.length} of ${FLOODERS}${missing.length ? `; missing in pane(s) ${missing.join(", ")}` : ""}`, missing.length === 0);
-  const errs = await pageErrors(app);
+  const errs = await pageErrors(app).catch((e) => [`page unreachable: ${e.message.slice(0, 80)}`]);
   checks.add("page errors during the run", "0", `${errs.length}${errs.length ? `: ${[...new Set(errs)].slice(0, 5).join(" || ")}` : ""}`, errs.length === 0);
-  const stamp = readFileSync(doneFile(0), "utf8");
+  const stamp = existsSync(doneFile(0)) ? readFileSync(doneFile(0), "utf8") : "never";
   checks.note(`pane 1 flood accepted its last byte at ${stamp}; the echo program keeps pane 9 (the key target) running until the app closes`);
 }

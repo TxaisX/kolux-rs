@@ -69,6 +69,7 @@ export function newApp(opts, name) {
   makeTemp(temp);
   const app = createApp({ root: opts.root, port: opts.port, cdp: opts.cdp, identifier: IDENTIFIER, temp, suffix: ".stress", offscreen: true, buildMinutes: 25, log: (...a) => console.log(" ", ...a) });
   app.temp = temp;
+  app.cdpTimeoutMs = 120000; // a page that does not answer in 2 minutes counts as frozen
   return app;
 }
 export const seedProfile = (app, settings = {}) => () => {

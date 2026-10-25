@@ -64,7 +64,9 @@ for (const id of list) {
     const closed = await ctx.app?.closeApp();
     if (closed) checks.add("app closes by its own path and leaves no process behind", "0 survivors", closed[1], closed[0]);
   } catch (e) {
-    checks.note(`close: ${e.message}`);
+    checks.note(`close: ${e.message}; the run's own app tree is ended by pid`);
+    checks.add("app closes by its own path", "closes", e.message.slice(0, 200), false);
+    await ctx.app?.forceStop();
   }
   if (ctx.app) {
     const gone = removeTemp(ctx.app.temp);

@@ -79,7 +79,8 @@ export function createApp(opts) {
   const paths = { appTemp, claudeConfig, codexHome, userHome, roaming, local, profile, settings: join(profile, "settings.json") };
 
   // cdp.mjs as a child: every call is one connection to the page, which keeps this file free of protocol code.
-  const cdp = async (...a) => (await run(process.execPath, [cdpScript, "main", ...a], { env: { ...process.env, CDP_PORT: String(CDP) } })).stdout.trim();
+  // app.cdpTimeoutMs (0 = none, smoke's way) ends a cdp.mjs child that never answers, e.g. when the page's main thread is flooded.
+  const cdp = async (...a) => (await run(process.execPath, [cdpScript, "main", ...a], { env: { ...process.env, CDP_PORT: String(CDP) }, ...(app.cdpTimeoutMs ? { timeout: app.cdpTimeoutMs } : {}) })).stdout.trim();
   const evalJs = async (expr) => {
     const out = await cdp("eval", expr);
     let v;
@@ -184,6 +185,7 @@ export function createApp(opts) {
 
   // ---------- the app: launch, relaunch or attach ----------
   const app = {
+    cdpTimeoutMs: 0,
     pid: null,
     exePath: null, // the built kolux-rs.exe inside this checkout, learned from the first launch
     dev: null, // the `pnpm tauri dev` child in launch mode
@@ -281,6 +283,11 @@ export function createApp(opts) {
 
   // The orphan scan: survivors of the tree captured before the close, never a taskkill first. The dev tree,
   // a vite started here and the survivors are ended afterwards as cleanup, not as the check.
+  // For a run that cannot close the app by its own path (a frozen page): end this run's own app tree, the dev tree and vite.
+  app.forceStop = async () => {
+    for (const pid of [app.pid, app.dev?.pid, app.vite?.pid]) if (pid) await run("taskkill", ["/PID", String(pid), "/T", "/F"]).catch(() => {});
+    app.pid = null;
+  };
   app.closeApp = async () => {
     if (ATTACH || KEEP) return null;
     let closeReport = null;
