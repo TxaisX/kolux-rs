@@ -450,8 +450,28 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
 /// USAGE-021: a report counts only when it comes from the folder the active account runs under;
 /// none on both sides is the computer's default sign-in. Case and slash direction do not matter.
 pub fn same_folder(active: Option<&str>, reported: Option<&str>) -> bool {
-    let norm = |p: &str| p.trim().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
-    active.map(norm) == reported.map(norm)
+    active.map(norm_folder) == reported.map(norm_folder)
+}
+
+fn norm_folder(p: &str) -> String {
+    p.trim().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// T-548-b: the store key one config folder's windows live under; the default sign-in keeps the
+/// original key, so what was stored before accounts stays readable.
+pub fn limits_key(dir: Option<&str>) -> String {
+    match dir.map(norm_folder).filter(|d| !d.is_empty()) {
+        Some(d) => format!("{LIMITS_KEY}:{d}"),
+        None => LIMITS_KEY.to_string(),
+    }
+}
+
+/// T-548-b: folds a report's windows into its own folder's stored windows and returns the result.
+pub fn keep_limits(store: &crate::state::Store, dir: Option<&str>, new: &[Limit]) -> Vec<Limit> {
+    let key = limits_key(dir);
+    let merged = merge_limits(limits_of(store, dir), new);
+    let _ = store.set(&key, &json!(merged).to_string());
+    merged
 }
 
 /// USAGE-021: an update that carries one window leaves the other as it was.
@@ -521,9 +541,7 @@ fn record_usage(app: &AppHandle, u: &Usage) {
     if !u.limits.is_empty() {
         if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
             if let Ok(store) = store.lock() {
-                let old = store.get(LIMITS_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-                u.limits = merge_limits(old, &u.limits);
-                let _ = store.set(LIMITS_KEY, &json!(u.limits).to_string());
+                u.limits = keep_limits(&store, u.config_dir.as_deref(), &u.limits);
                 if let Some(at) = exhausted(&u.limits) {
                     let _ = store.set(crate::claude_key::LIMIT_KEY, &at.to_string());
                 }
@@ -540,6 +558,18 @@ fn record_usage(app: &AppHandle, u: &Usage) {
     let _ = app.emit(USAGE_EVENT, payload);
 }
 
+/// T-548-b: a report from a folder other than the active account's keeps its windows in that folder's store.
+fn keep_other_account(app: &AppHandle, u: &Usage) {
+    if u.limits.is_empty() {
+        return;
+    }
+    if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
+        if let Ok(store) = store.lock() {
+            keep_limits(&store, u.config_dir.as_deref(), &u.limits);
+        }
+    }
+}
+
 /// The config folder the active Claude account runs under; none for the default sign-in.
 fn active_config_dir(app: &AppHandle) -> Option<String> {
     let store = app.try_state::<Mutex<crate::state::Store>>()?;
@@ -547,11 +577,24 @@ fn active_config_dir(app: &AppHandle) -> Option<String> {
     crate::claude_accounts::active_dir(&store)
 }
 
-/// The rate-limit windows the last status-line report carried, for the usage pill at start.
+/// The rate-limit windows the active account's last status-line reports carried, for the usage pill at start.
 #[tauri::command]
 pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Result<Vec<Limit>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(store.get(LIMITS_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default())
+    Ok(limits_of(&store, crate::claude_accounts::active_dir(&store).as_deref()))
+}
+
+/// T-548-b: the windows one config folder's reports carried, for a pane on another account.
+// Unregistered until lib.rs lists it (evidence/fix-hooks-fix-T-548-b-lib.rs.patch).
+#[allow(dead_code)]
+#[tauri::command]
+pub fn claude_usage_of(store: tauri::State<'_, Mutex<crate::state::Store>>, config_dir: Option<String>) -> Result<Vec<Limit>, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(limits_of(&store, config_dir.as_deref()))
+}
+
+fn limits_of(store: &crate::state::Store, dir: Option<&str>) -> Vec<Limit> {
+    store.get(&limits_key(dir)).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
 fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
@@ -566,7 +609,11 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 record_usage(app, &u);
                 200
             }
-            Ok(_) => 200,
+            // T-548-b: kept under its own folder for that account's figures, never raised as the active one's.
+            Ok(u) => {
+                keep_other_account(app, &u);
+                200
+            }
             Err(code) => code,
         },
         Some(req) => {
@@ -1699,6 +1746,30 @@ mod tests {
         let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).unwrap();
         assert_eq!((get("KOLUX_AGENT_HOOK_PORT"), get("KOLUX_PANE_KEY"), get("KOLUX_TERMINAL_HANDLE")), ("5", "9", "4"));
         assert_eq!(identity(get("KOLUX_HOOK_IDENTITY")), Some((9, Some(4))));
+    }
+
+    #[test]
+    fn row_548_b_each_config_folder_keeps_its_own_status_line_windows() {
+        use crate::state::Store;
+        let base = std::env::temp_dir().join(format!("kolux-rs-hooks-r548b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let store = Store::open(&base).unwrap();
+        let win = |kind: &str, used: f64| Limit { kind: kind.into(), used_percent: used, resets_at: Some(9) };
+        let (a, b) = ("C:\\u\\.kolux-rs\\claude-accounts\\a\\", "c:/u/.kolux-rs/claude-accounts/b");
+        keep_limits(&store, None, &[win("five_hour", 10.0), win("seven_day", 20.0)]);
+        keep_limits(&store, Some(a), &[win("five_hour", 70.0)]);
+        keep_limits(&store, Some(b), &[win("five_hour", 5.0)]);
+        // Another account's report no longer lands in (or merges with) the default sign-in's windows.
+        assert_eq!(limits_of(&store, None), vec![win("five_hour", 10.0), win("seven_day", 20.0)]);
+        assert_eq!(limits_of(&store, Some(a)), vec![win("five_hour", 70.0)]);
+        assert_eq!(limits_of(&store, Some("c:/u/.kolux-rs/claude-accounts/a")), limits_of(&store, Some(a)), "case and slash direction do not matter");
+        assert_eq!(limits_of(&store, Some(b)), vec![win("five_hour", 5.0)]);
+        // A one-window update keeps the folder's other window; a folder never heard from has none.
+        assert_eq!(keep_limits(&store, None, &[win("seven_day", 30.0)]), vec![win("five_hour", 10.0), win("seven_day", 30.0)]);
+        assert!(limits_of(&store, Some("C:/u/other")).is_empty());
+        assert_eq!(limits_key(None), LIMITS_KEY, "the default sign-in keeps the original key");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
