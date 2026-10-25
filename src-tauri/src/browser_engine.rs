@@ -21,6 +21,8 @@
 //!   in native mode (`profiles::firefox_at` decides).
 //! - T-272-b (BROW-032): a page's permission requests are answered by `permissions::answer`; a
 //!   refusal is told to its pane (PERMISSION_EVENT) with the permission named.
+//! - After-list 285 (BROW-040): a preview is denied every permission request, and its embedded
+//!   frames load only from its own folder (`preview::frame_may_load`, per frame start).
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Webview};
@@ -30,7 +32,7 @@ mod imp {
     use crate::browser::certs;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use std::sync::mpsc::Sender;
-    use crate::browser::{cookies, crash, holder, permissions, profiles};
+    use crate::browser::{cookies, crash, holder, permissions, preview, profiles};
     use cookies::Entry;
     use tauri::webview::cookie::SameSite;
     use tauri::Emitter;
@@ -74,6 +76,20 @@ mod imp {
         }
         // SAFETY: CoreWebView2 hands back the page's engine object.
         let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        // After-list 285 (BROW-040): while this tab shows a preview, an embedded frame may load
+        // only from the preview's own folder; `preview::frame_may_load` decides, per frame start.
+        let frames = NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            // SAFETY: Uri writes a CoTaskMem string `take` frees; SetCancel only records the answer.
+            let uri = unsafe { take(|p| args.Uri(p)) };
+            if !preview::frame_may_load(id, &uri) {
+                unsafe { args.SetCancel(true) }?;
+            }
+            Ok(())
+        }));
+        let mut frame_token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_FrameNavigationStarting(&frames, &mut frame_token) };
         if let Ok(core14) = core.cast::<ICoreWebView2_14>() {
             let handler = ServerCertificateErrorDetectedEventHandler::create(Box::new(move |_sender, args| {
                 let Some(args) = args else { return Ok(()) };
@@ -229,9 +245,13 @@ mod imp {
             let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
             // SAFETY: PermissionKind only writes a plain value; SetState only records the answer.
             unsafe { args.PermissionKind(&mut kind) }?;
-            if let permissions::Answer::Deny(text) = permissions::answer(kind.0) {
-                unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?;
-                let _ = app.emit(crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }));
+            match permissions::answer_for(kind.0, preview::is_preview(id)) {
+                permissions::Answer::Engine => {}
+                permissions::Answer::DenyQuiet => unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?,
+                permissions::Answer::Deny(text) => {
+                    unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?;
+                    let _ = app.emit(crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }));
+                }
             }
             Ok(())
         }));
