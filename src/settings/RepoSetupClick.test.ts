@@ -14,6 +14,7 @@ vi.mock("react", async (orig) => {
       return [h.slots[i], set];
     },
     useEffect: () => {},
+    useRef: (v: unknown) => ({ current: v }),
     useCallback: (f: unknown) => f,
   };
 });

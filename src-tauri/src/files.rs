@@ -727,13 +727,28 @@ pub fn dir_ignored(path: String, fence: tauri::State<'_, crate::fence::Fence>, s
 /// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not
 /// in a project, or out through a link; EDIT-045), else following links "dir", "file" or "missing".
 #[tauri::command]
-pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String) -> &'static str {
+pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String, folder_only: Option<bool>) -> &'static str {
     let roots = crate::links::roots(&store);
     match crate::links::fence(&path, &roots, &grants.snapshot(), true) {
         Ok(p) => kind_of(&p),
         Err(_) if crate::links::host_path(&path, &roots) => "remote",
+        Err(_) if folder_only == Some(true) => folder_probe(&path, &roots),
         Err(_) => "outside",
     }
+}
+
+/// after-list 383: with `folder_only`, a folder under no project answers "dir" or "missing" (never "file"
+/// or "outside"), so Reopen Closed Tab can tell that a terminal's old folder is still there. A share,
+/// a relative path or a `..` step is never looked up.
+pub fn folder_probe(path: &str, roots: &[String]) -> &'static str {
+    let p = Path::new(path);
+    if crate::links::host_path(path, roots) {
+        return "remote";
+    }
+    if crate::links::refuse_host(path, roots).is_err() || !p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return "missing";
+    }
+    if p.is_dir() { "dir" } else { "missing" }
 }
 
 pub fn kind_of(path: &Path) -> &'static str {
@@ -771,6 +786,21 @@ mod tests {
         let mut got = ignored_in(&d);
         got.sort();
         assert_eq!(got, vec!["build".to_string(), "run.log".to_string()]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn row383_a_folder_under_no_project_is_found_as_a_folder_and_nothing_else_is_looked_up() {
+        let d = temp_dir("probe");
+        fs::write(d.join("a.txt"), "x").unwrap();
+        let (dir, file) = (d.to_string_lossy().into_owned(), d.join("a.txt").to_string_lossy().into_owned());
+        let roots: Vec<String> = Vec::new(); // the folder is under no project
+        assert_eq!(folder_probe(&dir, &roots), "dir");
+        assert_eq!(folder_probe(&file, &roots), "missing", "a file is never reported");
+        assert_eq!(folder_probe(&d.join("gone").to_string_lossy(), &roots), "missing");
+        assert_eq!(folder_probe("relative/dir", &roots), "missing");
+        assert_eq!(folder_probe(&format!("{dir}{}..", std::path::MAIN_SEPARATOR), &roots), "missing");
+        assert_eq!(folder_probe(r"\\server\share\x", &roots), "remote");
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -1341,11 +1371,31 @@ pub fn launch_in(dir: &Path, command: &str, path_var: Option<std::ffi::OsString>
     cmd.spawn().map(|_| ()).map_err(|e| format!("{name} did not start: {e}"))
 }
 
-/// EDIT-043: the window may only run VS Code's command or one saved under General settings
+/// after-list 435: the presets of General settings > Open in (src/settings/openIn.ts). They are the list
+/// before anything is saved, and a preset row saved with an id sends the preset's command, so all of them run.
+const PRESET_COMMANDS: [&str; 8] = ["explorer", "code", "cursor", "windsurf", "zed", "subl", "idea", "wt -d"];
+
+/// EDIT-043: the window may only run a preset's command or one saved under General settings
 /// (openInApps). This keeps a stray or mistyped command out; it is not a wall against the window
 /// itself, which can also write openInApps through the settings patch (the window is trusted code).
 pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
-    cmd == "code" || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+    PRESET_COMMANDS.contains(&cmd) || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+}
+
+/// after-list 499: the file variant of open_in for a file the fence does not cover (the shortcuts file in
+/// the user's home): `file` opens in `command` (a preset or a saved app) and nothing else is run.
+pub fn open_file_in(file: &Path, command: &str, settings: &serde_json::Value, path_var: Option<std::ffi::OsString>) -> Result<(), String> {
+    let command = command.trim();
+    if !saved_command(settings, command) {
+        return Err(format!("{command} is not one of the apps under General settings, so it was not run"));
+    }
+    if !file.exists() {
+        return Err(format!("{} does not exist", file.display()));
+    }
+    if !file.is_file() {
+        return Err(format!("{} is not a file, so it was not opened", file.display()));
+    }
+    launch_in(file, command, path_var)
 }
 
 /// T-317 (EDIT-048): the branches of the repository a worktree belongs to (local ones, then remote ones
@@ -1523,6 +1573,35 @@ mod open_in_tests {
         let saved = serde_json::json!({ "openInApps": [{ "label": "Zed", "command": " zed " }] });
         assert!(saved_command(&saved, "zed"));
         assert!(!saved_command(&saved, "zed --evil"));
+    }
+
+    #[test]
+    fn row435_the_apps_listed_before_anything_is_saved_are_allowed_and_a_made_up_command_still_is_not() {
+        let none = serde_json::json!({});
+        for preset in ["explorer", "code", "cursor", "windsurf", "zed", "subl", "idea", "wt -d"] {
+            assert!(saved_command(&none, preset), "{preset}");
+        }
+        let custom = serde_json::json!({ "openInApps": [{ "name": "Mine", "command": "myedit" }] });
+        assert!(saved_command(&custom, "myedit") && saved_command(&custom, "zed"));
+        assert!(!saved_command(&custom, "explorer /e,") && !saved_command(&none, "powershell"));
+    }
+
+    #[test]
+    fn row499_a_single_file_opens_only_in_an_allowed_app_and_only_when_it_is_a_file() {
+        let d = temp_dir("openfile");
+        fs::write(d.join("keys.json"), "{}").unwrap();
+        let file = d.join("keys.json");
+        let none = serde_json::json!({});
+        let refused = open_file_in(&file, "cmd /c calc", &none, None).unwrap_err();
+        assert!(refused.contains("not one of the apps"), "{refused}");
+        let folder = open_file_in(&d, "zed", &none, None).unwrap_err();
+        assert!(folder.contains("not a file"), "{folder}");
+        let gone = open_file_in(&d.join("gone.json"), "zed", &none, None).unwrap_err();
+        assert!(gone.contains("does not exist"), "{gone}");
+        // allowed and a file: the launch itself is tried, and this machine has no such app on an empty PATH
+        let tried = open_file_in(&file, "zed", &none, None).unwrap_err();
+        assert!(tried.contains("zed was not found"), "{tried}");
+        let _ = fs::remove_dir_all(&d);
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

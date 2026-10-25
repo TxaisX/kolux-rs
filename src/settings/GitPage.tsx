@@ -14,6 +14,7 @@ import SetupPolicyRow from "./SetupPolicyRow";
 import { RENAME_FOLDERS_KEY, renamesFolders } from "../projects/folderRename";
 import AiRecipesSection from "./AiRecipesSection";
 import { useDraft } from "./useDraft";
+import { useLeaveSave } from "./leave";
 import { REVIEW_BOTS_KEY } from "../scm/review";
 import { botsText, parseBots } from "./reviewBots";
 
@@ -189,6 +190,8 @@ export default function GitPage() {
   const [draft, setDraft] = useState<string | null>(null);
   const [check, setCheck] = useState<PrefixCheck | null>(null);
   const typed = draft ?? String(settings?.branchPrefixCustom ?? "");
+  // SET-036: the custom prefix saves on leaving the field; changing page or closing must keep it too.
+  useLeaveSave(() => settings && draft !== null && draft !== String(settings.branchPrefixCustom ?? "") && void save({ branchPrefixCustom: draft }));
   const mode = settings ? modeOf(settings) : null;
   useEffect(() => {
     if (!mode) return;

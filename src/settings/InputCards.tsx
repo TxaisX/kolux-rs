@@ -2,6 +2,7 @@
 // PowerShell version of SET-026. The values are read and corrected by terminal/inputPrefs.ts; panes follow a
 // save at once (terminal/inputWire.ts). TerminalPage places the two cards.
 import { useEffect, useState } from "react";
+import { useLeaveSave } from "./leave";
 import type { Platform } from "../keys/actions";
 import { clampNumber } from "../terminal/text";
 import { FULL_SCREEN_SCROLL, INPUT_FIELDS, osc52Save, readInput, shellCardShown, type Auto } from "../terminal/inputPrefs";
@@ -32,6 +33,7 @@ function Lines({ value, onSave }: { value: number; onSave: (n: number) => void }
     setTyped(String(n));
     if (n !== value) onSave(n);
   };
+  useLeaveSave(() => typed !== String(value) && commit()); // SET-036: changing page or closing keeps what was typed
   return (
     <label className="num-field">
       <span>Full-screen scroll speed (lines per step)</span>

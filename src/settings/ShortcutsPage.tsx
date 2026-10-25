@@ -12,6 +12,7 @@ import { editChords, recordKey, recording, removeChord } from "../keys/record";
 import { createDoubleTap, recordDoubleTap } from "../keys/doubleTap";
 import { layoutNotes } from "../keys/helpNotes";
 import { Segmented } from "./GeneralPage";
+import { openShortcutsFileIn, shortcutsFileApps } from "./shortcutsFileOpen";
 import { AREAS, FILTERS, MAX_QUERY, filterRows, shortcutRows, type Filter, type Row } from "./shortcutRows";
 
 type Rec = { id: string; index: number };
@@ -93,6 +94,22 @@ export default function ShortcutsPage() {
           <button className="btn" onClick={() => show(true)}>
             Show in folder
           </button>
+          <select
+            className="field"
+            aria-label="Open file in"
+            value=""
+            onChange={(e) => {
+              const app = shortcutsFileApps(status.settings).find((a) => a.label === e.target.value);
+              if (app) openShortcutsFileIn(app).catch((err) => setFileNote(String(err)));
+            }}
+          >
+            <option value="">Open file in...</option>
+            {shortcutsFileApps(status.settings).map((a) => (
+              <option key={a.label} value={a.label}>
+                {a.label}
+              </option>
+            ))}
+          </select>
           <button className="btn" onClick={() => void invoke("keybindings_reload").catch((e) => setFileNote(String(e)))}>
             Reload from Disk
           </button>
