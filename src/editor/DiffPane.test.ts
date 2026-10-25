@@ -56,3 +56,26 @@ describe("how a diff tab starts (SET-038, T-323-b)", () => {
     expect(diffStart(readEditorPrefs({ editorWordWrap: false })).wrap).toBe(false);
   });
 });
+
+// Row 277: the embedded Changes view of a file tab (no pane header of its own) still has the layout
+// switch, the previous/next change buttons and Copy Context.
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import DiffPane from "./DiffPane";
+
+describe("the embedded Changes view has its own slim bar (row 277)", () => {
+  const html = (embedded: boolean) => renderToString(createElement(DiffPane, { id: 1, path: "C:/w/a.ts", staged: false, embedded, against: "head" }));
+  it("carries the Inline / Side by side switch, previous and next change and Copy Context", () => {
+    const h = html(true);
+    expect(h).toContain("Side by side");
+    expect(h).toContain('aria-label="Previous change"');
+    expect(h).toContain('aria-label="Next change"');
+    expect(h).toContain("Copy context");
+    expect(h).not.toContain("pane-head"); // still no header of a pane of its own
+  });
+  it("the pane's own header keeps them too, once each", () => {
+    const h = html(false);
+    expect(h.match(/Side by side/g)?.length).toBe(2); // the button text and its title
+    expect(h.match(/aria-label="Next change"/g)?.length).toBe(1);
+  });
+});

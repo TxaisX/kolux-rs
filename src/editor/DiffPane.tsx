@@ -457,21 +457,22 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
 
   // EDIT-007 (T-132-b): Copy Context in a diff copies the selection of the side that has focus (the
   // new side when neither has), headed by the path and the lines of that side.
+  const copyContext = () => {
+    const v = views.current;
+    if (!v) return false;
+    const old = v.a !== null && v.a.hasFocus && !v.b.hasFocus;
+    const view = old && v.a ? v.a : v.b;
+    const { from, to } = view.state.selection.main;
+    const got = contextText(view.state.doc, from, to, shortPath(path, root));
+    navigator.clipboard.writeText(old ? oldSideContext(got) : got.text).then(
+      () => report.current.onToast?.("Copied with path and lines"),
+      (err) => report.current.onToast?.(`Nothing was copied: ${String(err)}`),
+    );
+    return true;
+  };
   useEffect(() => {
-    if (embedded) return;
-    copiers.set(id, () => {
-      const v = views.current;
-      if (!v) return false;
-      const old = v.a !== null && v.a.hasFocus && !v.b.hasFocus;
-      const view = old && v.a ? v.a : v.b;
-      const { from, to } = view.state.selection.main;
-      const got = contextText(view.state.doc, from, to, shortPath(path, root));
-      navigator.clipboard.writeText(old ? oldSideContext(got) : got.text).then(
-        () => report.current.onToast?.("Copied with path and lines"),
-        (err) => report.current.onToast?.(`Nothing was copied: ${String(err)}`),
-      );
-      return true;
-    });
+    if (embedded) return; // the file tab's own pane owns the chord; the bar's button calls copyContext
+    copiers.set(id, copyContext);
     return () => void copiers.delete(id);
   }, [id, path, root, embedded]);
 
@@ -481,8 +482,39 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
 
   const name = baseName(path);
   const step = (dir: 1 | -1) => diffNav.get(id)?.(dir);
+  const layoutSwitch = (
+    <span className="view-switch" role="group" aria-label="Layout">
+      <button aria-pressed={!split} onClick={() => ((touched.current = true), setSplit(false))} title="Inline">
+        Inline
+      </button>
+      <button aria-pressed={split} onClick={() => ((touched.current = true), setSplit(true))} title="Side by side">
+        Side by side
+      </button>
+    </span>
+  );
+  const stepButtons = (
+    <>
+    <button className="ib" disabled={!changes} onClick={() => step(-1)} title="Previous change (Shift+F7)" aria-label="Previous change">
+      <ChevronDown size={12} style={{ transform: "rotate(180deg)" }} />
+    </button>
+    <button className="ib" disabled={!changes} onClick={() => step(1)} title="Next change (F7)" aria-label="Next change">
+      <ChevronDown size={12} />
+    </button>
+    </>
+  );
   return (
     <Shell embedded={embedded} focused={focused} hidden={hidden} label={`Diff of ${name}`} onFocus={onFocus} onKeys={onKeys} id={id}>
+      {embedded && (
+        <div className="changes-bar" role="toolbar" aria-label="Changes view">
+          {layoutSwitch}
+          <span className="right">
+            {stepButtons}
+            <button className="btn" onClick={copyContext} title="Copy the selection with its path and line numbers">
+              Copy context
+            </button>
+          </span>
+        </div>
+      )}
       {!embedded && (
       <header className="pane-head">
         <span className="agent-mark" title="Diff">
@@ -499,21 +531,9 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
             Preview
           </button>
         )}
-        <span className="view-switch" role="group" aria-label="Layout">
-          <button aria-pressed={!split} onClick={() => ((touched.current = true), setSplit(false))} title="Inline">
-            Inline
-          </button>
-          <button aria-pressed={split} onClick={() => ((touched.current = true), setSplit(true))} title="Side by side">
-            Side by side
-          </button>
-        </span>
+        {layoutSwitch}
         <span className="right">
-          <button className="ib" disabled={!changes} onClick={() => step(-1)} title="Previous change (Shift+F7)" aria-label="Previous change">
-            <ChevronDown size={12} style={{ transform: "rotate(180deg)" }} />
-          </button>
-          <button className="ib" disabled={!changes} onClick={() => step(1)} title="Next change (F7)" aria-label="Next change">
-            <ChevronDown size={12} />
-          </button>
+          {stepButtons}
           <span className="diff-actions">
             <button className="ib" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)} title="Diff actions" aria-label="Diff actions">
               <Dots size={12} />
