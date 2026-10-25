@@ -102,8 +102,8 @@ test("a file that is not an object keeps the defaults and says so", () => {
   expect(chordsOf(map, "worktree.palette")).toEqual(["Mod+Shift+J"]);
 });
 
-test("a custom chord that clashes inside its scope is dropped and the default stays; defaults may overlap", () => {
-  const map = resolve({ keybindings: { "sidebar.right.toggle": "Mod+B" } }, "win32");
+test("two custom chords that clash inside their scope are dropped and the defaults stay; defaults may overlap", () => {
+  const map = resolve({ keybindings: { "sidebar.right.toggle": "Mod+Alt+Q", "sidebar.left.toggle": "Mod+Alt+Q" } }, "win32");
   expect(chordsOf(map, "sidebar.right.toggle")).toEqual(["Mod+L"]);
   expect(chordsOf(map, "sidebar.left.toggle")).toEqual(["Mod+B"]);
   expect(map.errors.length).toBe(1);
@@ -118,15 +118,15 @@ test("a custom chord that clashes inside its scope is dropped and the default st
 });
 
 test("SET-010: a clash names every command on the chord, scope by scope; agents switched off never count", () => {
-  const map = resolve({ keybindings: { "view.tasks": "Mod+P" } }, "win32");
-  expect(map.clashes).toEqual([{ chord: "Mod+P", ids: ["worktree.quickOpen", "view.tasks"] }]);
+  const map = resolve({ keybindings: { "view.tasks": "Mod+Alt+Q", "worktree.quickOpen": "Mod+Alt+Q" } }, "win32");
+  expect(map.clashes).toEqual([{ chord: "Mod+Alt+Q", ids: ["worktree.quickOpen", "view.tasks"] }]);
   expect(chordsOf(map, "view.tasks"), "the override is ignored").toEqual([]);
   expect(resolve({ keybindings: { "view.tasks": "Mod+K" } }, "win32").clashes, "terminal scope is apart").toEqual([]);
   expect(resolve({ keybindings: { "view.tasks": null } }, "win32").clashes, "no chord never clashes").toEqual([]);
-  const agent = { keybindings: { "tab.newAgent.aider": "Mod+T" } };
+  const agent = { keybindings: { "tab.newTerminal": "Mod+Alt+Q", "tab.newAgent.aider": "Mod+Alt+Q" } };
   expect(resolve(agent, "win32").clashes[0].ids).toEqual(["tab.newTerminal", "tab.newAgent.aider"]);
   const off = resolve(agent, "win32", ["tab.newAgent.aider"]);
-  expect([off.clashes, off.errors, chordsOf(off, "tab.newAgent.aider")]).toEqual([[], [], ["Mod+T"]]);
+  expect([off.clashes, off.errors, chordsOf(off, "tab.newAgent.aider")]).toEqual([[], [], ["Mod+Alt+Q"]]);
 });
 
 test("FIX-1 AltGr: Ctrl+Alt with a typed character that is not the chord's own key is a typed symbol, never a command (Windows and Linux)", () => {
