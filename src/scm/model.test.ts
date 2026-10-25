@@ -85,6 +85,9 @@ test("GIT-023: create pull request says why it cannot run, and an open one is of
   expect(prReason(null, none)).toBe("Loading");
   // GIT-023: a branch that tracks a fork remote is a fork head.
   expect(prReason({ ...ready, upstream: "fork/feat" }, none)).toBe("Fork head not supported: the branch tracks fork/feat; push it to origin first");
+  // A remote named "origin/fork" is not origin, though its upstream text starts with "origin/".
+  expect(prReason({ ...ready, upstream: "origin/fork/feat", upstreamRemote: "origin/fork" }, none)).toBe("Fork head not supported: the branch tracks origin/fork/feat; push it to origin first");
+  expect(prReason({ ...ready, upstream: "origin/feat", upstreamRemote: "origin" }, none)).toBeNull();
   expect(prReason({ ...ready, branch: "main", upstream: "origin/main" }, none)).toBe("Move to a feature branch first");
   expect(prReason({ ...ready, changed: [{ path: "a.txt", status: "M", from: null }] }, none)).toBe("Commit your changes first");
   expect(prReason({ ...ready, untracked: [{ path: "new.txt", status: "U", from: null }] }, none)).toBe(null);
@@ -168,9 +171,17 @@ test("the main button follows the branch through its states", () => {
 });
 
 test("VIEW-066: a push to a fork names the fork remote, whatever form its address takes; origin stays unnamed", () => {
+  expect(pushTarget("fork/feat", "fork")).toBe("fork");
+  expect(pushTarget("origin/feat", "origin")).toBeNull();
+  expect(pushTarget(null, null)).toBeNull();
+  // A payload without the remote (an older back end) falls back to the upstream's first segment.
   expect(pushTarget("fork/feat")).toBe("fork");
-  expect(pushTarget("origin/feat")).toBeNull();
-  expect(pushTarget(null)).toBeNull();
+  // A remote whose name holds a slash is named whole, and a local upstream (remote ".") names none.
+  expect(pushTarget("team/fork/feat", "team/fork")).toBe("team/fork");
+  expect(pushTarget("main", null)).toBeNull();
+  const slashed: Status = { ...emptyStatus, branch: "feat", upstream: "team/fork/feat", upstreamRemote: "team/fork", ahead: 2, base: "origin/main" };
+  expect(nextStep(slashed, "").label).toBe("Push 2 to team/fork");
+  expect(remoteItems(slashed).find((i) => i.id === "push")?.label).toBe("Push 2 commits to team/fork");
   const onFork: Status = { ...emptyStatus, branch: "feat", upstream: "fork/feat", ahead: 2, base: "origin/main" };
   expect(nextStep(onFork, "").label).toBe("Push 2 to fork");
   expect(remoteItems(onFork).find((i) => i.id === "push")?.label).toBe("Push 2 commits to fork");

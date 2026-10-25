@@ -66,6 +66,16 @@ impl Budget {
     pub fn spent(&self) -> bool {
         self.0.is_some_and(|t| Instant::now() >= t)
     }
+    /// Runs `read` and waits for it only while the budget lasts: `None` when it ran out first (a
+    /// disk that hangs). The stalled read is left to finish on its own thread. `none` runs inline.
+    pub fn run<T: Send + 'static>(&self, read: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let Some(end) = self.0 else { return Some(read()) };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read());
+        });
+        rx.recv_timeout(end.saturating_duration_since(Instant::now())).ok()
+    }
 }
 
 // ---- the summaries on disk (VIEW-092) ----
@@ -273,6 +283,21 @@ mod tests {
         let got = list_scan(&roots(&root), &Scope::All, &mut Cache::new(), None, &spent);
         assert!(got.report.cut_short);
         assert!(got.sessions.len() < 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// after-list row 608: a read stalled inside one transcript (a hung network disk) does not hold
+    /// the scan past its budget; the scan lists what it has and says it was cut short.
+    #[test]
+    fn view092_a_read_stalled_inside_one_transcript_does_not_hold_the_scan_past_its_budget() {
+        let root = tmp("stall");
+        let dir = root.join("projects").join("C--work-app");
+        transcript(&dir.join("a-stall.jsonl"), "first"); // summarize() sleeps 5 s on this name in tests
+        let began = Instant::now();
+        let got = list_scan(&roots(&root), &Scope::All, &mut Cache::new(), None, &Budget::within(Duration::from_millis(400)));
+        assert!(began.elapsed() < Duration::from_secs(3), "the scan waited {:?} on the stalled read", began.elapsed());
+        assert!(got.report.cut_short);
+        assert!(got.sessions.is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 

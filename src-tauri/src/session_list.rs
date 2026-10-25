@@ -204,6 +204,10 @@ fn slice(path: &Path, from: u64, cap: u64) -> Option<String> {
 /// [`TAIL_CAP`] bytes for a title written late (Claude).
 pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     let mut s = Summary::default();
+    #[cfg(test)]
+    if path.file_name().is_some_and(|n| n.to_string_lossy().contains("stall")) {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
     let Some(head) = slice(path, 0, HEAD_CAP) else {
         s.unreadable = true;
         return s;
@@ -231,13 +235,18 @@ pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     s
 }
 
-fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64, report: &mut Report) -> Summary {
+fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64, report: &mut Report, budget: &Budget) -> Summary {
     if let Some((m, l, s)) = cache.get(path) {
         if *m == modified && *l == len {
             return s.clone();
         }
     }
-    let s = summarize(agent, path, len);
+    // The read runs apart so a hung disk cannot hold the scan past its budget; the file counts as skipped.
+    let (a, p) = (agent.to_string(), path.to_path_buf());
+    let s = budget.run(move || summarize(&a, &p, len)).unwrap_or_else(|| {
+        report.cut_short = true;
+        Summary { unreadable: true, ..Summary::default() }
+    });
     if s.unreadable {
         return s;
     }
@@ -301,7 +310,7 @@ fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &
                     report.skipped += 1;
                     continue;
                 };
-                let s = summary_for(cache, "claude", &path, modified, len, report);
+                let s = summary_for(cache, "claude", &path, modified, len, report, budget);
                 if s.unreadable {
                     report.skipped += 1;
                     continue;
@@ -355,7 +364,7 @@ fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &B
                 report.skipped += 1;
                 continue;
             };
-            let s = summary_for(cache, "codex", &path, modified, len, report);
+            let s = summary_for(cache, "codex", &path, modified, len, report, budget);
             if s.unreadable {
                 report.skipped += 1;
                 continue;

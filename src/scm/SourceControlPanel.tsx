@@ -25,13 +25,14 @@ import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGene
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import FileOpenWith from "./FileOpenWith";
+import FailureNotice, { type Failure } from "./FailureNotice";
 import { forkNotice, loadPushTarget, type PushTarget } from "./forkPush";
 import { watchStatus } from "./watch";
-import { afterRefresh, commitBox, failureSummary, mainStep, statusGuard } from "./rules";
+import { afterRefresh, commitBox, mainStep, statusGuard } from "./rules";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
 import { HistoryLoads, acceptHistory, historyFor, type LoadedHistory } from "./history";
-import { LINES_SKIPPED_NOTE, canCommit, changeCount, cutBanner, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
+import { LINES_SKIPPED_NOTE, canCommit, changeCount, cutBanner, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, filterRows, fullPath } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -98,7 +99,6 @@ function GraphCell({ row }: { row: GraphRow }) {
   );
 }
 
-type Failure = { title: string; output: string; fix?: string | null; policy?: boolean; behind?: boolean };
 
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
@@ -1023,43 +1023,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                 {info}
               </div>
             )}
-            {failure && (
-              <div className="scm-out" role="alert">
-                <details>
-                  <summary>{failure.title}</summary>
-                  <p data-failure-summary>{failureSummary(failure.output).summary}</p>
-                  {failureSummary(failure.output).details && <pre>{failure.output || "git gave no reason"}</pre>}
-                </details>
-                {failure.policy && (
-                  <div className="scm-policy" data-pull-policy style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div>Pick how to bring the remote's commits in; the pull runs again with it.</div>
-                    {PULL_POLICIES.map((p) => (
-                      <div key={p.action} className="btn-row">
-                        <button className="btn" disabled={busy} title={p.title} data-policy={p.action} onClick={() => remote(p.action, `Pull (${p.label.toLowerCase()})`)}>
-                          {p.label}
-                        </button>
-                        <button className="btn ghost" title={`Copies "${p.config}" to set this for good; nothing changes until you run it`} data-policy-copy={p.action} onClick={() => copy(p.config, "git config command")}>
-                          Copy setting
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {failure.behind && (
-                  <button className="btn" disabled={busy} title="The remote has commits this copy lacks; bring them in, then push again" data-pull-first onClick={() => remote("pull", "Pull")}>
-                    Pull first
-                  </button>
-                )}
-                {aiShown && aiOn && failure.fix !== null && !failure.policy && (
-                  <button className="btn" onClick={() => void fix(failure.fix ?? failure.output)}>
-                    Fix with AI
-                  </button>
-                )}
-                <button className="btn ghost" data-dismiss-failure onClick={() => setFailure(null)}>
-                  Dismiss
-                </button>
-              </div>
-            )}
+            {failure && <FailureNotice failure={failure} busy={busy} aiOn={aiShown && aiOn} onRemote={remote} onCopy={copy} onFix={(o) => void fix(o)} onDismiss={() => setFailure(null)} />}
             {error && <div className="note error">{error}</div>}
             {status && status.conflicts.length > 0 && (
               <div className="btn-row" data-agent-action="resolve-conflicts">
