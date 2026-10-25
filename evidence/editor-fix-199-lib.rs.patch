@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 4932563c..53d423f0 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -834,6 +834,7 @@ pub fn run() {
+             editor_drafts::editor_drafts_get,
+             editor_drafts::editor_drafts_drop,
+             editor_drafts::editor_draft_rename,
++            editor_drafts::editor_flush_ack,
+             editor_search::editor_search,
+             editor_search::editor_search_cancel,
+             skills::skills_scan,

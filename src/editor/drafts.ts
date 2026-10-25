@@ -4,6 +4,7 @@
 // disk copy that has since changed comes back with the changed-on-disk banner up (EDIT-003), so it
 // is never laid over the newer disk copy unseen. Read-only tabs never carry a draft.
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { diskOf, hashOf, isDirty, keyOf, sameText, textOf } from "./buffers";
 
 export type Draft = { path: string; text: string; base: string };
@@ -33,6 +34,8 @@ const real: Timers = { set: (f, ms) => setTimeout(f, ms), clear: (t) => clearTim
 export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
   const loaded = new Map<string, Promise<Map<string, Draft>>>();
   const timersOf = new Map<string, { t: unknown; worktree: string; path: string }>();
+  // Row 199: every tab edited since it was last clean, so a flush covers tabs whose timer already fired.
+  const open = new Map<string, { worktree: string; path: string }>();
   const mirror = (worktree: string) => {
     const k = keyOf(worktree);
     let p = loaded.get(k);
@@ -50,8 +53,9 @@ export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
     stop(pk(worktree, path));
     const m = await mirror(worktree);
     const text = textOf(path);
-    if (text === null) return;
+    if (text === null) return void open.delete(pk(worktree, path));
     if (!isDirty(path)) {
+      open.delete(pk(worktree, path));
       if (m.delete(keyOf(path))) await io.clear(worktree, path).catch(() => undefined);
       return;
     }
@@ -69,16 +73,19 @@ export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
       if (readOnly) return;
       const k = pk(worktree, path);
       stop(k);
+      open.set(k, { worktree, path });
       timersOf.set(k, { t: timers.set(() => void flushOne(worktree, path), ms), worktree, path });
     },
     /** Writes a waiting draft at once (the window is closing, the tab is leaving). */
     flush: (worktree: string, path: string) => flushOne(worktree, path),
-    /** Row 135: writes every waiting draft at once (the window lost focus, was hidden or is closing),
-     *  so the last moment of typing is not missing from the draft. */
-    flushAll: () => Promise.all([...timersOf.values()].map(({ worktree, path }) => flushOne(worktree, path))),
+    /** Rows 135, 199: writes the draft of every tab holding unsaved text at once (the window lost focus,
+     *  was hidden, is closing or is about to reload), so the last moment of typing is not missing and
+     *  a write that failed earlier is made again. */
+    flushAll: () => Promise.all([...new Map([...timersOf, ...open]).values()].map(({ worktree, path }) => flushOne(worktree, path))),
     /** The user closed the tab or chose to drop the edits: the draft goes. */
     async discard(worktree: string, path: string) {
       stop(pk(worktree, path));
+      open.delete(pk(worktree, path));
       (await mirror(worktree)).delete(keyOf(path));
       await io.clear(worktree, path).catch(() => undefined);
     },
@@ -106,6 +113,20 @@ export function flushOnLeave(target: Pick<Window, "addEventListener" | "removeEv
   };
 }
 if (typeof window !== "undefined") flushOnLeave(window, drafts.flushAll);
+
+/** Row 199: the window's side of "write every unsaved tab's draft before the interface reloads":
+ *  the host (recovery watch, editor_drafts.rs) asks with a token and holds the reload until the
+ *  token comes back or its wait runs out. */
+export type FlushRequests = { on: (handler: (token: number) => void) => unknown; ack: (token: number) => Promise<unknown> };
+export function answerFlushRequests(req: FlushRequests, flushAll: () => Promise<unknown>): void {
+  req.on((token) => void flushAll().catch(() => undefined).then(() => req.ack(token)).catch(() => undefined));
+}
+export const FLUSH_EVENT = "editor-flush-request";
+export const tauriFlush: FlushRequests = {
+  on: (handler) => listen<number>(FLUSH_EVENT, (e) => handler(e.payload)).catch(() => undefined),
+  ack: (token) => invoke("editor_flush_ack", { token }),
+};
+if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) answerFlushRequests(tauriFlush, drafts.flushAll);
 
 /** The worktree a draft is kept under: the tab's worktree root, else the file's own folder. */
 export const worktreeOf = (root: string | null | undefined, path: string): string => root ?? path.replace(/[\\/][^\\/]*$/, "");
