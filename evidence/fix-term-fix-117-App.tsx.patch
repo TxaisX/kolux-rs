@@ -1,0 +1,31 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 338bcc21..ce758ffd 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1205,7 +1205,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     const groups = cellsOf(panesIn(panes, p.cwd)).map((c) => c.group);
+     if (canExpand(groups.length, classic)) setZoom((z) => toggleZoom(z, p.cwd ?? "", groupOf(p), groups.length));
+   };
+-  const splitPane = (key: number, dir: "right" | "down", cli?: { ask: string; command: string | null }) => {
++  const splitPane = (key: number, dir: "right" | "down", cli?: { ask: string; command: string | null }, over?: Partial<Pane>) => {
+     const src = panes.find((p) => p.key === key);
+     if (!src) {
+       if (cli) cliFailed.current[cli.ask] = "that terminal is not in the window";
+@@ -1217,7 +1217,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       else setToast(`A workspace holds up to ${MAX_PANES} panes.`);
+       return;
+     }
+-    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [], typed: cli?.command ?? undefined, ask: cli?.ask };
++    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [], typed: cli?.command ?? undefined, ask: cli?.ask, ...over };
+     // one pane split down becomes a stacked pair; a split right puts the pair side by side again
+     const stack = dir === "down" && shown.length === 1;
+     setStacked((st) => ({ ...st, [activeDir ?? ""]: stack }));
+@@ -3245,6 +3245,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     onRename={(name) => renamePane(p.key, name)}
+                     renameAsk={askName[p.key]}
+                     sessionKnown={!!p.session}
++                    session={p.session}
++                    onSessionLaunch={(l, fork) => splitPane(p.key, "right", undefined, { agent: p.agent, agentId: p.agentId, account: p.account, setup: p.setup, env: p.env, program: l.program, args: l.args, forkOf: fork ? p.session : undefined })} // after-list #117: Continue / Fork open a second pane beside this one
+                     onCopyId={(what) => copyId(p, what)}
+                     findHandle={findHandle}
+                     typed={p.typed}

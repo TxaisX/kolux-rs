@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseArgs, beginFork, canContinue, contextText, continueLaunch, endFork, forkLaunch, newFork, sessionActions, type SessionPane } from "./sessionFork";
+import { baseArgs, beginFork, canContinue, contextText, continueLaunch, endFork, forkLaunch, newFork, sessionActions, sessionMenuActions, type SessionPane } from "./sessionFork";
 import { autoPowerShell, shellIconOf, windowsShellMenu, withDefaultFirst, type ShellEntry } from "./shellChoice";
 
 const P = (over: Partial<SessionPane> = {}): SessionPane => ({ agent: "claude", session: "abc-123", program: null, args: [], ...over });
@@ -71,5 +71,21 @@ describe("TERM-043 Windows shell choice", () => {
     expect(withDefaultFirst(all, "cmd").map((s) => s.id).slice(0, 3)).toEqual(["cmd", "pwsh", "powershell"]);
     expect(withDefaultFirst(all, "auto")).toBe(all);
     expect(withDefaultFirst(all, "nope")).toBe(all);
+  });
+});
+
+describe("after117: the pane menu runs the session actions", () => {
+  it("Continue and Fork hand their launch to the window, Copy Context copies, and a pane that cannot continue gets none", () => {
+    const launched: [string, string[], boolean][] = [];
+    let copied = 0;
+    const acts = sessionMenuActions(P({ cwd: "C:/w/a" }), { launch: (l, fork) => launched.push([l.program, l.args, fork]), copy: () => copied++ });
+    expect(acts.map((a) => a.id)).toEqual(["continueSession", "forkSession", "copyContext"]);
+    acts.forEach((a) => a.run());
+    expect(launched).toEqual([["claude", ["--resume", "abc-123"], false], ["claude", ["--resume", "abc-123", "--fork-session"], true]]);
+    expect(copied).toBe(1);
+    // Without a window handler only Copy Context is offered.
+    expect(sessionMenuActions(P(), { copy: () => {} }).map((a) => a.id)).toEqual(["copyContext"]);
+    expect(sessionMenuActions(P({ session: undefined }), { launch: () => {}, copy: () => {} })).toEqual([]);
+    expect(sessionMenuActions(P({ agent: "shell" }), { launch: () => {}, copy: () => {} })).toEqual([]);
   });
 });
