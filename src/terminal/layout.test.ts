@@ -1,6 +1,7 @@
 // PROJ-067: tabs and layout are saved and restored; damaged entries are dropped on their own and
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
+import { sessionOrder } from "../sessions/restoreOrder";
 import { layoutOf, marksOf, restoreAsks, restoreLayout, stillThere } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
@@ -105,11 +106,16 @@ test("T-066-c: the restore loop asks for an agent line only for an agent tab, ne
   expect(ask("claude", "claude", "claude", "editor")).toBe(false); // not a terminal tab
 });
 
-test("view107: tabs saved out of session order are restored in the order they were opened, in one pass", () => {
-  const saved = { panes: [shell(5, "C:/w/b"), shell(2, "C:/w/a"), shell(9, "C:/w/a"), shell(1, "C:/w/b")], activeTab: {}, focused: 9, activeDir: "C:/w/a", stacked: {} };
-  const l = restoreLayout(saved)!;
-  expect(l.panes.map((p) => p.key)).toEqual([1, 2, 5, 9]);
-  expect(l.focused).toBe(9);
+test("after723: a layout saved with a pane split in before an older one comes back in the same order, so a relaunch writes the same layout", () => {
+  // Split Right of pane 1 puts the new, higher key 3 between 1 and 2: the key order is not the screen order.
+  const panes = [shell(1, "C:/w/a"), shell(3, "C:/w/a"), shell(2, "C:/w/a")];
+  const l = layoutOf(panes, {}, 3, "C:/w/a", {});
+  expect(l.panes.map((p) => p.key)).toEqual([1, 3, 2]);
+  const back = restoreLayout(JSON.parse(JSON.stringify(l)))!;
+  expect(back.panes.map((p) => p.key)).toEqual([1, 3, 2]);
+  expect(JSON.stringify(back)).toBe(JSON.stringify(l));
+  // View-107 (T-069-c): the start lines are asked in the order the tabs were opened; main.tsx walks sessionOrder for that.
+  expect(sessionOrder(back.panes).map((p) => p.key)).toEqual([1, 2, 3]);
 });
 
 test("after100: pinned tabs and tab colours are saved with the layout and come back after a restart", () => {
