@@ -1,0 +1,40 @@
+diff --git a/src-tauri/src/files.rs b/src-tauri/src/files.rs
+index b70fb43b..8a71ece4 100644
+--- a/src-tauri/src/files.rs
++++ b/src-tauri/src/files.rs
+@@ -1341,11 +1341,15 @@ pub fn launch_in(dir: &Path, command: &str, path_var: Option<std::ffi::OsString>
+     cmd.spawn().map(|_| ()).map_err(|e| format!("{name} did not start: {e}"))
+ }
+ 
+-/// EDIT-043: the window may only run VS Code's command or one saved under General settings
++/// after-list 435: the presets of General settings > Open in (src/settings/openIn.ts). They are the list
++/// before anything is saved, and a preset row saved with an id sends the preset's command, so all of them run.
++const PRESET_COMMANDS: [&str; 8] = ["explorer", "code", "cursor", "windsurf", "zed", "subl", "idea", "wt -d"];
++
++/// EDIT-043: the window may only run a preset's command or one saved under General settings
+ /// (openInApps). This keeps a stray or mistyped command out; it is not a wall against the window
+ /// itself, which can also write openInApps through the settings patch (the window is trusted code).
+ pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
+-    cmd == "code" || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
++    PRESET_COMMANDS.contains(&cmd) || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+ }
+ 
+ /// T-317 (EDIT-048): the branches of the repository a worktree belongs to (local ones, then remote ones
+@@ -1525,6 +1529,17 @@ mod open_in_tests {
+         assert!(!saved_command(&saved, "zed --evil"));
+     }
+ 
++    #[test]
++    fn row435_the_apps_listed_before_anything_is_saved_are_allowed_and_a_made_up_command_still_is_not() {
++        let none = serde_json::json!({});
++        for preset in ["explorer", "code", "cursor", "windsurf", "zed", "subl", "idea", "wt -d"] {
++            assert!(saved_command(&none, preset), "{preset}");
++        }
++        let custom = serde_json::json!({ "openInApps": [{ "name": "Mine", "command": "myedit" }] });
++        assert!(saved_command(&custom, "myedit") && saved_command(&custom, "zed"));
++        assert!(!saved_command(&custom, "explorer /e,") && !saved_command(&none, "powershell"));
++    }
++
+     fn temp_dir(name: &str) -> std::path::PathBuf {
+         let d = std::env::temp_dir().join(format!("krs-files-pic-{name}-{}", std::process::id()));
+         let _ = fs::remove_dir_all(&d);
