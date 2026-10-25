@@ -9,10 +9,12 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::webview::cookie::{time::OffsetDateTime, Cookie, SameSite};
+use tauri::webview::cookie::SameSite;
 
 /// A cookie file larger than this is refused unread.
 pub const FILE_MAX: u64 = 4 * 1024 * 1024;
+/// How long one engine cookie call is waited for.
+pub const COOKIE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 /// Reasons kept in the report (the count is kept whole).
 const REASONS_MAX: usize = 10;
 
@@ -215,16 +217,21 @@ pub fn needs_key<'a>(rows: impl IntoIterator<Item = (&'a str, bool)>) -> bool {
     rows.into_iter().any(|(domain, encrypted)| encrypted && !google_family(domain))
 }
 
-/// The entry as the engine takes it; without an expiry the cookie lasts the session.
-pub fn cookie_of(e: &Entry) -> Cookie<'static> {
-    let mut b = Cookie::build((e.name.clone(), e.value.clone())).domain(e.domain.clone()).path(e.path.clone()).secure(e.secure).http_only(e.http_only);
-    if let Some(s) = e.same_site {
-        b = b.same_site(s);
+/// The domain WebView2's CreateCookie takes. A leading dot means "this host and its subdomains" and
+/// none means "this host only"; the cookie crate's domain getter drops that dot, so the engine is
+/// handed this text, not a `Cookie` (after-list 612).
+pub fn engine_domain(e: &Entry) -> String {
+    let host = e.domain.trim_start_matches('.').to_ascii_lowercase();
+    if e.domain.starts_with('.') {
+        format!(".{host}")
+    } else {
+        host
     }
-    if let Some(at) = e.expires.and_then(|s| OffsetDateTime::from_unix_timestamp(s).ok()) {
-        b = b.expires(at);
-    }
-    b.build()
+}
+
+/// Whether an engine cookie's domain (dotted or bare) belongs to `site` (a bare host).
+pub fn in_site(domain: &str, site: &str) -> bool {
+    domain.trim_start_matches('.').eq_ignore_ascii_case(site)
 }
 
 /// The entries grouped by site, in the file's order.
@@ -240,35 +247,35 @@ pub fn by_site(entries: &[Entry]) -> Vec<(&str, Vec<&Entry>)> {
     sites
 }
 
-/// Puts the file's cookies into the tab's engine, one site at a time: the site's old cookies go,
-/// the new ones come in; when a site fails its old cookies are put back and the import stops
-/// there, naming the site. Blocking (the engine answers on the main thread): called from an
-/// async command, never from the main thread.
+/// Puts the file's cookies into the tab's engine, one site at a time: the site's old cookies go
+/// (host-only and domain ones alike), the new ones come in with their own scope; when a site fails
+/// its old cookies are put back and the import stops there, naming the site. Blocking (the engine
+/// answers on the main thread): called from an async command, never from the main thread.
 pub fn apply(page: &tauri::Webview, entries: &[Entry], report: &mut Report) -> Result<(), String> {
+    use super::engine;
     for (site, list) in by_site(entries) {
-        let old: Vec<Cookie<'static>> = page.cookies().map_err(|e| format!("the tab's cookies could not be read: {e}"))?.into_iter().filter(|c| c.domain().is_some_and(|d| d.trim_start_matches('.') == site)).collect();
-        let put_back = |done: &[Cookie<'static>]| {
+        let old: Vec<Entry> = engine::cookies(page, COOKIE_WAIT).map_err(|e| format!("the tab's cookies could not be read: {e}"))?.into_iter().filter(|c| in_site(&c.domain, site)).collect();
+        let put_back = |done: &[Entry]| {
             for c in done {
-                let _ = page.delete_cookie(c.clone());
+                let _ = engine::delete_cookie(page, c.clone(), COOKIE_WAIT);
             }
             for c in &old {
-                let _ = page.set_cookie(c.clone());
+                let _ = engine::set_cookie(page, c.clone(), COOKIE_WAIT);
             }
         };
         for c in &old {
-            if let Err(e) = page.delete_cookie(c.clone()) {
+            if let Err(e) = engine::delete_cookie(page, c.clone(), COOKIE_WAIT) {
                 put_back(&[]);
                 return Err(format!("{site}: an old cookie could not be replaced ({e}); its cookies were put back"));
             }
         }
         let mut done = Vec::new();
         for e in &list {
-            let c = cookie_of(e);
-            if let Err(err) = page.set_cookie(c.clone()) {
+            if let Err(err) = engine::set_cookie(page, (*e).clone(), COOKIE_WAIT) {
                 put_back(&done);
                 return Err(format!("{site}: {} could not be set ({err}); its cookies were put back", e.name));
             }
-            done.push(c);
+            done.push((*e).clone());
         }
         report.imported += list.len();
         report.sites += 1;
@@ -335,10 +342,39 @@ mod tests {
         assert_eq!(entries[1], Entry { name: "plain".into(), value: String::new(), domain: "other.test".into(), path: "/".into(), secure: false, http_only: false, same_site: None, expires: None });
         assert_eq!((report.skipped, report.google, report.imported), (2, 0, 0));
         assert_eq!(report.reasons, vec!["entry 2: the name \"bad name\" is not a cookie name", "entry 3: sameSite \"weird\" is not strict, lax or none"]);
-        let c = cookie_of(&entries[0]);
-        assert_eq!((c.name(), c.value(), c.domain(), c.path(), c.secure(), c.http_only(), c.same_site()), ("sid", "v1", Some("example.test"), Some("/app"), Some(true), Some(true), Some(SameSite::Lax)));
-        assert_eq!(c.expires_datetime().map(|t| t.unix_timestamp()), Some(NOW + 60));
-        assert_eq!(cookie_of(&entries[1]).expires(), None);
+    }
+
+    fn at(domain: &str) -> Entry {
+        Entry { name: "n".into(), value: "v".into(), domain: domain.into(), path: "/".into(), secure: false, http_only: false, same_site: None, expires: None }
+    }
+
+    #[test]
+    fn after612_host_only_and_domain_cookies_reach_the_engine_as_different_domains() {
+        let text = ".example.test\tTRUE\t/\tFALSE\t0\ta\t1\nexample.test\tFALSE\t/\tFALSE\t0\tb\t2\n";
+        let (entries, _) = parse_netscape(text, NOW).unwrap();
+        assert_eq!((engine_domain(&entries[0]).as_str(), engine_domain(&entries[1]).as_str()), (".example.test", "example.test"));
+        let json = r#"[{"name":"a","value":"1","domain":".Example.test"},{"name":"b","value":"2","domain":"example.test"}]"#;
+        let (entries, _) = parse(json, NOW).unwrap();
+        assert_eq!((engine_domain(&entries[0]).as_str(), engine_domain(&entries[1]).as_str()), (".example.test", "example.test"));
+        assert_ne!(engine_domain(&at(".x.test")), engine_domain(&at("x.test")));
+    }
+
+    #[test]
+    fn after612_a_stray_run_of_dots_keeps_one_and_a_bare_host_stays_bare() {
+        assert_eq!(engine_domain(&at("..x.test")), ".x.test");
+        assert_eq!(engine_domain(&at(".x.test")), ".x.test");
+        assert_eq!(engine_domain(&at("x.test")), "x.test");
+        assert_eq!(engine_domain(&at("X.Test")), "x.test");
+    }
+
+    #[test]
+    fn after612_replacing_a_site_takes_both_kinds_and_nothing_of_a_look_alike() {
+        let site = "example.test";
+        assert!(in_site(".example.test", site));
+        assert!(in_site("example.test", site));
+        assert!(!in_site("notexample.test", site));
+        assert!(!in_site(".sub.example.test", site));
+        assert!(!in_site("example.test.evil", site));
     }
 
     #[test]

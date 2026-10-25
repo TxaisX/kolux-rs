@@ -976,7 +976,7 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
                 // CLI-047: document.cookie cannot set an HTTP-only cookie; the engine's store can.
                 let page_url = tabs().into_iter().find(|t| t.id == id).map(|t| t.url).unwrap_or_default();
                 let e = engine_cookie(id, a, &page_url)?;
-                super::set_cookie(id, super::cookies::cookie_of(&e)).map_err(|m| Fail::new("failed", m))?;
+                super::set_cookie(id, e.clone()).map_err(|m| Fail::new("failed", m))?;
                 return Ok(json!({ "page": id, "ok": true, "summary": format!("HTTP-only cookie {} set for {}", e.name, e.domain) }));
             }
             let mut answer = page(id, cmd, a.clone(), EVAL_WAIT)?;
