@@ -6,8 +6,9 @@
 // (the git status watcher, scm/watch.ts) while the tab is in front, or when it comes to the front
 // after a move, so a change made in a terminal, or a stage made elsewhere, shows without
 // reopening. A markdown file's diff is source text, never the rich view. GIT-040: a review note
-// hangs under a line of the new side, in both layouts, and in the side-by-side layout also under a
-// line of the old (left) side; the plus in the note gutter or the Add
+// hangs under a line of the new side, in both layouts, and under a line of the old (left) side too:
+// in the side-by-side layout under that line, in the inline layout under the deleted lines of its
+// chunk (or the line it is now); a note on the old side is only started side by side. The plus in the note gutter or the Add
 // Review Note command's chord (Mod+Shift+A unless the user rebinds it) on a selection opens the
 // note popover.
 import { useEffect, useRef, useState } from "react";
@@ -28,7 +29,7 @@ import { keepUnsaved, keptToast } from "./unsavedCopy";
 import { copiers, editors, look, saveFile, StaleNotice } from "./EditorPane";
 import { contextText, oldSideContext } from "./copyContext";
 import { editedText, notesOn, shortPath, sideOf, where, type LineNote, type Side } from "./diffNotes";
-import { oldSideDoc, withOldSideNote } from "./oldSide";
+import { oldSideDoc, unifiedSpot, withOldSideNote } from "./oldSide";
 import { noteCommand } from "./noteCommands";
 import { useKeymap } from "../keys/KeymapContext";
 import { watchStatus } from "../scm/watch";
@@ -107,6 +108,33 @@ export const noteField = (act: NoteActions, side: Side) =>
     },
     provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
   });
+// Row 25: the unified layout has no left view, so the cards of old-side notes are placed from the
+// merge view's chunks (unifiedSpot) and follow edits to the new text.
+type OldSpot = { note: LineNote; pos: number; side: number };
+export const setOldSpots = StateEffect.define<OldSpot[]>();
+export const oldNoteField = (act: NoteActions) =>
+  StateField.define<DecorationSet>({
+    create: () => Decoration.none,
+    update(deco, tr) {
+      const set = [...tr.effects].reverse().find((e) => e.is(setOldSpots));
+      if (set) return Decoration.set((set.value as OldSpot[]).filter((s) => s.pos <= tr.state.doc.length).map((s) => Decoration.widget({ widget: new NoteCard(s.note, act), block: true, side: s.side }).range(s.pos)), true);
+      return tr.docChanged ? deco.map(tr.changes) : deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+/** Puts the old-side cards of a unified view where its chunks say; true when it drew any. */
+const placeOldNotes = (v: EditorView, notes: LineNote[], had: boolean): boolean => {
+  const old = notesOn(notes, "old");
+  if (!old.length && !had) return false;
+  const orig = getOriginalDoc(v.state);
+  const chunks = getChunks(v.state)?.chunks ?? [];
+  const spots = old.flatMap((n) => {
+    const spot = unifiedSpot(chunks, orig, v.state.doc, n.end ?? n.line);
+    return spot ? [{ note: n, ...spot }] : [];
+  });
+  v.dispatch({ effects: setOldSpots.of(spots) });
+  return spots.length > 0;
+};
 class Plus extends GutterMarker {
   toDOM() {
     return Object.assign(document.createElement("span"), { className: "note-plus", textContent: "+", title: "Add a review note on this line" });
@@ -191,6 +219,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   const [stale, setStale] = useState(false); // EDIT-003 (T-073-c): the last save was refused, the file moved on
   const views = useRef<{ a: EditorView | null; b: EditorView } | null>(null);
   const shown = useRef<Sides | null>(null); // the sides the views were last given
+  const spotted = useRef(false); // row 25: the unified view holds old-side cards
   const held = useRef<Held | null>(null); // row 131: unsaved text kept while the views are built again
   const report = useRef({ onDirty, onToast });
   report.current = { onDirty, onToast };
@@ -282,6 +311,8 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
       EditorView.updateListener.of((u) => {
         count(u.state);
         if (!staged) u.transactions.forEach((tr) => relay(path, u.view, tr));
+        // Row 25: an edit can change the chunks, so the old-side cards are placed again.
+        if (u.docChanged && !split) queueMicrotask(() => views.current?.b === u.view && (spotted.current = placeOldNotes(u.view, noteRef.current.notes, spotted.current)));
       }),
     ];
     const diffConfig = spaces ? undefined : { override: withoutWhitespace };
@@ -293,11 +324,12 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
       a = merge.a;
       b = merge.b;
     } else {
-      b = new EditorView({ doc: modified, parent: host.current, extensions: [...right, unifiedMergeView({ original: s.original, mergeControls: false, gutter: true, diffConfig })] });
+      b = new EditorView({ doc: modified, parent: host.current, extensions: [...right, oldNoteField(act.current), unifiedMergeView({ original: s.original, mergeControls: false, gutter: true, diffConfig })] });
     }
     views.current = { a, b };
     a?.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     b.dispatch({ effects: setNotes.of(noteRef.current.notes) });
+    spotted.current = !split && placeOldNotes(b, noteRef.current.notes, false);
     count(b.state);
     if (o) {
       attach(path, b, o.base);
@@ -346,6 +378,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
       else {
         const was = getOriginalDoc(v.b.state);
         v.b.dispatch({ effects: originalDocChangeEffect(v.b.state, ChangeSet.of({ from: 0, to: was.length, insert: sides.original }, was.length)) });
+        spotted.current = placeOldNotes(v.b, noteRef.current.notes, spotted.current);
       }
     }
     if (sides.modified !== old.modified) {
@@ -388,13 +421,17 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   useEffect(() => {
     views.current?.a?.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     views.current?.b.dispatch({ effects: setNotes.of(noteRef.current.notes) });
+    const b = views.current?.b;
+    if (b && !views.current?.a) spotted.current = placeOldNotes(b, noteRef.current.notes, spotted.current);
   }, [notesKey]);
-  // A note on the old side only shows in the side-by-side layout, so opening one switches to it.
-  useEffect(() => {
-    if (jump?.side === "old") setSplit(true);
-  }, [jump?.at]);
   useEffect(() => {
     const v = views.current;
+    if (v && jump?.side === "old" && !v.a) {
+      // Inline layout: the old line's card hangs where unifiedSpot puts it.
+      const spot = unifiedSpot(getChunks(v.b.state)?.chunks ?? [], getOriginalDoc(v.b.state), v.b.state.doc, jump.line);
+      if (spot) v.b.dispatch({ selection: { anchor: spot.pos }, effects: EditorView.scrollIntoView(spot.pos, { y: "center" }) });
+      return;
+    }
     const target = jump?.side === "old" ? v?.a : v?.b;
     if (!target || !jump) return;
     const at = target.state.doc.line(Math.min(Math.max(jump.line, 1), target.state.doc.lines)).from;
