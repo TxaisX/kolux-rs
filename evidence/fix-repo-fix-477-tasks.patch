@@ -1,0 +1,80 @@
+diff --git a/src/tasks/TasksPage.tsx b/src/tasks/TasksPage.tsx
+index c8f18c8d..9b046e98 100644
+--- a/src/tasks/TasksPage.tsx
++++ b/src/tasks/TasksPage.tsx
+@@ -26,7 +26,7 @@ import { itemOfTarget, pasteLine, pastedWork, rowForNumber } from "./pasteWork";
+ import { parseGitHubUrl, type Target } from "./prModel";
+ import TaskDialog from "./TaskDialog";
+ import { startFromItem } from "../agentstart/host";
+-import { existingWorkspace, linkKey, workItem, type WorkItem, workLabel } from "./workStart";
++import { existingWorkspace, linkKey, linkedRows, workItem, type WorkItem, workLabel } from "./workStart";
+ import "./tasks.css";
+ 
+ /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
+@@ -232,17 +232,20 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
+   useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab, groupsKey]);
+   // GIT-049: the workspaces already made for the chosen repositories' checkouts, so an item that
+   // has one offers resume instead of start.
++  // An opened or pasted address adds its own repository when the picker has not chosen it (after-list 477).
++  const asked = [pr, pastedItem?.target].filter((t): t is Target => !!t);
++  const askedKey = asked.map((t) => linkKey(t.host, t.repo)).join(",");
+   const loadLinked = () => {
+-    const all = chosen.flatMap((r) => r.projects.map((p) => ({ repo: linkKey(r.host, r.repo), id: p.id })));
++    const all = linkedRows(chosen, rows, asked).flatMap((r) => r.projects.map((p) => ({ repo: linkKey(r.host, r.repo), id: p.id })));
+     void Promise.all(all.map((x) => invoke<Worktree[]>("workspace_list", { projectId: x.id }).then((w) => [x.repo, w] as const, () => [x.repo, [] as Worktree[]] as const))).then((got) => {
+       const next: Record<string, Worktree[]> = {};
+       for (const [r, w] of got) next[r] = [...(next[r] ?? []), ...w];
+       setLinked(next);
+     });
+   };
+-  useEffect(loadLinked, [groupsKey, result]);
++  useEffect(loadLinked, [groupsKey, result, askedKey, askedKey === "" ? "" : rows.length]);
+   const resumeDir = (t: Task) => existingWorkspace(linked[linkKey(t.host ?? gh?.host ?? "", t.repo)] ?? [], t.number);
+-  /** The workspace already made for a pasted address (only known for the repositories chosen above). */
++  /** The workspace already made for a pasted or opened address, for any repository Kolux has a project for. */
+   const resumeTarget = (x: Target) => existingWorkspace(linked[linkKey(x.host, x.repo)] ?? [], x.number);
+   const workOn = (dir: string | null, item: WorkItem | null, repo: string, number: number) => {
+     if (dir) return onResume ? onResume(dir) : setNote(`Workspace already made for #${number}: ${dir}`);
+diff --git a/src/tasks/workStart.test.ts b/src/tasks/workStart.test.ts
+index f9de8937..a198e40f 100644
+--- a/src/tasks/workStart.test.ts
++++ b/src/tasks/workStart.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from "vitest";
+-import { existingWorkspace, linkKey, workItem, workLabel } from "./workStart";
++import { existingWorkspace, linkKey, linkedRows, workItem, workLabel } from "./workStart";
+ 
+ describe("GIT-049 starting or resuming a workspace from an item", () => {
+   it("turns a task row into the item the create command takes", () => {
+@@ -33,4 +33,14 @@ describe("GIT-049 starting or resuming a workspace from an item", () => {
+     expect(workLabel(null, { kind: "issue" })).toBe("Start workspace");
+     expect(workLabel(null, { kind: "pr" })).toBe("Check out in a workspace");
+   });
++  it("lists the workspaces of an opened or pasted address's repository even when the picker has not chosen it", () => {
++    const row = (host: string, repo: string, checking = false) => ({ key: `${host}/${repo}`, host, repo, checking });
++    const chosen = [row("github.com", "acme/app")];
++    const all = [...chosen, row("github.com", "acme/lib"), row("git.corp.example", "acme/lib"), row("", "", true)];
++    expect(linkedRows(chosen, all, [])).toEqual(chosen);
++    expect(linkedRows(chosen, all, [{ host: "github.com", repo: "Acme/Lib" }])).toEqual([chosen[0], all[1]]);
++    // The same name on another host is another repository; an address of a repository with no project adds nothing.
++    expect(linkedRows(chosen, all, [{ host: "git.corp.example", repo: "acme/lib" }])).toEqual([chosen[0], all[2]]);
++    expect(linkedRows(chosen, all, [{ host: "github.com", repo: "acme/unknown" }, { host: "github.com", repo: "acme/app" }])).toEqual(chosen);
++  });
+ });
+diff --git a/src/tasks/workStart.ts b/src/tasks/workStart.ts
+index 4aac4d39..583f5ddc 100644
+--- a/src/tasks/workStart.ts
++++ b/src/tasks/workStart.ts
+@@ -28,3 +28,12 @@ export const workLabel = (existing: string | null, task: Pick<Task, "kind">): st
+ /** Which repository a workspace list belongs to: host and owner/name, without case. The same name on
+  * two hosts is two repositories, so a row never resumes the other host's workspace (review AFTER 5). */
+ export const linkKey = (host: string, repo: string): string => `${host}/${repo}`.toLowerCase();
++
++/** The picker rows whose workspaces to list: the chosen ones, plus the row of each open or pasted
++ * address's repository when it is not chosen but Kolux has a project for it (after-list 477), so
++ * resume is offered for any repository Kolux knows. */
++export function linkedRows<R extends { key: string; host: string; repo: string; checking: boolean }>(chosen: R[], all: R[], targets: { host: string; repo: string }[]): R[] {
++  const have = new Set(chosen.map((r) => r.key));
++  const wanted = new Set(targets.map((t) => linkKey(t.host, t.repo)));
++  return [...chosen, ...all.filter((r) => !have.has(r.key) && !r.checking && wanted.has(linkKey(r.host, r.repo)))];
++}
