@@ -19,7 +19,7 @@ const openScript = (target) => `(async () => {
     const before = count(), t0 = performance.now();
     document.querySelector("button.newtab").click();
     let item = null;
-    for (let i = 0; i < 100 && !item; i++) { await sleep(20); item = [...document.querySelectorAll('[role="menu"][aria-label="New tab"] [role="menuitem"]')].find((x) => /^\\s*Terminal\\s*$/.test((x.querySelector(".name") ?? x).textContent || "")); }
+    for (let i = 0; i < 100 && !item; i++) { await sleep(20); item = [...document.querySelectorAll('[role="menu"][aria-label="New tab"] [role="menuitem"]')].find((x) => /^\\s*Terminal(\\s|$)/.test((x.querySelector(".name") ?? x).textContent || "")); }
     if (!item) return { error: "no Terminal item in the New tab menu at " + before, times };
     item.click();
     for (let i = 0; i < 500 && count() === before; i++) await sleep(20);
@@ -71,13 +71,29 @@ export async function run({ launch, checks }) {
     await app.sleep(5000);
     const after = await snapshot(app);
     const left = paneProcs(after);
-    rounds.push({ r, panes: opened.count ?? 0, openErr: opened.error, closeErr: closed.error, openP95: opens.p95, openMax: opens.max, peakProcs: paneProcs(peakSnap).length, procsLeft: left.length, memMB: appMemMB(after), peakMB: appMemMB(peakSnap), closeMax: stats(closed.times).max });
+    // Working set swings with the web view's garbage collection: the floor of three readings 4 s apart is the round's memory.
+    const mems = [appMemMB(after)];
+    for (let i = 0; i < 2; i++) {
+      await app.sleep(4000);
+      mems.push(appMemMB(await snapshot(app)));
+    }
+    rounds.push({ r, panes: opened.count ?? 0, openErr: opened.error, closeErr: closed.error, openP95: opens.p95, openMax: opens.max, peakProcs: paneProcs(peakSnap).length, procsLeft: left.length, leftNames: left.map((p) => p.name).join("+"), memMB: Math.min(...mems), memReadings: mems.map((m) => Math.round(m)).join("/"), peakMB: appMemMB(peakSnap), closeMax: stats(closed.times).max });
     console.log(`  round ${r}: ${JSON.stringify(rounds[r - 1])}`);
-    if (opened.error || closed.error) break;
+    if (opened.error || closed.error) {
+      // A stall: is the page still answering, and what does it show?
+      const t1 = Date.now();
+      const probe = await Promise.race([
+        app.evalJs(`({ panes: document.querySelectorAll(${JSON.stringify(TERM)}).length, menuOpen: !!document.querySelector('[role="menu"]'), dialog: (document.querySelector('[role="alertdialog"]')?.textContent ?? "").slice(0, 120), notice: [...document.querySelectorAll('.notice, .toast, [role="alert"], [role="status"]')].map((e) => e.textContent.trim().slice(0, 100)).filter(Boolean) })`).catch((e) => `ERR ${e.message.slice(0, 100)}`),
+        app.sleep(15000).then(() => "NO ANSWER in 15 s"),
+      ]);
+      const procs = (await snapshot(app)).filter((p) => /kolux-rs|msedgewebview2/.test(p.name)).map((p) => `${p.name}#${p.pid} threads ${p.threads}`).join(", ");
+      checks.note(`stall in round ${r}: page probe after ${((Date.now() - t1) / 1000).toFixed(1)} s = ${JSON.stringify(probe)}; ${procs}`);
+      break;
+    }
   }
   checks.add(`every round opened ${PANES} panes and closed them all`, `${ROUNDS} rounds, no stall`, rounds.map((x) => `r${x.r}: ${x.panes} open${x.openErr ? ` ERROR ${x.openErr}` : ""}${x.closeErr ? ` CLOSE ERROR ${x.closeErr}` : ""}`).join("; "), rounds.length === ROUNDS && rounds.every((x) => x.panes === PANES && !x.openErr && !x.closeErr));
   const last = rounds[rounds.length - 1];
-  checks.add("pane host processes still in the app's tree after the final close", "0", `${last.procsLeft} (${paneProcs(await snapshot(app)).map((p) => p.name).join(", ") || "none"}); per round [${rounds.map((x) => x.procsLeft).join(" ")}]`, last.procsLeft === 0);
+  checks.add("pane host processes still in the app's tree after the final close", "0", `${last.procsLeft} (${paneProcs(await snapshot(app)).map((p) => p.name).join(", ") || "none"}); per round [${rounds.map((x) => x.procsLeft + (x.leftNames ? ":" + x.leftNames : "")).join(" ")}]`, last.procsLeft === 0);
   // Anything the tree ever held that is still alive but no longer under the app is an orphan.
   const aliveNow = await app.survivorsOf([...seen.values()]);
   const inTree = new Set((await snapshot(app)).map((p) => p.pid));
@@ -86,7 +102,7 @@ export async function run({ launch, checks }) {
   await app.killAll(orphans); // cleanup, not the check
   const base = rounds[0].memMB;
   const final = last.memMB;
-  checks.add("app memory after round 5 vs after round 1 (app + web view working set, MB)", "within +15% of round 1", `${fmt(base)} -> ${fmt(final)} MB (${fmt(((final - base) / base) * 100, 1)}%); per round [${rounds.map((x) => fmt(x.memMB)).join(" ")}]; peak per round [${rounds.map((x) => fmt(x.peakMB)).join(" ")}]`, final <= base * 1.15);
+  checks.add("app memory after round 5 vs after round 1 (app + web view working set, MB; floor of 3 readings per round)", "within +15% of round 1", `${fmt(base)} -> ${fmt(final)} MB (${fmt(((final - base) / base) * 100, 1)}%); per round [${rounds.map((x) => fmt(x.memMB)).join(" ")}]; peak per round [${rounds.map((x) => fmt(x.peakMB)).join(" ")}]`, final <= base * 1.15);
   const errs = await pageErrors(app);
   checks.add("page errors (window error, unhandled rejection, console.error) during the run", "0", `${errs.length}${errs.length ? `: ${[...new Set(errs)].slice(0, 5).join(" || ")}` : ""}`, errs.length === 0);
   checks.note(`open time per pane p95 by round [${rounds.map((x) => fmt(x.openP95)).join(" ")}] ms, max [${rounds.map((x) => fmt(x.openMax)).join(" ")}] ms; close max [${rounds.map((x) => fmt(x.closeMax)).join(" ")}] ms; ${((Date.now() - start) / 1000).toFixed(0)} s total; pane host process names counted: ${[...PANE_PROCS].join(", ")}`);

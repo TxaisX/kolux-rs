@@ -20,7 +20,7 @@ const CHURN_JS = `(() => {
         if (panes().length < 8 && (panes().length < 3 || window.__churn.ops % 3 !== 2)) {
           document.querySelector("button.newtab").click();
           let item = null;
-          for (let i = 0; i < 50 && !item; i++) { await sleep(10); item = [...document.querySelectorAll('[role="menu"][aria-label="New tab"] [role="menuitem"]')].find((x) => /^\\s*Terminal\\s*$/.test((x.querySelector(".name") ?? x).textContent || "")); }
+          for (let i = 0; i < 50 && !item; i++) { await sleep(10); item = [...document.querySelectorAll('[role="menu"][aria-label="New tab"] [role="menuitem"]')].find((x) => /^\\s*Terminal(\\s|$)/.test((x.querySelector(".name") ?? x).textContent || "")); }
           item?.click();
         } else {
           panes()[panes().length - 1]?.querySelector('button[title^="Close pane"]')?.click();

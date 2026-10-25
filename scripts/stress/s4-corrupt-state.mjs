@@ -100,7 +100,10 @@ export async function run({ launch, checks }) {
     } else if (c.key === "B") {
       const damaged = after.filter((f) => f.startsWith("state.db.damaged-") && !/(-wal|-shm)$/.test(f));
       checks.add(`${tag}: the damaged state.db is set aside, not deleted`, "a state.db.damaged-<stamp> file exists", damaged.join(", ") || `none; files now: ${after.join(", ")}`, damaged.length > 0);
-      checks.add(`${tag}: settings.json is untouched by a bad state.db`, "byte-identical to before", bytesOf(join(profile, "settings.json"))?.equals(goodSettings) || patchResult === "saved" ? "identical or only changed by the later test save" : "CHANGED", true);
+      const rest = (b) => { try { const o = JSON.parse(b.toString("utf8")); delete o.stressRound; return JSON.stringify(Object.entries(o).sort()); } catch { return null; } };
+      const nowBytes = bytesOf(join(profile, "settings.json"));
+      const untouched = !!nowBytes && (nowBytes.equals(goodSettings) || (patchResult === "saved" && rest(nowBytes) !== null && rest(nowBytes) === rest(goodSettings)));
+      checks.add(`${tag}: settings.json is untouched by a bad state.db`, "same keys and values as before (only the test save's stressRound may differ)", untouched ? (nowBytes.equals(goodSettings) ? "byte-identical" : "identical apart from stressRound") : "CHANGED or gone", untouched);
     } else {
       const same = [...before].filter(([f, b]) => f === "settings.json" && bytesOf(join(profile, f))?.equals(b)).length === 1;
       checks.add(`${tag}: settings.json is untouched`, "byte-identical to before", same ? "identical" : "CHANGED or gone", same);
