@@ -1,0 +1,221 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ba49fd09..beb5784d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -94,6 +94,7 @@ import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
+ import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
+ import { closeSkills, toggleSkills } from "./skills/nav";
+ import { BringSkillsUp } from "./skills/SkillBarItem";
++import SkillUpdateNotice from "./skills/SkillUpdateNotice";
+ import { KitGallery, KitSetup } from "./kits/Kits";
+ import Wizard from "./onboarding/Wizard";
+ import Guides from "./onboarding/Guides";
+@@ -3411,6 +3412,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       )}
+       <UpdateCenter />
+       <BringSkillsUp onShow={() => screen !== "skills" && toggleSkills(screen, setScreen)} />
++      <SkillUpdateNotice settingsLoaded={settingsRead} />
+       <FeedbackDialog />
+       {reviewOn(settings) && (
+         <ReviewNotes
+diff --git a/src/skills/SkillUpdate.tsx b/src/skills/SkillUpdate.tsx
+index 513dccde..4ac36a49 100644
+--- a/src/skills/SkillUpdate.tsx
++++ b/src/skills/SkillUpdate.tsx
+@@ -1,23 +1,18 @@
+-// SKILL-024: the notice that some Kolux skills installed outside Kolux are out of date.
++// SKILL-024: the page-level note that some Kolux skills installed outside Kolux are out of date (the one-time notice is SkillUpdateNotice, mounted by the window).
+ // SKILL-026: the background update dialog: what qualifies, why the rest is kept (with a reinstall
+ // command), Update, Stop, the per-skill result, and Show log with the installer's output.
+ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+-import { Close } from "../chrome/icons";
+ import SkillInstall from "./SkillInstall";
+ import { skillBar, SKILLS_SHOW_EVENT } from "./skillBarStore";
+ import type { Load } from "./skillBar";
+-import { STOP_LABEL, UPDATE_LABEL, UPDATING_LABEL, chipTone, freshKeys, noticeShown, noticeText, sumUpRun, updatable, type Checked } from "./updateNotice";
++import { STOP_LABEL, UPDATE_LABEL, UPDATING_LABEL, chipTone, noticeText, sumUpRun, updatable, type Checked } from "./updateNotice";
+ 
+-/** One notice per session, dismissed or not. */
+-let shownThisSession = false;
++type Props = { workspace: string | null; onChanged?: () => void; /** The Kolux skills the Install panel offers. */ bundled?: string[]; /** Types a command into the inline terminal without running it (T-244-b). */ onType?: (line: string) => void; /** SKILL-025: what the last check found, for the freshness pills. */ onFreshness?: (load: Load, checked: Checked | null) => void };
+ 
+-type Props = { workspace: string | null; settingsLoaded?: boolean; onChanged?: () => void; /** The Kolux skills the Install panel offers. */ bundled?: string[]; /** Types a command into the inline terminal without running it (T-244-b). */ onType?: (line: string) => void; /** SKILL-025: what the last check found, for the freshness pills. */ onFreshness?: (load: Load, checked: Checked | null) => void };
+-
+-export default function SkillUpdate({ workspace, settingsLoaded = true, onChanged, bundled = [], onType, onFreshness }: Props) {
++export default function SkillUpdate({ workspace, onChanged, bundled = [], onType, onFreshness }: Props) {
+   const [checked, setChecked] = useState<Checked | null>(null);
+   const [open, setOpen] = useState(false);
+-  const [notice, setNotice] = useState(false);
+   // SKILL-027: the run itself lives in the store, so it goes on (and the status bar shows it) with the dialog closed.
+   const view = useSyncExternalStore(skillBar.subscribe, skillBar.get);
+   const status = view.status;
+@@ -36,7 +31,7 @@ export default function SkillUpdate({ workspace, settingsLoaded = true, onChange
+   useEffect(() => {
+     skillBar.sync();
+     if (skillBar.takeWanted()) setOpen(true);
+-    const show = () => (skillBar.takeWanted(), setOpen(true), setNotice(false));
++    const show = () => (skillBar.takeWanted(), setOpen(true));
+     window.addEventListener(SKILLS_SHOW_EVENT, show);
+     return () => window.removeEventListener(SKILLS_SHOW_EVENT, show);
+   }, []);
+@@ -50,17 +45,7 @@ export default function SkillUpdate({ workspace, settingsLoaded = true, onChange
+     }
+     lastState.current = status?.state;
+   }, [status?.state]);
+-  useEffect(() => {
+-    if (!shownThisSession && noticeShown(checked, settingsLoaded, false)) {
+-      shownThisSession = true;
+-      setNotice(true);
+-    }
+-  }, [checked, settingsLoaded]);
+ 
+-  const dismiss = () => {
+-    setNotice(false);
+-    if (checked) invoke("skills_update_dismiss", { keys: freshKeys(checked) }).catch(() => undefined);
+-  };
+   const busy = status?.state === "running" || status?.state === "stopping";
+   const start = () => {
+     if (!checked) return;
+@@ -81,18 +66,7 @@ export default function SkillUpdate({ workspace, settingsLoaded = true, onChange
+   const rows = checked?.report.rows ?? [];
+   return (
+     <>
+-      {notice && !open && (
+-        <div className="skills-note" role="status">
+-          {noticeText(checked?.report.available ?? 0)}{" "}
+-          <button className="btn" onClick={() => (setOpen(true), setNotice(false))}>
+-            Review
+-          </button>{" "}
+-          <button className="btn" aria-label="Dismiss" onClick={dismiss}>
+-            <Close />
+-          </button>
+-        </div>
+-      )}
+-      {!notice && !open && (checked?.report.available ?? 0) > 0 && (
++      {!open && (checked?.report.available ?? 0) > 0 && (
+         <div className="skills-note" role="status">
+           {noticeText(checked?.report.available ?? 0)}{" "}
+           <button className="btn" onClick={() => setOpen(true)}>
+diff --git a/src/skills/SkillUpdateNotice.tsx b/src/skills/SkillUpdateNotice.tsx
+new file mode 100644
+index 00000000..4cde94fc
+--- /dev/null
++++ b/src/skills/SkillUpdateNotice.tsx
+@@ -0,0 +1,44 @@
++// SKILL-024 (after-list row 62): the notice that Kolux skills installed outside Kolux are out of date.
++// The window mounts it, so it shows wherever the user is, once per session, after settings have loaded;
++// Review opens the Skills page and its update dialog, Dismiss remembers the exact copies and revisions.
++import { useEffect, useState, useSyncExternalStore } from "react";
++import { invoke } from "@tauri-apps/api/core";
++import { Close } from "../chrome/icons";
++import { skillBar } from "./skillBarStore";
++import { claimNotice, freshKeys, noticeText, type Checked } from "./updateNotice";
++import "./skillNotice.css";
++
++type Props = { settingsLoaded: boolean };
++
++export default function SkillUpdateNotice({ settingsLoaded }: Props) {
++  const [checked, setChecked] = useState<Checked | null>(null);
++  const [shown, setShown] = useState(false);
++  const runDone = useSyncExternalStore(skillBar.subscribe, skillBar.get).status?.state === "done";
++  // Looked at again when settings arrive and when an update run ends, so a fixed skill withdraws the notice.
++  useEffect(() => {
++    if (!settingsLoaded) return;
++    let live = true;
++    invoke<Checked>("skills_update_check", { workspace: null }).then(
++      (c) => live && setChecked(c),
++      () => live && setChecked(null),
++    );
++    return () => void (live = false);
++  }, [settingsLoaded, runDone]);
++  useEffect(() => {
++    if (claimNotice(checked, settingsLoaded)) setShown(true);
++  }, [checked, settingsLoaded]);
++
++  const left = checked ? freshKeys(checked) : [];
++  if (!shown || !checked || checked.report.available === 0 || left.length === 0) return null;
++  return (
++    <div className="skill-notice" role="status">
++      <span>{noticeText(checked.report.available)}</span>
++      <button className="btn" onClick={() => (setShown(false), skillBar.click())}>
++        Review
++      </button>
++      <button className="ib" aria-label="Dismiss" title="Dismiss" onClick={() => (setShown(false), invoke("skills_update_dismiss", { keys: left }).catch(() => undefined))}>
++        <Close />
++      </button>
++    </div>
++  );
++}
+diff --git a/src/skills/noticeMount.test.ts b/src/skills/noticeMount.test.ts
+new file mode 100644
+index 00000000..5f48bf8b
+--- /dev/null
++++ b/src/skills/noticeMount.test.ts
+@@ -0,0 +1,13 @@
++// After-list row 62: the window itself mounts the skills notice, with the real "settings read" flag.
++import { readFileSync } from "node:fs";
++import { expect, test } from "vitest";
++
++test("App mounts SkillUpdateNotice app-wide and waits for settings", () => {
++  const app = readFileSync("src/App.tsx", "utf8");
++  expect(app).toContain("<SkillUpdateNotice settingsLoaded={settingsRead} />");
++});
++
++test("the Skills page no longer owns the one-time notice", () => {
++  const page = readFileSync("src/skills/SkillUpdate.tsx", "utf8");
++  expect(page).not.toContain("shownThisSession");
++});
+diff --git a/src/skills/skillNotice.css b/src/skills/skillNotice.css
+new file mode 100644
+index 00000000..5f0b5daf
+--- /dev/null
++++ b/src/skills/skillNotice.css
+@@ -0,0 +1,3 @@
++/* SKILL-024 (after-list row 62): the one-time "Kolux skills have updates" notice, over any screen. */
++.skill-notice { position: fixed; z-index: 58; right: max(16px, env(safe-area-inset-right, 0px)); bottom: 44px; display: flex; align-items: center; gap: 8px; max-width: min(420px, calc(100vw - 32px)); padding: 6px 8px 6px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--fg); font-size: 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); }
++.skill-notice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+diff --git a/src/skills/updateNotice.test.ts b/src/skills/updateNotice.test.ts
+index 4018ca23..48c3b99b 100644
+--- a/src/skills/updateNotice.test.ts
++++ b/src/skills/updateNotice.test.ts
+@@ -1,6 +1,6 @@
+ // SKILL-024 / SKILL-026: when the update notice appears and what the dialog says about a run.
+ import { expect, test } from "vitest";
+-import { chipTone, freshKeys, noticeShown, noticeText, sumUpRun, updatable, type Checked, type Report, type UpdateStatus } from "./updateNotice";
++import { chipTone, claimNotice, freshKeys, noticeShown, resetNoticeClaim, noticeText, sumUpRun, updatable, type Checked, type Report, type UpdateStatus } from "./updateNotice";
+ 
+ const report = (over: Partial<Report> = {}): Report => ({
+   rows: [
+@@ -55,3 +55,11 @@ test("SKILL-026: the finished run is summed up from the rescan, not the exit cod
+   expect(sumUpRun(st({ stopped: true, code: null, results: [ok("a"), bad("b")] }))).toBe("Stopped. 1 updated, 1 not.");
+   expect(sumUpRun(st({ error: "Node.js was not found", results: [bad("a")] }))).toBe("Node.js was not found");
+ });
++
++test("after-list row 62: the notice waits for settings and is claimed once per session by whichever screen asks first", () => {
++  resetNoticeClaim();
++  expect(claimNotice(checked(), false)).toBe(false); // settings not loaded: not claimed either
++  expect(claimNotice(checked(), true)).toBe(true);
++  expect(claimNotice(checked(), true)).toBe(false); // the Skills page asking later gets nothing
++  resetNoticeClaim();
++});
+diff --git a/src/skills/updateNotice.ts b/src/skills/updateNotice.ts
+index a9a346b2..5c8124b6 100644
+--- a/src/skills/updateNotice.ts
++++ b/src/skills/updateNotice.ts
+@@ -17,6 +17,15 @@ export const freshKeys = (c: Checked): string[] => c.report.notice.filter((k) =>
+  * not again in the same session (`shownThisSession`), whether it was dismissed or opened. */
+ export const noticeShown = (c: Checked | null, settingsLoaded: boolean, shownThisSession: boolean): boolean => !!c && settingsLoaded && !shownThisSession && c.report.available > 0 && freshKeys(c).length > 0;
+ 
++let claimed = false;
++/** After-list row 62: true the first time the notice may show this session; the window and the Skills page share the one claim. */
++export function claimNotice(c: Checked | null, settingsLoaded: boolean): boolean {
++  if (!noticeShown(c, settingsLoaded, claimed)) return false;
++  claimed = true;
++  return true;
++}
++export const resetNoticeClaim = () => void (claimed = false);
++
+ export const noticeText = (n: number): string => (n === 1 ? "1 Kolux skill has an update." : `${n} Kolux skills have updates.`);
+ 
+ /** Names the notice offers: skills with a qualifying copy. */
