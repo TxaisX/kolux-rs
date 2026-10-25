@@ -1123,14 +1123,16 @@ pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Va
 /// Installs Kolux's hooks into `home/hooks.json` (after the user's own entries) and marks them
 /// trusted in `home/config.toml` with Codex's own fingerprints (STAT-008). An unreadable or
 /// unparsable file is left alone. When trust cannot be set, `hooks.json` goes back exactly as it
-/// was (or away, when Kolux created it). True when something was written.
-pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
-    install_codex_with(home, command, codex_listing)
+/// was (or away, when Kolux created it). True when something was written. This form passes
+/// Codex's own listing in, so a test can make it fail without starting Codex (hooks FIX-4).
+#[cfg(test)]
+pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
+    install_codex_mirroring(home, command, None, listing)
 }
 
-/// `install_codex` with Codex's own listing passed in, so a test can make it fail without
-/// starting Codex (hooks FIX-4).
-pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
+/// `install_codex_with` that also copies the user's own Codex hooks and approvals from `user` into
+/// the home (T-025-e), Kolux's entry first. The user's home is only read.
+pub(crate) fn install_codex_mirroring(home: &Path, command: &str, user: Option<&Path>, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
     let _one = CODEX_INSTALL.lock().map_err(|e| e.to_string())?;
     let file = home.join("hooks.json");
     let config = home.join("config.toml");
@@ -1142,7 +1144,25 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
     let text = read(&file)?;
     let mut hooks: Value = serde_json::from_str(text.as_deref().unwrap_or("{}")).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
     let mut doc: toml_edit::DocumentMut = read(&config)?.unwrap_or_default().parse().map_err(|e| format!("{} is not valid TOML ({e}); left alone", config.display()))?;
-    let changed = write_codex_groups(&file, text.as_deref(), &mut hooks, command)?;
+    let config_before = doc.to_string();
+    let hooks_before = hooks.clone();
+    let mut changed = false;
+    if let Some(user) = user {
+        // The file may not exist yet: its real path is the real folder plus its name.
+        let real_home = crate::trust::real_path(home)?;
+        let file_path = Path::new(&real_home).join("hooks.json").to_string_lossy().into_owned();
+        // A user file Kolux cannot read leaves the copy as it was.
+        match agent_hooks::codex_mirror::mirror(user, &mut hooks, &mut doc, &file_path, command) {
+            Ok(_) if hooks != hooks_before => {
+                agent_hooks::back_up(&file, &agent_hooks::codex_record(&file))?;
+                write_json(&file, &hooks, text.as_deref())?;
+                changed = true;
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("kolux-rs: codex hooks: {e}"),
+        }
+    }
+    changed |= write_codex_groups(&file, text.as_deref(), &mut hooks, command)?;
     let real = crate::trust::real_path(&file)?;
     // Several launches write trust once: an unchanged file whose entries are all in the table is done.
     let state = doc.get("hooks").and_then(|h| h.get("state")).and_then(toml_edit::Item::as_table);
@@ -1152,6 +1172,11 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
         state?.get(&format!("{real}:{}:{index}:0", snake(event)))?.get("trusted_hash")
     };
     if !changed && CODEX_EVENTS.iter().all(|e| trusted(e).is_some()) {
+        // Only the copied approvals moved: no listing is needed.
+        if doc.to_string() != config_before {
+            crate::trust::write_whole(&config, &doc.to_string())?;
+            return Ok(true);
+        }
         return Ok(false);
     }
     // hooks FIX-3: a file Kolux had just created goes with its `created` record, so no stray
@@ -1217,7 +1242,9 @@ pub fn install_codex_home(home: &Path) {
         Ok(path) => {
             // Codex runs the command through cmd.exe; the native separators are what was verified.
             let command = format!("\"{}\"", if cfg!(windows) { path.replace('/', "\\") } else { path });
-            if let Err(e) = install_codex(home, &command) {
+            // T-025-e: the user's own Codex home (never the managed home itself) is copied from.
+            let user = crate::trust::codex_config_file().parent().map(Path::to_path_buf).filter(|u| !same_path(&u.to_string_lossy(), &home.to_string_lossy()));
+            if let Err(e) = install_codex_mirroring(home, &command, user.as_deref(), codex_listing) {
                 eprintln!("kolux-rs: codex hooks: {e}");
             }
         }

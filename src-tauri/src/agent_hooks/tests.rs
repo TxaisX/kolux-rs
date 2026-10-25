@@ -2020,3 +2020,110 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     assert_eq!((read(&claude), read(&codex), read(&gemini), read(&antigravity)), (shaped(), codex_user.into(), gemini_user.into(), antigravity_user.into()));
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ---- T-025-e: the user's Codex hooks and approvals copied into a managed home (temp-dir fixtures only) ----
+
+fn mirror_fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let dir = temp(name);
+    let (user, managed) = (dir.join("user-codex"), dir.join("managed-codex"));
+    fs::create_dir_all(&user).unwrap();
+    fs::create_dir_all(&managed).unwrap();
+    let theirs = r#"{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"user-a.cmd"}]}],"Stop":[{"hooks":[{"type":"command","command":"user-b.cmd"}]}]}}"#;
+    fs::write(user.join("hooks.json"), theirs).unwrap();
+    (dir, user, managed)
+}
+
+fn user_approves(user: &Path, hooks: &[(&str, &str)]) {
+    let real = crate::trust::real_path(&user.join("hooks.json")).unwrap().replace('\\', "\\\\");
+    let text: String = hooks.iter().map(|(key, hash)| format!("[hooks.state.\"{real}:{key}\"]\ntrusted_hash = \"{hash}\"\n")).collect();
+    fs::write(user.join("config.toml"), text).unwrap();
+}
+
+fn kolux_listing(home: &Path, command: &str) -> Option<Vec<Value>> {
+    use super::super::snake;
+    let real = crate::trust::real_path(&home.join("hooks.json")).unwrap();
+    Some(CODEX_EVENTS.iter().map(|e| json!({ "key": format!("{real}:{}:0:0", snake(e)), "command": command, "currentHash": "sha256:00", "sourcePath": real })).collect())
+}
+
+fn trusted(managed: &Path) -> std::collections::BTreeMap<String, String> {
+    let real = crate::trust::real_path(&managed.join("hooks.json")).unwrap();
+    let doc: toml_edit::DocumentMut = fs::read_to_string(managed.join("config.toml")).unwrap().parse().unwrap();
+    let state = doc["hooks"]["state"].as_table().unwrap();
+    state.iter().map(|(k, v)| (k.strip_prefix(&format!("{real}:")).unwrap().to_owned(), v["trusted_hash"].as_str().unwrap().to_owned())).collect()
+}
+
+#[test]
+fn t025e_the_users_hooks_and_approvals_are_copied_with_kolux_first_and_the_users_files_untouched() {
+    use super::super::install_codex_mirroring;
+    let (dir, user, managed) = mirror_fixture("t025e-copy");
+    user_approves(&user, &[("pre_tool_use:0:0", "sha256:aa"), ("stop:0:0", "sha256:bb")]);
+    let before = (fs::read(user.join("hooks.json")).unwrap(), fs::read(user.join("config.toml")).unwrap());
+    let command = "\"C:/Users/me/.kolux-rs/agent-hooks/codex.cmd\"";
+    assert!(install_codex_mirroring(&managed, command, Some(&user), |h| kolux_listing(h, command)).unwrap());
+    let copy: Value = serde_json::from_str(&fs::read_to_string(managed.join("hooks.json")).unwrap()).unwrap();
+    for (event, theirs) in [("PreToolUse", "user-a.cmd"), ("Stop", "user-b.cmd")] {
+        let groups = copy["hooks"][event].as_array().unwrap();
+        assert!(is_mine(&groups[0]), "{event}: Kolux's status hook runs first");
+        assert_eq!(groups[1]["hooks"][0]["command"], theirs, "{event}: then the user's own");
+    }
+    let got = trusted(&managed);
+    assert_eq!((got.get("pre_tool_use:1:0").map(String::as_str), got.get("stop:1:0").map(String::as_str)), (Some("sha256:aa"), Some("sha256:bb")), "the user's approvals follow their hooks to the new places: {got:?}");
+    assert_eq!(got.get("pre_tool_use:0:0").map(String::as_str), Some("sha256:00"), "Kolux's own entry is trusted at its place");
+    assert!(!got.contains_key("pre_tool_use:0:0") || got["pre_tool_use:0:0"] != "sha256:aa", "trust for one entry never counts for another");
+    assert_eq!((fs::read(user.join("hooks.json")).unwrap(), fs::read(user.join("config.toml")).unwrap()), before, "the user's own Codex files are only read");
+    assert!(!install_codex_mirroring(&managed, command, Some(&user), |_| panic!("a copy already in step asks Codex nothing")).unwrap(), "a second refresh writes nothing");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t025e_a_withdrawn_approval_disappears_from_the_copy_and_a_changed_original_is_refreshed() {
+    use super::super::install_codex_mirroring;
+    let (dir, user, managed) = mirror_fixture("t025e-refresh");
+    user_approves(&user, &[("pre_tool_use:0:0", "sha256:aa"), ("stop:0:0", "sha256:bb")]);
+    let command = "\"C:/Users/me/.kolux-rs/agent-hooks/codex.cmd\"";
+    install_codex_mirroring(&managed, command, Some(&user), |h| kolux_listing(h, command)).unwrap();
+    user_approves(&user, &[("pre_tool_use:0:0", "sha256:aa")]);
+    assert!(install_codex_mirroring(&managed, command, Some(&user), |_| panic!("only the approvals moved")).unwrap());
+    let got = trusted(&managed);
+    assert!(!got.contains_key("stop:1:0") && got.contains_key("pre_tool_use:1:0"), "the approval the user withdrew is gone from the copy: {got:?}");
+    // The user adds a hook before their old one: the old one moves down, and so does its approval.
+    let edited = r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"user-new.cmd"}]},{"matcher":"*","hooks":[{"type":"command","command":"user-a.cmd"}]}],"Stop":[{"hooks":[{"type":"command","command":"user-b.cmd"}]}]}}"#;
+    fs::write(user.join("hooks.json"), edited).unwrap();
+    user_approves(&user, &[("pre_tool_use:1:0", "sha256:aa")]);
+    install_codex_mirroring(&managed, command, Some(&user), |h| kolux_listing(h, command)).unwrap();
+    let got = trusted(&managed);
+    assert_eq!((got.get("pre_tool_use:2:0").map(String::as_str), got.contains_key("pre_tool_use:1:0")), (Some("sha256:aa"), false), "the approval stays with its hook, and the new hook is not approved: {got:?}");
+    let copy: Value = serde_json::from_str(&fs::read_to_string(managed.join("hooks.json")).unwrap()).unwrap();
+    assert_eq!(copy["hooks"]["PreToolUse"].as_array().unwrap().len(), 3);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t025e_a_user_hooks_file_that_cannot_be_parsed_leaves_the_copy_as_it_was() {
+    use super::super::install_codex_mirroring;
+    let (dir, user, managed) = mirror_fixture("t025e-broken");
+    let command = "\"C:/Users/me/.kolux-rs/agent-hooks/codex.cmd\"";
+    install_codex_mirroring(&managed, command, Some(&user), |h| kolux_listing(h, command)).unwrap();
+    let copy = fs::read(managed.join("hooks.json")).unwrap();
+    fs::write(user.join("hooks.json"), "{ not json").unwrap();
+    assert!(!install_codex_mirroring(&managed, command, Some(&user), |_| panic!("nothing changed")).unwrap());
+    assert_eq!(fs::read(managed.join("hooks.json")).unwrap(), copy);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t025e_trust_is_granted_again_when_kolux_s_own_entry_changes() {
+    use super::super::{install_codex_mirroring, snake};
+    let (dir, user, managed) = mirror_fixture("t025e-regrant");
+    user_approves(&user, &[("stop:0:0", "sha256:bb")]);
+    let (first, second) = ("\"C:/Users/me/.kolux-rs/agent-hooks/codex.cmd\"", "\"C:/Users/me/.kolux-rs/agent-hooks/codex-2.cmd\"");
+    install_codex_mirroring(&managed, first, Some(&user), |h| kolux_listing(h, first)).unwrap();
+    let rehash = |h: &Path| {
+        let real = crate::trust::real_path(&h.join("hooks.json")).unwrap();
+        Some(CODEX_EVENTS.iter().map(|e| json!({ "key": format!("{real}:{}:0:0", snake(e)), "command": second, "currentHash": "sha256:11", "sourcePath": real })).collect())
+    };
+    assert!(install_codex_mirroring(&managed, second, Some(&user), rehash).unwrap());
+    let got = trusted(&managed);
+    assert_eq!((got.get("stop:0:0").map(String::as_str), got.get("stop:1:0").map(String::as_str)), (Some("sha256:11"), Some("sha256:bb")), "Kolux's new entry is trusted, the user's approval is kept: {got:?}");
+    let _ = fs::remove_dir_all(&dir);
+}
