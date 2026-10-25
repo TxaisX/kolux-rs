@@ -176,21 +176,56 @@ describe("row 199: every dirty buffer is in the draft store before the interface
     expect(r.calls).toEqual([]);
   });
 
-  it("answering a flush request: flush first, acknowledge after, and acknowledge even when the flush fails", async () => {
+  it("answering a flush request: flush first, acknowledge after", async () => {
     const order: string[] = [];
     let handler: (token: number) => void = () => undefined;
     const req = { on: (h: (token: number) => void) => (handler = h), ack: async (t: number) => void order.push(`ack ${t}`) };
     answerFlushRequests(req, async () => {
       await new Promise((r) => setTimeout(r, 5));
       order.push("flushed");
+      return true;
     });
     handler(7);
     await new Promise((r) => setTimeout(r, 30));
     expect(order).toEqual(["flushed", "ack 7"]);
-    order.length = 0;
-    answerFlushRequests(req, async () => Promise.reject(new Error("io")));
+  });
+
+  it("no acknowledgement when the flush failed or threw, so the host does not reload as if the text were safe", async () => {
+    const order: string[] = [];
+    let handler: (token: number) => void = () => undefined;
+    const req = { on: (h: (token: number) => void) => (handler = h), ack: async (t: number) => void order.push(`ack ${t}`) };
+    answerFlushRequests(req, async () => false);
     handler(8);
     await new Promise((r) => setTimeout(r, 10));
-    expect(order).toEqual(["ack 8"]);
+    answerFlushRequests(req, async () => Promise.reject(new Error("io")));
+    handler(9);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(order).toEqual([]);
+  });
+
+  it("flushAll is false when a dirty tab's write failed, true once every write lands; the real flushAll feeds the ack", async () => {
+    let busy = true;
+    const io: DraftIo = {
+      set: async () => {
+        if (busy) throw new Error("store busy");
+      },
+      clear: async () => undefined,
+      list: async () => [],
+    };
+    const d = createDrafts(io, 600, { set: () => 1, clear: () => undefined });
+    open(P, "disk\n", "disk\ntyped\n");
+    d.edited(W, P);
+    const acks: number[] = [];
+    let handler: (token: number) => void = () => undefined;
+    answerFlushRequests({ on: (h) => (handler = h), ack: async (t) => void acks.push(t) }, d.flushAll);
+    expect(await d.flushAll()).toBe(false);
+    handler(1);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(acks).toEqual([]);
+    busy = false;
+    expect(await d.flushAll()).toBe(true);
+    handler(2);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(acks).toEqual([2]);
   });
 });

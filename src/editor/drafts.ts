@@ -48,20 +48,24 @@ export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
     if (t !== undefined) timers.clear(t.t);
     timersOf.delete(k);
   };
-  /** Writes the draft for the file as it is now (or clears it when the tab is clean). */
-  const flushOne = async (worktree: string, path: string) => {
+  /** Writes the draft for the file as it is now (or clears it when the tab is clean).
+   *  False only when the draft of a dirty tab could not be written. */
+  const flushOne = async (worktree: string, path: string): Promise<boolean> => {
     stop(pk(worktree, path));
     const m = await mirror(worktree);
     const text = textOf(path);
-    if (text === null) return void open.delete(pk(worktree, path));
+    if (text === null) {
+      open.delete(pk(worktree, path));
+      return true;
+    }
     if (!isDirty(path)) {
       open.delete(pk(worktree, path));
       if (m.delete(keyOf(path))) await io.clear(worktree, path).catch(() => undefined);
-      return;
+      return true;
     }
     const base = await hashOf(diskOf(path) ?? "");
     m.set(keyOf(path), { path, text, base });
-    await io.set(worktree, path, text, base).catch(() => undefined);
+    return io.set(worktree, path, text, base).then(() => true, () => false);
   };
   return {
     /** The draft kept for a file (null when none). */
@@ -80,8 +84,9 @@ export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
     flush: (worktree: string, path: string) => flushOne(worktree, path),
     /** Rows 135, 199: writes the draft of every tab holding unsaved text at once (the window lost focus,
      *  was hidden, is closing or is about to reload), so the last moment of typing is not missing and
-     *  a write that failed earlier is made again. */
-    flushAll: () => Promise.all([...new Map([...timersOf, ...open]).values()].map(({ worktree, path }) => flushOne(worktree, path))),
+     *  a write that failed earlier is made again. Resolves true only when every dirty tab was written. */
+    flushAll: async (): Promise<boolean> =>
+      (await Promise.all([...new Map([...timersOf, ...open]).values()].map(({ worktree, path }) => flushOne(worktree, path)))).every(Boolean),
     /** The user closed the tab or chose to drop the edits: the draft goes. */
     async discard(worktree: string, path: string) {
       stop(pk(worktree, path));
@@ -118,8 +123,9 @@ if (typeof window !== "undefined") flushOnLeave(window, drafts.flushAll);
  *  the host (recovery watch, editor_drafts.rs) asks with a token and holds the reload until the
  *  token comes back or its wait runs out. */
 export type FlushRequests = { on: (handler: (token: number) => void) => unknown; ack: (token: number) => Promise<unknown> };
-export function answerFlushRequests(req: FlushRequests, flushAll: () => Promise<unknown>): void {
-  req.on((token) => void flushAll().catch(() => undefined).then(() => req.ack(token)).catch(() => undefined));
+export function answerFlushRequests(req: FlushRequests, flushAll: () => Promise<boolean>): void {
+  // No ack after a failed write: the host's wait runs out and it logs "flush not acked" (row 199 review).
+  req.on((token) => void flushAll().then((ok) => (ok ? req.ack(token) : undefined)).catch(() => undefined));
 }
 export const FLUSH_EVENT = "editor-flush-request";
 export const tauriFlush: FlushRequests = {
