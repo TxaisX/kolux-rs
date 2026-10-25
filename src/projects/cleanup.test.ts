@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_VIEW, arrangeRows, needsSizes, sizeText, addKept, forgetCleanupMemory, keptAfter, keptBatches, keptView, lastScan, preselected, rememberScan, rememberShowAll, rememberedShowAll, rowFacts, rowLabel, shownRows, tickedPaths, ticksAfterScan, type KeptItem, type Scan, type ScanRow } from "./cleanup";
+import { DEFAULT_VIEW, arrangeRows, childrenFirst, needsSizes, sizeText, addKept, forgetCleanupMemory, keptAfter, keptBatches, keptView, lastScan, preselected, rememberScan, rememberShowAll, rememberedShowAll, rowFacts, rowLabel, shownRows, tickedPaths, ticksAfterScan, type KeptItem, type Scan, type ScanRow } from "./cleanup";
 
 const row = (path: string, over: Partial<ScanRow> = {}): ScanRow => ({
   path,
@@ -143,5 +143,23 @@ describe("PROJ-081 cleanup filters, search and sorting", () => {
     expect(sizeText(512)).toBe("512 B");
     expect(sizeText(1536)).toBe("1.5 KB");
     expect(sizeText(900 * 1024 * 1024)).toBe("900 MB");
+  });
+});
+
+describe("T-149 cleanup removes children before their parents", () => {
+  const parents: Record<string, string> = { "/w/child": "/w/parent", "/w/grand": "/w/child", "/w/other": "/w/parent" };
+  const parentOf = (p: string) => parents[p];
+
+  it("puts every child ahead of its parent, deepest first, and keeps the scan order among equals", () => {
+    expect(childrenFirst(["/w/parent", "/w/child", "/w/grand", "/w/loner"], parentOf)).toEqual(["/w/grand", "/w/child", "/w/parent", "/w/loner"]);
+    expect(childrenFirst(["/w/parent", "/w/other", "/w/child"], parentOf)).toEqual(["/w/other", "/w/child", "/w/parent"]);
+  });
+  it("counts a parent that is not itself ticked, matches paths across slash and case, and survives a loop", () => {
+    const parentsByKey: Record<string, string> = { "/w/child": "/w/parent", "/w/grand": "/W/Child/" };
+    expect(childrenFirst(["/w/child", "/W/Grand"], (p) => parentsByKey[p.toLowerCase().replace(/\/+$/, "")])).toEqual(["/W/Grand", "/w/child"]);
+    expect(childrenFirst(["/a", "/b"], (p) => (p === "/a" ? "/b" : "/a"))).toHaveLength(2);
+  });
+  it("leaves the order alone without a parent lookup", () => {
+    expect(childrenFirst(["/w/parent", "/w/child"])).toEqual(["/w/parent", "/w/child"]);
   });
 });

@@ -1944,6 +1944,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 void reload();
               }}
               onKept={(items) => setKept((old) => addKept(old, items))}
+              parentOf={(path) => (worktrees[p.id] ?? []).find((x) => same(x.path, path))?.parent}
             />
           )}
           {outsideCard({ outside: outsideOf(list), dismissed: dismissedOutside(settings).includes(p.id), collapsed: false, otherRows: others.length }).show && (
