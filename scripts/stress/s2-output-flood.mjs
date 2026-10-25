@@ -1,0 +1,141 @@
+// S2 output flood: 8 panes each print ~50 MB at once while a 9th pane echoes typed keys. Bars: the 9th pane's echo
+// p95 <= 250 ms during the flood, memory bounded, the final line of every pane shows.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { TERM, addProjectAndOpen, appMemMB, fmt, gitInit, installProbe, pageErrors, paneText, seedProfile, slash, snapshot, stats, typeInto } from "./lib.mjs";
+
+export const title = "Output flood (8 panes x ~50 MB)";
+export const seed = seedProfile;
+const FLOODERS = 8;
+const LINES = 500_000; // x 100 bytes = ~50 MB per pane
+const FLOOD_BUDGET_S = 600;
+const MEM_PEAK_MB = 1024; // app + web view growth over the pre-flood working set
+const MEM_AFTER_MB = 512; // growth 10 s after the last pane finished
+
+const FLOOD_JS = `// prints ${LINES} lines of 100 bytes, honours back-pressure, then END-<k> and a done file once the last byte was accepted
+const fs = require("node:fs");
+const [k, done] = [process.argv[2], process.argv[3]];
+const line = "x".repeat(98) + "\\n";
+let i = 0;
+function go() {
+  while (i < ${LINES}) {
+    i++;
+    if (!process.stdout.write(line)) return process.stdout.once("drain", go);
+  }
+  process.stdout.write("END-" + k + "\\n", () => fs.writeFileSync(done, String(Date.now())));
+}
+go();
+`;
+const ECHO_JS = `// answers every byte it reads with a numbered token on its own line
+let n = 0;
+process.stdin.setRawMode(true);
+process.stdin.resume();
+process.stdin.on("data", (d) => { for (const b of d) { if (b === 3) process.exit(0); process.stdout.write("[E" + ++n + "]\\r\\n"); } });
+process.stdout.write("ECHO-READY\\r\\n");
+`;
+
+// In the page: type one character into pane `idx`'s input field and wait for the token the echo program answers with.
+const echoScript = (idx, count, gap) => `(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const pane = [...document.querySelectorAll(${JSON.stringify(TERM)})].filter((e) => e.offsetParent !== null)[${idx}];
+  const ta = pane.querySelector(".xterm-helper-textarea"), rows = pane.querySelector(".xterm-rows");
+  window.__echoN = window.__echoN || 0;
+  const out = [];
+  for (let i = 0; i < ${count}; i++) {
+    const token = "[E" + (window.__echoN + 1) + "]";
+    const ms = await new Promise((resolve) => {
+      const t0 = performance.now();
+      const done = (v) => { obs.disconnect(); clearTimeout(to); resolve(v); };
+      const obs = new MutationObserver(() => { if (rows.textContent.includes(token)) done(performance.now() - t0); });
+      obs.observe(rows, { subtree: true, childList: true, characterData: true });
+      const to = setTimeout(() => done(-1), 5000);
+      ta.value = "x";
+      ta.dispatchEvent(new InputEvent("input", { data: "x", inputType: "insertText", bubbles: true }));
+    });
+    if (ms >= 0) window.__echoN++; else window.__echoN++; // the token number advances either way: the program counted the byte
+    out.push(Math.round(ms));
+    await sleep(${gap});
+  }
+  return out;
+})()`;
+
+export async function run({ launch, checks }) {
+  const app = await launch("s2");
+  const repo = join(app.temp, "repo");
+  const files = join(app.temp, "files");
+  mkdirSync(files, { recursive: true });
+  writeFileSync(join(files, "flood.js"), FLOOD_JS);
+  writeFileSync(join(files, "echo.js"), ECHO_JS);
+  await gitInit(app, repo, "s2");
+  await installProbe(app);
+  await addProjectAndOpen(app, repo);
+  for (let want = 2; want <= FLOODERS + 1; want++) {
+    await app.focusPane(TERM, 0, ".xterm-helper-textarea");
+    await app.click('.pane.focused button[title^="Split right"]');
+    await app.waitFor(`${want} shell panes`, async () => (await app.shown(TERM)) === want, 30000);
+  }
+  for (let i = 0; i < FLOODERS + 1; i++) await app.waitFor(`pane ${i + 1}'s input field`, async () => (await app.evalJs(`!!([...document.querySelectorAll(${JSON.stringify(TERM)})].filter((e) => e.offsetParent !== null)[${i}]?.querySelector(".xterm-helper-textarea"))`)), 20000);
+  await app.sleep(4000); // the shells reach their prompts
+  const echoPane = FLOODERS;
+  await typeInto(app, echoPane, `node '${slash(join(files, "echo.js"))}'`);
+  await app.waitFor("the echo program", async () => (await paneText(app, echoPane))?.includes("ECHO-READY"), 30000, 500);
+  const idle = await app.evalJs(echoScript(echoPane, 30, 100));
+  const idleStats = stats(idle.filter((v) => v >= 0));
+  checks.add("echo latency in a 9th pane with nothing else running (30 keys, in-page key to token on screen)", "p95 <= 250 ms (the same bar as under flood)", `p50 ${fmt(idleStats.p50)} ms, p95 ${fmt(idleStats.p95)} ms, max ${fmt(idleStats.max)} ms; ${idle.filter((v) => v < 0).length} lost`, idleStats.p95 <= 250 && !idle.includes(-1));
+  const before = await snapshot(app);
+  const baseMB = appMemMB(before);
+  const doneFile = (k) => join(files, `done-${k}`);
+  const t0 = Date.now();
+  for (let k = 0; k < FLOODERS; k++) await typeInto(app, k, `node '${slash(join(files, "flood.js"))}' ${k} '${slash(doneFile(k))}'`);
+  const tStart = Date.now();
+  checks.note(`all ${FLOODERS} flood commands typed in ${((tStart - t0) / 1000).toFixed(1)} s`);
+  // Memory is sampled in the background while the echo samples are taken.
+  const mem = [];
+  let finished = false;
+  const sampler = (async () => {
+    while (!finished) {
+      try {
+        mem.push(appMemMB(await snapshot(app)));
+      } catch {
+        /* a sample missed is a sample missed */
+      }
+      await app.sleep(3000);
+    }
+  })();
+  await app.sleep(3000);
+  const flooding = await app.evalJs(echoScript(echoPane, 60, 250));
+  const floodStats = stats(flooding.filter((v) => v >= 0));
+  const stillRunning = Array.from({ length: FLOODERS }, (_, k) => !existsSync(doneFile(k))).filter(Boolean).length;
+  checks.add("echo latency in a 9th pane while 8 panes flood (60 keys, in-page key to token on screen)", "p95 <= 250 ms", `p50 ${fmt(floodStats.p50)} ms, p95 ${fmt(floodStats.p95)} ms, max ${fmt(floodStats.max)} ms; ${flooding.filter((v) => v < 0).length} keys never echoed within 5 s; ${stillRunning} of ${FLOODERS} floods still running when sampling ended`, floodStats.p95 <= 250 && !flooding.includes(-1));
+  let pending = 0;
+  try {
+    await app.waitFor("every flood to finish", () => ((pending = Array.from({ length: FLOODERS }, (_, k) => existsSync(doneFile(k))).filter((x) => !x).length) === 0), FLOOD_BUDGET_S * 1000, 2000);
+  } catch {
+    /* judged below */
+  }
+  const tDone = Date.now();
+  finished = true;
+  await sampler;
+  const secs = (tDone - tStart) / 1000;
+  checks.add(`all ${FLOODERS} floods finish (each ${LINES} lines, ~${Math.round((LINES * 100) / 1e6)} MB)`, `within ${FLOOD_BUDGET_S} s`, pending === 0 ? `${secs.toFixed(0)} s (${((FLOODERS * LINES * 100) / 1e6 / secs).toFixed(1)} MB/s total)` : `${pending} of ${FLOODERS} still running after ${FLOOD_BUDGET_S} s`, pending === 0);
+  await app.sleep(10000);
+  const afterMB = appMemMB(await snapshot(app));
+  const peak = Math.max(...mem, baseMB);
+  checks.add("app memory growth at the peak during the flood (app + web view working set)", `<= ${MEM_PEAK_MB} MB over the pre-flood ${fmt(baseMB)} MB`, `peak ${fmt(peak)} MB (+${fmt(peak - baseMB)}); ${mem.length} samples`, peak - baseMB <= MEM_PEAK_MB);
+  checks.add("app memory growth 10 s after the floods ended", `<= ${MEM_AFTER_MB} MB over the pre-flood level`, `${fmt(afterMB)} MB (+${fmt(afterMB - baseMB)})`, afterMB - baseMB <= MEM_AFTER_MB);
+  // The final line: the bytes were accepted (done file); the screen has to show them too.
+  const missing = [];
+  for (let k = 0; k < FLOODERS; k++) {
+    let ok = false;
+    for (let i = 0; i < 60 && !ok; i++) {
+      ok = ((await paneText(app, k)) ?? "").includes(`END-${k}`);
+      if (!ok) await app.sleep(500);
+    }
+    if (!ok) missing.push(k + 1);
+  }
+  checks.add("pane shows its final line (END-<k>) after the flood", "8 of 8 panes", `${FLOODERS - missing.length} of ${FLOODERS}${missing.length ? `; missing in pane(s) ${missing.join(", ")}` : ""}`, missing.length === 0);
+  const errs = await pageErrors(app);
+  checks.add("page errors during the run", "0", `${errs.length}${errs.length ? `: ${[...new Set(errs)].slice(0, 5).join(" || ")}` : ""}`, errs.length === 0);
+  const stamp = readFileSync(doneFile(0), "utf8");
+  checks.note(`pane 1 flood accepted its last byte at ${stamp}; the echo program keeps pane 9 (the key target) running until the app closes`);
+}
