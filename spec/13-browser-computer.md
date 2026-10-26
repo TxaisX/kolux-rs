@@ -76,9 +76,9 @@ Rules: searches go to the chosen engine, one of Google, Duck Duck Go, Bing or Ka
   app as a cancelled `kolux-chord:` navigation; the split the page sits in becomes the focused
   one as the chord arrives.)
 Acceptance:
-  - [ ] Type rust ownership and press Enter → results from the configured search engine.
-  - [ ] Type example.com → the HTTPS site loads; type localhost:3000 → it loads over HTTP.
-  - [ ] Type an address with the javascript: scheme → invalid-address notice, page unchanged.
+  - [x] Type rust ownership and press Enter → results from the configured search engine. (cards; evidence/cards-BROW-003.txt)
+  - [x] Type example.com → the HTTPS site loads; type localhost:3000 → it loads over HTTP. (cards; evidence/cards-BROW-003.txt)
+  - [x] Type an address with the javascript: scheme → invalid-address notice, page unchanged. (cards; evidence/cards-BROW-003.txt)
 Compat: keyboard command for focusing the address bar, default Mod+L (command id is an allowlist
   candidate); engine choices Google, Duck Duck Go, Bing and Kagi. With the browser settings page
   cut, which engine is the fixed default and whether the Kagi link keeps a home is an owner
@@ -103,7 +103,7 @@ Rules: only the toolbar button halts a load in progress, while the shortcut and 
 Acceptance:
   - [ ] Open a slow page → Stop with a spinner; press it → loading halts; after a normal load the
         button reads Reload.
-  - [ ] In a fresh tab → back and forward are both disabled.
+  - [x] In a fresh tab → back and forward are both disabled. (cards; evidence/cards-BROW-005.txt)
 Compat: keyboard commands browser.back (Mac Mod+[, other platforms Alt+Left), browser.forward (Mac
   Mod+], other platforms Alt+Right), browser.reload (Mod+R), and hard reload (Mod+Shift+R; its
   command id is an allowlist candidate).
