@@ -3,7 +3,7 @@
 // hooks) play the same choice the test button does: the system's sound, one of nine Kolux tones, or
 // a custom audio file, at the saved volume, with the toast silent whenever Kolux plays its own.
 import { invoke } from "@tauri-apps/api/core";
-import { decide, emptyPacer, type NotifyEvent } from "../notify/pacing";
+import { newPaceMemory, paced, type NotifyEvent } from "../notify/pace";
 import { masterOn } from "../status/notifyMaster";
 
 /** The kinds of notification, their settings keys and what they are when nothing is saved. The
@@ -157,24 +157,23 @@ export async function preparePlan(n: { sound: Sound; volume: number; customFile:
 }
 
 /** STAT-044: one pacer for the window; `resetPacer` is for tests. */
-let pacer = emptyPacer();
+let pacer = newPaceMemory();
 export function resetPacer(): void {
-  pacer = emptyPacer();
+  pacer = newPaceMemory();
 }
 
 /** STAT-043: a desktop notification with the chosen sound. The toast is silent whenever Kolux plays
  * its own tone or file, so one sound plays; the sound starts once the toast is shown. STAT-044: with
- * an `event` the notification is merged and paced (`decide`) and the backend learns its id and pane,
- * so a click can focus that pane; a merged or repeated event raises nothing. With "Stay quiet about the
- * worktree you are looking at" on, an event in `focusedWorktree` is held back while the window has
- * focus; every other worktree's event still shows (STAT-041). */
-export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: Omit<NotifyEvent, "at">, focusedWorktree: string | null = null): Promise<void> {
+ * an `event` the notification is merged and paced (`paced`) and the backend learns its id and pane,
+ * so a click can focus that pane; a merged or repeated event raises nothing. With "Stay quiet" on,
+ * nothing is shown while the window has focus. A "gone quiet" warning (it may be stuck) skips the
+ * pacer. `_focusedWorktree` is no longer read; the callers still pass it. */
+export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: NotifyEvent, _focusedWorktree: string | null = null): Promise<void> {
   if (!masterOn(settings)) return; // STAT-042 (T-124-b): the master switch silences every notification
   const prefs = readNotifications(settings);
-  if (event) {
-    const d = decide(pacer, { ...event, at: Date.now() }, { windowFocused: typeof document !== "undefined" && document.hasFocus(), suppressFocused: prefs.suppressFocused, focusedWorktree });
-    pacer = d.state;
-    if (!d.show) return;
+  if (event && event.kind !== "quiet") {
+    const focused = typeof document !== "undefined" && document.hasFocus();
+    if (!paced(pacer, event.worktree, event.id, Date.now(), { focused, quietWhenFocused: prefs.suppressFocused, test: event.kind === "test" })) return;
   }
   const { plan, play, close } = await preparePlan(prefs);
   try {
