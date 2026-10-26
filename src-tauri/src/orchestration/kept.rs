@@ -7,7 +7,7 @@
 //! is lost and the next read does not keep it aside a second time. A store that cannot be read at
 //! all is an error, never an empty value.
 
-use crate::state::Store;
+use crate::state::{KeepAside, Store};
 use serde::{de::DeserializeOwned, Serialize};
 
 fn now_ms() -> u128 {
@@ -58,15 +58,18 @@ pub(crate) fn refuse_copies(dir: &std::path::Path) {
 /// does. An existing copy is never reused, so an earlier one is never replaced.
 fn set_aside_at<T: Serialize>(store: &Store, key: &str, text: &str, fresh: &T, ms: u128) -> Result<String, String> {
     let base = format!("{key}.corrupt-{ms}");
-    let mut aside = base.clone();
-    let mut n = 1;
-    while store.get(&aside).map_err(|e| format!("{key} could not be kept aside ({e}); nothing was changed"))?.is_some() {
-        n += 1;
-        aside = format!("{base}-{n}");
-    }
     let fresh = serde_json::to_string(fresh).map_err(|e| e.to_string())?;
-    store.set_all(&[(aside.as_str(), text), (key, fresh.as_str())]).map_err(|e| format!("{key} could not be kept aside ({e}); nothing was changed"))?;
-    Ok(aside)
+    // The store takes the name only if it is free, so a taken one (even one that appeared since a
+    // look) moves on to the next, and the key is reset only if it still holds what was read.
+    for n in 1.. {
+        let aside = if n == 1 { base.clone() } else { format!("{base}-{n}") };
+        match store.keep_aside(key, text, &aside, &fresh).map_err(|e| format!("{key} could not be kept aside ({e}); nothing was changed"))? {
+            KeepAside::Done => return Ok(aside),
+            KeepAside::NameTaken => {}
+            KeepAside::Changed => return Err(format!("{key} changed while being kept aside; nothing was changed")),
+        }
+    }
+    unreachable!()
 }
 
 #[cfg(test)]
@@ -302,6 +305,38 @@ mod tests {
         assert_eq!(saved["threads"], want["threads"], "the unknown field survives the save");
         assert_eq!(saved["future"], want["future"]);
         assert_eq!(saved["seq"], 4);
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn row875_an_existing_kept_copy_is_never_overwritten() {
+        let (store, dir) = fresh("noover");
+        store.set("demo.list.corrupt-42", "earlier copy").unwrap();
+        store.set("demo.list", "broken now").unwrap();
+        let got = set_aside_at(&store, "demo.list", "broken now", &Vec::<Value>::new(), 42).unwrap();
+        assert_eq!(got, "demo.list.corrupt-42-2");
+        assert_eq!(store.get("demo.list.corrupt-42").unwrap().as_deref(), Some("earlier copy"));
+        assert_eq!(store.get(&got).unwrap().as_deref(), Some("broken now"));
+        // The store's own step refuses a taken name rather than upserting over it.
+        assert_eq!(store.keep_aside("demo.list", "broken now", "demo.list.corrupt-42", "[]").unwrap(), KeepAside::NameTaken);
+        assert_eq!(store.get("demo.list.corrupt-42").unwrap().as_deref(), Some("earlier copy"));
+        assert_eq!(store.get("demo.list").unwrap().as_deref(), Some("[]"), "the earlier set_aside_at already reset it; the refused step changes nothing");
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn row875_the_key_is_not_reset_when_it_changed_after_it_was_read() {
+        let (store, dir) = fresh("changed");
+        store.set("demo.list", "broken as read").unwrap();
+        // Another connection writes new data after the read and before the reset.
+        let other = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        other.execute("UPDATE kv SET value = 'written since' WHERE key = 'demo.list'", []).unwrap();
+        let err = set_aside_at(&store, "demo.list", "broken as read", &Vec::<Value>::new(), 5).unwrap_err();
+        assert!(err.contains("changed while being kept aside; nothing was changed"), "{err}");
+        assert_eq!(store.get("demo.list").unwrap().as_deref(), Some("written since"), "the newer value stays");
+        assert!(asides(&store, "demo.list").is_empty(), "the copy rolled back with the refused reset");
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
     }
