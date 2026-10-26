@@ -676,7 +676,17 @@ mod tests {
         assert_eq!(s.log, "done");
         assert_eq!(report(&t, None).available, 0);
         // The lock was let go: another operation may take it, and a new update may start.
-        assert!(crate::skill_delete::lock(&app).is_ok());
+        // The worker flips "done" a moment before its guard leaves the process-wide HELD list, so wait for it under load.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let freed = loop {
+            let taken = crate::skill_delete::lock(&app);
+            if taken.is_ok() || std::time::Instant::now() >= deadline {
+                break taken;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert!(freed.is_ok());
+        drop(freed);
         job.clear();
         assert_eq!(job.status().state, "idle");
     }
