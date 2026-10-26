@@ -465,6 +465,21 @@ describe("round 8", () => {
     });
   });
 
+  describe("LOW-1: indenting an item of a loose 1) list keeps the other gaps", () => {
+    const L = "1) one\n\n2) two\n\n3) three\n\n4) four\n";
+    const shapes: [string, string, string, string, string][] = [
+      ["item 2, 4 spaces", L, "\n2) two\n", "\n    2) two\n", "1) one\n\n    2) two\n\n3) three\n\n4) four\n"],
+      ["item 2, tab", L, "\n2) two\n", "\n\t2) two\n", "1) one\n\n\t2) two\n\n3) three\n\n4) four\n"],
+      ["item 3, 4 spaces", L, "\n3) three\n", "\n    3) three\n", "1) one\n\n2) two\n\n    3) three\n\n4) four\n"],
+      ["item 4, 4 spaces", L, "\n4) four\n", "\n    4) four\n", "1) one\n\n2) two\n\n3) three\n\n    4) four\n"],
+    ];
+    it.each(shapes)("%s", (_, b, from, to, want) => {
+      const { next, refused } = edit(b + P, from, to);
+      expect(refused).toBe(0);
+      expect(next).toBe(want + P);
+    });
+  });
+
   describe("LOW-3: a line the edit adds to a CRLF note ends in CRLF", () => {
     const crlf = (s: string) => s.replace(/\n/g, "\r\n");
     const shapes: [string, string, string, string, string][] = [

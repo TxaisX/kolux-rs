@@ -132,14 +132,14 @@ function placeTight(body: string, out: string, prev: string, tight: ReturnType<t
   let kept = next === null ? null : tight ? regap(tight, next, prev, out) : next;
   // A blank line the edit did not touch must survive the placement (the blocks retyped in the view's spelling can drop one).
   if (kept !== null && next !== null && blankLines(next) < blankLines(base) + blankLines(out) - blankLines(prev)) kept = null;
-  if (kept !== null && next !== null && blankMoved(base, next, prev, out)) kept = null;
+  if (kept !== null && next !== null && blankMoved(base, next, prev, out, new Set(tight?.gaps.map((g) => g.item)))) kept = null;
   if (next !== null && kept === null) placeStats.refused++;
   return kept;
 }
 
 /** Whether the retyped text added or dropped a blank line above an item away from the edit (the view spells a list loose when one item
  *  holds two blocks, tight otherwise, and a retyped list takes that spelling for the items the user did not touch). */
-function blankMoved(base: string, next: string, prev: string, out: string): boolean {
+function blankMoved(base: string, next: string, prev: string, out: string, gapped: Set<number>): boolean {
   const e = changeBetween(prev, out);
   if (!e) return false;
   const ps = itemStarts(prev);
@@ -152,7 +152,10 @@ function blankMoved(base: string, next: string, prev: string, out: string): bool
   return ps.some((_, i) => {
     if (fate[i] === "cut" || touched(i) || touched(i - 1)) return false;
     const at = ns[fate[i] === "before" ? i : i + dn];
-    return at !== undefined && (blankAbove(next, at) !== 0) !== (blankAbove(base, bs[i]) !== 0);
+    if (at === undefined) return false;
+    const had = blankAbove(base, bs[i]) !== 0;
+    // Round 8 (LOW-1): a blank the view's loose spelling put above an item the file already has a gap above is swapped for the file's gap.
+    return (blankAbove(next, at) !== 0) !== had && !(had === false && gapped.has(i));
   });
 }
 
