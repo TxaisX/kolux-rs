@@ -17,7 +17,7 @@ import { registerListKeys } from "./richFormat";
 import { registerRichKeys } from "./richKeys";
 import { createSlash, type SlashView } from "./slashMenu";
 import { createWiki, type WikiView } from "./wikiPopup";
-import { $importFlowing, DETAILS_NODES, makeDetails, withoutSections } from "./richDetails";
+import { $importFlowing, DETAILS_NODES, looseCodeRows, makeDetails, withoutSections } from "./richDetails";
 
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
 
@@ -56,16 +56,22 @@ const LIMITS: [RegExp, string][] = [
 
 /** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
 export function unsupported(md: string): string | null {
-  const prose = withoutSections(md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "")).replace(/`[^`\n]*`/g, "");
+  const prose = withoutCode(md);
   for (const [re, what] of LIMITS) if (re.test(prose)) return `it has ${what}`;
+  // ~~~ fences and indented code would be reflowed into one line or lose their indent.
+  if (looseCodeRows(md.split("\n")).some(Boolean)) return "it has code blocks the rich view would reflow";
   const back = roundTrip(md);
   if (back === null) return "it could not be read as markdown";
   if (words(back) !== words(md)) return "some of its text would be lost";
   // Row 94 (EDIT-019): raw and inline HTML show as the tags typed; the note stays only when every tag comes back byte for byte.
+  const backProse = withoutCode(back);
   const count = (text: string, tag: string) => text.split(tag).length - 1;
-  for (const tag of new Set(prose.match(HTML_TAG) ?? [])) if (count(back, tag) < count(prose, tag)) return "it has HTML";
+  for (const tag of new Set(prose.match(HTML_TAG) ?? [])) if (count(backProse, tag) < count(prose, tag)) return "it has HTML";
   return null;
 }
+
+/** `md` without its code (fenced blocks and inline spans) and section lines: the text the HTML check reads. */
+const withoutCode = (md: string): string => withoutSections(md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "")).replace(/`[^`\n]*`/g, "");
 
 const HTML_TAG = /<\/?[a-z][\w-]*(\s[^<>]*)?\/?>/gi;
 

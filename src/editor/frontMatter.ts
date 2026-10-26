@@ -33,6 +33,37 @@ export function richChange(now: string, out: string, prev?: string): { from: num
   return c && { from: c.from + front.length, to: c.to + front.length, insert: c.insert };
 }
 
+const WORD = /[\p{L}\p{N}]+/gu;
+const WINDOW_FROM = 8000;
+const MARGIN_WORDS = 40;
+
+/** Where the n-th word of `text` starts (the end of the text past the last word). */
+function wordStart(text: string, n: number): number {
+  WORD.lastIndex = 0;
+  for (let i = 0, m; (m = WORD.exec(text)); i++) if (i === n) return m.index;
+  return text.length;
+}
+
+/** How many words of `text` start before `p`. */
+function wordsBefore(text: string, p: number): number {
+  WORD.lastIndex = 0;
+  let n = 0;
+  for (let m; (m = WORD.exec(text)) && m.index < p; ) n++;
+  return n;
+}
+
+const wordList = (text: string) => (text.match(WORD) ?? []).join(" ");
+
+/** The stretch of `body` and of `prev` round the edit `f..t` (in `prev`), as [body from, prev from, body to, prev to]. Both
+ *  spellings hold the same words, so the same word numbers mark the same places in each. Null when the words of the two
+ *  stretches differ (the texts are not spellings of each other), so the caller diffs the whole of both. */
+function stretch(body: string, prev: string, f: number, t: number): [number, number, number, number] | null {
+  const k0 = Math.max(0, wordsBefore(prev, f) - MARGIN_WORDS);
+  const k1 = wordsBefore(prev, t) + MARGIN_WORDS;
+  const w: [number, number, number, number] = [wordStart(body, k0), wordStart(prev, k0), wordStart(body, k1), wordStart(prev, k1)];
+  return wordList(body.slice(w[0], w[2])) === wordList(prev.slice(w[1], w[3])) ? w : null;
+}
+
 /** Row 135: the rich view gives back the whole body in its own spelling (its list markers, its
  *  emphasis marks, its blank lines). Only the span the user changed is taken from it: the body is
  *  matched against the rich view's spelling of it before the edit (`prev`), and every byte outside
@@ -45,10 +76,18 @@ export function keepRaw(body: string, out: string, prev?: string): string {
   let t = e.to;
   const delta = e.insert.length - (t - f);
   // ponytail: one character diff per edit, capped at 50 ms; a capped diff is coarser, so it only widens the span taken.
-  const respelt = diff(body, prev, { timeout: 50 });
+  // Row 94 review: a big wrapped note differs from `prev` everywhere, so only the stretch round the edit is diffed.
+  const w = body.length + prev.length > WINDOW_FROM ? stretch(body, prev, f, t) : null;
+  const [ba, pa] = w ?? [0, 0];
+  const respelt = (w ? diff(body.slice(ba, w[2]), prev.slice(pa, w[3]), { timeout: 50 }) : diff(body, prev, { timeout: 50 })).map((c) => ({ fromA: c.fromA + ba, toA: c.toA + ba, fromB: c.fromB + pa, toB: c.toB + pa }));
   for (const c of respelt) if (c.fromB < t && c.toB > f) (f = Math.min(f, c.fromB)), (t = Math.max(t, c.toB));
   // A place in `prev` outside every respelt bit, as a place in `body` (a bit only deleted from
   // `body` that sits right at the place stays after it).
-  const at = (p: number) => respelt.reduce((n, c) => (c.toB < p || (c.toB === p && c.fromB < p) ? n + (c.toA - c.fromA) - (c.toB - c.fromB) : n), p);
+  const at = (p: number) => respelt.reduce((n, c) => (c.toB < p || (c.toB === p && c.fromB < p) ? n + (c.toA - c.fromA) - (c.toB - c.fromB) : n), p + ba - pa);
   return body.slice(0, at(f)) + out.slice(f, t + delta) + body.slice(at(t));
+}
+
+/** Whether the front matter is hidden for `path`: the choice made while this file was shown, else the saved one. */
+export function hideFrontFor(held: { path: string; hide: boolean }, path: string, saved: (path: string) => boolean): boolean {
+  return held.path === path ? held.hide : saved(path);
 }

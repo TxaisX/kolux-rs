@@ -11,7 +11,7 @@ import { baseName, subscribe, textOf } from "./buffers";
 import { domPick, selections } from "./notes";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { outline } from "./toc";
-import { splitFront } from "./frontMatter";
+import { hideFrontFor, splitFront } from "./frontMatter";
 import { FrontMatterBlock } from "../shell/MdViewControls";
 import { frontControl } from "../shell/mdView";
 import { mdPrefs, setMdPrefs } from "../shell/mdPrefs";
@@ -47,8 +47,13 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
   }, []);
   // EDIT-019 (row 94): front matter is its own block above the note, shown at first and remembered per file (VIEW-113); the page below is the body.
   const { front, body } = useMemo(() => splitFront(text ?? ""), [text]);
-  const [hideFront, setHideFront] = useState(() => mdPrefs(path).hideFront);
-  useEffect(() => void setMdPrefs(path, { hideFront }), [path, hideFront]);
+  // The choice is held with its path and saved on the click, so a pane moved to another file reads that file's own choice.
+  const [held, setHeld] = useState({ path, hide: false });
+  const hideFront = hideFrontFor(held, path, (p) => mdPrefs(p).hideFront);
+  const toggleFront = () => {
+    setHeld({ path, hide: !hideFront });
+    setMdPrefs(path, { hideFront: !hideFront });
+  };
   const frontCtl = frontControl(front, hideFront);
   const html = useMemo(() => (text === null ? "" : renderNote(body, renderMarkdown)), [text, body, libs]);
   useEffect(() => {
@@ -116,7 +121,7 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
           {path}
         </span>
         {frontCtl && (
-          <button className="ib" aria-pressed={frontCtl.pressed} title={frontCtl.label} aria-label={frontCtl.label} onClick={() => setHideFront((v) => !v)}>
+          <button className="ib" aria-pressed={frontCtl.pressed} title={frontCtl.label} aria-label={frontCtl.label} onClick={toggleFront}>
             Front
           </button>
         )}
