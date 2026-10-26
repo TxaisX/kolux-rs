@@ -99,7 +99,7 @@ mod test_dir;
 mod tools;
 mod token_usage;
 mod tray;
-mod trust;
+pub mod trust;
 mod update;
 mod visibility;
 mod web_icon;
