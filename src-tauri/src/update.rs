@@ -202,12 +202,14 @@ pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: St
     })
 }
 
-/// Remembers the dismissed version or that the reassurance tip is done.
+/// Remembers the dismissed version or that the reassurance tip is done, or empties the refused-installer list.
 #[tauri::command]
 pub fn update_mark(store: State<'_, Mutex<Store>>, key: String, value: String) -> Result<(), String> {
-    let key = match key.as_str() {
-        "dismissedVersion" => KEY_DISMISSED,
-        "tipDone" => KEY_TIP_DONE,
+    let (key, value) = match key.as_str() {
+        "dismissedVersion" => (KEY_DISMISSED, value),
+        "tipDone" => (KEY_TIP_DONE, value),
+        // The refused-installer list can be emptied here, never added to.
+        "refusedInstallers" => (guard::KEY_REFUSED, guard::refused_reset_value(&value)?.to_string()),
         _ => return Err(format!("unknown update mark: {key}")),
     };
     store.lock().map_err(|e| e.to_string())?.set(key, &value).map_err(|e| e.to_string())
@@ -331,7 +333,7 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
     let (checked, version) = (bytes.clone(), update.version.clone());
     let verdict = tauri::async_runtime::spawn_blocking(move || {
         let dir = std::env::temp_dir().join("kolux-rs-update-check");
-        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::PINNED_PUBLISHER, guard::SIGNED_BUILD || guard::PINNED_PUBLISHER.is_some(), guard::check_file)
+        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::Pins { subject: guard::PINNED_PUBLISHER, issuer: guard::PINNED_ISSUER }, guard::SIGNED_BUILD || guard::PINNED_PUBLISHER.is_some() || guard::PINNED_ISSUER.is_some(), guard::check_file)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -536,5 +538,15 @@ mod tests {
         assert!(at("route_from_store(&store, &url)?") < at(".build()"));
         assert!(at("Route::Direct => builder.no_proxy()") < at(".build()"));
         assert!(at("Route::Via(p) => builder.proxy(p)") < at(".build()"));
+    }
+
+    // AFTER (refused-list reset): update_mark can empty the refused list, and the issuer pin reaches the check.
+    #[test]
+    fn t293_the_refused_list_reset_and_the_issuer_pin_are_wired() {
+        let src = include_str!("update.rs");
+        let mark = &src[src.find("pub fn update_mark").unwrap()..src.find("pub async fn update_download").unwrap()];
+        assert!(mark.contains("\"refusedInstallers\"") && mark.contains("guard::refused_reset_value"), "update_mark lost the refused-list reset");
+        let dl = &src[src.find("pub async fn update_download").unwrap()..src.find("pub fn update_restart").unwrap()];
+        assert!(dl.contains("guard::PINNED_ISSUER"), "update_download no longer passes the issuer pin");
     }
 }

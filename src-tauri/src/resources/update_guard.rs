@@ -37,7 +37,9 @@ pub const SIGNED_BUILD: bool = match option_env!("KOLUX_RS_SIGNED_BUILD") {
 };
 /// A signature read that has not answered by then is given up (FIX-2 AFTER 1).
 pub const SIGNATURE_LIMIT: Duration = Duration::from_secs(20);
-/// The publisher pinned into a signed release build, if the release job set it.
+/// The publisher (certificate subject) pinned into a signed release build, if the release job set it.
+/// Unset today. TODO(signing): the release job sets it from the signing certificate's subject once
+/// Authenticode signing exists; until then a signed copy trusts its own signature's subject.
 pub const PINNED_PUBLISHER: Option<&str> = option_env!("KOLUX_RS_PUBLISHER");
 /// The marker the page reads to show the security stop card (no install button).
 pub const REFUSED_MARK: &str = "update:refused|";
@@ -46,7 +48,7 @@ pub const REFUSED_MARK: &str = "update:refused|";
 #[derive(Debug, Clone, PartialEq)]
 pub enum SignState {
     /// A valid signature that chains to a trusted root.
-    Signed { subject: String, thumbprint: String },
+    Signed { subject: String, issuer: String, thumbprint: String },
     /// No signature at all.
     Unsigned,
     /// The installer's contents do not match its signature: a definite refusal.
@@ -70,6 +72,8 @@ pub fn parse_report(json: &str) -> SignState {
     struct Report {
         status: Option<String>,
         subject: Option<String>,
+        #[serde(default)]
+        issuer: Option<String>,
         thumbprint: Option<String>,
     }
     let Ok(r) = serde_json::from_str::<Report>(json.trim()) else {
@@ -82,7 +86,7 @@ pub fn parse_report(json: &str) -> SignState {
             if subject.trim().is_empty() {
                 SignState::Broken("a valid signature without a publisher".into())
             } else {
-                SignState::Signed { subject, thumbprint: r.thumbprint.unwrap_or_default() }
+                SignState::Signed { subject, issuer: r.issuer.unwrap_or_default(), thumbprint: r.thumbprint.unwrap_or_default() }
             }
         }
         "NotSigned" => SignState::Unsigned,
@@ -152,17 +156,101 @@ pub fn decide(running: &SignState, installer: &SignState, pinned: Option<&str>, 
     }
 }
 
+/// The certificate authority pinned into a signed release build, if the release job set it
+/// (`KOLUX_RS_PUBLISHER_ISSUER`, the issuer line of the signing certificate). Unset today: no
+/// issuer is checked. TODO(signing): set it from the real certificate once Authenticode signing exists.
+pub const PINNED_ISSUER: Option<&str> = option_env!("KOLUX_RS_PUBLISHER_ISSUER");
+
+/// The publisher and certificate authority a build pins, each `None` when the build sets none.
+#[derive(Clone, Copy, Default)]
+pub struct Pins<'a> {
+    pub subject: Option<&'a str>,
+    pub issuer: Option<&'a str>,
+}
+
+/// `decide`, plus the issuer pin (FIX-2 AFTER 4): an installer that passed the subject check must
+/// also come from the pinned certificate authority. A blank or missing pin changes nothing.
+pub fn decide_pinned(running: &SignState, installer: &SignState, pinned: Option<&str>, pinned_issuer: Option<&str>, signed_build: bool) -> Verdict {
+    let verdict = decide(running, installer, pinned, signed_build);
+    let Some(want) = pinned_issuer.map(str::trim).filter(|p| !p.is_empty()) else { return verdict };
+    if verdict != Verdict::Install {
+        return verdict;
+    }
+    match installer {
+        SignState::Signed { issuer, .. } if same_publisher(want, issuer) => Verdict::Install,
+        SignState::Signed { issuer, .. } => {
+            let got = if issuer.trim().is_empty() { "no named authority".to_string() } else { publisher_name(issuer) };
+            stop(format!("the installer's certificate was issued by {got} but Kolux RS's is issued by {}.", publisher_name(want)))
+        }
+        _ => stop(format!("the installer is not signed, but Kolux RS's certificate is issued by {}.", publisher_name(want))),
+    }
+}
+
+/// What `update_mark("refusedInstallers", ..)` may store: the list can be emptied, never added to.
+pub fn refused_reset_value(value: &str) -> Result<&'static str, String> {
+    if value.trim().is_empty() { Ok("[]") } else { Err("the refused-installer list can only be cleared".into()) }
+}
+
+/// The installer copy being checked. Smallest fix for the check-then-use race: it is created fresh
+/// (`create_new`, so nothing planted is reused), reopened read-only with sharing that denies other
+/// writers, deleters and renamers, read back against the verified bytes, and kept open while the
+/// signature tool reads it. Dropping it removes the file.
+pub struct HeldCopy {
+    path: std::path::PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl HeldCopy {
+    pub fn create_at(path: &Path, bytes: &[u8]) -> std::io::Result<HeldCopy> {
+        use std::io::{Read, Write};
+        let mut w = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+        if let Err(e) = w.write_all(bytes).and_then(|()| w.sync_all()) {
+            drop(w);
+            let _ = std::fs::remove_file(path);
+            return Err(e);
+        }
+        drop(w);
+        let mut held = HeldCopy { path: path.to_path_buf(), file: None };
+        let mut ro = std::fs::OpenOptions::new();
+        ro.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            ro.share_mode(1); // FILE_SHARE_READ only
+        }
+        let mut f = ro.open(path)?;
+        let mut back = Vec::with_capacity(bytes.len());
+        f.read_to_end(&mut back)?;
+        if back != bytes {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "the copy changed before it could be held"));
+        }
+        held.file = Some(f);
+        Ok(held)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for HeldCopy {
+    fn drop(&mut self) {
+        self.file = None;
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Writes the downloaded installer to `dir`, checks it with `check` against the running copy's
 /// signature, and removes the file again. The installer itself is never started here.
-pub fn vet(bytes: &[u8], dir: &Path, version: &str, running: &SignState, pinned: Option<&str>, signed_build: bool, check: impl Fn(&Path) -> SignState) -> Verdict {
+pub fn vet(bytes: &[u8], dir: &Path, version: &str, running: &SignState, pins: Pins, signed_build: bool, check: impl Fn(&Path) -> SignState) -> Verdict {
     let safe: String = version.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
-    let file = dir.join(format!("kolux-rs-update-{safe}-{}.exe", std::process::id()));
-    let installer = match std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, bytes)) {
-        Ok(()) => check(&file),
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let file = dir.join(format!("kolux-rs-update-{safe}-{}-{nonce}.exe", std::process::id()));
+    let installer = match std::fs::create_dir_all(dir).and_then(|()| HeldCopy::create_at(&file, bytes)) {
+        Ok(held) => check(held.path()),
         Err(e) => SignState::Unknown(format!("the download could not be written for the check: {}", e.kind())),
     };
-    let _ = std::fs::remove_file(&file);
-    decide(running, &installer, pinned, signed_build)
+    decide_pinned(running, &installer, pins.subject, pins.issuer, signed_build)
 }
 
 /// One installer stopped for its publisher. It is known by its own bytes (SHA-256) and by the update
@@ -207,6 +295,7 @@ pub fn refused_has(list: Option<&str>, sha256: Option<&str>, signature: &str) ->
 
 /// Runs `cmd` and gives its standard output, or `None` when it fails to start, exits with an
 /// error, or is still running after `limit` (it is then ended).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn bounded_output(mut cmd: std::process::Command, limit: Duration) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut child = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
@@ -254,7 +343,7 @@ pub fn check_file(path: &Path) -> SignState {
     let ps = sys.join(r"WindowsPowerShell\v1.0\powershell.exe");
     let script = "$ErrorActionPreference='Stop'; $s = Get-AuthenticodeSignature -LiteralPath $env:KOLUX_RS_SIG_FILE; \
         $c = $s.SignerCertificate; \
-        [pscustomobject]@{ status = [string]$s.Status; subject = $(if ($c) { $c.Subject } else { '' }); thumbprint = $(if ($c) { $c.Thumbprint } else { '' }) } | ConvertTo-Json -Compress";
+        [pscustomobject]@{ status = [string]$s.Status; subject = $(if ($c) { $c.Subject } else { '' }); issuer = $(if ($c) { $c.Issuer } else { '' }); thumbprint = $(if ($c) { $c.Thumbprint } else { '' }) } | ConvertTo-Json -Compress";
     let mut cmd = std::process::Command::new(ps);
     cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).env("KOLUX_RS_SIG_FILE", path).creation_flags(CREATE_NO_WINDOW);
     match bounded_output(cmd, SIGNATURE_LIMIT) {
@@ -283,7 +372,10 @@ mod tests {
 
     const ACME: &str = "CN=Acme Tools Ltd, O=Acme Tools Ltd, L=Leeds, C=GB";
     fn signed(subject: &str, thumb: &str) -> SignState {
-        SignState::Signed { subject: subject.into(), thumbprint: thumb.into() }
+        SignState::Signed { subject: subject.into(), issuer: String::new(), thumbprint: thumb.into() }
+    }
+    fn signed_by(subject: &str, issuer: &str) -> SignState {
+        SignState::Signed { subject: subject.into(), issuer: issuer.into(), thumbprint: "T".into() }
     }
     fn stopped(v: Verdict) -> String {
         match v {
@@ -376,7 +468,7 @@ mod tests {
     fn vet_checks_a_temporary_copy_and_removes_it() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-t293-{}-{}", std::process::id(), line!()));
         let seen = std::cell::RefCell::new(None);
-        let v = vet(b"MZ fake installer", &dir, "1.2.3", &signed(ACME, "A"), None, false, |p| {
+        let v = vet(b"MZ fake installer", &dir, "1.2.3", &signed(ACME, "A"), Pins::default(), false, |p| {
             *seen.borrow_mut() = Some((p.to_path_buf(), std::fs::read(p).unwrap()));
             signed("CN=Mallory", "B")
         });
@@ -386,7 +478,7 @@ mod tests {
         assert!(path.file_name().unwrap().to_string_lossy().starts_with("kolux-rs-update-1.2.3-"));
         assert!(!path.exists(), "the checked copy is removed");
         // An odd version string never escapes the folder.
-        let v = vet(b"x", &dir, "../../evil", &SignState::Unsigned, None, false, |p| {
+        let v = vet(b"x", &dir, "../../evil", &SignState::Unsigned, Pins::default(), false, |p| {
             assert_eq!(p.parent().unwrap(), dir.as_path());
             SignState::Unsigned
         });
@@ -482,5 +574,109 @@ mod tests {
         let s = check_file(&f);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!matches!(s, SignState::Signed { .. }), "{s:?}");
+    }
+
+    // AFTER 3: the copy being checked is held against writes, so it cannot be swapped under the check.
+    #[cfg(windows)]
+    #[test]
+    fn the_checked_copy_cannot_be_swapped_while_it_is_checked() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t293-held-{}", std::process::id()));
+        let swapped = std::cell::RefCell::new(Vec::new());
+        let v = vet(b"MZ the real bytes", &dir, "9.9.9", &SignState::Unsigned, Pins::default(), false, |p| {
+            let mut tries = swapped.borrow_mut();
+            tries.push(("overwrite", std::fs::write(p, b"MZ swapped").is_ok()));
+            tries.push(("open for write", std::fs::OpenOptions::new().write(true).open(p).is_ok()));
+            tries.push(("delete", std::fs::remove_file(p).is_ok()));
+            tries.push(("rename", std::fs::rename(p, p.with_extension("old")).is_ok()));
+            assert_eq!(std::fs::read(p).unwrap(), b"MZ the real bytes", "the check reads the verified bytes");
+            SignState::Unsigned
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(v, Verdict::Install);
+        assert_eq!(swapped.into_inner().into_iter().filter(|(_, ok)| *ok).collect::<Vec<_>>(), [], "writes that got through");
+    }
+
+    #[test]
+    fn a_held_copy_never_takes_over_a_file_that_is_already_there() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t293-held-new-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("planted.exe");
+        std::fs::write(&f, b"planted by someone else").unwrap();
+        assert!(HeldCopy::create_at(&f, b"MZ verified").is_err());
+        assert_eq!(std::fs::read(&f).unwrap(), b"planted by someone else");
+        let g = dir.join("fresh.exe");
+        {
+            let held = HeldCopy::create_at(&g, b"MZ verified").unwrap();
+            assert_eq!(std::fs::read(held.path()).unwrap(), b"MZ verified");
+        }
+        assert!(!g.exists(), "dropping the held copy removes it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The real Windows tool must still be able to read a copy that is held open: a copy of this
+    // (unsigned) test program reads NotSigned held and plain alike, not a sharing error.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_tool_can_read_a_held_copy() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t293-held-ps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        let plain = dir.join("plain.exe");
+        std::fs::write(&plain, &bytes).unwrap();
+        let held = HeldCopy::create_at(&dir.join("held.exe"), &bytes).unwrap();
+        let (a, b) = (check_file(&plain), check_file(held.path()));
+        drop(held);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(b, a, "held {b:?} vs plain {a:?}");
+        assert!(!matches!(b, SignState::Unknown(_)) || matches!(a, SignState::Unknown(_)), "{b:?}");
+    }
+
+    // AFTER 4: besides the subject, a build can pin the certificate authority that issued it.
+    #[test]
+    fn the_report_carries_the_issuer() {
+        let r = parse_report(r#"{"status":"Valid","subject":"CN=Acme Tools Ltd","issuer":"CN=Acme Code CA","thumbprint":"AB"}"#);
+        assert_eq!(r, SignState::Signed { subject: "CN=Acme Tools Ltd".into(), issuer: "CN=Acme Code CA".into(), thumbprint: "AB".into() });
+        assert_eq!(parse_report(r#"{"status":"Valid","subject":"CN=Acme Tools Ltd","thumbprint":"AB"}"#), signed("CN=Acme Tools Ltd", "AB"));
+    }
+
+    #[test]
+    fn a_pinned_issuer_must_match_and_no_pin_changes_nothing() {
+        let running = signed_by(ACME, "CN=Acme Code CA");
+        let good = signed_by(ACME, "cn=Acme Code CA");
+        let other_ca = signed_by(ACME, "CN=Sketchy CA");
+        assert_eq!(decide_pinned(&running, &good, None, Some("CN=Acme Code CA"), true), Verdict::Install);
+        let why = stopped(decide_pinned(&running, &other_ca, None, Some("CN=Acme Code CA"), true));
+        assert!(why.contains("Sketchy CA") && why.contains("Acme Code CA") && why.contains("not be offered again"), "{why}");
+        assert!(matches!(decide_pinned(&running, &signed_by(ACME, ""), None, Some("CN=Acme Code CA"), true), Verdict::Stop(_)));
+        // The subject is still checked as well.
+        assert!(matches!(decide_pinned(&running, &signed_by("CN=Mallory", "CN=Acme Code CA"), None, Some("CN=Acme Code CA"), true), Verdict::Stop(_)));
+        // An unsigned installer and a broken one are stopped by the usual rules; an unclear one still retries.
+        assert!(matches!(decide_pinned(&running, &SignState::Unsigned, None, Some("CN=Acme Code CA"), true), Verdict::Stop(_)));
+        retried(decide_pinned(&running, &unknown(), None, Some("CN=Acme Code CA"), true));
+        // No pin (or a blank one): exactly `decide`, so an unsigned build behaves as before.
+        for pin in [None, Some("  ")] {
+            assert_eq!(decide_pinned(&running, &other_ca, None, pin, true), decide(&running, &other_ca, None, true));
+            assert_eq!(decide_pinned(&SignState::Unsigned, &SignState::Unsigned, None, pin, false), Verdict::Install);
+        }
+    }
+
+    #[test]
+    fn the_pins_are_off_in_a_build_that_sets_none() {
+        assert!(PINNED_ISSUER.is_none() || option_env!("KOLUX_RS_PUBLISHER_ISSUER").is_some());
+    }
+
+    // AFTER (refused-list reset): update_mark can empty the list, and nothing else about it.
+    #[test]
+    fn the_refused_list_can_only_be_emptied() {
+        assert_eq!(refused_reset_value(""), Ok("[]"));
+        assert_eq!(refused_reset_value("  "), Ok("[]"));
+        for add in ["x", r#"[{"sha256":"ab"}]"#, "1.2.3"] {
+            assert!(refused_reset_value(add).is_err(), "{add}");
+        }
+        let after = refused_reset_value("").unwrap();
+        assert!(!refused_has(Some(after), Some(&sha256_hex(b"stale installer")), "SIG-OLD"));
+        let before = refused_add(None, entry(b"stale installer", "SIG-OLD", "1.1.0"));
+        assert!(refused_has(Some(&before), None, "SIG-OLD"));
+        assert_eq!(refused_add(Some(after), entry(b"a", "s", "1")), refused_add(None, entry(b"a", "s", "1")), "the emptied list takes new entries as a new one does");
     }
 }
