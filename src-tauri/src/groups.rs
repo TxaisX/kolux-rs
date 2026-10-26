@@ -120,7 +120,8 @@ impl Groups {
 
 /// Loads, changes and saves the groups in one go, counting the change.
 pub fn change<T>(store: &Store, f: impl FnOnce(&mut Groups) -> Result<T, String>) -> Result<(Groups, T), String> {
-    let mut groups = load(store);
+    // Card 13: a store or copy that fails is an error, never an empty set saved over the blob.
+    let mut groups: Groups = crate::orchestration::kept::load(store, KEY)?;
     let out = f(&mut groups)?;
     groups.rev += 1;
     store.set(KEY, &serde_json::to_string(&groups).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -188,6 +189,19 @@ mod tests {
         change(&s, |g| g.create("Fresh", None)).unwrap();
         assert_eq!(crate::orchestration::kept::asides(&s, KEY), vec![broken.to_string()], "the original bytes are kept aside");
         assert_eq!(load(&s).groups.len(), 1);
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13_groups_are_not_saved_over_a_blob_that_could_not_be_kept_aside() {
+        let (s, dir) = store("nocopy");
+        let broken = "{\"groups\": [{\"id\": \"g-1\", \"name\": \"Work\"";
+        s.set(KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let err = change(&s, |g| g.create("Fresh", None)).unwrap_err();
+        assert!(err.contains(KEY) && !err.contains("Work"), "{err}");
+        assert_eq!(s.get(KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }

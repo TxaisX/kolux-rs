@@ -34,10 +34,6 @@ pub struct Source {
     pub root: Option<String>,
 }
 
-fn load(store: &Store) -> Value {
-    crate::orchestration::kept::or_default::<Value>(store, KEY)
-}
-
 fn save(store: &Store, v: &Value) -> Result<(), String> {
     store.set(KEY, &v.to_string()).map_err(|e| format!("could not save the visibility choice: {e}"))
 }
@@ -45,7 +41,7 @@ fn save(store: &Store, v: &Value) -> Result<(), String> {
 /// The choices, made on first use. Projects already there keep showing worktrees made elsewhere, as
 /// they did before this choice existed (PROJ-042); projects added later start with them hidden.
 pub fn ensure(store: &Store, projects: &[Project]) -> Result<Value, String> {
-    let v = load(store);
+    let v: Value = crate::orchestration::kept::load(store, KEY)?;
     if v.is_object() {
         return Ok(v);
     }
@@ -197,4 +193,23 @@ pub fn remove_root(store: &Store, path: &str) -> Result<(), String> {
         }
     }
     save(store, &v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn card13_visibility_choices_that_could_not_be_kept_aside_are_never_saved_over() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-vis-c13-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir).unwrap();
+        let broken = "{\"global\": {\"claude\": true";
+        store.set(KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(ensure(&store, &[]).unwrap_err().contains(KEY));
+        assert_eq!(store.get(KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

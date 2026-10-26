@@ -217,6 +217,11 @@ fn status_map(store: &Store) -> HashMap<String, String> {
     crate::orchestration::kept::or_default(store, STATUS_OF_KEY)
 }
 
+/// Card 13: the map a save starts from; a store or copy that fails is an error, never an empty map.
+fn status_map_to_change(store: &Store) -> Result<HashMap<String, String>, String> {
+    crate::orchestration::kept::load(store, STATUS_OF_KEY)
+}
+
 /// The status id of the workspace at \`path\`; one with none, or whose status was deleted, is in the first.
 pub fn status_of(store: &Store, path: &str) -> String {
     let list = statuses(store);
@@ -227,13 +232,13 @@ pub fn set_status(store: &Store, path: &str, id: &str) -> Result<(), String> {
     if !statuses(store).iter().any(|s| s.id == id) {
         return Err(format!("There is no status {id}"));
     }
-    let mut map = status_map(store);
+    let mut map = status_map_to_change(store)?;
     map.insert(name_key(path), id.to_string());
     store.set(STATUS_OF_KEY, &serde_json::to_string(&map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 pub fn clear_status(store: &Store, path: &str) -> Result<(), String> {
-    let mut map = status_map(store);
+    let mut map = status_map_to_change(store)?;
     if map.remove(&name_key(path)).is_none() {
         return Ok(());
     }
@@ -529,5 +534,22 @@ mod tests {
         assert_eq!(saved_space(&store, "p").len(), 1, "a folder deleted since is not shown");
         drop(store);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn card13_a_status_map_that_could_not_be_kept_aside_is_never_saved_over() {
+        let dir = temp("c13");
+        let db = dir.join("db");
+        let store = Store::open(&db).unwrap();
+        let broken = "{\"C:/a\": \"s-1\"";
+        store.set(STATUS_OF_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        let first = statuses(&store)[0].id.clone();
+        let err = set_status(&store, "C:/a", &first).unwrap_err();
+        assert!(err.contains(STATUS_OF_KEY) && !err.contains("s-1"), "{err}");
+        assert!(clear_status(&store, "C:/a").is_err());
+        assert_eq!(store.get(STATUS_OF_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
