@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { defaultTabs, tabTitle, type SharedTab } from "./DefaultTabs";
+import { defaultTabs, nearestTabColor, openDefaultTabs, tabPanes, tabTitle, type SharedTab } from "./DefaultTabs";
+import type { Pane } from "../App";
+import type { TabColors } from "../terminal/tabColor";
 import type { TrustAnswer, TrustAsk } from "./TrustPrompt";
 
 const tab = (title: string | null, command: string | null, color: string | null = null): SharedTab => ({ title, color, command });
@@ -57,5 +59,65 @@ describe("PROJ-034 the default tabs of a new workspace", () => {
     expect(tabTitle(tab("Dev", "pnpm dev"))).toBe("Dev");
     expect(tabTitle(tab(null, "  pnpm dev"))).toBe("pnpm");
     expect(tabTitle(tab(null, null, "#fff"))).toBe("Terminal");
+  });
+});
+
+/** The window's panes and tab colours as plain variables, with the setters the App gives. */
+function windowState(start: Pane[]) {
+  const w = { panes: start, colors: {} as TabColors, said: [] as string[], next: { current: 100 } };
+  return {
+    w,
+    deps: {
+      nextKey: w.next,
+      setPanes: (f: Pane[] | ((p: Pane[]) => Pane[])) => void (w.panes = typeof f === "function" ? f(w.panes) : f),
+      setTabColors: (f: TabColors | ((m: TabColors) => TabColors)) => void (w.colors = typeof f === "function" ? f(w.colors) : f),
+      say: (m: string) => void w.said.push(m),
+    },
+  };
+}
+const shell = (key: number, cwd: string, group?: number): Pane => ({ key, cwd, branch: "b", agent: "shell", program: null, args: [], group });
+
+describe("PROJ-034 opening the default tabs in a new workspace", () => {
+  it("picks the palette colour nearest a file colour, and none for a bad one", () => {
+    expect(nearestTabColor("#0af")).toBe("blue");
+    expect(nearestTabColor("#E00")).toBe("red");
+    expect(nearestTabColor("#46a758")).toBe("green");
+    expect(nearestTabColor("red")).toBeNull();
+    expect(nearestTabColor(null)).toBeNull();
+  });
+
+  it("makes one shell tab per default tab, the command typed ahead and the title kept", () => {
+    let n = 10;
+    const out = tabPanes([tab("Dev", "pnpm dev", "#E00"), tab(null, "tail -f log"), tab(null, null)], "C:/w", "main", () => n++);
+    expect(out.panes.map((p) => [p.key, p.title, p.typed, p.group ?? p.key, p.agent, p.cwd])).toEqual([
+      [10, "Dev", "pnpm dev", 10, "shell", "C:/w"],
+      [11, "tail", "tail -f log", 10, "shell", "C:/w"],
+      [12, "Terminal", undefined, 10, "shell", "C:/w"],
+    ]);
+    expect(out.colors).toEqual({ 10: "red" });
+  });
+
+  it("opens the tabs beside the workspace's first pane and colours them", async () => {
+    const { w, deps } = windowState([shell(1, "C:/other"), shell(2, "C:/w", 2)]);
+    const r = fakeRust([tab("Dev", "pnpm dev", "#0af"), tab("Logs", null)], null);
+    await openDefaultTabs("C:/r", "C:/w", "b", { ...deps, invoke: r.invoke });
+    expect(w.panes.map((p) => [p.key, p.group ?? p.key, p.title])).toEqual([[1, 1, undefined], [2, 2, undefined], [100, 2, "Dev"], [101, 2, "Logs"]]);
+    expect(w.colors).toEqual({ 100: "blue" });
+    expect(w.said).toEqual([]);
+  });
+
+  it("opens nothing and says why when kolux.yaml was refused", async () => {
+    const { w, deps } = windowState([shell(2, "C:/w")]);
+    const r = fakeRust([], null, "kolux.yaml is larger than 64 KB, so its shared settings are ignored");
+    await openDefaultTabs("C:/r", "C:/w", "b", { ...deps, invoke: r.invoke });
+    expect(w.panes).toHaveLength(1);
+    expect(w.said).toEqual(["kolux.yaml is larger than 64 KB, so its shared settings are ignored"]);
+  });
+
+  it("says, never throws, when reading the tabs fails", async () => {
+    const { w, deps } = windowState([shell(2, "C:/w")]);
+    await openDefaultTabs("C:/r", "C:/w", "b", { ...deps, invoke: async () => Promise.reject("no such command") });
+    expect(w.panes).toHaveLength(1);
+    expect(w.said).toEqual(["no such command"]);
   });
 });
