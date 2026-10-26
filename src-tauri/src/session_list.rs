@@ -235,27 +235,38 @@ pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     s
 }
 
-fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64, report: &mut Report, budget: &Budget) -> Summary {
-    if let Some((m, l, s)) = cache.get(path) {
-        if *m == modified && *l == len {
-            return s.clone();
+/// Stats a transcript and, unless the saved summary still matches, reads it, all on one worker so a
+/// hung disk stalls neither step past the budget. `None`: gone, unreadable, or the budget ran out.
+fn look(cache: &mut Cache, agent: &str, path: &Path, report: &mut Report, budget: &Budget) -> Option<(u64, u64, Summary)> {
+    let (a, p, saved) = (agent.to_string(), path.to_path_buf(), cache.get(path).cloned());
+    let Some(found) = budget.run(move || {
+        let (modified, len) = stat(&p)?;
+        if let Some((m, l, s)) = saved {
+            if m == modified && l == len {
+                return Some((modified, len, s, false));
+            }
         }
-    }
-    // The read runs apart so a hung disk cannot hold the scan past its budget; the file counts as skipped.
-    let (a, p) = (agent.to_string(), path.to_path_buf());
-    let s = budget.run(move || summarize(&a, &p, len)).unwrap_or_else(|| {
+        Some((modified, len, summarize(&a, &p, len), true))
+    }) else {
         report.cut_short = true;
-        Summary { unreadable: true, ..Summary::default() }
-    });
+        return None;
+    };
+    let (modified, len, s, fresh) = found?;
     if s.unreadable {
-        return s;
+        return None;
     }
-    report.parsed += 1;
-    cache.insert(path.to_path_buf(), (modified, len, s.clone()));
-    s
+    if fresh {
+        report.parsed += 1;
+        cache.insert(path.to_path_buf(), (modified, len, s.clone()));
+    }
+    Some((modified, len, s))
 }
 
 fn stat(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(test)]
+    if path.file_name().is_some_and(|n| n.to_string_lossy().contains("statstall")) {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
     let meta = fs::metadata(path).ok().filter(|m| m.is_file())?;
     let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
     Some((modified, meta.len()))
@@ -306,15 +317,10 @@ fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &
                     report.cut_short = true;
                     return out;
                 }
-                let Some((modified, len)) = stat(&path) else {
+                let Some((modified, len, s)) = look(cache, "claude", &path, report, budget) else {
                     report.skipped += 1;
                     continue;
                 };
-                let s = summary_for(cache, "claude", &path, modified, len, report, budget);
-                if s.unreadable {
-                    report.skipped += 1;
-                    continue;
-                }
                 if s.skip {
                     continue;
                 }
@@ -360,15 +366,10 @@ fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &B
                 report.cut_short = true;
                 return out;
             }
-            let Some((modified, len)) = stat(&path) else {
+            let Some((modified, len, s)) = look(cache, "codex", &path, report, budget) else {
                 report.skipped += 1;
                 continue;
             };
-            let s = summary_for(cache, "codex", &path, modified, len, report, budget);
-            if s.unreadable {
-                report.skipped += 1;
-                continue;
-            }
             if s.skip || !in_scope(s.cwd.as_deref(), scope) {
                 continue;
             }
@@ -695,6 +696,23 @@ mod tests {
             rows.push(json!({ "type": "event_msg", "payload": { "type": "user_message", "message": m } }));
         }
         lines(path, &rows);
+    }
+
+    /// after-list row 777: a stat that hangs (a dead network disk) counts against the scan budget too.
+    #[test]
+    fn row777_a_stalled_stat_does_not_hold_the_scan_past_its_budget() {
+        let root = tmp("statstall");
+        let dir = root.join("projects").join("C--work-app");
+        lines(&dir.join("a-statstall.jsonl"), &[claude_user("first", r"C:\work\app")]);
+        let sid = "019a0000-0000-7000-8000-0000000007c1";
+        codex_session(&root.join("sessions/2026/10/01").join(format!("rollout-2026-10-01T00-00-00-{sid}-statstall.jsonl")), sid, r"C:\work\app", Value::String("cli".into()), Some("hi"));
+        let both = Roots { claude: vec![root.clone()], codex: vec![root.clone()] };
+        let began = std::time::Instant::now();
+        let got = list_scan(&both, &Scope::All, &mut Cache::new(), None, &Budget::within(std::time::Duration::from_millis(400)));
+        assert!(began.elapsed() < std::time::Duration::from_secs(3), "the scan waited {:?} on the stalled stat", began.elapsed());
+        assert!(got.report.cut_short);
+        assert!(got.sessions.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
