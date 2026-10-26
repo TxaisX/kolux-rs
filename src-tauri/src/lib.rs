@@ -74,7 +74,7 @@ mod skills;
 mod star;
 mod pasted_image;
 mod pr_checkout;
-mod pty;
+pub mod pty;
 mod setup;
 mod routing;
 mod schedule;
