@@ -19,7 +19,7 @@ import {
   clampButton, insetFor, moveBy, parseButton, parseSaved, resizeBy, SETTING_BUTTON, SETTING_PANEL, shown, startsPanelMove, toggleMaximize, toStored,
   type Edge, type Pos, type Rect, type Saved, type Win, BUTTON,
 } from "./geometry";
-import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, saved, saveTarget, select, selectNumber, setDirty, setTitle, step, toggle, type Kind, type Panel } from "./panel";
+import { add, answer, asked, close, closeKey, empty, hide, openLink, programExited, reorder, saved, saveTarget, select, selectNumber, setDirty, setTitle, step, toggle, type Kind, type Panel } from "./panel";
 import { isDirty } from "../editor/buffers";
 import { startFolderFor } from "./trusted";
 import { liveTerminals, SCAN_EVERY_MS, waitingTabs } from "./waitingScan";
@@ -310,6 +310,8 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
                       program={info?.program ?? null}
                       args={info?.args ?? []}
                       name={info?.name}
+                      linksOpenInKolux={settings?.linksOpenInKolux === true}
+                      onOpenLink={(url) => run((p) => openLink(p, url))}
                       onFocus={() => run((p) => select(p, t.key))}
                       onPty={(id) => (ptys.current[t.key] = id)}
                       onRunning={(on) => on === false && run((p) => programExited(p, t.key))}

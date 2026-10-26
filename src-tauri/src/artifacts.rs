@@ -442,13 +442,15 @@ pub fn artifact_remove(lib: tauri::State<'_, Library>, id: String) -> Result<(),
     lib.remove(&id)
 }
 
-/// Opens a web or mail link in the system's own handler; nothing else is let through.
-#[tauri::command]
+/// Opens a web or mail link in the system's own handler; nothing else is let through, and no more than a
+/// handful in a row (links::admit_browser_open). The command runs on a worker, never the window's thread.
+#[tauri::command(async)]
 pub fn open_external(url: String) -> Result<(), String> {
     let low = url.to_ascii_lowercase();
     if !(low.starts_with("http://") || low.starts_with("https://") || low.starts_with("mailto:")) {
         return Err(format!("{url} is not a web or mail link"));
     }
+    crate::links::admit_browser_open()?;
     system_open(&url)
 }
 

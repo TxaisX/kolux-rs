@@ -1,0 +1,41 @@
+diff --git a/src-tauri/src/browser_preview.rs b/src-tauri/src/browser_preview.rs
+index 7b4afb41..b55b8942 100644
+--- a/src-tauri/src/browser_preview.rs
++++ b/src-tauri/src/browser_preview.rs
+@@ -114,6 +114,17 @@ pub fn grant(url: &str) -> Result<(), String> {
+     Ok(())
+ }
+ 
++/// APP-015: allowances last until the main page is rebuilt (a reload); a folder allowed before it asks again.
++pub fn clear_grants() {
++    if let Ok(mut p) = PREVIEWS.lock() {
++        revoke_all(&mut p);
++    }
++}
++
++fn revoke_all(previews: &mut [Preview]) {
++    previews.iter_mut().for_each(|p| p.granted = false);
++}
++
+ /// The folder path a request's rest names, or why it may not: a parent step (`..`, in either
+ /// slash), a root (`/x`, `\x`), a drive or `\\?\` prefix, or a NUL. The rest is already decoded.
+ /// Pure; `respond` canonicalizes the result and checks it again against the real folder, so a
+@@ -452,6 +463,18 @@ mod tests {
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+ 
++    #[test]
++    fn app015_a_rebuilt_window_forgets_every_allowed_folder_but_keeps_the_documents_opened() {
++        let dir = site("revoke");
++        let mut p = vec![open(&dir, true)];
++        assert_eq!(respond(&p, "/t1/css/a.css").0, 200);
++        revoke_all(&mut p);
++        assert!(!p[0].granted);
++        assert_eq!(respond(&p, "/t1/css/a.css").0, 403, "the folder must be allowed again");
++        assert_eq!(respond(&p, "/t1/index.html").0, 200, "the opened document still reads");
++        let _ = std::fs::remove_dir_all(&dir);
++    }
++
+     #[test]
+     fn brow040_parent_steps_roots_prefixes_backslashes_and_nul_are_refused_before_the_join() {
+         let root = Path::new("G:/w/site");
