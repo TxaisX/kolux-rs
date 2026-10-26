@@ -42,3 +42,15 @@ LIVE PROOF PENDING (batched):
    note its name/kind/id from that line and exclude it. Right-click a text field inside an artifact preview (sandboxed iframe) ->
    the engine's own menu (iframe requests are never taken over).
 6. Right-click plain text outside any box (a settings label) -> no menu at all. Right-click in a terminal pane -> the pane menu as before.
+
+CRASH REPORT BUNDLE COPY (T-324-b-rest, APP-038 rule "crash reports take no images and copy the scrubbed diagnostic bundle instead")
+Built: reportCrash passes crash = true to requestFeedback; the Send Feedback box then hides the screenshot picker (src/feedback/FeedbackDialog.tsx),
+and Open on GitHub copies the diag_bundle text, scrubbed again with src/feedback/scrub.ts, to the clipboard (src/feedback/crashBundle.ts) with a note.
+Tests: src/feedback/crashBundle.test.ts (4; seeds an sk- token and C:\Users\jdoe path into the bundle: output holds the bundle, neither seed),
+src/crash.test.ts (crash flag). Red first: crashBundle.test.ts failed to import, crash flag test failed (G:/Temp/fix-other-v3-logs/cb-vitest-red.log).
+No Rust change (diag.rs bundle/scrub reused); no patch needed (src/feedback and src/crash.tsx are fix-other files).
+
+LIVE PROOF PENDING (batched):
+7. Trigger the crash screen (or call reportCrash from a dev console), press Report: the box opens with the crash text and no Add screenshot control,
+   a line says the logs are copied. Open on GitHub -> the issue page opens, the note says the logs are on the clipboard; paste into the issue body:
+   a header "Kolux RS <version> diagnostics", no C:\Users\<name> path and no token.
