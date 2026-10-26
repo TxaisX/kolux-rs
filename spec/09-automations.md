@@ -191,9 +191,9 @@ Rules: names sort the way people count, so 2 comes before 10, and sorting by las
   loads that one's runs; run status and usage update in the open page as runs progress, with no
   refresh needed.
 Acceptance:
-  - [ ] Search for a word that appears only inside a prompt → that automation shows.
-  - [ ] Sort by last run → never-run automations are at the bottom.
-  - [ ] Force a load failure → an error with Retry, not a nothing-created message.
+  - [x] Search for a word that appears only inside a prompt → that automation shows. (cards; evidence/cards-AUTO-016.txt)
+  - [x] Sort by last run → never-run automations are at the bottom. (cards; evidence/cards-AUTO-016.txt)
+  - [x] Force a load failure → an error with Retry, not a nothing-created message. (cards; evidence/cards-AUTO-016.txt)
 Compat: —
 Source: D-09-016
 
@@ -207,10 +207,10 @@ Rules: Run Now ignores the timetable and the precheck and is logged as a manual 
   confirmation can be switched off, and out of the box it is on, so Kolux always asks; after a run
   the upcoming time is shown again.
 Acceptance:
-  - [ ] Click Run Now on a paused automation → a manual run appears in history.
-  - [ ] Delete with confirmation on → a confirm step shows; switch confirmation off → the next
-        delete happens at once.
-  - [ ] Pause → nothing runs at the next due time.
+  - [x] Click Run Now on a paused automation → a manual run appears in history. (cards; evidence/cards-AUTO-019.txt)
+  - [x] Delete with confirmation on → a confirm step shows; switch confirmation off → the next
+        delete happens at once. (cards; evidence/cards-AUTO-019.txt)
+  - [x] Pause → nothing runs at the next due time. (cards; evidence/cards-AUTO-019.txt)
 Compat: —
 Source: D-09-019
 

@@ -481,3 +481,58 @@ fn auto013_box3_unreadable_run_history_is_reported_as_an_error_not_as_an_empty_l
     store.lock().unwrap().set(RUNS_KEY, "[]").unwrap();
     assert!(auto::list(&store.lock().unwrap()).unwrap()["runsError"].is_null());
 }
+
+// ---------------------------------------------------------------- AUTO-019 (backend halves)
+
+#[test]
+fn auto019_box1_run_now_on_a_paused_automation_logs_a_manual_run_in_its_history() {
+    let dir = scratch("a019b1");
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+    seed_project(&store.lock().unwrap(), &ws);
+    let daily = json!({ "preset": "daily", "time": "02:00", "timezone": "UTC" });
+    let made = auto::save_automation(&store.lock().unwrap(), &form(&ws, "r1", daily), FRI_NOON).unwrap();
+    let id = made["id"].as_str().unwrap().to_string();
+    assert_eq!(auto::set_enabled(&store.lock().unwrap(), &id, false).unwrap()["enabled"], json!(false));
+    assert!(auto::list(&store.lock().unwrap()).unwrap()["runs"].as_array().unwrap().is_empty());
+
+    let git = Git::detect().unwrap();
+    let said = RefCell::new(Vec::<(String, Value)>::new());
+    let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+    let yes = |_: &str| true;
+    let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+    let out = auto::run(&l, &id, "manual").unwrap();
+    assert_eq!((out["automationId"].as_str(), out["trigger"].as_str(), out["number"].as_u64()), (Some(id.as_str()), Some("manual"), Some(1)));
+    let all = auto::list(&store.lock().unwrap()).unwrap();
+    let runs = all["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!((runs[0]["id"].as_str(), runs[0]["trigger"].as_str()), (out["id"].as_str(), Some("manual")));
+    assert_eq!(said.borrow().iter().filter(|(_, v)| v["kind"] == "start").count(), 1, "the run was handed to the window to start");
+    assert_eq!(all["automations"][0]["enabled"], json!(false), "it is still paused afterwards");
+}
+
+#[test]
+fn auto019_box3_a_paused_automation_runs_nothing_when_its_due_time_comes() {
+    let dir = scratch("a019b3");
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+    seed_project(&store.lock().unwrap(), &ws);
+    let every5 = json!({ "preset": "custom", "custom": "*/5 * * * *", "timezone": "UTC" });
+    let made = auto::save_automation(&store.lock().unwrap(), &form(&ws, "r1", every5), FRI_NOON).unwrap();
+    let id = made["id"].as_str().unwrap().to_string();
+    let due = made["nextRunAt"].as_i64().unwrap();
+    auto::set_enabled(&store.lock().unwrap(), &id, false).unwrap();
+
+    let git = Git::detect().unwrap();
+    let said = RefCell::new(Vec::<(String, Value)>::new());
+    let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+    let yes = |_: &str| true;
+    let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+    for k in 0..3 {
+        assert!(auto::tick(&l, due + k * 300_000 + 1_000).unwrap().is_empty(), "due time {k} passes with nothing run");
+    }
+    assert!(said.borrow().is_empty(), "nothing told the window to start anything");
+    assert!(auto::list(&store.lock().unwrap()).unwrap()["runs"].as_array().unwrap().is_empty());
+}
