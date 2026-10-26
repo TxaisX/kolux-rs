@@ -228,22 +228,33 @@ pub struct Scan {
     pub changed: bool,
 }
 
-/// ORCH-056: scan `terminal`'s newest output for an open prompt and show it: a prompt found marks
-/// pane `pane_key` waiting the way an in-band status would, and a prompt gone marks it working
-/// again; a pane whose hooks already report a state is left to them. Registered in lib.rs by the
-/// coordinator (evidence/watch-T-129-d-lib.rs.patch).
-#[tauri::command]
-pub fn prompt_scan(app: tauri::AppHandle, terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, terminal: u32) -> Scan {
+/// The old command body; `mark` sets a pane's status from an in-band payload and says whether it moved.
+pub fn prompt_scan_on(terminals: &crate::terminal::Terminals, terminal: u32, mark: impl Fn(String) -> bool) -> Scan {
     let read = terminals.read(terminal, None, Some(FRAME_LINES));
     let before = with_scanner(|s| s.last(terminal).cloned());
     let prompt = read.as_ref().and_then(|r| live_prompt(terminal, r));
     let hooked = crate::status::state_of(terminal).is_some();
     let changed = match (&before, &prompt) {
-        (_, Some(p)) if !hooked => crate::status::status_inband(app, pane_key, Some(terminal), format!(r#"{{"state":"{}"}}"#, p.state())),
-        (Some(_), None) if !hooked => crate::status::status_inband(app, pane_key, Some(terminal), r#"{"state":"working"}"#.into()),
+        (_, Some(p)) if !hooked => mark(format!(r#"{{"state":"{}"}}"#, p.state())),
+        (Some(_), None) if !hooked => mark(r#"{"state":"working"}"#.into()),
         _ => false,
     };
     Scan { prompt, changed }
+}
+
+/// ORCH-056: scan `terminal`'s newest output for an open prompt and show it: a prompt found marks
+/// pane `pane_key` waiting the way an in-band status would, and a prompt gone marks it working
+/// again; a pane whose hooks already report a state is left to them. Registered in lib.rs by the
+/// coordinator (evidence/watch-T-129-d-lib.rs.patch). Async so the screen read and scan (165 ms
+/// under load) run off the UI thread; the page awaits each scan, so one pane's scans stay in order.
+#[tauri::command]
+pub async fn prompt_scan(app: tauri::AppHandle, pane_key: u32, terminal: u32) -> Scan {
+    tauri::async_runtime::spawn_blocking(move || {
+        let terminals = tauri::Manager::state::<crate::terminal::Terminals>(&app).inner().clone();
+        prompt_scan_on(&terminals, terminal, |data| crate::status::status_inband(app.clone(), pane_key, Some(terminal), data))
+    })
+    .await
+    .unwrap_or(Scan { prompt: None, changed: false })
 }
 
 /// ORCH-056: the pane's restored scrollback has been replayed; the scan starts after it.
@@ -354,5 +365,34 @@ mod tests {
         terminal_ended(term);
         assert_eq!(worker_attention(term, || None), None, "an ended process's hook state is ignored");
         assert_eq!(worker_attention(term + 1, cursor_menu), Some("approval"), "the new process is read on its own");
+    }
+}
+
+#[cfg(test)]
+mod scan_async_tests {
+    use super::*;
+    use crate::terminal::{Line, Terminals};
+
+    fn is_async<F: std::future::Future>(_: fn(tauri::AppHandle, u32, u32) -> F) {}
+
+    #[test]
+    fn prompt_scan_is_an_async_command_that_matches_the_sync_one() {
+        is_async(prompt_scan);
+        let _scratch = crate::test_dir::temp("prompt-scan-async");
+        let terminals = Terminals::default();
+        // A terminal nobody opened reads as nothing: no prompt, no status moved, mark never asked.
+        let none = prompt_scan_on(&terminals, 9_100_001, |_| panic!("no prompt and none before: nothing to mark"));
+        assert_eq!((none.prompt, none.changed), (None, false));
+        // A prompt seen earlier and gone now marks the pane working, as the old body did.
+        let seen = Read { lines: vec![Line { cursor: 1, text: "Allow command? [y/n]".into() }], cursor: 1, oldest: 1, ..Read::default() };
+        assert!(live_prompt(9_100_002, &seen).is_some());
+        let marks = Mutex::new(Vec::new());
+        let gone = prompt_scan_on(&terminals, 9_100_002, |d| {
+            marks.lock().unwrap().push(d);
+            true
+        });
+        assert_eq!((gone.prompt.is_none(), gone.changed), (true, true));
+        assert_eq!(*marks.lock().unwrap(), vec![r#"{"state":"working"}"#.to_string()]);
+        with_scanner(|s| s.pruned(9_100_002));
     }
 }
