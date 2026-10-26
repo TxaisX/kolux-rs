@@ -3544,6 +3544,9 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
+            // Card 15: the receipt is saved after the lane lock is gone, so a same-request retry waits here for it.
+            let retry_turn = retry.as_deref().map(retry_turn);
+            let _retry_turn = retry_turn.as_ref().map(|t| t.lock().unwrap_or_else(|p| p.into_inner()));
             if let Some(key) = &retry {
                 // ORCH-055: the receipt lasts in the store, so a retry after a restart sends nothing.
                 // Card 13b: unreadable receipts refuse here, before anything is typed, so a retry never types twice.
@@ -3714,6 +3717,14 @@ mod typed {
     pub fn count(id: u32) -> usize {
         COUNTS.lock().unwrap_or_else(|p| p.into_inner()).get(&id).copied().unwrap_or(0)
     }
+}
+
+/// One lock per in-flight `terminal send` retry key; idle keys are dropped on the next call.
+fn retry_turn(key: &str) -> std::sync::Arc<Mutex<()>> {
+    static TURNS: Mutex<BTreeMap<String, std::sync::Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    let mut turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
+    turns.retain(|k, t| k == key || std::sync::Arc::strong_count(t) > 1);
+    turns.entry(key.to_string()).or_default().clone()
 }
 
 fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -> Result<so::Delivery, Fail> {
@@ -5528,6 +5539,38 @@ mod tests {
         assert_eq!(again["retried"], true);
         assert_eq!(typed::count(5313), typed_once, "a retry of a recorded send types nothing");
         drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Card 13b note 1: a caller that times out and retries while the first send still waits for the
+    /// input box must not type a second time; the retry waits for the first send's receipt.
+    #[test]
+    fn card15_two_sends_with_the_same_retry_request_type_once() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-c15-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let terminals = Terminals::default();
+        terminals.fake_session(5314, &dir.display().to_string(), None);
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.send".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-5314", "text": "hello", "retryRequest": "same" }), pane: None, cli: VERSION.into(), arrived: None };
+        let lane = so::lane(5314);
+        let held = lane.lock().unwrap();
+        let outs = std::thread::scope(|sc| {
+            let go = || {
+                sc.spawn(|| {
+                    let notify = |_: Value| {};
+                    let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+                    dispatch(&ctx, &req)
+                })
+            };
+            let (a, b) = (go(), go());
+            // Both callers are now past the receipt check (or queued behind the first), waiting for the input box.
+            std::thread::sleep(Duration::from_millis(400));
+            drop(held);
+            [a.join().unwrap().unwrap(), b.join().unwrap().unwrap()]
+        });
+        assert_eq!(typed::count(5314), 1, "the text went in once");
+        assert_eq!(outs.iter().filter(|o| o["retried"] == true).count(), 1, "the other answered from the receipt");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
