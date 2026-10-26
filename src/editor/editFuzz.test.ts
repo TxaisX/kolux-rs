@@ -175,10 +175,16 @@ function keptEnds(loose: string, prev: string, out: string, whole: boolean): [st
 // Round 7: an oracle that does not share regap's "covered" rule. `marked` reads the note before and after the save; the list items
 // (in document order, each keyed by its depth and first line) and the code blocks that the edit's own span leaves alone must read the same.
 type Entry = { key: string; shape: string; blankBefore: boolean | null; s: number; e: number };
+// Round 8: a list as marked reads it (loose = a blank line between its items or between blocks of one item), keyed by depth and first item.
+type ListEntry = { key: string; loose: boolean; items: string };
 
-function listEntries(src: string): { items: Entry[]; codes: string[] } {
+/** Emphasis spelt with _ or * is one spelling: an item respelt by the save is still the same item. */
+const spell = (t: string) => t.replace(/_/g, "*");
+
+function listEntries(src: string): { items: Entry[]; codes: string[]; lists: ListEntry[] } {
   const items: Entry[] = [];
   const codes: string[] = [];
+  const lists: ListEntry[] = [];
   const md = src.replace(/\r\n?/g, "\n");
   const walk = (ts: Token[], depth: number, from: number) => {
     let at = from;
@@ -189,6 +195,7 @@ function listEntries(src: string): { items: Entry[]; codes: string[] } {
       if (t.type === "code") codes.push((t as { text: string }).text.trimEnd());
       if (t.type === "list") {
         const its = (t as { items: (Token & { text: string; tokens: Token[]; task?: boolean; checked?: boolean })[] }).items;
+        lists.push({ key: depth + "|" + spell(its[0]?.text.split("\n")[0].trim() ?? ""), loose: !!(t as { loose?: boolean }).loose, items: its.map((x) => spell(x.text.split("\n")[0].trim())).join("\n") });
         let cur = s;
         its.forEach((it, i) => {
           const w = md.indexOf(it.raw, cur);
@@ -197,7 +204,7 @@ function listEntries(src: string): { items: Entry[]; codes: string[] } {
           const kids = it.tokens.filter((k) => k.type !== "checkbox").map((k) => (k.type === "paragraph" ? "text" : k.type)); // loose or tight reads the same here
           while (kids[kids.length - 1] === "space") kids.pop();
           const prevRaw = i ? its[i - 1].raw : "";
-          items.push({ key: depth + "|" + (it.task ? (it.checked ? "x" : "o") : "") + it.text.split("\n")[0].trim(), shape: kids.join(","), blankBefore: i ? /\n[ \t]*\n$/.test(prevRaw) : null, s: st, e: cur });
+          items.push({ key: depth + "|" + (it.task ? (it.checked ? "x" : "o") : "") + spell(it.text.split("\n")[0].trim()), shape: kids.join(","), blankBefore: i ? /\n[ \t]*\n$/.test(prevRaw) : null, s: st, e: cur });
           walk(it.tokens, depth + 1, st);
         });
         continue;
@@ -207,7 +214,7 @@ function listEntries(src: string): { items: Entry[]; codes: string[] } {
     }
   };
   walk(marked.lexer(md), 0, 0);
-  return { items, codes };
+  return { items, codes, lists };
 }
 
 /** How many entries of `a` and `b` agree at the start, and at the end of what is left. */
@@ -228,6 +235,7 @@ function structureProblem(body: string, saved: string, prev: string, out: string
   const now = listEntries(saved);
   // Ordered numbers are the view's to renumber, so the edit's span is read with them all set to 1.
   const ones = (t: string) => t.replace(/^([ \t]*)\d+([.)])/gm, "$11$2");
+  const spelt = (t: string) => ones(t).replace(/^([ \t]*)[*+](?=[ \t])/gm, "$1-").replace(/_/g, "*").trimEnd();
   const view = listEntries(ones(prev));
   const e = changeBetween(ones(prev), ones(out))!;
   // A lone carriage return (typed inside a CRLF note) is a line end to marked and plain text to the view.
@@ -259,7 +267,8 @@ function structureProblem(body: string, saved: string, prev: string, out: string
     // The edit itself can take the gap away (Backspace joins the line above the gap to the line below it): the view's own text changed it.
     const viewGap = view.items[a]?.blankBefore !== viewOut.items[vi]?.blankBefore;
     // An item the save retyped in the view's spelling (a fence lifted out of it) is placed whole, gap and all.
-    const retyped = ones(body.slice(x.s, x.e)).trimEnd() !== ones(saved.slice(y.s, y.e)).trimEnd();
+    // Round 8: respelling alone (the marker, _ for *, a renumber) is not retyping, so such an item's gap is still checked.
+    const retyped = spelt(body.slice(x.s, x.e)) !== spelt(saved.slice(y.s, y.e));
     if (!viewGap && !retyped && x.blankBefore !== null && y.blankBefore !== null && x.blankBefore !== y.blankBefore) {
       // A blank line the view's own spelling put beside the edited item (an empty item is followed by one) is not made up.
       if (!x.blankBefore && touched(a - 1)) continue;
@@ -270,6 +279,22 @@ function structureProblem(body: string, saved: string, prev: string, out: string
     // Where the view already read the item differently from the file before the edit (it retypes a nested indent), the old shape binds nothing.
     const viewSaw = view.items[a]?.shape !== x.shape;
     if (x.shape !== y.shape && viewChanged === 0 && !viewShape && !viewSaw) return `item ${a} ${JSON.stringify(x.key)} reads ${x.shape} before, ${y.shape} after the save`;
+  }
+  // Round 8: a list the edit left as loose or tight as the view read it keeps the file's own state, even when one of its items was touched
+  // (a gap kept right under a parent's text loosens the parent's list, and no single item's gap shows it).
+  const [lp, ls] = sameEnds(was.lists, now.lists, (x, y) => x.key === y.key);
+  const lpairs: [number, number][] = [];
+  for (let i = 0; i < lp; i++) lpairs.push([i, i]);
+  for (let i = 1; i <= ls; i++) lpairs.push([was.lists.length - i, now.lists.length - i]);
+  for (const [a, b] of lpairs) {
+    const vi = a < lp ? a : a + viewOut.lists.length - view.lists.length;
+    const v = view.lists[a];
+    const vo = viewOut.lists[vi];
+    if (view.lists.length !== was.lists.length || !v || !vo || v.loose !== vo.loose) continue;
+    // The view spells a list loose where the file has it tight (a `1)` list): its own spelling binds nothing.
+    if (v.loose && !was.lists[a].loose) continue;
+    // A list that lost, gained or changed items can lose or gain its looseness with them (the gap was theirs): only an unchanged item run binds.
+    if (was.lists[a].items === now.lists[b].items && was.lists[a].loose !== now.lists[b].loose) return `list ${a} ${JSON.stringify(was.lists[a].key)} was ${was.lists[a].loose ? "loose" : "tight"}, the save made it ${now.lists[b].loose ? "loose" : "tight"}`;
   }
   return null;
 }
@@ -334,4 +359,29 @@ tail=${JSON.stringify(tail)}`).toBe(true);
     // Shown with --silent=false: how often each path holds.
     console.log(`fuzz seed ${seed}: ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, mismatched 0, ${ms.toFixed(0)} ms`);
   }, 20_000);
+});
+
+// Round 8: the oracle itself. Each saved text below is what round 7 (4a018d90) saved, and the oracle must flag it.
+describe("oracle: list state and respelt items", () => {
+  const P = "\n\nTail para here.\n";
+  const viewEdit = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    return { prev, out: roundTrip(prev.replace(from, to))! };
+  };
+  const saveOf = (body: string, prev: string, out: string) => {
+    const c = richChange(body, out, prev);
+    return c ? body.slice(0, c.from) + c.insert + body.slice(c.to) : body;
+  };
+  it("flags the round 7 bytes of NEW-HIGH-1 (the outer list turned loose) and passes what is saved now", () => {
+    const body = "- a\n  - n1\n\n  - n2\n- b\n- c\n" + P;
+    const { prev, out } = viewEdit(body, "  - n1\n", "");
+    expect(structureProblem(body, "- a\n\n  - n2\n- b\n- c\n\n\nTail para here.\n", prev, out)).toMatch(/was tight, the save made it loose/);
+    expect(structureProblem(body, saveOf(body, prev, out), prev, out)).toBeNull();
+  });
+  it("flags a far gap dropped beside respelt items (the retyped exemption no longer hides it)", () => {
+    const body = "- _one_\n\n- _two_\n\n- _three_\n\n- _four_\n" + P;
+    const { prev, out } = viewEdit(body, "one", "oneX");
+    expect(structureProblem(body, "- *oneX*\n\n- *two*\n\n- *three*\n- *four*\n" + P, prev, out)).toMatch(/blank line above item 3/);
+    expect(structureProblem(body, saveOf(body, prev, out), prev, out)).toBeNull();
+  });
 });
