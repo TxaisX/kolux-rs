@@ -168,6 +168,8 @@ const MAIL: &[(&str, &str, &[&str])] = &[
 ];
 /// CLI-038: the orchestration changes. Each carries a request id that lasts, so a change whose
 /// answer was lost can be sent again and still take effect no more than once.
+/// Row 877: every orchestration command that saves; an unread mail refuses these before any change.
+const MAIL_WRITES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", ASK, RESET, "orchestration.task-create", "orchestration.dispatch", ABANDON, UPDATE, TASK_RESET, STOP, RETAIN, RELEASE, "orchestration.gate-create", "orchestration.gate-resolve"];
 const CHANGES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", "orchestration.task-create", "orchestration.dispatch", WORKER_START];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// CLI-024 / CLI-025: reading, typing into and waiting on a terminal by its handle.
@@ -2910,6 +2912,10 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let need = || pane.clone().ok_or_else(unbound);
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut m = Mail::load(&store);
+    // Row 877: a mail that could not be read is refused by every command that saves, before it changes anything.
+    if MAIL_WRITES.contains(&req.command.as_str()) && !(req.command == "orchestration.dispatch" && a["dryRun"] == true) {
+        m.ensure_readable()?;
+    }
     let retry = text("retryRequest").map(|r| format!("{}|{}|{r}", req.command, pane.clone().unwrap_or_default()));
     let out = match req.command.as_str() {
         "orchestration.run-create" => {
@@ -3008,8 +3014,11 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "orchestration.task-create" | "orchestration.task-list" | "orchestration.dispatch" | "orchestration.dispatch-show" | ABANDON | UPDATE | TASK_RESET | STOP | WORKER_LIST | RETAIN | RELEASE | WORKER_SHOW | WORKER_READ | "orchestration.gate-create" | "orchestration.gate-resolve" | "orchestration.gate-list" => tasks(ctx, &store, &mut m, req, pane.as_deref(), retry)?,
         other => return Err(Fail::args(format!("unknown command {other}"))),
     };
-    m.save(&store)?;
-    crate::orchestration::pointer::rebind(&m);
+    // Reads on an unread mail answer from the empty mail; there is nothing to save or rebind.
+    if !m.unread {
+        m.save(&store)?;
+        crate::orchestration::pointer::rebind(&m);
+    }
     Ok(out)
 }
 
@@ -4256,6 +4265,8 @@ fn reuse(ctx: &Ctx, req: &Request, to: &str) -> Result<Value, Fail> {
 /// second worker. A start turned away leaves no receipt; one that timed out keeps its outcome. A
 /// start left pending by an earlier run of Kolux is over (its terminals went with it): it runs fresh.
 fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    // Row 877: an unread mail cannot be saved, so refuse before a task, worktree or terminal is made.
+    crate::orchestration::Mail::load(&*ctx.store.lock().map_err(|e| e.to_string())?).ensure_readable()?;
     // ORCH-017: the same start is the same caller, folder and flags; the CLI gives every send a
     // request id of its own, so that one is left out.
     let start = || {
@@ -5398,6 +5409,53 @@ mod tests {
             assert_eq!((load_list(&s, TASKS_KEY).unwrap().len(), load_list(&s, DISPATCHES_KEY).unwrap().len()), (1, 1), "{scope}: the lists were not cleared");
             assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "{scope}: the mail blob is byte-identical");
         }
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row877_mutating_mail_commands_on_an_unread_mail_are_refused_before_saving_anything() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row877-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let broken = "{\"runs\": [{\"id\": \"run-1\"}], \"messages\": [tru";
+        {
+            let s = store.lock().unwrap();
+            save_list(&s, TASKS_KEY, &[json!({ "id": "task-1", "status": "ready" })]).unwrap();
+            save_list(&s, DISPATCHES_KEY, &[json!({ "id": "d-1" })]).unwrap();
+            s.set("orchestration.mail", broken).unwrap();
+        }
+        let (tasks_before, dispatches_before) = {
+            let s = store.lock().unwrap();
+            (s.get(TASKS_KEY).unwrap(), s.get(DISPATCHES_KEY).unwrap())
+        };
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        for (command, args) in [
+            ("orchestration.task-create", json!({ "spec": "new work" })),
+            ("orchestration.task-update", json!({ "id": "task-1", "status": "blocked" })),
+            ("orchestration.worker-start", json!({ "spec": "x", "terminal": "term-9", "worktree": "current" })),
+            ("orchestration.run-create", json!({ "objective": "ship" })),
+            ("orchestration.dispatch", json!({ "task": "task-1", "to": "term-9" })),
+        ] {
+            let err = dispatch(&ctx, &req(command, args)).unwrap_err();
+            assert!(err.message.contains("orchestration.mail") && err.message.contains("nothing was saved over it"), "{command}: {}", err.message);
+            let s = store.lock().unwrap();
+            assert_eq!((s.get(TASKS_KEY).unwrap(), s.get(DISPATCHES_KEY).unwrap()), (tasks_before.clone(), dispatches_before.clone()), "{command}: the lists are unchanged");
+            assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "{command}: the mail blob is byte-identical");
+        }
+        // Reads still answer from the empty mail, and change nothing.
+        for (command, args) in [("orchestration.task-list", json!({})), ("orchestration.run-list", json!({})), ("orchestration.dispatch", json!({ "task": "task-1", "dryRun": true }))] {
+            let err = dispatch(&ctx, &req(command, args)).err();
+            assert!(err.is_none_or(|e| !e.message.contains("nothing was saved over it")), "{command} must not be refused for the unread mail");
+        }
+        let s = store.lock().unwrap();
+        assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "reads left the mail blob alone");
+        drop(s);
         drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
