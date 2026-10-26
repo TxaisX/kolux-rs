@@ -83,6 +83,10 @@ import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filters
 import { deletePlan, rowMenu, type MenuItem } from "./menu";
 import { commentBlocks, itemFromPaste, type Span } from "./details";
 import { onWorkspaceStatus } from "./statusRefresh";
+import StatusEditor from "./StatusEditorForm";
+import { editorRows, savePayload, type StatusRow } from "./statusEditor";
+import { useMissingFolders } from "./missingFolders";
+import { folderMissingNote } from "./folderWorkspace";
 import { FILE_MANAGER, loadTargets, openIn } from "../editor/openIn";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -203,6 +207,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [menu, setMenu] = useState<{ x: number; y: number; projectId: string; path: string; items: MenuItem[] } | null>(null);
   const [detailsOf, setDetailsOf] = useState<{ path: string; name: string; item: string; comment: string; error?: string } | null>(null);
   const [batch, setBatch] = useState<{ root: string; order: string[]; error?: string } | null>(null);
+  const [statusesOf, setStatusesOf] = useState<{ path: string; rows: StatusRow[]; error?: string } | null>(null); // PROJ-084
   // EDIT-041: coming from the Inbox the workspace rows can take seconds to list, so each render
   // looks for the selected row until it is there, then scrolls to it once.
   const revealed = useRef(0);
@@ -308,7 +313,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewAnswered, setPreviewAnswered] = useState(false); // Git has answered for the name now shown
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
-  const [forgetAsk, setForgetAsk] = useState<{ projectId: string; path: string; label: string } | null>(null); // row 364: the question before a folder workspace is taken out of Kolux
+  const [forgetAsk, setForgetAsk] = useState<{ projectId: string; path: string; label: string; refused?: string } | null>(null); // row 364: the question before a folder workspace is taken out of Kolux; `refused` is why it cannot be (364b)
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
@@ -441,6 +446,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   // workspace first, one gh call per GitHub project, a round every few minutes while the window is
   // shown (backing off after failures, waiting out a rate limit), and again on focus when stale.
   const pollPaths = Object.values(worktrees).flat().map((w) => w.path);
+  const goneFolders = useMissingFolders(pollPaths); // PROJ-086
   const norm = (d: string) => d.replace(/[\\/]+$/, "").toLowerCase();
   const pollActive = activeDir === null ? null : (pollPaths.find((p) => norm(p) === norm(activeDir)) ?? null);
   const pollLinks = linkedPrs(settings[SCM_LINKED_PR_KEY]);
@@ -914,7 +920,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       const row = projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w }))).find(({ w }) => same(hovered, w.path));
       const act = row ? pointerDelete(row.w, { fieldFocused: isTextField(document.activeElement), deleting: new Set(busy === "removing" && confirm ? [confirm.path] : []) }) : null;
       if (!row || act === null) return;
-      if (act.action === "forget") return void setForgetAsk({ projectId: row.p.id, path: act.path, label: worktreeLabel(row.w) });
+      if (act.action === "forget") return void askForget({ projectId: row.p.id, path: act.path, label: worktreeLabel(row.w) });
       return void ask(row.p.id, row.w.path, worktreeLabel(row.w));
     }
     for (const p of projects) {
@@ -1100,6 +1106,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     }
     if (asked) await remove(asked);
   };
+  // Row 364b: the backend's own verdict decides up front whether the question is offered; a check that cannot be asked still asks.
+  const askForget = (f: { projectId: string; path: string; label: string }) => {
+    invoke<string | null>("workspace_forget_check", { projectId: f.projectId, path: f.path })
+      .catch(() => null)
+      .then((why) => setForgetAsk({ ...f, ...(why ? { refused: why } : {}) }));
+  };
   // Row 364: forgetting drops Kolux's records only, but the row vanishes, so it is confirmed first.
   const forget = async (f: { projectId: string; path: string; label: string }) => {
     setForgetAsk(null);
@@ -1196,6 +1208,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       else if (id === "details") {
         const d = await invoke<{ name: string | null; item: string | null; comment: string }>("workspace_details_get", { path: w.path });
         setDetailsOf({ path: w.path, name: d.name ?? "", item: d.item ?? "", comment: d.comment });
+      } else if (id === "statuses:edit") {
+        const st = await invoke<{ list: { id: string; label: string }[] }>("workspace_statuses", { paths: [w.path] });
+        setStatusesOf({ path: w.path, rows: editorRows(st.list) });
       } else if (id.startsWith("status:")) {
         await invoke("workspace_status_set", { path: w.path, status: id.slice(7) });
         await reload();
@@ -1671,6 +1686,11 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               external
             </span>
           )}
+          {goneFolders.has(w.path) && (
+            <span className="hint" title={folderMissingNote}>
+              missing
+            </span>
+          )}
           {pushTag(w)}
           {groupBy !== "project" && <span className="hint">{projectLabel(p)}</span>}
           {liveCount(w)}
@@ -1752,6 +1772,21 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
         <CardLine shown={cardDetails.shown} facts={facts} depth={depth} />
         {paneRows(w, depth)}
+        {statusesOf?.path === w.path && !asking && (
+          <StatusEditor
+            initial={statusesOf.rows}
+            error={statusesOf.error}
+            onCancel={() => setStatusesOf(null)}
+            onSave={(rows) =>
+              void invoke("workspace_statuses_set", { list: savePayload(rows) })
+                .then(() => {
+                  setStatusesOf(null);
+                  return reload();
+                })
+                .catch((err) => setStatusesOf({ ...statusesOf, rows, error: String(err) }))
+            }
+          />
+        )}
         {detailsOf?.path === w.path && !asking && (
           <div className="sb-form" data-details={worktreeLabel(w)}>
             <input className="field" aria-label="Name" placeholder="Name (blank uses the branch)" value={detailsOf.name} onChange={(e) => setDetailsOf({ ...detailsOf, name: e.target.value })} />
@@ -1827,17 +1862,30 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         )}
         {forgetAsk && same(forgetAsk.path, w.path) && (
           <div className="sb-form warn" data-forget={forgetAsk.label}>
-            <span>
-              Take <b>{forgetAsk.label}</b> out of Kolux? Its folder stays on disk.
-            </span>
-            <div className="btn-row">
-              <button className="btn danger" onClick={() => void forget(forgetAsk)}>
-                Take out
-              </button>
-              <button className="btn" onClick={() => setForgetAsk(null)}>
-                Keep
-              </button>
-            </div>
+            {forgetAsk.refused ? (
+              <>
+                <span>{forgetAsk.refused}</span>
+                <div className="btn-row">
+                  <button className="btn" onClick={() => setForgetAsk(null)}>
+                    OK
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span>
+                  Take <b>{forgetAsk.label}</b> out of Kolux? Its folder stays on disk.
+                </span>
+                <div className="btn-row">
+                  <button className="btn danger" onClick={() => void forget(forgetAsk)}>
+                    Take out
+                  </button>
+                  <button className="btn" onClick={() => setForgetAsk(null)}>
+                    Keep
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
         {asking && (

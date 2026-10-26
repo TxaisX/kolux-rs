@@ -15,6 +15,7 @@ import { mergeRegister } from "@lexical/utils";
 import { registerTable, TABLE, TABLE_NODES } from "./richTable";
 import { registerListKeys } from "./richFormat";
 import { registerRichKeys } from "./richKeys";
+import { registerCodeColour } from "./richCodeColour";
 import { createSlash, type SlashView } from "./slashMenu";
 import { createWiki, type WikiView } from "./wikiPopup";
 import { $importFlowing, DETAILS_NODES, looseCodeRows, makeDetails, withoutSections } from "./richDetails";
@@ -152,6 +153,7 @@ export function mountRich(el: HTMLElement, md: string, onEdit: (md: string, prev
     wiki ? wiki.destroy : () => undefined,
     registerListKeys(editor),
     registerRichKeys(editor),
+    registerCodeColour(editor),
     registerRichText(editor),
     registerHistory(editor, createEmptyHistoryState(), 300),
     registerList(editor),

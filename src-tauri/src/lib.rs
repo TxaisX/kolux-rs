@@ -736,7 +736,7 @@ pub fn run() {
             pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
             pr_review::scm_review_read, pr_review::scm_review_act, pr_review::scm_review_send, pr_review::scm_pr_conflicts,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
-            bulk::workspace_remove_many, bulk::workspace_kept_branch_delete, bulk::workspace_forget,
+            bulk::workspace_remove_many, bulk::workspace_forget, bulk::workspace_forget_check,
             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
             bulk::space_scan, bulk::space_saved,
             ports::ports_list, ports::ports_stop,

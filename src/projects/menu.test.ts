@@ -8,7 +8,7 @@ const W = (path: string, parent?: string) => ({ path, parent });
 describe("PROJ-065 workspace context menu", () => {
   it("lists Delete, Sleep, Move to status, Set parent, Details and Open in for one row", () => {
     expect(ids({})).toEqual(["delete", "sleep", "status", "parent", "details", "open-in"]);
-    expect(rowMenu(base).find((i) => i.id === "status")?.children?.map((c) => c.id)).toEqual(["status:todo"]);
+    expect(rowMenu(base).find((i) => i.id === "status")?.children?.map((c) => c.id)).toEqual(["status:todo", "statuses:edit"]);
   });
   it("a sleeping workspace offers Wake; the main checkout is never deleted or slept", () => {
     expect(ids({ asleep: true })).toContain("wake");
