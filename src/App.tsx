@@ -188,6 +188,7 @@ import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
+import { scopesFor } from "./keys/keyScopes";
 import { installTapReset } from "./shell/inputExtras";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { usePromptScan } from "./status/promptScan";
@@ -637,7 +638,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       const hit =
         tapHit(windowTaps, keymap, e) ||
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
+        matchEvent(keymap, e, scopesFor({ screen, kind, inTree })) ||
         // GIT-042: a preview tab takes the one editor shortcut that applies to it.
         (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
       if (!hit || heldByTerminal(hit.id, settings)) return;
@@ -1169,6 +1170,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "preview", path }]);
     setFocused(key);
   };
+
+  // APP-019: markdown files the system handed to the app open as previews, at start and on each later ask.
+  const openFiles = useRef(openPreview);
+  openFiles.current = openPreview;
+  useEffect(() => {
+    const drain = () => void invoke<string[]>("open_files_take").then((fs) => fs.forEach((f) => openFiles.current(f))).catch(() => undefined);
+    const off = listen("open-files", drain);
+    drain();
+    return () => void off.then((f) => f()).catch(() => undefined);
+  }, []);
 
   // TERM-001: the layout strip sets how many cells the workspace in front holds. Growing adds
   // empty chooser panes (nothing starts on its own); shrinking drops unstarted cells newest

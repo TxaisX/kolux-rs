@@ -10,9 +10,10 @@
 //! need nothing of their own. On Linux a reveal opens the folder without selecting the file; the
 //! FileManager1 D-Bus call would select it.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// File types that run when opened: programs, scripts, installers, shortcuts, macro documents and
 /// the odd Office and web-query types that start a program. Lowercase, without the dot.
@@ -32,6 +33,66 @@ const PROGRAMS: &[&str] = &[
     "crt", "cer", "der", "p7b", "p7c", "pfx", "p12", "xnk", "shb", "shs", "prf", "prg", "pcd", "vsmacros", "vsw",
     "rdp", "appref-ms", "wsb", "msu", "iso", "img", "vhd", "vhdx", "ppkg",
 ];
+
+/// What time it is, so the open limit can be tested with a clock that is moved by hand.
+pub trait Clock {
+    fn now(&self) -> Duration;
+}
+
+/// Time since the first reading in this run (monotonic).
+pub struct RunClock;
+
+impl Clock for RunClock {
+    fn now(&self) -> Duration {
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed()
+    }
+}
+
+/// APP-015 (T-248-c): at most max opens in any window, so a runaway page or script cannot flood the
+/// default browser with tabs. An open that is refused is not counted and does not push the window on.
+pub struct OpenLimit {
+    max: usize,
+    window: Duration,
+    stamps: VecDeque<Duration>,
+}
+
+impl OpenLimit {
+    pub const fn new(max: usize, window: Duration) -> Self {
+        Self { max, window, stamps: VecDeque::new() }
+    }
+
+    /// Counts one open now, or says how long to wait until the oldest one in the window expires.
+    pub fn admit(&mut self, clock: &dyn Clock) -> Result<(), Duration> {
+        let now = clock.now();
+        while let Some(&t) = self.stamps.front() {
+            if now.saturating_sub(t) >= self.window {
+                self.stamps.pop_front();
+            } else {
+                break;
+            }
+        }
+        if self.stamps.len() >= self.max {
+            let oldest = self.stamps.front().copied().unwrap_or(now);
+            return Err(self.window.saturating_sub(now.saturating_sub(oldest)));
+        }
+        self.stamps.push_back(now);
+        Ok(())
+    }
+}
+
+/// Ten browser opens per ten seconds is far more than a person clicks and far less than a loop does.
+static BROWSER_OPENS: Mutex<OpenLimit> = Mutex::new(OpenLimit::new(10, Duration::from_secs(10)));
+
+fn admit_browser_open_at(limit: &Mutex<OpenLimit>, clock: &dyn Clock) -> Result<(), String> {
+    let mut l = limit.lock().unwrap_or_else(|e| e.into_inner());
+    l.admit(clock).map_err(|wait| format!("Too many links were opened in a row. Try again in {} seconds.", wait.as_secs() + u64::from(wait.subsec_nanos() > 0)))
+}
+
+/// The one gate every open in the default browser passes (artifacts::open_external).
+pub fn admit_browser_open() -> Result<(), String> {
+    admit_browser_open_at(&BROWSER_OPENS, &RunClock)
+}
 
 /// Every registered root: the projects, a project's own workspaces folder, and the shared one.
 pub fn roots(store: &Mutex<crate::state::Store>) -> Vec<String> {
@@ -413,6 +474,99 @@ pub async fn editor_open(store: tauri::State<'_, Mutex<crate::state::Store>>, gr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FakeClock(std::cell::Cell<Duration>);
+    impl FakeClock {
+        fn at(ms: u64) -> Self {
+            Self(std::cell::Cell::new(Duration::from_millis(ms)))
+        }
+        fn set(&self, ms: u64) {
+            self.0.set(Duration::from_millis(ms));
+        }
+    }
+    impl Clock for FakeClock {
+        fn now(&self) -> Duration {
+            self.0.get()
+        }
+    }
+
+    fn limit() -> OpenLimit {
+        OpenLimit::new(3, Duration::from_secs(10))
+    }
+
+    #[test]
+    fn app015_a_burst_up_to_the_limit_opens_and_the_next_one_waits() {
+        let (mut l, c) = (limit(), FakeClock::at(1_000));
+        for _ in 0..3 {
+            assert_eq!(l.admit(&c), Ok(()));
+        }
+        assert_eq!(l.admit(&c), Err(Duration::from_secs(10)));
+        assert_eq!(l.admit(&c), Err(Duration::from_secs(10)), "a refusal does not use up or push on the window");
+    }
+
+    #[test]
+    fn app015_the_wait_shrinks_as_the_oldest_open_ages() {
+        let (mut l, c) = (limit(), FakeClock::at(0));
+        for _ in 0..3 {
+            l.admit(&c).unwrap();
+        }
+        c.set(4_000);
+        assert_eq!(l.admit(&c), Err(Duration::from_secs(6)));
+    }
+
+    #[test]
+    fn app015_the_window_resets_at_exactly_its_length() {
+        let (mut l, c) = (limit(), FakeClock::at(5_000));
+        for _ in 0..3 {
+            l.admit(&c).unwrap();
+        }
+        c.set(14_999);
+        assert!(l.admit(&c).is_err(), "one millisecond before the window ends");
+        c.set(15_000);
+        assert_eq!(l.admit(&c), Ok(()), "the oldest opens have aged out exactly at the window");
+        assert_eq!(l.admit(&c), Ok(()));
+        assert_eq!(l.admit(&c), Ok(()));
+        assert!(l.admit(&c).is_err(), "and the limit is back after three more");
+    }
+
+    #[test]
+    fn app015_opens_spread_out_never_hit_the_limit_and_the_window_slides() {
+        let (mut l, c) = (limit(), FakeClock::at(0));
+        for i in 0..20 {
+            c.set(i * 4_000); // 2.5 opens per window
+            assert_eq!(l.admit(&c), Ok(()), "open {i}");
+        }
+        assert!(l.admit(&c).is_err(), "three opens (68s, 72s, 76s) already fill the window at 76s");
+        c.set(80_000);
+        assert_eq!(l.admit(&c), Ok(()), "the 68s open has aged out by 80s");
+    }
+
+    #[test]
+    fn app015_a_clock_that_steps_back_does_not_panic_or_free_the_window() {
+        let (mut l, c) = (limit(), FakeClock::at(20_000));
+        for _ in 0..3 {
+            l.admit(&c).unwrap();
+        }
+        c.set(1_000);
+        assert!(l.admit(&c).is_err());
+    }
+
+    #[test]
+    fn app015_the_gate_says_how_long_to_wait_and_is_shared_by_every_caller() {
+        let (shared, c) = (Mutex::new(OpenLimit::new(2, Duration::from_millis(2_500))), FakeClock::at(0));
+        assert!(admit_browser_open_at(&shared, &c).is_ok());
+        assert!(admit_browser_open_at(&shared, &c).is_ok());
+        let e = admit_browser_open_at(&shared, &c).unwrap_err();
+        assert!(e.contains("Try again in 3 seconds"), "{e}");
+        c.set(2_500);
+        assert!(admit_browser_open_at(&shared, &c).is_ok());
+    }
+
+    #[test]
+    fn app015_the_real_clock_only_moves_forward() {
+        let (a, b) = (RunClock.now(), RunClock.now());
+        assert!(b >= a);
+    }
 
     fn ed(path: &str, console: bool) -> crate::tools::Editor {
         crate::tools::Editor { id: "x".into(), name: "X".into(), path: path.into(), console }

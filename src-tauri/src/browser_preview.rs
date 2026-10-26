@@ -114,6 +114,17 @@ pub fn grant(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// APP-015: allowances last until the main page is rebuilt (a reload); a folder allowed before it asks again.
+pub fn clear_grants() {
+    if let Ok(mut p) = PREVIEWS.lock() {
+        revoke_all(&mut p);
+    }
+}
+
+fn revoke_all(previews: &mut [Preview]) {
+    previews.iter_mut().for_each(|p| p.granted = false);
+}
+
 /// The folder path a request's rest names, or why it may not: a parent step (`..`, in either
 /// slash), a root (`/x`, `\x`), a drive or `\\?\` prefix, or a NUL. The rest is already decoded.
 /// Pure; `respond` canonicalizes the result and checks it again against the real folder, so a
@@ -449,6 +460,18 @@ mod tests {
         p[0].granted = true;
         assert_eq!(respond(&p, "/t1/css/a.css").0, 200);
         assert_eq!(respond(&p, "/t1/a%20b.html").0, 200);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app015_a_rebuilt_window_forgets_every_allowed_folder_but_keeps_the_documents_opened() {
+        let dir = site("revoke");
+        let mut p = vec![open(&dir, true)];
+        assert_eq!(respond(&p, "/t1/css/a.css").0, 200);
+        revoke_all(&mut p);
+        assert!(!p[0].granted);
+        assert_eq!(respond(&p, "/t1/css/a.css").0, 403, "the folder must be allowed again");
+        assert_eq!(respond(&p, "/t1/index.html").0, 200, "the opened document still reads");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

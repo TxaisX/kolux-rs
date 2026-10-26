@@ -463,6 +463,7 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
                 scm::watch::unwatch_all();
+                browser::preview::clear_grants();
             }
         })
         .on_window_event(|window, event| {
@@ -539,6 +540,7 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             sessions::list::sessions_list,
             sessions::list::session_resume_plan,
+            sessions::files::session_delete, sessions::files::session_reveal, sessions::files::session_open,
             session_rows::session_row_detail,
             session_rows::session_name,
             terminal::terminal_spawn,
@@ -920,6 +922,8 @@ pub fn run() {
             update::update_compat,
             lifecycle::close_alive,
             lifecycle::app_restart,
+            lifecycle::open_files_take, // APP-019: the page drains the markdown files the system handed over
+            tray::tray_close_switch_available, // APP-007: Settings hides the close-to-tray switch where it cannot work
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])

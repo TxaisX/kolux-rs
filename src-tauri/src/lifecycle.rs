@@ -14,6 +14,8 @@
 //! steps as the quit's final save, and a step that failed or timed out cancels the restart.
 //! APP-020: a pane's search path takes in entries the stored user and system Path gained since the
 //! app started, after what the process already had, nothing dropped or repeated.
+//! APP-019: markdown files the system hands to the app (double-click, Open with) are picked out of
+//! the launch arguments, queued until the page asks for them, and forwarded by a second launch.
 
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
@@ -244,7 +246,7 @@ pub fn forward_to(dir: &Path) -> Forwarded {
         token: running.token.clone(),
         command: "app.open".into(),
         cwd: std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
-        args: json!({}),
+        args: json!({ "files": launch_markdown() }),
         pane: None,
         cli: env!("CARGO_PKG_VERSION").into(),
         arrived: None,
@@ -260,6 +262,7 @@ pub fn claim_or_forward<R: tauri::Runtime>(app: &tauri::App<R>) {
     match claim(&app.config().identifier) {
         Claim::First(instance) => {
             app.manage(instance);
+            queue_open(&launch_markdown());
         }
         Claim::Second => {
             if let Ok(dir) = app.path().app_data_dir() {
@@ -269,6 +272,127 @@ pub fn claim_or_forward<R: tauri::Runtime>(app: &tauri::App<R>) {
             std::process::exit(DUPLICATE_EXIT);
         }
     }
+}
+
+// ---------------------------------------------------------------- APP-019: markdown from the system
+
+const MARKDOWN_EXT: [&str; 5] = ["md", "markdown", "mdown", "mkd", "mkdn"];
+
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = s.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn is_file_address(a: &str) -> bool {
+    a.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:"))
+}
+
+/// The local path an encoded file address names (`file:///C:/My%20Notes/a.md`), or `None` when the
+/// address is not a local file or does not decode.
+fn file_address_path(addr: &str) -> Option<String> {
+    let rest = addr.get(5..)?.strip_prefix("//")?;
+    let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        return None;
+    }
+    let decoded = percent_decode(path)?;
+    // /C:/dir -> C:/dir
+    let b = decoded.as_bytes();
+    let path = if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' { &decoded[1..] } else { &decoded[..] };
+    Some(if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() })
+}
+
+/// The markdown files among `args` (the launch arguments without the program name), as absolute
+/// paths: encoded file addresses are decoded, relative paths are taken from `cwd`, switches and every
+/// other kind of file are ignored, repeats are dropped.
+pub fn markdown_paths(args: &[String], cwd: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for a in args {
+        let a = a.trim();
+        if a.is_empty() || a.starts_with('-') {
+            continue;
+        }
+        let path = if is_file_address(a) {
+            match file_address_path(a) {
+                Some(p) => PathBuf::from(p),
+                None => continue,
+            }
+        } else {
+            PathBuf::from(a)
+        };
+        let is_markdown = path.extension().and_then(OsStr::to_str).is_some_and(|e| MARKDOWN_EXT.iter().any(|m| m.eq_ignore_ascii_case(e)));
+        if !is_markdown {
+            continue;
+        }
+        let full = if path.is_absolute() { path } else { cwd.join(path) };
+        let full = full.to_string_lossy().into_owned();
+        if !out.contains(&full) {
+            out.push(full);
+        }
+    }
+    out
+}
+
+/// This process's own launch arguments, markdown files only.
+fn launch_markdown() -> Vec<String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    markdown_paths(&args, &std::env::current_dir().unwrap_or_default())
+}
+
+/// Files asked for before the page can take them; the page drains the queue once it is ready, and
+/// again whenever the running copy is asked to open more.
+pub struct OpenQueue(Mutex<Vec<String>>);
+
+impl OpenQueue {
+    pub const fn new() -> Self {
+        Self(Mutex::new(Vec::new()))
+    }
+
+    /// Adds files (each once). Anything that is not a markdown path is dropped here too: the list may
+    /// come from another process over the command-line port.
+    pub fn push(&self, files: &[String]) {
+        let Ok(mut q) = self.0.lock() else { return };
+        for f in markdown_paths(files, Path::new("")) {
+            if !q.contains(&f) {
+                q.push(f);
+            }
+        }
+    }
+
+    /// Everything queued so far, oldest first; the queue is empty afterwards.
+    pub fn take(&self) -> Vec<String> {
+        self.0.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
+    }
+}
+
+static OPEN_QUEUE: OpenQueue = OpenQueue::new();
+
+/// Queues the markdown files among `files`; how many there were.
+pub fn queue_open(files: &[String]) -> usize {
+    OPEN_QUEUE.push(files);
+    markdown_paths(files, Path::new("")).len()
+}
+
+pub fn take_open() -> Vec<String> {
+    OPEN_QUEUE.take()
+}
+
+/// The page asks for the files the system handed over.
+#[tauri::command]
+pub fn open_files_take() -> Vec<String> {
+    take_open()
 }
 
 // ---------------------------------------------------------------- APP-006: closing and quitting
@@ -643,5 +767,46 @@ mod tests {
         let stored = stored_paths();
         assert_eq!(stored.len(), 2, "the system Path and the user Path");
         assert!(stored[0].to_lowercase().contains("windows"), "{}", stored[0]);
+    }
+
+    #[test]
+    fn app019_markdown_files_are_picked_out_of_the_arguments_and_everything_else_is_ignored() {
+        let cwd = Path::new(if cfg!(windows) { "C:\\work" } else { "/work" });
+        let abs = if cfg!(windows) { "C:\\notes\\a.md" } else { "/notes/a.md" };
+        let got = markdown_paths(&[abs.into(), "--flag".into(), "b.txt".into(), "C.MARKDOWN".into(), "".into(), "tool.exe".into(), "d".into()], cwd);
+        assert_eq!(got, vec![abs.to_string(), cwd.join("C.MARKDOWN").to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn app019_an_encoded_file_address_with_spaces_is_decoded_so_it_still_opens() {
+        let got = markdown_paths(&["file:///C:/My%20Notes/caf%C3%A9.md".into()], Path::new("/x"));
+        let want = if cfg!(windows) { "C:\\My Notes\\café.md" } else { "C:/My Notes/café.md" };
+        assert_eq!(got, vec![want.to_string()]);
+        let unix = markdown_paths(&["file:///home/me/a%20b.md".into(), "FILE://localhost/home/me/c.md".into()], Path::new("/x"));
+        let (a, c) = if cfg!(windows) { ("\\home\\me\\a b.md", "\\home\\me\\c.md") } else { ("/home/me/a b.md", "/home/me/c.md") };
+        assert_eq!(unix, vec![a.to_string(), c.to_string()]);
+    }
+
+    #[test]
+    fn app019_a_bad_encoding_a_remote_host_or_a_non_markdown_address_is_ignored() {
+        let bad = ["file:///C:/a%2.md", "file:///C:/a%ZZ.md", "file://server/share/a.md", "file:///C:/a.txt"];
+        let args: Vec<String> = bad.iter().map(|s| s.to_string()).collect();
+        let got = markdown_paths(&args, Path::new("/x"));
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn app019_a_file_repeated_is_listed_once() {
+        let p = if cfg!(windows) { "C:\\a.md" } else { "/a.md" };
+        assert_eq!(markdown_paths(&[p.into(), p.into()], Path::new("/x")).len(), 1);
+    }
+
+    #[test]
+    fn app019_files_asked_for_before_the_page_is_ready_wait_in_the_queue_in_order_and_come_out_once() {
+        let queue = OpenQueue::new();
+        let (a, b, skip) = if cfg!(windows) { ("C:\\q\\1.md", "C:\\q\\2.md", "C:\\q\\skip.txt") } else { ("/q/1.md", "/q/2.md", "/q/skip.txt") };
+        queue.push(&[a.into(), skip.into(), b.into(), a.into()]);
+        assert_eq!(queue.take(), vec![a.to_string(), b.to_string()]);
+        assert!(queue.take().is_empty());
     }
 }
