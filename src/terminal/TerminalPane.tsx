@@ -847,10 +847,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     });
 
     (async () => {
+      // ux card 6: the four registrations are IPC round trips; asked together they cost one, not four.
       unlisteners.push(
+        ...(await Promise.all([
         // TERM-098: a chunk tagged with this pane's key is drawn at once, before terminal_spawn answers;
         // anything else that arrives first is held until the id is known and replayed then.
-        await listen<OutputEvent>("terminal-output", (e) => {
+        listen<OutputEvent>("terminal-output", (e) => {
           // APP-052: output from a replaced run of the terminal service is dropped, never drawn.
           if (!fromThisService(e.payload.generation, serviceRef.current)) return;
           // ORCH-057: already in the snapshot this pane redrew from; acknowledged unread so the reader's count stays true
@@ -875,17 +877,17 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           else mine(e.payload.id, draw);
         }),
         // CLI-024: the app asks for the frame as it looks now; the rows on screen go back by id.
-        await listen<{ id: number; request: string }>("terminal-screen-request", (e) => {
+        listen<{ id: number; request: string }>("terminal-screen-request", (e) => {
           if (e.payload.id !== idRef.current) return;
           const buf = term.buffer.active;
           const rows: string[] = [];
           for (let y = 0; y < term.rows; y++) rows.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? "");
           invoke("terminal_screen_reply", { request: e.payload.request, rows }).catch(() => {});
         }),
-        await listen<{ terminal: number; agent: string | null }>("pane-agent", (e) =>
+        listen<{ terminal: number; agent: string | null }>("pane-agent", (e) =>
           mine(e.payload.terminal, () => setFound(foundAgent(e.payload.agent))),
         ),
-        await listen<ExitEvent>("terminal-exit", (e) =>
+        listen<ExitEvent>("terminal-exit", (e) =>
           mine(e.payload.id, () => {
             ended = true;
             openGate(); // whatever a shell printed before dying is shown with its exit
@@ -909,6 +911,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             else setDied(code);
           }),
         ),
+        ])),
       );
       if (!alive) {
         // Unmounted while the listeners were registering (StrictMode's double mount): let them go,

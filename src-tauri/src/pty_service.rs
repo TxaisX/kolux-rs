@@ -594,6 +594,10 @@ pub enum Probe {
 
 pub fn probe(dir: &Path, wait: Duration) -> Probe {
     let Some(ep) = read_endpoint(dir) else { return Probe::None };
+    // ux card 6: a service killed with its window leaves its record; a dead loopback port takes Windows ~2 s to refuse.
+    if crate::procs::wait_gone(&[ep.pid], Duration::ZERO).is_empty() {
+        return Probe::None;
+    }
     match Client::connect(&ep, wait) {
         Ok(c) => match compatible(c.protocol()) {
             Ok(()) => Probe::Ready(ep, c),
@@ -968,6 +972,21 @@ mod tests {
         remove_endpoint_if_ours(&dir, 42);
         assert!(read_endpoint(&dir).is_none());
         assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "no temporary file left behind");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    /// ux card 6: Windows takes about 2 s to refuse a dead loopback port, and a service killed with its window leaves its
+    /// record behind; a record whose process is gone must read as "no service" at once.
+    #[test]
+    fn ux6_a_recorded_service_whose_process_is_gone_is_not_dialled() {
+        let dir = scratch("ux6gone");
+        let port = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let mut done = if cfg!(windows) { std::process::Command::new("cmd").args(["/C", "exit"]).spawn() } else { std::process::Command::new("true").spawn() }.unwrap();
+        let pid = done.id();
+        done.wait().unwrap();
+        write_endpoint(&dir, &Endpoint { port, token: "t".into(), pid, generation: 1, protocol: PROTOCOL }).unwrap();
+        let t = Instant::now();
+        assert!(matches!(probe(&dir, PROBE_WAIT), Probe::None));
+        assert!(t.elapsed() < Duration::from_millis(500), "took {:?}", t.elapsed());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
