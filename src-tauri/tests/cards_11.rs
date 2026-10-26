@@ -2,7 +2,10 @@
 //! Every repository is a fresh `git init` under the scratch root G:\Temp\cards-v3\, every "remote" a
 //! local bare repository beside it; git's own config files are replaced by empty scratch files.
 
-use kolux_rs_lib::scm::{commit, discard_paths, remote, stage, status, Change, Status};
+use kolux_rs_lib::git::Git;
+use kolux_rs_lib::projects::{add_project, create_workspace, place_from, remove_check, remove_worktree, removal_refused};
+use kolux_rs_lib::scm::{commit, discard_paths, remote, stage, status, summary, Change, Status};
+use kolux_rs_lib::state::Store;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,11 +19,15 @@ fn norm(p: &Path) -> String {
 /// A fresh folder under the scratch root; refuses to run when the agent homes are not redirected there,
 /// and points git away from the user's config before any repository exists.
 fn scratch(tag: &str) -> PathBuf {
+    scratch_in("git11", tag)
+}
+
+fn scratch_in(sub: &str, tag: &str) -> PathBuf {
     for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
         let v = std::env::var(var).unwrap_or_default();
         assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
     }
-    let base = Path::new(ROOT).join("git11");
+    let base = Path::new(ROOT).join(sub);
     std::fs::create_dir_all(&base).unwrap();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -304,4 +311,98 @@ fn git007_box1_two_local_commits_are_two_to_push_and_pushing_brings_the_counts_t
     assert_eq!((zero.ahead, zero.behind), (0, 0));
     assert_eq!(g(&bare, &["rev-parse", "main"]), g(&w, &["rev-parse", "HEAD"]), "origin holds both commits");
     save_states("git007", json!({ "two": snapshot(&two), "zero": snapshot(&zero) }));
+}
+
+// ---- batch 2 (scratch root git11b) ----
+
+fn git016_state(w: &Path) -> Value {
+    json!({ "status": snapshot(&status(w).unwrap()), "summary": serde_json::to_value(summary(w, Some("main"), false).unwrap()).unwrap() })
+}
+
+#[test]
+fn git016_boxes_60_changed_files_and_a_clean_branch_feed_the_review_prompt_real_statuses() {
+    let _lock = STATES.lock().unwrap_or_else(|e| e.into_inner());
+    let d = scratch_in("git11b", "git016");
+    let (w, _bare) = with_origin(&d);
+    g(&w, &["checkout", "-q", "-b", "feature"]);
+    let clean = git016_state(&w);
+    assert_eq!(clean["summary"]["files"], 0);
+    assert!(paths(&status(&w).unwrap().changed).is_empty());
+    for i in 1..=60 {
+        write(&w, &format!("src/f{i}.ts"), "x
+");
+    }
+    let uncommitted = git016_state(&w);
+    assert_eq!(status(&w).unwrap().untracked.len(), 60);
+    g(&w, &["add", "."]);
+    g(&w, &["commit", "-q", "-m", "sixty"]);
+    let committed = git016_state(&w);
+    assert_eq!(committed["summary"]["files"], 60);
+    save_states("git016", json!({ "clean": clean, "uncommitted60": uncommitted, "committed60": committed }));
+}
+
+/// A project over a repo with a local bare origin, its profile store beside it (all under git11b).
+fn project_over(git: &Git, d: &Path) -> (Store, kolux_rs_lib::projects::Project, PathBuf) {
+    let (w, _bare) = with_origin(d);
+    let profile = d.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    let store = Store::open(&profile).unwrap();
+    let project = add_project(git, &store, &w).unwrap();
+    (store, project, w)
+}
+
+#[test]
+fn git067_box1_an_ignored_file_named_in_the_include_file_is_present_in_the_new_worktree() {
+    let d = scratch_in("git11b", "git067a");
+    let git = Git::detect().unwrap();
+    let (store, project, w) = project_over(&git, &d);
+    write(&w, ".gitignore", ".env.local
+notes.log
+");
+    g(&w, &["add", ".gitignore"]);
+    g(&w, &["commit", "-q", "-m", "ignore"]);
+    write(&w, ".env.local", "TOKEN=fake-not-a-secret
+");
+    write(&w, "notes.log", "not named in the include file
+");
+    write(&w, ".worktreeinclude", "# local secrets
+.env.local
+");
+    let place = place_from(&project, &json!({}));
+    let made = create_workspace(&git, &place, &project, "with-env", Some("main")).unwrap();
+    let wt = PathBuf::from(&made.worktree.path);
+    assert_eq!(std::fs::read_to_string(wt.join(".env.local")).unwrap(), "TOKEN=fake-not-a-secret
+", "the ignored file named in the include file is copied in");
+    assert!(!wt.join("notes.log").exists(), "an ignored file the include file does not name stays behind");
+    assert!(wt.join("seed.txt").exists());
+    drop(store);
+}
+
+#[test]
+fn git067_box2_deleting_a_workspace_with_uncommitted_work_is_refused_until_the_work_is_gone() {
+    let d = scratch_in("git11b", "git067b");
+    let git = Git::detect().unwrap();
+    let (store, project, _w) = project_over(&git, &d);
+    let place = place_from(&project, &json!({}));
+    let made = create_workspace(&git, &place, &project, "dirty-one", Some("main")).unwrap();
+    let wt = PathBuf::from(&made.worktree.path);
+    write(&wt, "seed.txt", "edited
+");
+    write(&wt, "new.txt", "untracked
+");
+    let now = remove_check(&git, &project, &made.worktree.path).unwrap();
+    assert_eq!(now.changes.len(), 2, "{:?}", now.changes);
+    let why = removal_refused(&now, false, &now.stamp).expect("refused");
+    assert!(why.contains("2 uncommitted or untracked changes would be lost"), "{why}");
+    let err = remove_worktree(&git, &project, &made.worktree.path, false, false);
+    assert!(err.is_err() && wt.exists(), "removal must not go through: {err:?}");
+    assert!(wt.join("new.txt").exists() && std::fs::read_to_string(wt.join("seed.txt")).unwrap() == "edited
+", "nothing was lost");
+    // Control: once the work is gone the same removal goes through and takes the branch.
+    g(&wt, &["checkout", "-q", "--", "seed.txt"]);
+    std::fs::remove_file(wt.join("new.txt")).unwrap();
+    assert!(removal_refused(&remove_check(&git, &project, &made.worktree.path).unwrap(), false, &remove_check(&git, &project, &made.worktree.path).unwrap().stamp).is_none());
+    remove_worktree(&git, &project, &made.worktree.path, false, false).unwrap();
+    assert!(!wt.exists());
+    drop(store);
 }

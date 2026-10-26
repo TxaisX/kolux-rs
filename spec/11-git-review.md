@@ -110,9 +110,9 @@ Rules: a branch name already taken locally or on the configured remote is caught
   worktree has it checked out; if checking whether a base branch exists fails, for example offline,
   the answer is unknown rather than missing, and malformed branch input is never run.
 Acceptance:
-  - [ ] Name an ignored file in the include file and create a workspace → the file is present in the
-        new worktree.
-  - [ ] Delete a workspace with uncommitted work → Kolux refuses or asks before anything is lost.
+  - [x] Name an ignored file in the include file and create a workspace → the file is present in the
+        new worktree. (cards; evidence/cards-GIT-067.txt)
+  - [x] Delete a workspace with uncommitted work → Kolux refuses or asks before anything is lost. (cards; evidence/cards-GIT-067.txt)
 Compat: existing repositories may already carry the root include file (one path per line, a hash
   sign starts a comment) and a shared-folders list in kolux.yaml; both are user-facing and should
   keep working under their existing names (the exact spellings are in COMPAT.md 5.6; OD-14 in
@@ -150,9 +150,9 @@ Rules: each list of files in the prompt stops at 50 entries and then says how ma
   if the branch has no changes to look at, a plain message says so and no agent launches; this
   shipped in 0.12.0.
 Acceptance:
-  - [ ] Change 60 files and run it → the prompt names the base, lists 50 files and mentions 10 more.
-  - [ ] Run it on a clean branch → a plain message explains the branch has no changes to look at; no
-        agent starts.
+  - [x] Change 60 files and run it → the prompt names the base, lists 50 files and mentions 10 more. (cards; evidence/cards-GIT-016.txt)
+  - [x] Run it on a clean branch → a plain message explains the branch has no changes to look at; no
+        agent starts. (cards; evidence/cards-GIT-016.txt)
 Compat: —
 Source: D-11-016
 
@@ -199,8 +199,8 @@ Rules: notes attach only to lines present in the diff; edits are trimmed and an 
   refused; saved notes keep their height reserved so the lines below do not shift; the note popover
   stays inside the window and closes on a click outside it.
 Acceptance:
-  - [ ] Add a note on line 12 → the card sits under line 12; switch to side-by-side → still under
-        line 12.
+  - [x] Add a note on line 12 → the card sits under line 12; switch to side-by-side → still under
+        line 12. (cards; evidence/cards-GIT-040.txt)
   - [ ] Edit the note → the open card updates; click trash → it is gone.
 Compat: Add Review Note defaults to Mod+Shift+A (its command id is an allowlist candidate).
 Source: D-11-040
@@ -218,8 +218,8 @@ Rules: a note can be opened at its line, copied or deleted, and notes can be cle
   keep notes as well; an empty notes section explains how to add one; sending notes has no default
   key and the user may bind one.
 Acceptance:
-  - [ ] Add three notes across two files and send → the agent gets all three and they show as sent.
-  - [ ] Edit a note while a send is running, then clear delivered → the edited note remains.
+  - [x] Add three notes across two files and send → the agent gets all three and they show as sent. (cards; evidence/cards-GIT-041.txt)
+  - [x] Edit a note while a send is running, then clear delivered → the edited note remains. (cards; evidence/cards-GIT-041.txt)
 Compat: the send-notes command has no default key (its command id is an allowlist candidate).
 Source: D-11-041
 

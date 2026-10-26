@@ -216,5 +216,988 @@
       "submodulesCut": 0,
       "cut": 0
     }
+  },
+  "git016": {
+    "clean": {
+      "status": {
+        "branch": "feature",
+        "upstream": null,
+        "upstreamRemote": null,
+        "ahead": 0,
+        "behind": 0,
+        "rewritten": false,
+        "base": "main",
+        "heavy": [],
+        "staged": [],
+        "changed": [],
+        "untracked": [],
+        "conflicts": [],
+        "operation": null,
+        "resolved": [],
+        "lines": {
+          "staged": {},
+          "changed": {},
+          "untracked": {}
+        },
+        "submodules": {},
+        "submodulesCut": 0,
+        "cut": 0
+      },
+      "summary": {
+        "against": "main",
+        "ahead": 0,
+        "behind": 0,
+        "source": {
+          "added": 0,
+          "removed": 0
+        },
+        "tests": {
+          "added": 0,
+          "removed": 0
+        },
+        "generated": {
+          "added": 0,
+          "removed": 0
+        },
+        "files": 0,
+        "committed": [],
+        "linesSkipped": false
+      }
+    },
+    "uncommitted60": {
+      "status": {
+        "branch": "feature",
+        "upstream": null,
+        "upstreamRemote": null,
+        "ahead": 0,
+        "behind": 0,
+        "rewritten": false,
+        "base": "main",
+        "heavy": [],
+        "staged": [],
+        "changed": [],
+        "untracked": [
+          {
+            "path": "src/f1.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f10.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f11.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f12.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f13.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f14.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f15.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f16.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f17.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f18.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f19.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f2.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f20.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f21.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f22.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f23.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f24.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f25.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f26.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f27.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f28.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f29.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f3.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f30.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f31.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f32.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f33.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f34.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f35.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f36.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f37.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f38.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f39.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f4.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f40.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f41.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f42.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f43.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f44.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f45.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f46.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f47.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f48.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f49.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f5.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f50.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f51.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f52.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f53.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f54.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f55.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f56.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f57.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f58.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f59.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f6.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f60.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f7.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f8.ts",
+            "status": "U",
+            "from": null
+          },
+          {
+            "path": "src/f9.ts",
+            "status": "U",
+            "from": null
+          }
+        ],
+        "conflicts": [],
+        "operation": null,
+        "resolved": [],
+        "lines": {
+          "staged": {},
+          "changed": {},
+          "untracked": {
+            "src/f1.ts": [
+              1,
+              0
+            ],
+            "src/f10.ts": [
+              1,
+              0
+            ],
+            "src/f11.ts": [
+              1,
+              0
+            ],
+            "src/f12.ts": [
+              1,
+              0
+            ],
+            "src/f13.ts": [
+              1,
+              0
+            ],
+            "src/f14.ts": [
+              1,
+              0
+            ],
+            "src/f15.ts": [
+              1,
+              0
+            ],
+            "src/f16.ts": [
+              1,
+              0
+            ],
+            "src/f17.ts": [
+              1,
+              0
+            ],
+            "src/f18.ts": [
+              1,
+              0
+            ],
+            "src/f19.ts": [
+              1,
+              0
+            ],
+            "src/f2.ts": [
+              1,
+              0
+            ],
+            "src/f20.ts": [
+              1,
+              0
+            ],
+            "src/f21.ts": [
+              1,
+              0
+            ],
+            "src/f22.ts": [
+              1,
+              0
+            ],
+            "src/f23.ts": [
+              1,
+              0
+            ],
+            "src/f24.ts": [
+              1,
+              0
+            ],
+            "src/f25.ts": [
+              1,
+              0
+            ],
+            "src/f26.ts": [
+              1,
+              0
+            ],
+            "src/f27.ts": [
+              1,
+              0
+            ],
+            "src/f28.ts": [
+              1,
+              0
+            ],
+            "src/f29.ts": [
+              1,
+              0
+            ],
+            "src/f3.ts": [
+              1,
+              0
+            ],
+            "src/f30.ts": [
+              1,
+              0
+            ],
+            "src/f31.ts": [
+              1,
+              0
+            ],
+            "src/f32.ts": [
+              1,
+              0
+            ],
+            "src/f33.ts": [
+              1,
+              0
+            ],
+            "src/f34.ts": [
+              1,
+              0
+            ],
+            "src/f35.ts": [
+              1,
+              0
+            ],
+            "src/f36.ts": [
+              1,
+              0
+            ],
+            "src/f37.ts": [
+              1,
+              0
+            ],
+            "src/f38.ts": [
+              1,
+              0
+            ],
+            "src/f39.ts": [
+              1,
+              0
+            ],
+            "src/f4.ts": [
+              1,
+              0
+            ],
+            "src/f40.ts": [
+              1,
+              0
+            ],
+            "src/f41.ts": [
+              1,
+              0
+            ],
+            "src/f42.ts": [
+              1,
+              0
+            ],
+            "src/f43.ts": [
+              1,
+              0
+            ],
+            "src/f44.ts": [
+              1,
+              0
+            ],
+            "src/f45.ts": [
+              1,
+              0
+            ],
+            "src/f46.ts": [
+              1,
+              0
+            ],
+            "src/f47.ts": [
+              1,
+              0
+            ],
+            "src/f48.ts": [
+              1,
+              0
+            ],
+            "src/f49.ts": [
+              1,
+              0
+            ],
+            "src/f5.ts": [
+              1,
+              0
+            ],
+            "src/f50.ts": [
+              1,
+              0
+            ],
+            "src/f51.ts": [
+              1,
+              0
+            ],
+            "src/f52.ts": [
+              1,
+              0
+            ],
+            "src/f53.ts": [
+              1,
+              0
+            ],
+            "src/f54.ts": [
+              1,
+              0
+            ],
+            "src/f55.ts": [
+              1,
+              0
+            ],
+            "src/f56.ts": [
+              1,
+              0
+            ],
+            "src/f57.ts": [
+              1,
+              0
+            ],
+            "src/f58.ts": [
+              1,
+              0
+            ],
+            "src/f59.ts": [
+              1,
+              0
+            ],
+            "src/f6.ts": [
+              1,
+              0
+            ],
+            "src/f60.ts": [
+              1,
+              0
+            ],
+            "src/f7.ts": [
+              1,
+              0
+            ],
+            "src/f8.ts": [
+              1,
+              0
+            ],
+            "src/f9.ts": [
+              1,
+              0
+            ]
+          }
+        },
+        "submodules": {},
+        "submodulesCut": 0,
+        "cut": 0
+      },
+      "summary": {
+        "against": "main",
+        "ahead": 0,
+        "behind": 0,
+        "source": {
+          "added": 0,
+          "removed": 0
+        },
+        "tests": {
+          "added": 0,
+          "removed": 0
+        },
+        "generated": {
+          "added": 0,
+          "removed": 0
+        },
+        "files": 0,
+        "committed": [],
+        "linesSkipped": false
+      }
+    },
+    "committed60": {
+      "status": {
+        "branch": "feature",
+        "upstream": null,
+        "upstreamRemote": null,
+        "ahead": 0,
+        "behind": 0,
+        "rewritten": false,
+        "base": "main",
+        "heavy": [],
+        "staged": [],
+        "changed": [],
+        "untracked": [],
+        "conflicts": [],
+        "operation": null,
+        "resolved": [],
+        "lines": {
+          "staged": {},
+          "changed": {},
+          "untracked": {}
+        },
+        "submodules": {},
+        "submodulesCut": 0,
+        "cut": 0
+      },
+      "summary": {
+        "against": "main",
+        "ahead": 1,
+        "behind": 0,
+        "source": {
+          "added": 60,
+          "removed": 0
+        },
+        "tests": {
+          "added": 0,
+          "removed": 0
+        },
+        "generated": {
+          "added": 0,
+          "removed": 0
+        },
+        "files": 60,
+        "committed": [
+          {
+            "path": "src/f1.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f10.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f11.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f12.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f13.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f14.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f15.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f16.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f17.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f18.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f19.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f2.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f20.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f21.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f22.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f23.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f24.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f25.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f26.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f27.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f28.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f29.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f3.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f30.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f31.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f32.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f33.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f34.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f35.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f36.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f37.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f38.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f39.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f4.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f40.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f41.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f42.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f43.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f44.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f45.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f46.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f47.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f48.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f49.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f5.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f50.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f51.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f52.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f53.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f54.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f55.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f56.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f57.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f58.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f59.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f6.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f60.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f7.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f8.ts",
+            "status": "A",
+            "from": null
+          },
+          {
+            "path": "src/f9.ts",
+            "status": "A",
+            "from": null
+          }
+        ],
+        "linesSkipped": false
+      }
+    }
   }
 }
