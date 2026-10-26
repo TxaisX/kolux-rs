@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseArgs, beginFork, canContinue, contextText, continueLaunch, endFork, forkLaunch, newFork, sessionActions, sessionMenuActions, type SessionPane } from "./sessionFork";
+import { baseArgs, beginFork, canContinue, contextText, continueLaunch, endFork, forkLaunch, forkTitle, newFork, sessionActions, sessionMenuActions, type SessionPane } from "./sessionFork";
 import { autoPowerShell, shellIconOf, windowsShellMenu, withDefaultFirst, type ShellEntry } from "./shellChoice";
 
 const P = (over: Partial<SessionPane> = {}): SessionPane => ({ agent: "claude", session: "abc-123", program: null, args: [], ...over });
@@ -87,5 +87,23 @@ describe("after117: the pane menu runs the session actions", () => {
     expect(sessionMenuActions(P(), { copy: () => {} }).map((a) => a.id)).toEqual(["copyContext"]);
     expect(sessionMenuActions(P({ session: undefined }), { launch: () => {}, copy: () => {} })).toEqual([]);
     expect(sessionMenuActions(P({ agent: "shell" }), { launch: () => {}, copy: () => {} })).toEqual([]);
+  });
+});
+
+describe("after776 TERM-037: Fork Agent Session asks for a name first", () => {
+  it("with the dialog wired, Fork opens it and starts nothing; Continue still starts at once", () => {
+    const launched: boolean[] = [];
+    const asked: string[][] = [];
+    const acts = sessionMenuActions(P({ cwd: "C:/w/a" }), { launch: (_l, fork) => launched.push(fork), askFork: (l) => asked.push(l.args), copy: () => {} });
+    acts.find((a) => a.id === "forkSession")?.run();
+    expect(launched).toEqual([]);
+    expect(asked).toEqual([["--resume", "abc-123", "--fork-session"]]);
+    acts.find((a) => a.id === "continueSession")?.run();
+    expect(launched).toEqual([false]);
+  });
+  it("the typed name becomes the pane title: trimmed, one-spaced, capped, empty means none", () => {
+    expect(forkTitle("  try   the   other   way ")).toBe("try the other way");
+    expect(forkTitle("   ")).toBeUndefined();
+    expect(forkTitle("x".repeat(200))?.length).toBe(80);
   });
 });

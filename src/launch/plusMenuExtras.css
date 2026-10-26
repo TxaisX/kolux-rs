@@ -1,0 +1,8 @@
+/* TERM-042 / TERM-043: the entry box and the shell submenu in the plus menu. */
+.menu-entry { margin-bottom: 4px; }
+.menu-entry-rows { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; margin-bottom: 4px; }
+.menu-entry-rows .menu-item[aria-selected="true"] { background: var(--row-selected); }
+.menu-entry-rows .name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-entry-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-size: 11.5px; color: var(--fg-faint); }
+.menu-sub { padding-left: 16px; }
+.shell-mark { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 13px; padding: 0 2px; border-radius: 3px; font: 600 8.5px/1 var(--mono, ui-monospace, monospace); letter-spacing: 0; color: var(--fg-muted); border: 1px solid var(--line-strong); }
