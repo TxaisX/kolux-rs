@@ -945,12 +945,15 @@ impl Mail {
     /// The saved mail. A blob that does not read is kept aside first (row 193, `kept`); a store that
     /// cannot be read at all loads empty but marked `unread`, so it is never saved over.
     pub fn load(store: &crate::state::Store) -> Mail {
-        kept::load(store, KEY).unwrap_or_else(|_| Mail { unread: true, ..Mail::default() })
+        kept::load(store, KEY).unwrap_or_else(|why| {
+            eprintln!("kolux-rs: {why}");
+            Mail { unread: true, ..Mail::default() }
+        })
     }
 
     pub fn save(&self, store: &crate::state::Store) -> Result<(), Fail> {
         if self.unread {
-            return Err(Fail::new("failed", "the orchestration mail could not be read, so nothing was saved over it; try again"));
+            return Err(Fail::new("failed", format!("the orchestration mail ({KEY}) could not be read, so nothing was saved over it; try again")));
         }
         let text = serde_json::to_string(self).map_err(|e| Fail::new("failed", e.to_string()))?;
         store.set(KEY, &text).map_err(|e| Fail::new("failed", e.to_string()))
