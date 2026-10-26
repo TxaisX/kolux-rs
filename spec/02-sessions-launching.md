@@ -148,9 +148,9 @@ Rules: the default is one copy per seat for 2+ seats in a git project, and the s
   short explanation; plain terminal seats always open in the current folder, whichever option is
   chosen.
 Acceptance:
-  - [ ] Open the launch screen with 3 seats in a git project → separate copies is selected.
-  - [ ] Switch to the shared folder → a warning with a fix button appears; click the fix → separate copies is selected again.
-  - [ ] Open the launch screen on a folder outside git → the separate-copy option is disabled and explained.
+  - [x] Open the launch screen with 3 seats in a git project → separate copies is selected. (cards; evidence/cards-SESS-014.txt)
+  - [x] Switch to the shared folder → a warning with a fix button appears; click the fix → separate copies is selected again. (cards; evidence/cards-SESS-014.txt)
+  - [x] Open the launch screen on a folder outside git → the separate-copy option is disabled and explained. (cards; evidence/cards-SESS-014.txt)
 Compat: —
 Source: D-02-014
 
