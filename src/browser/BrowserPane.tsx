@@ -33,6 +33,8 @@ import { documentPathOf, dropVerdict, openSource, openWithSystemApp, overPane, p
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
 import { DrawCanvas } from "./DrawCanvas";
+import { type Grab, grabElement } from "./grabFlow";
+import { GrabSheet } from "./GrabSheet";
 import { capturePage, type Picture } from "./picture";
 import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
 
@@ -160,6 +162,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const draftBox = useRef<HTMLTextAreaElement>(null);
   // T-241 (BROW-038): the page's picture while the drawing canvas covers the page.
   const [drawing, setDrawing] = useState<Picture | null>(null);
+  // T-240 (BROW-035): grab mode: the picker runs and its next pick opens the details sheet (`grab`) instead of a note.
+  const [grabMode, setGrabMode] = useState(false);
+  const [grab, setGrab] = useState<Grab | null>(null);
+  const grabbing = useRef(false);
   const focusMe = useRef(onFocus);
   focusMe.current = onFocus;
   const closeMe = useRef(onClose);
@@ -400,7 +406,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     const el = host.current!;
     const send = (theme = false) => {
       // T-074: while the recovery overlay shows, the page is hidden so the overlay can cover it.
-      const shown = !hidden && !overlay && !drawing && el.clientWidth > 0 && el.clientHeight > 0;
+      const shown = !hidden && !overlay && !drawing && !grab && el.clientWidth > 0 && el.clientHeight > 0;
       const background = theme ? backgroundBehind(el) : undefined;
       invoke("browser_bounds", { id, spot: shown ? spot(el) : { x: 0, y: 0, w: 0, h: 0 }, shown, background }).catch(() => {});
     };
@@ -424,7 +430,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       themed.disconnect();
       window.removeEventListener("resize", resized);
     };
-  }, [id, open, hidden, overlay, drawing]);
+  }, [id, open, hidden, overlay, drawing, grab]);
 
   // T-074: the probe, about four times a second while the page is on screen (BROW-008), paused
   // while the tab is hidden or the overlay covers the page. One probe in flight at a time.
@@ -479,7 +485,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         const r = readPicks(await invoke("browser_annotate", { id, what: "poll" }));
         if (!r.active) await invoke("browser_annotate", { id, what: "start" });
         if (r.escape) setPicking(false);
-        if (r.picks.length) setDraft((d) => d ?? r.picks[0]);
+        if (r.picks.length) {
+          if (grabbing.current) grabPicked(r.picks[0]);
+          else setDraft((d) => d ?? r.picks[0]);
+        }
       } catch {
         setPicking(false);
       } finally {
@@ -491,6 +500,35 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   useEffect(() => {
     if (draft) draftBox.current?.focus();
   }, [draft]);
+  // T-240 (BROW-035): Grab ends with the picker (a pick, Esc in the page, or the Annotate button).
+  useEffect(() => {
+    if (!picking) {
+      grabbing.current = false;
+      setGrabMode(false);
+    }
+  }, [picking]);
+  // The pick ends picking, then the element is cut out of the page's picture and the sheet covers the page.
+  const grabPicked = (pick: Pick) => {
+    grabbing.current = false;
+    setPicking(false);
+    grabElement(invoke, id, pick)
+      .then(setGrab)
+      .catch((err) => setNote(err instanceof Error ? err.message : String(err)));
+  };
+  const startGrab = () => {
+    if (grabMode) return stopPicking();
+    setNote(null);
+    grabbing.current = true;
+    setGrabMode(true);
+    if (picking) return;
+    invoke("browser_annotate", { id, what: "start" })
+      .then(() => setPicking(true))
+      .catch((err) => {
+        grabbing.current = false;
+        setGrabMode(false);
+        setNote(String(err));
+      });
+  };
   const stopPicking = () => {
     setPicking(false);
     invoke("browser_annotate", { id, what: "stop" }).catch(() => {});
@@ -913,6 +951,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           <button className="ib txt" data-go="draw" onClick={startDraw} disabled={!open || !!overlay || !!drawing} title="Draw on a picture of the page and send it to an agent" aria-label="Draw on the page">
             Draw
           </button>
+          {/* T-240 (BROW-035): grab one element: pick it, then see its details and picture and copy or send them. */}
+          <button className={`ib txt${grabMode ? " on" : ""}`} data-go="grab" onClick={startGrab} disabled={!open || !!overlay || !!drawing || !!grab} title={grabMode ? "Stop picking an element" : "Grab an element: pick it to see its details and picture"} aria-label="Grab an element" aria-pressed={grabMode}>
+            Grab
+          </button>
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
@@ -1125,6 +1167,19 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             onSend={onSend}
             onClose={(done) => {
               setDrawing(null);
+              if (done) setNote(done);
+            }}
+          />
+        )}
+        {grab && (
+          <GrabSheet
+            grab={grab}
+            title={title ?? ""}
+            url={at.current}
+            targets={targets}
+            onSend={onSend}
+            onClose={(done) => {
+              setGrab(null);
               if (done) setNote(done);
             }}
           />
