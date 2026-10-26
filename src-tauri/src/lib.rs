@@ -22,7 +22,7 @@ pub mod claude_key;
 pub mod codex_accounts;
 pub mod codex_usage;
 mod creatures;
-mod diag;
+pub mod diag;
 mod editor_drafts;
 mod editor_search;
 pub mod fence;

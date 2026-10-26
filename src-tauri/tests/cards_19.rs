@@ -46,3 +46,66 @@ fn app054_box2_ending_one_of_three_sessions_stops_only_that_one() {
     assert!(left.is_empty(), "cleanup: {left:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------- APP-048 box 1 / APP-050 box 1: the profile after a hard kill
+
+fn fixture(part: &str) -> (serde_json::Map<String, serde_json::Value>, Vec<String>) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("evidence").join("cards-APP-048-050-patches.json");
+    let all: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the patches fixture is there")).unwrap();
+    let set = all[part]["set"].as_object().expect("set is an object").clone();
+    let remove = all[part]["remove"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_owned()).collect();
+    (set, remove)
+}
+
+/// The writer half, run as a child of `app048_box1_*` (a no-op in a normal run): applies the exact `settings_patch`
+/// arguments the window sends (src/settings/__cards__/APP-048-050.test.ts), reports ready, then waits to be killed.
+#[test]
+fn app048_child_writer() {
+    let Ok(dir) = std::env::var("CARDS19_WRITER_DIR") else { return };
+    let dir = PathBuf::from(dir);
+    let store = kolux_rs_lib::state::Store::open(&dir).expect("store opens");
+    for part in ["setting", "layout"] {
+        let (set, remove) = fixture(part);
+        store.patch_settings(&set, &remove).expect("the patch is written");
+    }
+    std::fs::write(dir.join("ready"), "").unwrap();
+    std::thread::sleep(Duration::from_secs(300));
+}
+
+/// APP-048 box 1 and APP-050 box 1, Rust half: a setting and a layout written the way `settings_patch` writes them are
+/// still there when the process is killed (TerminateProcess, no clean exit) two seconds later, and the next open reads them.
+#[test]
+fn app048_box1_a_setting_and_the_layout_are_there_after_the_process_is_killed_two_seconds_later() {
+    let dir = scratch("app048");
+    {
+        let s = kolux_rs_lib::state::Store::open(&dir).unwrap();
+        s.save_settings(&serde_json::json!({ "theme": "classic", "zoom": 1.25 })).unwrap();
+    }
+    let exe = std::env::current_exe().unwrap();
+    let mut child = std::process::Command::new(exe)
+        .args(["app048_child_writer", "--exact", "--nocapture", "--test-threads=1"])
+        .env("CARDS19_WRITER_DIR", &dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the writer starts");
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while !dir.join("ready").exists() {
+        assert!(std::time::Instant::now() < until, "the writer never reported ready");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    child.kill().expect("hard kill");
+    child.wait().unwrap();
+
+    let s = kolux_rs_lib::state::Store::open(&dir).unwrap();
+    let got = s.try_settings().expect("settings.json reads whole after the kill");
+    assert_eq!(got["needsStrip"], serde_json::json!(false), "the changed setting is there");
+    assert_eq!(got["savedLayout"], fixture("layout").0["savedLayout"], "the layout is there, identical");
+    assert_eq!(got["theme"], "classic", "what was set before is kept");
+    assert_eq!(got["zoom"], 1.25);
+    assert!(s.take_fallback_notice().is_none(), "the main file was read, not the backup");
+    assert!(!dir.join("settings.json.tmp").exists(), "no half-written temporary file is left");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}

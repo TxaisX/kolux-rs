@@ -144,6 +144,20 @@ describe("APP-026", () => {
     expect(card(doc.body)).not.toBeNull();
     expect(cardTitle(doc.body)).toContain("0.3.0");
   });
+
+  test("DT-APP-026: background checks keep the dismissed version hidden; an explicit Check for Updates shows it", async () => {
+    feed.latest = info("0.2.0");
+    await start();
+    await sendWindow("kolux-check-updates");
+    await click(root, byTitle(doc.body, "Dismiss"));
+    expect(card(doc.body)).toBeNull();
+    await pump(95 * MIN); // background: the same 0.2.0 stays hidden
+    expect(sent("update_check").length).toBeGreaterThanOrEqual(4);
+    expect(card(doc.body)).toBeNull();
+    await sendWindow("kolux-check-updates"); // requested: the same 0.2.0 shows
+    expect(card(doc.body)).not.toBeNull();
+    expect(cardTitle(doc.body)).toContain("0.2.0");
+  });
 });
 
 describe("APP-027", () => {
