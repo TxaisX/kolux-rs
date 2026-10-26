@@ -250,7 +250,7 @@ Rules: a symlink expands only after it is confirmed to point at a folder; otherw
 Acceptance:
   - [ ] Press Mod+Shift+E → the explorer opens; Down, Right, Down, Enter → the first file of the
         second folder opens.
-  - [ ] Shift-click two rows apart → three rows are selected.
+  - [x] Shift-click two rows apart → three rows are selected. (cards; evidence/cards-EDIT-033.txt)
 Compat: keybinding id sidebar.explorer.toggle; view id explorer.
 Source: D-12-033
 
@@ -273,10 +273,10 @@ Rules: creating a file or folder never replaces something already there, and cop
   top-level items a new name, and refuses symlinks; undo is Mod+Z and redo is Mod+Shift+Z, with
   Ctrl+Y as well on Windows and Linux; Delete (and Mod+Backspace on macOS) removes the selection.
 Acceptance:
-  - [ ] Create a file whose name is already taken → refused, and the original is untouched.
-  - [ ] Delete two files → one confirmation, both in the trash; press Mod+Z → both come back.
-  - [ ] Drop a desktop folder onto a folder that already holds one with the same name → the copy
-        arrives under a new name.
+  - [x] Create a file whose name is already taken → refused, and the original is untouched. (cards; evidence/cards-EDIT-034.txt)
+  - [x] Delete two files → one confirmation, both in the trash; press Mod+Z → both come back. (cards; evidence/cards-EDIT-034.txt)
+  - [x] Drop a desktop folder onto a folder that already holds one with the same name → the copy
+        arrives under a new name. (cards; evidence/cards-EDIT-034.txt)
 Compat: the existing keybinding ids for explorer undo, redo, copy path, copy relative path and
   delete keep working.
 Source: D-12-034
