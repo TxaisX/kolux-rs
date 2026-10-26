@@ -1,0 +1,2 @@
+box 2: src-tauri/tests/cards_20.rs::cli035_box2_worker_start_with_effort_and_no_model_is_refused — cargo test --manifest-path src-tauri/Cargo.toml --test cards_20 (scratch env: CLAUDE_CONFIG_DIR, CODEX_HOME, USERPROFILE, HOME under <scratch>; KOLUX_* unset) — test cli035_box2_worker_start_with_effort_and_no_model_is_refused ... ok; test result: ok. 18 passed; 0 failed (log c20-4)
+  (parser refusal; zero connections at the stand-in. box 1, the ready receipt from a started worker, is LIVE)

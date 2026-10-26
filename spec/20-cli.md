@@ -25,8 +25,9 @@ User sees: a new isolated checkout shows up in Kolux; when an agent was named, t
   terminal starts that agent and gives it the prompt. The worktree is made in the background unless
   `--activate` asks for it to be shown.
 Rules: when `--repo` is left out, the repo comes from the worktree the command was run inside;
-  `--agent` must name an agent Kolux knows; a prompt with no agent is refused, and so is an empty
-  agent, prompt or setup value; `--setup` takes run, skip or inherit to decide whether the repo's
+  `--agent` must name an agent Kolux knows; a prompt with no agent goes to the default agent
+  (DT-CLI-018); an empty agent, prompt or setup value is refused; `--setup` takes run, skip or
+  inherit to decide whether the repo's
   setup scripts run; setup flags that contradict each other are refused; `--run-hooks` opts in to
   both setup and activation scripts; the starting branch is the repo's default base unless
   `--base-branch` says otherwise; lineage: the parent is the worktree the command was called from,
@@ -42,7 +43,8 @@ Acceptance:
         with A as its parent, Claude starts in b's first terminal with the prompt, and focus stays
         where it was.
   - [ ] The same command with `--activate` → b is brought into view.
-  - [ ] `kolux worktree create --name b --prompt hi` → refused, because a prompt needs an agent.
+  - [x] `kolux worktree create --name b --prompt hi` → accepted, not refused: b is made and the
+        default agent is picked to receive the prompt (DT-CLI-018). (cards; evidence/cards-CLI-018.txt)
 Compat: worktree create with `--repo`, `--name`, `--agent`, `--prompt`, `--base-branch`, `--issue`,
   `--comment`, `--setup`, `--parent-worktree`, `--no-parent`, `--run-hooks` and `--activate`.
 Source: D-20-018
@@ -56,9 +58,9 @@ Rules: the four states are running, not running, stale and graph not ready; the 
   answers cleanly, while the app is closed; with `--json` the same state comes back in
   machine-readable form.
 Acceptance:
-  - [ ] App closed → reports not running.
-  - [ ] Kill the app hard so its startup files stay behind → reports stale.
-  - [ ] App up → reports running.
+  - [x] App closed → reports not running. (cards; evidence/cards-CLI-012.txt)
+  - [x] Kill the app hard so its startup files stay behind → reports stale. (cards; evidence/cards-CLI-012.txt)
+  - [x] App up → reports running. (cards; evidence/cards-CLI-012.txt)
 Compat: the command word status; scripts read the state from its JSON output, so the four state
   names stay stable.
 Source: D-20-012
@@ -96,9 +98,9 @@ Rules: run-create attaches the new run to the coordinator terminal it resolves; 
   change something accept `--retry-request` for exact recovery; run-current reports the run attached
   to the calling coordinator terminal, or to the one named with `--from`.
 Acceptance:
-  - [ ] `kolux orchestration run-create --objective x`, then `kolux orchestration run-current` in
-        the same terminal → shows that run.
-  - [ ] `kolux orchestration run-list --limit 1` → one row and a cursor for the next page.
+  - [x] `kolux orchestration run-create --objective x`, then `kolux orchestration run-current` in
+        the same terminal → shows that run. (cards; evidence/cards-CLI-030.txt)
+  - [x] `kolux orchestration run-list --limit 1` → one row and a cursor for the next page. (cards; evidence/cards-CLI-030.txt)
 Compat: orchestration run-create, run-use, run-current, run-list and run-show; `--objective`,
   `--id`, `--from`, `--takeover-legacy`, `--limit`, `--cursor` and `--retry-request`.
 Source: D-20-030
@@ -124,10 +126,10 @@ Rules: nine message types are given with `--type`: status, dispatch, escalation,
   error says so plainly; reply takes `--id` and `--body`, and has to go through the same kolux
   program that asked the question.
 Acceptance:
-  - [ ] A worker sends a worker-done message with `--outcome` succeeded and no `--to` → it lands in
-        the coordinator's run mailbox.
-  - [ ] `kolux orchestration send --type heartbeat --to @all` is refused before the sender is even
-        worked out.
+  - [x] A worker sends a worker-done message with `--outcome` succeeded and no `--to` → it lands in
+        the coordinator's run mailbox. (cards; evidence/cards-CLI-031.txt)
+  - [x] `kolux orchestration send --type heartbeat --to @all` is refused before the sender is even
+        worked out. (cards; evidence/cards-CLI-031.txt)
 Compat: orchestration send and reply; `--to`, `--run`, `--from`, `--subject`, `--body`, `--type`,
   `--priority`, `--thread-id`, `--payload`, `--task-id`, `--dispatch-id`, `--dispatch-capability`,
   `--outcome`, `--files-modified`, `--report-path`, `--phase`, `--retry-request` and `--id`; the
@@ -151,9 +153,9 @@ Rules: plain check returns the oldest unacknowledged batch; `--ack` acknowledges
   filtered out, a full page of 100 rows comes with a warning, and peek combined with wait fails with
   a clear reason; inbox with `--full` includes all the supported issue context, within limits.
 Acceptance:
-  - [ ] Two messages arrive → check returns both; check with `--ack` afterwards returns nothing new.
-  - [ ] `kolux orchestration check --wait --timeout-ms 30000` prints keepalives on stderr and
-        returns as soon as a message arrives.
+  - [x] Two messages arrive → check returns both; check with `--ack` afterwards returns nothing new. (cards; evidence/cards-CLI-032.txt)
+  - [x] `kolux orchestration check --wait --timeout-ms 30000` prints keepalives on stderr and
+        returns as soon as a message arrives. (cards; evidence/cards-CLI-032.txt)
 Compat: orchestration check and inbox; `--terminal`, `--run`, `--ack`, `--unread`, `--peek`,
   `--all`, `--types`, `--format`, `--wait`, `--timeout-ms`, `--limit`, `--full` and
   `--retry-request`.
@@ -172,9 +174,9 @@ Rules: `--timeout-ms` sets both how long the app waits and how long the CLI wait
   resumed wait never hands back again; with `--json` the output uses the shared envelope from
   CLI-004.
 Acceptance:
-  - [ ] Ask with a short timeout → the output includes a resume command, and running it later
-        returns the answer.
-  - [ ] Ask with an invalid timeout → refused before the app is contacted.
+  - [x] Ask with a short timeout → the output includes a resume command, and running it later
+        returns the answer. (cards; evidence/cards-CLI-033.txt)
+  - [x] Ask with an invalid timeout → refused before the app is contacted. (cards; evidence/cards-CLI-033.txt)
 Compat: orchestration ask; `--to`, `--run`, `--question`, `--resume`, `--dispatch-capability`,
   `--options`, `--timeout-ms`, `--from` and `--retry-request`; exit status 75 for the Windows
   hand-back.
@@ -197,10 +199,10 @@ Rules: task-create takes a spec, a short title, a display name, dependencies and
   terminal; dispatch refusals come back as ordinary clear errors through the normal error output;
   dispatch-show shows a dispatch or its opening text.
 Acceptance:
-  - [ ] Create task B that depends on A → `kolux orchestration task-list --ready` leaves B out until
-        A is done.
-  - [ ] `kolux orchestration dispatch --task t --dry-run` prints the opening text and changes
-        nothing.
+  - [x] Create task B that depends on A → `kolux orchestration task-list --ready` leaves B out until
+        A is done. (cards; evidence/cards-CLI-034.txt)
+  - [x] `kolux orchestration dispatch --task t --dry-run` prints the opening text and changes
+        nothing. (cards; evidence/cards-CLI-034.txt)
 Compat: orchestration task-create, task-list, task-update, dispatch and dispatch-show; `--spec`,
   `--task-title`, `--display-name`, `--deps`, `--parent`, `--status`, `--ready`, `--brief`,
   `--result`, `--task`, `--to`, `--inject`, `--dry-run`, `--return-preamble`, `--preamble`, `--run`,
@@ -224,7 +226,7 @@ Rules: `--task` names an existing task, while `--spec` creates one in the same s
 Acceptance:
   - [ ] `kolux orchestration worker-start --spec x --tier build` starts a worker on the model routed
         for build and prints a ready receipt.
-  - [ ] `kolux orchestration worker-start --spec x --effort high` with no `--model` is refused.
+  - [x] `kolux orchestration worker-start --spec x --effort high` with no `--model` is refused. (cards; evidence/cards-CLI-035.txt)
 Compat: orchestration worker-start; `--task`, `--spec`, `--task-title`, `--deps`, `--parent`,
   `--worktree`, `--name`, `--repo`, `--base-branch`, `--display-name`, `--comment`,
   `--setup`, `--agent`, `--model`, `--effort`, `--terminal`, `--tier`, `--retry-of`, `--timeout-ms`,
@@ -249,8 +251,8 @@ Rules: worker-list covers the run attached to the calling terminal unless `--run
   terminal commands refuse such a worker's handle, while worker-read with `--source` set to
   transcript always works; help states this limit without naming kinds of worker.
 Acceptance:
-  - [ ] From a coordinator terminal, worker-list shows only that run's workers.
-  - [ ] worker-read on a released worker says that it is reading an archive.
+  - [x] From a coordinator terminal, worker-list shows only that run's workers. (cards; evidence/cards-CLI-036.txt)
+  - [x] worker-read on a released worker says that it is reading an archive. (cards; evidence/cards-CLI-036.txt)
 Compat: orchestration worker-list, worker-show, worker-read, worker-stop, worker-abandon,
   worker-release and worker-retain; `--dispatch`, `--source`, `--cursor`, `--limit`, `--run`,
   `--terminal-state` and `--retry-request`.
@@ -266,7 +268,7 @@ Rules: the window is brought forward even when the app was already answering; wh
   clear reason when the server cannot safely become the desktop app; if the app never answers, the
   command gives up with an error after a time limit.
 Acceptance:
-  - [ ] App closed → `kolux open` launches it and exits 0 once it is ready.
+  - [x] App closed → `kolux open` launches it and exits 0 once it is ready. (cards; evidence/cards-CLI-011.txt)
   - [ ] App minimised → `kolux open` brings it to the front.
 Compat: the command word open.
 Source: D-20-011
