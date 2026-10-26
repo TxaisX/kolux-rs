@@ -233,3 +233,78 @@ describe("fuzz regressions: a `[r]:` line cut short by the window, a gap past an
     run("- - a [0 -\n\n  indented\n\n- para\n- b\n\n```-\ncode 1\n\nmore code\n```\n", "- - a [0 -\n\n  indented\n\n-\n\n```-\ncode 1\n\nmore code\n```");
   });
 });
+
+// Round 6 (NEW-HIGH-A, NEW-MED-B): a blank-line gap is put back by item, not by word number, so an item with no words
+// (an emoji, `...`) keeps its gaps where they were; an item that starts with markup, a task box or a fence is not refused.
+describe("round 6: loose-list gaps are put back by item", () => {
+  const P = "\n\nTail para here.\n";
+  /** Saves one word change (`from` -> `to` in the view's text); returns the note and whether it was refused. */
+  const edit = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    expect(prev).toContain(from);
+    const out = roundTrip(prev.replace(from, to))!;
+    let refused = 0;
+    const next = apply(body, richChange(body, out, prev, () => refused++));
+    if (refused) expect(next).toBe(body);
+    else expect(roundTrip(next)).toBe(out);
+    return { next, refused };
+  };
+  const placed = (body: string, from: string, to: string, want: string) => {
+    const { next, refused } = edit(body, from, to);
+    expect(refused).toBe(0);
+    expect(next).toBe(want);
+  };
+  describe("HIGH-A: an item with no words", () => {
+    it("emoji item, edit far from the list", () => {
+      const b = "- alpha\n\n- 🎉\n\n- gamma\n\n\nTail para here.\n";
+      placed(b, "Tail", "Tails", b.replace("Tail", "Tails"));
+    });
+    it("a plan with a check mark item", () => {
+      const b = "# Plan\n\n- Write spec\n\n- ✅\n\n- Ship it\n\nNotes below.\n";
+      placed(b, "Notes", "More notes", b.replace("Notes", "More notes"));
+    });
+    it("two emoji items in a row", () => {
+      const b = "- a\n\n- 🙂\n\n- 🙃\n\n- b\n\nx\n";
+      placed(b, "x", "xy", b.replace("\nx\n", "\nxy\n"));
+    });
+    it("a `...` item, edit in the item after it", () => {
+      const b = "- alpha\n\n- ...\n\n- gamma\n\nTail\n";
+      placed(b, "gamma", "gammas", b.replace("gamma", "gammas"));
+    });
+    it("an edit inside the emoji item's neighbour keeps both gaps", () => {
+      const b = "- alpha\n\n- 🎉\n\n- gamma\n\nTail\n";
+      placed(b, "alpha", "alphas", b.replace("alpha", "alphas"));
+    });
+  });
+  describe("MED-B: markup at the start of an item, a task box, a fence", () => {
+    const keep = (b: string, from: string, to: string, want: string) => placed(b, from, to, want);
+    it("bold label items, edit in the tail", () => {
+      const b = "- **Name:** Bob\n\n- **Age:** 3\n" + P;
+      keep(b, "Tail", "Tails", b.replace("Tail", "Tails"));
+    });
+    it("bold label items, edit inside the list", () => {
+      const b = "- **Name:** Bob\n\n- **Age:** 3\n" + P;
+      keep(b, "Bob", "Bobby", b.replace("Bob", "Bobby"));
+    });
+    it("link items", () => {
+      const b = "- [Home](http://h.com) page\n\n- [Away](http://a.com) page\n" + P;
+      keep(b, "Tail", "Tails", b.replace("Tail", "Tails"));
+    });
+    it("task items", () => {
+      const b = "- [ ] buy milk\n\n- [x] eggs\n" + P;
+      keep(b, "Tail", "Tails", b.replace("Tail", "Tails"));
+    });
+    it("code span items", () => {
+      const b = "- `npm i` installs\n\n- `npm t` tests\n" + P;
+      keep(b, "Tail", "Tails", b.replace("Tail", "Tails"));
+    });
+    it("a fenced block inside an item", () => {
+      const b = "- a\n\n  ```\n  x\n  ```\n\n- b\n\n- c\n" + P;
+      keep(b, "Tail", "Tails", b.replace("Tail", "Tails"));
+    });
+    it("italic items, edit the last item", () => {
+      const b = "- _Note_ one\n\n- _Note_ two\n\n- three\n";
+      keep(b, "three", "threes", b.replace("three", "threes"));
+    });
+  });
+});

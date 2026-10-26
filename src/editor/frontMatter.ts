@@ -90,7 +90,8 @@ function placeBody(body: string, out: string, prev: string): string | null {
   return kept;
 }
 
-type Gap = { at: number; raw: string };
+/** `at`: where the gap's item line starts in the tight text; `item`: that line's number among the tight text's item lines. */
+type Gap = { at: number; raw: string; item: number; cut?: number };
 
 const ITEM = /^([ \t]*)([-*+]|\d+[.)])[ \t]/;
 const FENCE = /^[ \t]*(`{3,}|~{3,})/;
@@ -109,6 +110,7 @@ export function collapseGaps(body: string): { text: string; gaps: Gap[] } | null
   let blank = -1; // where the blank lines before this line start in `body`, or -1
   let copied = 0;
   let pos = 0;
+  let items = 0;
   for (const line of body.split("\n")) {
     const start = pos;
     pos += line.length + 1;
@@ -130,11 +132,12 @@ export function collapseGaps(body: string): { text: string; gaps: Gap[] } | null
       const top = stack[stack.length - 1];
       if (blank >= 0 && top && top.w === w && top.k === kind(m)) {
         text += body.slice(copied, blank);
-        gaps.push({ at: text.length, raw: body.slice(blank, start) });
+        gaps.push({ at: text.length, raw: body.slice(blank, start), item: items });
         copied = start;
       }
       if (top && top.w === w) stack.pop();
       stack.push({ w, k: kind(m) });
+      items++;
     } else {
       const w = width(/^[ \t]*/.exec(line)![0]);
       if (blank >= 0 && w === 0) stack.length = 0;
@@ -146,36 +149,68 @@ export function collapseGaps(body: string): { text: string; gaps: Gap[] } | null
   return { text: text + body.slice(copied), gaps };
 }
 
-/** `next` (the edited tight text) with the blank lines put back at the item boundaries they were at, found by word number
- *  (the edit changes `prev` into `out`). A boundary the edit itself covers is dropped; one it does not cover that cannot be
- *  found again makes the whole placement null, never a list tightened behind the user's back. */
+/** Where each item line of `text` starts (outside fences): the lines `collapseGaps` counts as items. */
+function itemStarts(text: string): number[] {
+  const starts: number[] = [];
+  let fence = "";
+  let pos = 0;
+  for (const line of text.split("\n")) {
+    const start = pos;
+    pos += line.length + 1;
+    if (/^[ \t]*\r?$/.test(line)) continue;
+    const f = FENCE.exec(line)?.[1];
+    if (fence) {
+      if (f && f[0] === fence[0] && f.length >= fence.length && /^[ \t]*[`~]+[ \t]*\r?$/.test(line)) fence = "";
+      continue;
+    }
+    if (f) fence = f;
+    if (ITEM.test(line)) starts.push(start);
+  }
+  return starts;
+}
+
+const BLANK_LINE = /^[ \t]*\r?\n$/;
+
+/** How long the one blank line above the line starting at `at` is (the edit left it there: the gap in the view's spelling, so the file's own
+ *  bytes replace it); 0 when the line above is not blank; -1 when more than one is, which cannot be told apart from the file's gap. */
+function blankAbove(text: string, at: number): number {
+  const start = (end: number) => (end < 2 ? 0 : text.lastIndexOf("\n", end - 2) + 1); // the line that ends at `end`, after its line break
+  if (at < 1) return 0;
+  const s = start(at);
+  if (!BLANK_LINE.test(text.slice(s, at))) return 0;
+  if (s === 0) return -1;
+  return BLANK_LINE.test(text.slice(start(s), s)) ? -1 : at - s;
+}
+
+/** `next` (the edited tight text) with the blank lines put back before the item lines they were before, found by item number
+ *  (the edit changes `prev` into `out`). Row 94 round 6: never by word number, an emoji item has no words. A gap whose line
+ *  break or marker the edit covers is dropped; one that cannot be found again for sure, or whose place does not read back as a
+ *  gap between sibling items, makes the whole placement null, never a list tightened or a gap moved behind the user's back. */
 function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string, out: string): string | null {
   const e = changeBetween(prev, out);
   if (!e) return restore(next, tight.gaps);
-  const tw = wordSpans(tight.text);
-  const pw = wordSpans(prev);
-  const nw = wordSpans(next);
-  if (tw.length !== pw.length) return null;
-  const dw = nw.length - tw.length;
+  const ts = itemStarts(tight.text);
+  const ps = itemStarts(prev);
+  const ns = itemStarts(next);
+  const dn = itemStarts(out).length - ps.length;
+  if (ts.length !== ps.length || ns.length - ts.length !== dn) return null;
   const kept: Gap[] = [];
-  let k = 0;
+  const used = new Set<number>();
   for (const g of tight.gaps) {
-    while (k < tw.length && tw[k].e <= g.at) k++;
-    if (k === 0 || k >= tw.length) return null;
-    // The boundary in the view's text is its last line break between the two words; an edit that covers it drops the gap.
-    const cut = pw[k - 1].e + prev.slice(pw[k - 1].e, pw[k].s).lastIndexOf(String.fromCharCode(10));
-    if (cut < pw[k - 1].e) return null;
-    const before = e.to <= cut;
-    if (!before && e.from <= cut) continue;
-    const j = before ? k + dw : k;
-    if (j < 1 || j >= nw.length) return null;
-    const t = next.slice(nw[j - 1].e, nw[j].s);
-    const nl = t.lastIndexOf("\n");
-    // A fence line between the two words (code has no words) means the boundary is not where the words say.
-    if (nl < 0 || !/^[ \t]*([-*+][ \t]*)?$/.test(t.slice(nl + 1)) || /\n[ \t]*(`{3,}|~{3,})/.test(t.slice(0, nl))) return null;
-    kept.push({ at: nw[j - 1].e + nl + 1, raw: g.raw });
+    const line = ps[g.item];
+    const marker = ITEM.exec(prev.slice(line, line + 64))?.[0].length ?? 0;
+    // Before: the edit ends at or before the line break above the item. After: it starts past the item's marker.
+    const j = e.to <= line - 1 ? g.item + dn : e.from >= line + marker ? g.item : -1;
+    if (j < 0) continue;
+    if (j >= ns.length || used.has(j)) return null;
+    used.add(j);
+    const cut = blankAbove(next, ns[j]);
+    if (cut < 0) return null;
+    kept.push({ at: ns[j] - cut, raw: g.raw, item: j, cut });
   }
-  return looseReadsAlike(tight.text, next, kept) ? restore(next, kept) : null;
+  kept.sort((a, b) => a.at - b.at);
+  const restored = restore(next, kept);
+  return looseReadsAlike(tight.text, next, kept) ? restored : null;
 }
 
 /** Whether the items around the edit read the same loose as tight: a table or HTML line after an item can start a block
@@ -197,18 +232,18 @@ function looseReadsAlike(before: string, next: string, gaps: Gap[]): boolean {
   const hi = gaps.findIndex((g) => g.at >= ce);
   a = Math.max(a, gaps[lo]?.at ?? 0);
   b = Math.min(b, hi < 0 ? b : (gaps[hi + 1]?.at ?? b));
-  const near = gaps.filter((g) => g.at > a && g.at < b).map((g) => ({ at: g.at - a, raw: g.raw }));
+  const near = gaps.filter((g) => g.at > a && g.at < b).map((g) => ({ at: g.at - a, raw: g.raw, cut: g.cut }));
   if (!near.length) return true;
   const tightWin = next.slice(a, b);
   return roundTrip(restore(tightWin, near)) === roundTrip(tightWin);
 }
 
-function restore(text: string, gaps: Gap[]): string {
+function restore(text: string, gaps: { at: number; raw: string; cut?: number }[]): string {
   let out = "";
   let at = 0;
   for (const g of gaps) {
     out += text.slice(at, g.at) + g.raw;
-    at = g.at;
+    at = g.at + (g.cut ?? 0);
   }
   return out + text.slice(at);
 }

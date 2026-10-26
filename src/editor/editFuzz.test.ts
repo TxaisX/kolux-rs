@@ -3,8 +3,10 @@ import { blockSpans, collapseGaps, placeStats, richChange, splitFront } from "./
 import { changeBetween, roundTrip, unsupported } from "./markdown";
 
 // Row 94 review rounds 3-4: random everyday edits in the rich view, chained (each saved note is the next edit's input).
-// After every edit the saved note reads back as the rich view's text, keeps every block away from the edit, and can
-// still be shown in the rich view; or it is byte for byte the note before the edit (refused, source view). Nothing else.
+// After every edit the saved note reads back as the rich view's text, keeps every block away from the edit (on the file's own
+// bytes, blank lines between list items included), keeps every blank-line gap between list items that the edit's range does
+// not cover (same item, same spelling), and can still be shown in the rich view; or it is byte for byte the note before the
+// edit (refused, source view). Nothing else.
 const ENV = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
 // FUZZ_SEED=<n> runs one seed; FUZZ_RANGE=<a>-<b> runs every seed from a to b.
 const [LO, HI] = ENV.FUZZ_RANGE ? ENV.FUZZ_RANGE.split("-").map(Number) : [Number(ENV.FUZZ_SEED ?? 20261026)];
@@ -46,6 +48,14 @@ const KINDS = [
   (i: number) => `temperature ${i} was\n-5 today`,
   (i: number) => `stars here ${i}\n* * * x`,
   (i: number) => `see ${i}\nthere [r]: u`,
+  // Round 6: items with no words, items that start with markup or a task box, a fence inside an item (all loose).
+  (i: number) => `- alpha ${i}\n\n- 🎉\n\n- gamma _g_\n\n- ...\n\n- five`,
+  (i: number) => `- 🙂\n\n- ✅\n\n- 🙃\n- tail ${i}`,
+  (i: number) => `- **Name:** Bob ${i}\n\n- **Age:** __3__\n\n- _Note_ three\n\n- __Last__ one`,
+  (i: number) => `- [Home](http://h.com) page ${i}\n\n- [Away](http://a.com) page\n\n- more`,
+  (i: number) => `- [ ] buy milk ${i}\n\n- [x] eggs _e_\n\n- [ ] bread`,
+  (i: number) => `- \`npm i\` installs ${i}\n\n- \`npm t\` tests\n\n- done`,
+  (i: number) => `- a ${i}\n\n  \`\`\`\n  x\n  \`\`\`\n\n- b _b_\n\n- c`,
 ];
 
 const PUNCT = [" ", ".", ",", "*", "_", "-", "=", "#", ">", "`", "|", "\n", "\n\n", "1. ", "- ", " word ", "Q", "[", "]", "\\"];
@@ -106,12 +116,13 @@ function note(r: (n: number) => number): string {
 
 const WORD = /[\p{L}\p{N}]+/gu;
 const LIST = /^ {0,3}([-*+]|\d+[.)])[ \t]/;
+const LISTLINE = new RegExp(LIST.source, "m");
 
 /** What a placement must keep byte for byte: `body` through the last word before the blocks (items and section
  *  children unless `whole`, and then the whole list) that the edit `prev` -> `out` touches, in the rich view's blocks or the file's, whichever
  *  reach further, with one block of slack; and from the first word after them. `body` and `prev` hold the same words. */
 function keptEnds(loose: string, prev: string, out: string, whole: boolean): [string, string] {
-  const body = collapseGaps(loose)?.text ?? loose; // the gaps are checked on their own, below
+  const body = loose; // Round 6: the file's own bytes, blank lines between items included
   const e = changeBetween(prev, out)!;
   const bw = [...body.matchAll(WORD)];
   const pw = [...prev.matchAll(WORD)];
@@ -127,8 +138,9 @@ function keptEnds(loose: string, prev: string, out: string, whole: boolean): [st
     if (i1 < 0) i1 = blocks.length - 1;
     let j0 = Math.max(0, i0 - 1);
     let j1 = Math.min(blocks.length - 1, i1 + 1);
-    // Placed whole, a list is one block however many blank lines split it in the file.
-    const item = (j: number) => whole && j >= 0 && j < blocks.length && LIST.test(t.slice(blocks[j].s));
+    // Placed whole, a list is one block however many blank lines split it in the file, and a paragraph line above its first item
+    // (the list interrupts it without a blank line) belongs to the block that holds that item.
+    const item = (j: number) => whole && j >= 0 && j < blocks.length && LISTLINE.test(t.slice(blocks[j].s, blocks[j].e));
     while (item(j0) && item(j0 - 1)) j0--;
     while (item(j1) && item(j1 + 1)) j1++;
     const s = blocks[j0].s;
@@ -138,24 +150,70 @@ function keptEnds(loose: string, prev: string, out: string, whole: boolean): [st
   const [p0, p1] = span(prev, pw, e.from, e.to);
   const upTo = (k: number) => (k <= 0 ? 0 : bw[k - 1].index + bw[k - 1][0].length);
   const from = (i: number) => (i >= bw.length ? body.length : bw[i].index);
-  const [b0, b1] = span(body, bw, upTo(before), from(bw.length - after));
+  // The blocks are the ones the placement sees (the tight text, where a list can fold into the paragraph above it); the bytes kept are the file's.
+  const tight = collapseGaps(body)?.text ?? body;
+  const tw = [...tight.matchAll(WORD)];
+  const [b0, b1] = span(tight, tw, tw[before - 1] ? tw[before - 1].index + tw[before - 1][0].length : 0, tw[tw.length - after] ? tw[tw.length - after].index : tight.length);
   const w0 = Math.min(p0, b0);
   const w1 = Math.min(p1, b1);
   return [body.slice(0, upTo(w0)), w1 ? body.slice(from(bw.length - w1)) : ""];
 }
 
-/** How many blank-line gaps between list items of `body` lie two or more gaps away from the edit `prev` -> `out`. */
-function farGaps(body: string, prev: string, out: string): number {
-  const t = collapseGaps(body);
-  if (!t) return 0;
+/** Where the item lines of `t` start (outside fences). Written apart from frontMatter.ts, so the test does not trust it. */
+function itemLines(t: string): number[] {
+  const out: number[] = [];
+  let fence: string | null = null;
+  let pos = 0;
+  for (const line of t.split("\n")) {
+    const f = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (f && f[0] === fence[0] && f.length >= fence.length && /^[ \t]*[`~]+[ \t]*\r?$/.test(line)) fence = null;
+    } else if (f) fence = f;
+    else if (/^[ \t]*([-*+]|\d+[.)])[ \t]/.test(line)) out.push(pos);
+    pos += line.length + 1;
+  }
+  return out;
+}
+
+/** The blank-line gaps between sibling items of `t`: which item line each is before, and its bytes. */
+function gapsOf(t: string): { item: number; raw: string }[] {
+  const c = collapseGaps(t);
+  if (!c) return [];
+  const at = itemLines(c.text);
+  return c.gaps.map((g) => ({ item: at.indexOf(g.at), raw: g.raw }));
+}
+
+/** Null when every gap of `body` that the edit `prev` -> `out` does not cover is in `saved` before the same item, spelt the same
+ *  (so a gap dropped, moved to the next boundary or respelt as spaces fails), and `saved` holds no gap beyond those and the
+ *  covered ones' own bytes; else why not. A gap is covered when the edit reaches the line break before its item or that item's marker. */
+function gapProblem(body: string, saved: string, prev: string, out: string, head: string, tail: string): string | null {
+  const gaps = gapsOf(body);
+  if (!gaps.length) return null;
   const e = changeBetween(prev, out)!;
-  const tw = [...t.text.matchAll(WORD)];
-  const pw = [...prev.matchAll(WORD)];
-  const ks = t.gaps.map((g) => tw.filter((w) => w.index + w[0].length <= g.at).length);
-  const i0 = pw.filter((w) => w.index + w[0].length <= e.from).length;
-  const i1 = pw.filter((w) => w.index < e.to).length;
-  const far = t.gaps.filter((_, k) => (ks[k] <= i0 && ks.filter((x, j) => j > k && x <= i0).length >= 2) || (ks[k] >= i1 && ks.filter((x, j) => j < k && x >= i1).length >= 2));
-  return far.length;
+  const ps = itemLines(prev);
+  const dn = itemLines(out).length - ps.length;
+  const was = collapseGaps(body)!;
+  if (itemLines(was.text).length !== ps.length) return `the view's text has ${ps.length} item lines, the file's ${itemLines(was.text).length}`;
+  const want: { item: number; raw: string }[] = [];
+  const covered: string[] = [];
+  for (const g of gaps) {
+    const line = ps[g.item];
+    const marker = /^[ \t]*([-*+]|\d+[.)])[ \t]/.exec(prev.slice(line))![0].length;
+    if (e.to > line - 1 && e.from < line + marker) covered.push(g.raw);
+    else want.push({ item: e.to <= line - 1 ? g.item + dn : g.item, raw: g.raw });
+  }
+  const got = gapsOf(saved);
+  const lines = itemLines(saved);
+  // The gap's bytes sit right before the same item line, after the line break that ends the line above (a list the edit cut in two
+  // is no longer read as having a gap there, but its blank lines are still the file's own).
+  for (const w of want) {
+    const at = lines[w.item];
+    if (at === undefined || saved.slice(at - w.raw.length - 1, at) !== "\n" + w.raw) return `gap before item ${w.item} (${JSON.stringify(w.raw)}) is gone, moved or respelt`;
+  }
+  // A gap inside the span the edit retyped (between the kept head and tail) is in the view's spelling, so it may be one the file did not have.
+  const extra = got.filter((g) => !want.some((w) => w.item === g.item && w.raw === g.raw) && !(lines[g.item] - g.raw.length >= head.length - 1 && lines[g.item] <= saved.length - tail.length + 1));
+  if (extra.length > covered.length || extra.some((g) => !covered.includes(g.raw))) return `made-up gaps ${JSON.stringify(extra)}`;
+  return null;
 }
 
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
@@ -186,6 +244,7 @@ describe("fuzz: chained everyday rich-view edits save a note that reads back as 
         const why = `FUZZ_SEED=${seed}, edit ${edits}, chain step ${s} (${what})\nbody=${JSON.stringify(body)}\nprev=${JSON.stringify(prev)}\nout=${JSON.stringify(out)}\nnext=${JSON.stringify(nb)}`;
         if (no) {
           refused++;
+          if (ENV.FUZZ_REFUSED) console.log("REFUSED " + why);
           expect(next, why).toBe(now);
           break; // the note goes to source view
         }
@@ -194,10 +253,11 @@ describe("fuzz: chained everyday rich-view edits save a note that reads back as 
         expect(roundTrip(nb), why).toBe(out);
         // (2) Every block away from the edit keeps its bytes (the whole list or section when it was placed whole).
         const [head, tail] = keptEnds(body, prev, out, placeStats.whole !== whole);
-        const tight = collapseGaps(nb)?.text ?? nb;
-        expect(tight.startsWith(head) && tight.endsWith(tail), why).toBe(true);
-        // (4) Round 5: the blank lines between list items away from the edit survive (a retyped list keeps them as a count).
-        expect(collapseGaps(nb)?.gaps.length ?? 0, why).toBeGreaterThanOrEqual(farGaps(body, prev, out));
+        expect(nb.startsWith(head) && nb.endsWith(tail), why + `
+head=${JSON.stringify(head)}
+tail=${JSON.stringify(tail)}`).toBe(true);
+        // (4) Round 6: every blank-line gap the edit's range does not cover is where it was, spelt as it was; none is made up.
+        expect(gapProblem(body, nb, prev, out, head, tail), why).toBeNull();
         // (3) A note the view could show stays one it can show, unless the view's own text cannot be shown.
         // richChange puts the body's last line end back, so that is the text the view's `out` becomes.
         if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null) expect(unsupported(nb), why).toBeNull();
