@@ -154,7 +154,7 @@ import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SU
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
-import { VOCAB, nextNeedsYou } from "./terminal/status";
+import { VOCAB, needsYouCount, nextNeedsYou } from "./terminal/status";
 import { followedTitle, IDLE, shownAgent, type Identity } from "./terminal/shellMarks";
 import type { KindKey } from "./settings/notifications";
 import { tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
@@ -559,9 +559,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   });
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
+  // ux fix 2: one count of waiting panes feeds the bell and the window title.
+  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)));
   useEffect(() => {
-    document.title = windowTitle(info);
-  }, [info]);
+    document.title = windowTitle(info, needing);
+  }, [info, needing]);
   // BROW-001: a browser tab is named after its page.
   useEffect(() => {
     const off = listen<{ id: number; title: string }>("browser-title", (e) => setTitles((t) => ({ ...t, [e.payload.id]: e.payload.title })));
@@ -2498,6 +2500,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             : undefined
         }
         screen={screen}
+        needsYou={needing}
         classic={classic}
         sidebarWidth={leftWidth}
         appMenu
