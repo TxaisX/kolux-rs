@@ -16,9 +16,14 @@ export function newPaceMemory(): PaceMemory {
   return { shown: new Map(), lastByDir: new Map() };
 }
 
-/** The fixed identity of one agent event: the pane, the state it reached and when. */
-export function noteId(paneKey: number, what: string, at: number): string {
-  return `${paneKey}:${what}:${at}`;
+const loadStamp = Date.now().toString(36);
+let sequence = 0;
+/** The identity of one agent event: a load stamp plus a process-wide counter, so two events are never
+ * equal (same pane, same words, same millisecond included) and a reload never repeats an id the backend
+ * still remembers. */
+export function noteId(): string {
+  sequence += 1;
+  return `${loadStamp}.${sequence}`;
 }
 
 /** Whether to show this notification now; a `true` records it in the memory. */
