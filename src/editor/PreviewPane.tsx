@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { Close, FileCode, List } from "../chrome/icons";
+import { Close, Dots, FileCode, List } from "../chrome/icons";
 import { baseName, subscribe, textOf } from "./buffers";
 import { domPick, selections } from "./notes";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
@@ -19,6 +19,9 @@ import { followClick, type LinkHandler } from "./linkClicks";
 import { drawDiagrams, loadRenderers, renderNote, watchRenderers } from "./diagrams";
 import { filterDataPictures } from "./notePictures";
 import { showPicturesIn } from "./pictureDom";
+import { readPicture } from "./pictureBytes";
+import { mimeOf } from "./imageFiles";
+import { bytesToDataUri, exportNotePdf, noteTitle } from "../browser/notePdf";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import "./editor-extras.css";
@@ -35,6 +38,9 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
   // EDIT-017 / EDIT-016: the find bar and the contents panel.
   const [find, setFind] = useState<FindOpen | null>(null);
   const [toc, setToc] = useState(false);
+  // EDIT-018: the actions menu and the line saying how the PDF export went.
+  const [menu, setMenu] = useState(false);
+  const [pdfLine, setPdfLine] = useState<string | null>(null);
   const page = useRef<HTMLDivElement>(null);
   const section = useRef<HTMLElement>(null);
   const root = useCallback(() => page.current, []);
@@ -108,6 +114,29 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
     if (!e.repeat) setFind((f) => ({ replace: false, seed: selectedIn(page.current), n: (f?.n ?? 0) + 1 }));
   };
 
+  // EDIT-018: the rendered note, its on-disk pictures read in as data addresses, printed to a PDF by a hidden page (browser_pdf.rs).
+  const exportPdf = async () => {
+    setMenu(false);
+    const shown = page.current;
+    if (!shown) return;
+    setPdfLine("Exporting to PDF...");
+    try {
+      const copy = shown.cloneNode(true) as HTMLElement;
+      for (const img of Array.from(copy.querySelectorAll<HTMLImageElement>("img[data-local-picture]"))) {
+        const file = img.getAttribute("data-local-picture") ?? "";
+        try {
+          img.setAttribute("src", bytesToDataUri(await readPicture(file, invoke), mimeOf(file)));
+        } catch {
+          img.removeAttribute("src");
+        }
+      }
+      const done = await exportNotePdf(invoke, { html: copy.innerHTML, title: noteTitle(path), folder: path.replace(/[\\/][^\\/]*$/, "") });
+      setPdfLine(done.kind === "saved" ? `Saved ${done.path}` : null);
+    } catch (err) {
+      setPdfLine(`PDF export failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const name = baseName(path);
   return (
     <section ref={section} className={`pane editor preview${focused ? " focused" : ""}${toc && hasHeadings ? " toc-open" : ""}`} hidden={hidden} aria-label={`Preview of ${name}`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="preview" data-key={id} tabIndex={-1}>
@@ -131,6 +160,21 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
           </button>
         )}
         <span className="right">
+          <span className="diff-actions">
+            <button className="ib" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)} title="Note actions" aria-label="Note actions">
+              <Dots size={12} />
+            </button>
+            {menu && (
+              <>
+                <div className="menu-backdrop" onMouseDown={() => setMenu(false)} />
+                <div className="menu diff-menu" role="menu">
+                  <button role="menuitem" className="menu-item" onClick={() => void exportPdf()}>
+                    <span className="name">Export to PDF...</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </span>
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
@@ -141,6 +185,14 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
           {name} did not open: {error}
           <button className="btn" onClick={() => setTries((n) => n + 1)}>
             Retry
+          </button>
+        </div>
+      )}
+      {pdfLine && (
+        <div className="notice" role="status">
+          {pdfLine}
+          <button className="btn" onClick={() => setPdfLine(null)}>
+            Dismiss
           </button>
         </div>
       )}

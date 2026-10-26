@@ -483,6 +483,38 @@ pub fn keeps_running(mac: bool, code: Option<i32>, quitting: bool) -> bool {
     mac && code.is_none() && !quitting
 }
 
+/// T-324-b-rest: set by the exit-requested event (lib.rs). tao's WM_ENDSESSION handler closes the
+/// event loop without it, so an exit reached with this unset came from Windows ending the session.
+pub static EXIT_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether this exit is Windows ending the user's session (sign-out, shutdown, restart): the
+/// system says the session is shutting down, or no exit was asked for by the app or its last window.
+pub fn session_end(windows: bool, shutting_down: bool, exit_asked: bool) -> bool {
+    windows && (shutting_down || !exit_asked)
+}
+
+#[cfg(windows)]
+fn session_shutting_down() -> bool {
+    // SAFETY: GetSystemMetrics takes no pointers and has no failure mode beyond returning 0.
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows_sys::Win32::UI::WindowsAndMessaging::SM_SHUTTINGDOWN) != 0 }
+}
+
+#[cfg(not(windows))]
+fn session_shutting_down() -> bool {
+    false
+}
+
+/// Called first thing when the app exits (lib.rs): a session end is logged before the final save,
+/// which Windows may cut short, so the next start does not report the run as a crash.
+pub fn note_session_end(app: &tauri::AppHandle) {
+    if !session_end(cfg!(windows), session_shutting_down(), EXIT_ASKED.load(Ordering::SeqCst)) {
+        return;
+    }
+    if let Ok(dir) = app.path().app_data_dir() {
+        crate::diag::write(&dir, &format!("{} sign-out, shutdown or restart", crate::resources::recovery::SESSION_END));
+    }
+}
+
 /// The main window is gone (Windows, Linux): the quit is under way, and ends by the deadline
 /// however the final save or the WebView2 wait behave.
 pub fn quit_watchdog<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -654,6 +686,16 @@ mod tests {
     }
 
     use super::*;
+
+    /// T-324-b-rest: only a Windows exit nobody asked for, or one the system says is a shutdown, is a session end.
+    #[test]
+    fn t324b_a_windows_exit_nobody_asked_for_is_a_session_end_and_a_quit_or_a_crash_is_not() {
+        assert!(session_end(true, false, false), "tao closed the loop on WM_ENDSESSION: no exit was asked for");
+        assert!(session_end(true, true, true), "the system says the session is shutting down");
+        assert!(!session_end(true, false, true), "a quit, a restart or the last window closing asked for the exit");
+        assert!(!session_end(false, false, false), "off Windows nothing ends the session this way");
+        assert!(!session_end(false, true, false));
+    }
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kolux-rs-lifecycle-{}-{name}", std::process::id()));
