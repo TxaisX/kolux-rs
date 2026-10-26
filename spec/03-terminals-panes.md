@@ -209,8 +209,8 @@ Rules: no unread mark for the pane being looked at; hidden tabs and hidden split
   unread; with Kolux in the background, the selected worktree is marked unread; late or stale finish
   events are dropped; notification settings gate what is sent.
 Acceptance:
-  - [ ] An agent finishing in a hidden tab sends one notification and marks the tab unread.
-  - [ ] An agent finishing in the focused pane that is on screen adds no unread mark.
+  - [x] An agent finishing in a hidden tab sends one notification and marks the tab unread. (cards; evidence/cards-TERM-118.txt)
+  - [x] An agent finishing in the focused pane that is on screen adds no unread mark. (cards; evidence/cards-TERM-118.txt)
 Compat: —
 Source: D-03-118
 
@@ -224,8 +224,8 @@ Rules: Kolux checks for running child processes first; an idle shell closes with
   once per pane; keyboard and mouse close follow the same policy; a setting turns the confirmation
   off; the confirmation names the tab being closed, so closing a background tab is never ambiguous.
 Acceptance:
-  - [ ] Closing a tab running a dev server asks; closing an idle shell does not.
-  - [ ] Closing a split tab with two busy panes shows one confirmation, not two.
+  - [x] Closing a tab running a dev server asks; closing an idle shell does not. (cards; evidence/cards-TERM-045.txt)
+  - [x] Closing a split tab with two busy panes shows one confirmation, not two. (cards; evidence/cards-TERM-045.txt)
 Compat: —
 Source: D-03-045
 
@@ -251,8 +251,8 @@ User sees: a header row on every pane shows who is running, the session name and
 Rules: shown on every pane, single or split, since 2026-10-05; the usage meter shows context use
   against the session cap; never drawn over hidden content.
 Acceptance:
-  - [ ] A single-pane grid still shows the header.
-  - [ ] In a split tab each pane carries its own header with its own usage percentage.
+  - [x] A single-pane grid still shows the header. (cards; evidence/cards-TERM-019.txt)
+  - [x] In a split tab each pane carries its own header with its own usage percentage. (cards; evidence/cards-TERM-019.txt)
 Compat: —
 Source: D-03-019
 
@@ -262,9 +262,9 @@ User does: works in a git worktree.
 User sees: a small chip with the branch name; detached checkouts show a short commit id.
 Rules: no chip for a plain folder workspace; hovering the chip shows the full branch name.
 Acceptance:
-  - [ ] A pane in branch feature/x shows that branch; a folder outside git shows no chip.
-  - [ ] Hovering a truncated branch chip shows the whole branch name; a detached checkout shows a
-      short commit id.
+  - [x] A pane in branch feature/x shows that branch; a folder outside git shows no chip. (cards; evidence/cards-TERM-022.txt)
+  - [x] Hovering a truncated branch chip shows the whole branch name; a detached checkout shows a
+      short commit id. (cards; evidence/cards-TERM-022.txt)
 Compat: —
 Source: D-03-022
 
@@ -276,8 +276,8 @@ Rules: close is always shown; expand is disabled for a lone pane in the classic 
   look it expands the session window; the split button stays transparent on hover (no flash);
   right-clicking the header opens the same pane menu.
 Acceptance:
-  - [ ] The four buttons appear in the same order on every pane.
-  - [ ] Right-clicking the header opens the same menu as the more button.
+  - [x] The four buttons appear in the same order on every pane. (cards; evidence/cards-TERM-025.txt)
+  - [x] Right-clicking the header opens the same menu as the more button. (cards; evidence/cards-TERM-025.txt)
 Compat: —
 Source: D-03-025
 
