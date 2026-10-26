@@ -29,6 +29,8 @@ pub const COMMANDS: &[super::Command] = &[
     ("agent hooks on", "agent.hooks.on", &[]),
     ("agent hooks off", "agent.hooks.off", &[]),
     ("agent hooks prepare-codex", "agent.hooks.prepare-codex", &[]),
+    // APP-061: the release smoke test's old-profile check; answers only for a throwaway profile.
+    ("profile migrate", "profile.migrate", &[]),
 ];
 
 /// ORCH-043: the folders under home where each agent reads skills installed for the whole
@@ -302,6 +304,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("agent hooks on", "Switch the agent status hooks on and put Kolux's entries back into every agent."),
     ("agent hooks off", "Switch the agent status hooks off and take Kolux's entries out of every agent."),
     ("agent hooks prepare-codex", "Install and trust Kolux's Codex hooks before Codex is first started."),
+    ("profile migrate", "Carry a former-name profile's settings into a throwaway profile (the release smoke test; refuses the installed profile)."),
 ];
 
 /// The bare word some commands take after their verb, and the flag it stands for.
@@ -472,6 +475,7 @@ pub fn run(p: &Parsed) -> Option<Result<Value, Fail>> {
         "agent.hooks.on" => switch::set(&super::data_dir(), true).map_err(Fail::from),
         "agent.hooks.off" => switch::set(&super::data_dir(), false).map_err(Fail::from),
         "agent.hooks.prepare-codex" => switch::prepare_codex(&profile_settings()).map_err(Fail::from),
+        "profile.migrate" => crate::import::migrate_check(&super::data_dir()).map_err(Fail::from),
         _ => return None,
     })
 }
@@ -500,6 +504,7 @@ pub fn text(command: &str, r: &Value) -> Option<String> {
             out.join("\n")
         }
         "agent.hooks.prepare-codex" => format!("Kolux's Codex hooks are installed and trusted in {}", r["home"].as_str().unwrap_or_default()),
+        "profile.migrate" => format!("migrated into {}: {}", r["profile"].as_str().unwrap_or_default(), r["summary"].as_str().unwrap_or_default()),
         _ => return None,
     })
 }

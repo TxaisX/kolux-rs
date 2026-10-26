@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { acquire, downloadUrl, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, takeQueued, unlock, STALE_MS } from "./release.mjs";
+import { acquire, downloadUrl, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, smokeMigration, takeQueued, unlock, STALE_MS } from "./release.mjs";
 import { decide, WAIT_MS } from "./ci-gate.mjs";
 import { checkPromises, checkWorkflow } from "./workflow-check.mjs";
 import { parseArgs } from "./ship.mjs";
@@ -66,6 +66,29 @@ describe("packaged CLI smoke test (APP-061)", () => {
   it("stops the release when the CLI's version is wrong or its help is broken", () => {
     expect(() => smokeCli(cli("0.1.9", HELP), "0.2.0")).toThrow(/says 0.1.9, the release is 0.2.0/);
     expect(() => smokeCli(cli("0.2.0", ""), "0.2.0")).toThrow(/--help/);
+  });
+});
+
+describe("packaged old-profile migration smoke test (APP-061)", () => {
+  const fake = (added, seen = []) => (words, env) => {
+    seen.push({ words, env });
+    return JSON.stringify({ success: true, result: { added } });
+  };
+  const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), "mig-smoke-"));
+  it("lays out a former-name folder beside a throwaway profile and passes when exactly the listed settings carried", () => {
+    const root = scratch();
+    const seen = [];
+    smokeMigration(fake(["uiLook", "language"], seen), root);
+    expect(seen[0].words).toEqual(["profile", "migrate", "--json"]);
+    expect(seen[0].env.KOLUX_USER_DATA_PATH).toBe(path.join(root, "kolux.smoke"));
+    expect(fs.readFileSync(path.join(root, "Nightshift", "settings.json"), "utf8")).toMatch(/nightshiftLanguage/);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  it("stops the release when a setting is missing or one beyond the allow-list carried", () => {
+    const root = scratch();
+    expect(() => smokeMigration(fake(["uiLook"]), root)).toThrow(/carried \["uiLook"\]/);
+    expect(() => smokeMigration(fake(["uiLook", "language", "githubToken"]), root)).toThrow(/more than the allow-list/);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
 
