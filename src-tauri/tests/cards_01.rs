@@ -367,3 +367,28 @@ fn proj063_box2_backend_half_a_branch_switched_inside_the_workspace_folder_lists
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+#[test]
+fn proj070_box1_a_workspace_with_an_unsaved_change_lists_it_and_a_delete_without_force_is_refused() {
+    use kolux_rs_lib::projects::{remove_check, removal_refused};
+    let git = Git::detect().unwrap();
+    let profile = scratch("p70-profile");
+    let store = Store::open(&profile).unwrap();
+    let parent = scratch("p70-repos");
+    let root = scratch("p70-root");
+    let (_remote, _work, project) = cloned_project(&git, &store, &parent);
+    let ws = create_workspace(&git, &nested_at(&root), &project, "unsaved", None).unwrap().worktree.path;
+    let clean = remove_check(&git, &project, &ws).unwrap();
+    assert!(clean.changes.is_empty());
+    std::fs::write(Path::new(&ws).join("scratch.txt"), "not committed").unwrap();
+    let asked = remove_check(&git, &project, &ws).unwrap();
+    assert_eq!(asked.changes, vec!["?? scratch.txt".to_string()], "the question has the change to warn about");
+    let refusal = removal_refused(&asked, false, &asked.stamp).expect("confirming without force is refused");
+    assert!(refusal.contains("1 uncommitted or untracked change would be lost"), "{refusal}");
+    assert!(Path::new(&ws).join("scratch.txt").exists(), "nothing was deleted");
+    assert_eq!(removal_refused(&asked, true, &asked.stamp), None, "only the force box lets it through");
+    drop(store);
+    for d in [profile, parent, root] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}

@@ -235,8 +235,8 @@ Rules: a workspace with changes is not deleted unless forced, and a locked one i
   not taken back if the user has gone elsewhere; the list holds its scroll position, and with
   reduced motion the row disappears without animation.
 Acceptance:
-  - [ ] Delete a workspace holding an unsaved change → a warning shows; confirming without force is
-        refused.
+  - [x] Delete a workspace holding an unsaved change → a warning shows; confirming without force is
+        refused. (cards; evidence/cards-PROJ-070.txt)
   - [ ] Delete the active row while the list is scrolled → the list does not jump.
 Compat: Keybinding id workspace.delete.
 Source: D-01-070
