@@ -259,3 +259,48 @@ fn sess027_box2_codex_custom_default_arguments_replace_the_built_in_ones() {
         assert!(!args.iter().any(|a| a == "--sandbox" || a == "--ask-for-approval" || a == "never"), "built-ins must be gone: {args:?}");
     }
 }
+
+// ---- SESS-030: a restored Claude Code tab starts through the real pty layer when the project path has spaces ----
+
+#[cfg(windows)]
+#[test]
+fn sess030_box3_resume_starts_in_a_project_folder_whose_path_contains_spaces() {
+    use kolux_rs_lib::pty::{program_command, PtySession};
+    use std::sync::Arc;
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let root = scratch("s30-root");
+    let project = root.join("my project folder");
+    let shim_dir = root.join("agent bin");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    // Stands in for the agent: a command-script shim (how npm installs claude on Windows) that prints what it received.
+    let shim = shim_dir.join("claude.cmd");
+    std::fs::write(&shim, "@echo off\r\necho RESUME-ARGS[%*]\r\necho RESUME-CWD[%CD%]\r\n").unwrap();
+
+    let none = serde_json::json!({});
+    let line = start_line_as(&none, "claude", &[], "", true, Start::Restore(Some("0b6c7e3a-4f2d-4b8e-9a51-2d3c4e5f6a7b"))).unwrap();
+    assert!(line.resumed);
+    let cmd = program_command(&shim.to_string_lossy(), &line.args, Some(&project.to_string_lossy()));
+
+    let out = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let sink = Arc::clone(&out);
+    let mut session = PtySession::spawn(cmd, 200, 24, move |c| sink.lock().unwrap().extend_from_slice(c), |_| {}).expect("the resumed agent starts");
+    // The console layer keeps the session open after the shim ends; wait for its last line, then stop.
+    let start = std::time::Instant::now();
+    let mut answered = 0;
+    while !String::from_utf8_lossy(&out.lock().unwrap()).contains("RESUME-CWD[") && start.elapsed() < std::time::Duration::from_secs(30) {
+        // The console layer asks where the cursor is and waits; the terminal view answers, so does this.
+        let asked = String::from_utf8_lossy(&out.lock().unwrap()).matches("[6n").count();
+        for _ in answered..asked {
+            session.write(b"[1;1R").unwrap();
+        }
+        answered = asked;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    session.kill();
+    let text = String::from_utf8_lossy(&out.lock().unwrap()).to_string();
+    assert!(text.contains("--permission-mode auto --resume 0b6c7e3a-4f2d-4b8e-9a51-2d3c4e5f6a7b]"), "{text}");
+    assert!(text.to_lowercase().contains("my project folder]"), "started in the spaced folder: {text}");
+    let _ = std::fs::remove_dir_all(root);
+}

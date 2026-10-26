@@ -223,7 +223,7 @@ Rules: works for every agent that can resume, among them Claude Code, Codex, Dev
 Acceptance:
   - [ ] Run Claude Code, quit, reopen → the same conversation carries on in the same pane.
   - [ ] Kill Kolux during a session and reopen → the session resumes.
-  - [ ] On Windows, with a project path that contains spaces → resume still starts.
+  - [x] On Windows, with a project path that contains spaces → resume still starts. (cards; evidence/cards-SESS-030.txt)
 Compat: —
 Source: D-02-030
 
