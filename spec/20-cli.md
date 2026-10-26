@@ -172,9 +172,9 @@ Rules: `--timeout-ms` sets both how long the app waits and how long the CLI wait
   resumed wait never hands back again; with `--json` the output uses the shared envelope from
   CLI-004.
 Acceptance:
-  - [ ] Ask with a short timeout → the output includes a resume command, and running it later
-        returns the answer.
-  - [ ] Ask with an invalid timeout → refused before the app is contacted.
+  - [x] Ask with a short timeout → the output includes a resume command, and running it later
+        returns the answer. (cards; evidence/cards-CLI-033.txt)
+  - [x] Ask with an invalid timeout → refused before the app is contacted. (cards; evidence/cards-CLI-033.txt)
 Compat: orchestration ask; `--to`, `--run`, `--question`, `--resume`, `--dispatch-capability`,
   `--options`, `--timeout-ms`, `--from` and `--retry-request`; exit status 75 for the Windows
   hand-back.
@@ -197,10 +197,10 @@ Rules: task-create takes a spec, a short title, a display name, dependencies and
   terminal; dispatch refusals come back as ordinary clear errors through the normal error output;
   dispatch-show shows a dispatch or its opening text.
 Acceptance:
-  - [ ] Create task B that depends on A → `kolux orchestration task-list --ready` leaves B out until
-        A is done.
-  - [ ] `kolux orchestration dispatch --task t --dry-run` prints the opening text and changes
-        nothing.
+  - [x] Create task B that depends on A → `kolux orchestration task-list --ready` leaves B out until
+        A is done. (cards; evidence/cards-CLI-034.txt)
+  - [x] `kolux orchestration dispatch --task t --dry-run` prints the opening text and changes
+        nothing. (cards; evidence/cards-CLI-034.txt)
 Compat: orchestration task-create, task-list, task-update, dispatch and dispatch-show; `--spec`,
   `--task-title`, `--display-name`, `--deps`, `--parent`, `--status`, `--ready`, `--brief`,
   `--result`, `--task`, `--to`, `--inject`, `--dry-run`, `--return-preamble`, `--preamble`, `--run`,
@@ -224,7 +224,7 @@ Rules: `--task` names an existing task, while `--spec` creates one in the same s
 Acceptance:
   - [ ] `kolux orchestration worker-start --spec x --tier build` starts a worker on the model routed
         for build and prints a ready receipt.
-  - [ ] `kolux orchestration worker-start --spec x --effort high` with no `--model` is refused.
+  - [x] `kolux orchestration worker-start --spec x --effort high` with no `--model` is refused. (cards; evidence/cards-CLI-035.txt)
 Compat: orchestration worker-start; `--task`, `--spec`, `--task-title`, `--deps`, `--parent`,
   `--worktree`, `--name`, `--repo`, `--base-branch`, `--display-name`, `--comment`,
   `--setup`, `--agent`, `--model`, `--effort`, `--terminal`, `--tier`, `--retry-of`, `--timeout-ms`,
