@@ -28,7 +28,7 @@ mod editor_search;
 pub mod fence;
 pub mod files;
 pub mod final_save;
-mod fsops;
+pub mod fsops;
 mod fonts;
 pub mod git;
 mod github;
