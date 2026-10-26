@@ -32,9 +32,12 @@ pub const COPILOT_SCRIPT: &str = "copilot.cmd";
 pub const COPILOT_EVENTS: [&str; 13] = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "subagentStart", "SubagentStop", "PreCompact", "Stop", "ErrorOccurred", "PermissionRequest", "Notification"];
 /// Copilot's ask-the-user tool, by its documented name.
 const COPILOT_ASK_TOOL: &str = "ask_user";
-/// STAT-012: the eight Cursor events installed. Session start can fire while idle and is left
-/// unhooked on purpose; session end is understood (`normalize`) but not installed.
-pub const CURSOR_EVENTS: [&str; 8] = ["beforeSubmitPrompt", "stop", "preToolUse", "postToolUse", "postToolUseFailure", "beforeShellExecution", "beforeMCPExecution", "afterAgentResponse"];
+/// STAT-012 / DT-C49: the five Cursor state events installed. `preToolUse`, `beforeShellExecution` and
+/// `beforeMCPExecution` are Cursor permission hooks: it blocks on any answer outside their schema
+/// (cursor.com/docs/agent/hooks) and SAFE-009 guards only Claude Code, so they are understood
+/// (`normalize`) but never installed, and install takes Kolux's old entries out. Session start can
+/// fire while idle and is left unhooked on purpose; session end is understood but not installed.
+pub const CURSOR_EVENTS: [&str; 5] = ["beforeSubmitPrompt", "stop", "postToolUse", "postToolUseFailure", "afterAgentResponse"];
 /// STAT-013: Droid's documented events Kolux hooks. SessionStart and SubagentStop are installed
 /// and ignored (both fire while idle). PermissionRequest is not in Factory's hook reference, so it
 /// is read when it comes but not installed.
@@ -469,7 +472,8 @@ fn root_of<'a>(file: &Path, v: &'a mut Value) -> Result<&'a mut Map<String, Valu
     v.as_object_mut().ok_or_else(|| format!("{} has a top level that is not an object; left alone", file.display()))
 }
 
-/// STAT-012: one Kolux entry under each Cursor event, the user's entries kept where they are.
+/// STAT-012: one Kolux entry under each Cursor event, the user's entries kept where they are; an older
+/// file's Kolux entries under the permission events go (DT-C49).
 pub fn install_cursor(home: &Path, file: &Path) -> Result<bool, String> {
     let command = quoted(&write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", true))?);
     let text = read_opt(file)?;

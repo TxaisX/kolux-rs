@@ -1,0 +1,36 @@
+diff --git a/src-tauri/src/hooks.rs b/src-tauri/src/hooks.rs
+index 85da7d96..3ca810cc 100644
+--- a/src-tauri/src/hooks.rs
++++ b/src-tauri/src/hooks.rs
+@@ -372,6 +372,11 @@ pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
+     if path == "/antigravity/PreToolUse" {
+         return json!({ "decision": "allow" }).to_string();
+     }
++    // STAT-012: Cursor's beforeSubmitPrompt output is {"continue": bool} (cursor.com/docs/agent/hooks); the prompt always proceeds.
++    if path == "/cursor" && serde_json::from_slice::<Value>(body).ok().is_some_and(|e| e.get("hook_event_name").and_then(Value::as_str) == Some("beforeSubmitPrompt")) {
++        return json!({ "continue": true }).to_string();
++    }
++
+     // T-156-b: the rules in force for the command's folder (built-ins, the user's own, per project)
+     // and the recent-attempts list, both in protected_custom.rs.
+     crate::protected_custom::listen(path, body, settings).unwrap_or_else(|| "{}".into())
+@@ -1491,6 +1496,19 @@ Content-Length: {}
+         assert!(codex_script().contains("-o NUL"));
+     }
+ 
++    /// STAT-012: Cursor's prompt hook is answered in its documented shape and every other Cursor event with
++    /// the neutral `{}`; Kolux says nothing to its permission hooks (SAFE-009 guards only Claude Code).
++    #[test]
++    fn stat_012_cursor_prompt_hook_gets_continue_and_the_rest_stay_neutral() {
++        let s = json!({});
++        let ev = |name: &str| format!(r#"{{"hook_event_name":"{name}","conversation_id":"c1","command":"git push -f"}}"#);
++        assert_eq!(reply_body("/cursor", ev("beforeSubmitPrompt").as_bytes(), &s), r#"{"continue":true}"#);
++        for name in ["stop", "postToolUse", "preToolUse", "beforeShellExecution", "beforeMCPExecution"] {
++            assert_eq!(reply_body("/cursor", ev(name).as_bytes(), &s), "{}", "{name}");
++        }
++        assert_eq!(reply_body("/cursor", b"not json {", &s), "{}");
++    }
++
+     #[test]
+     fn codex_hooks_go_last_and_are_replaced_in_place() {
+         let mut file = ev(r#"{"description":"mine","hooks":{

@@ -437,3 +437,62 @@ fn stat_021_pi_titles_come_from_the_kolux_extension_alone() {
     let out = std::process::Command::new("node").arg(dir.join("run.mjs")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[\"\u{3c0} - Fix parser - my-app\"]", "no title before Pi names the session; then session name and folder: {}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// Kolux's old eight-event Cursor file, built from a fresh install's command plus the three permission events.
+fn old_cursor_file(home: &Path, file: &Path, user_shell: Option<&str>) -> Value {
+    install_cursor(home, file).unwrap();
+    let mut v: Value = serde_json::from_str(&read(file)).unwrap();
+    let mine = v["hooks"]["stop"][0].clone();
+    for e in ["preToolUse", "beforeShellExecution", "beforeMCPExecution"] {
+        v["hooks"][e] = json!([mine.clone()]);
+    }
+    if let Some(cmd) = user_shell {
+        v["hooks"]["beforeShellExecution"].as_array_mut().unwrap().insert(0, json!({ "command": cmd }));
+    }
+    v
+}
+
+/// SAFE-009 / DT-C49: Cursor blocks on any answer outside its permission schema, so the three
+/// permission events are never installed; the other five are.
+#[test]
+fn stat_012_cursor_installs_only_the_five_state_events() {
+    assert_eq!(CURSOR_EVENTS.as_slice(), ["beforeSubmitPrompt", "stop", "postToolUse", "postToolUseFailure", "afterAgentResponse"]);
+    let home = scratch("cursor-five");
+    let file = cursor_file(&home);
+    assert!(install_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    let mut keys: Vec<&str> = v["hooks"].as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let mut want = CURSOR_EVENTS.to_vec();
+    want.sort_unstable();
+    assert_eq!(keys, want, "exactly the five state events");
+    assert_eq!(inspect_cursor(&file), ("installed", None));
+}
+
+#[test]
+fn stat_012_cursor_install_drops_old_permission_entries_and_keeps_the_users() {
+    let home = scratch("cursor-old");
+    let file = cursor_file(&home);
+    let user = "./my-gate.sh";
+    let old = old_cursor_file(&home, &file, Some(user));
+    fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+    assert_eq!(old["hooks"].as_object().unwrap().len(), 8, "the file starts with eight Kolux events");
+    assert_eq!(inspect_cursor(&file).0, "installed", "the status row judges the five");
+    assert!(install_cursor(&home, &file).unwrap(), "the old entries go");
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([{ "command": user }]), "only the user's entry is left, unchanged");
+    assert_eq!(serde_json::to_string(&v["hooks"]["beforeShellExecution"][0]).unwrap(), serde_json::to_string(&old["hooks"]["beforeShellExecution"][0]).unwrap());
+    assert!(v["hooks"].get("preToolUse").is_none() && v["hooks"].get("beforeMCPExecution").is_none(), "an event key Kolux left empty is dropped");
+    assert!(["preToolUse", "beforeMCPExecution", "beforeShellExecution"].iter().all(|e| !v["hooks"][e].as_array().is_some_and(|l| l.iter().any(names_mine))));
+    assert!(CURSOR_EVENTS.iter().all(|e| v["hooks"][e].as_array().unwrap().iter().filter(|h| names_mine(h)).count() == 1));
+    assert!(!install_cursor(&home, &file).unwrap(), "a second install changes nothing");
+}
+
+#[test]
+fn stat_012_cursor_permission_events_stay_mapped_for_older_files() {
+    let mut m = Memory::default();
+    for event in ["preToolUse", "beforeShellExecution", "beforeMCPExecution"] {
+        let e = normalize_with(&mut m, "/cursor", &json!({"hook_event_name":event,"conversation_id":"c1","tool_name":"search","command":"ls"})).unwrap();
+        assert_eq!(e["hook_event_name"], "PreToolUse", "{event}");
+    }
+}
