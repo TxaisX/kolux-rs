@@ -701,11 +701,16 @@ pub struct PrefixCheck {
     pub refused: bool,
 }
 
-#[tauri::command]
-pub fn branch_prefix_check(mode: Option<String>, custom: Option<String>) -> PrefixCheck {
+pub fn branch_prefix_check_now(mode: Option<String>, custom: Option<String>) -> PrefixCheck {
     let user = || prefix_user(|| crate::git::run(&["config", "user.name"], None).ok(), crate::scm::gh_login);
     let (prefix, warning) = branch_prefix(mode.as_deref(), custom.as_deref(), user, &git_accepts);
     PrefixCheck { prefix, refused: warning.is_some() }
+}
+
+/// Async so the git and gh lookups (up to 230 ms) run off the UI thread, which a sync command would hold.
+#[tauri::command]
+pub async fn branch_prefix_check(mode: Option<String>, custom: Option<String>) -> PrefixCheck {
+    tauri::async_runtime::spawn_blocking(move || branch_prefix_check_now(mode, custom)).await.unwrap_or(PrefixCheck { prefix: String::new(), refused: false })
 }
 
 pub fn used_dirs(store: &Store) -> Vec<String> {
@@ -5178,5 +5183,23 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert!(save_details(&store, w, "n", "", &long).is_err());
         assert_eq!(details_of(&store, w).name, None, "an over-long comment writes nothing");
         drop(store);
+    }
+}
+
+#[cfg(test)]
+mod branch_prefix_async_tests {
+    use super::*;
+
+    fn is_async<F: std::future::Future>(_: fn(Option<String>, Option<String>) -> F) {}
+
+    #[test]
+    fn branch_prefix_check_is_an_async_command_that_matches_the_sync_one() {
+        is_async(branch_prefix_check);
+        for (mode, custom) in [(Some("custom"), Some("team/")), (Some("none"), None), (None, None)] {
+            let (m, c) = (mode.map(String::from), custom.map(String::from));
+            let new = tauri::async_runtime::block_on(branch_prefix_check(m.clone(), c.clone()));
+            let old = branch_prefix_check_now(m, c);
+            assert_eq!((new.prefix, new.refused), (old.prefix, old.refused), "{mode:?} {custom:?}");
+        }
     }
 }

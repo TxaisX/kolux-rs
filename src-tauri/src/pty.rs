@@ -284,10 +284,15 @@ pub fn shell_choice(settings: &serde_json::Value) -> Option<&str> {
     }
 }
 
-#[tauri::command]
-pub fn shell_list(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Vec<ShellInfo> {
+pub fn shell_list_on(store: &Mutex<crate::state::Store>) -> Vec<ShellInfo> {
     let settings = store.lock().map(|s| s.settings()).unwrap_or_default();
     chosen_first(shells(crate::agents::find_program), &settings)
+}
+
+/// Async so the PATH probe (up to 240 ms) runs off the UI thread, which a sync command would hold.
+#[tauri::command]
+pub async fn shell_list(app: tauri::AppHandle) -> Vec<ShellInfo> {
+    tauri::async_runtime::spawn_blocking(move || shell_list_on(&tauri::Manager::state::<Mutex<crate::state::Store>>(&app))).await.unwrap_or_default()
 }
 
 /// TERM-040: where a new terminal starts. A requested folder may be relative to the workspace or
@@ -980,5 +985,20 @@ mod tests {
         .expect("spawn shell in a pty");
         session.kill();
         exit_rx.recv_timeout(Duration::from_secs(30)).expect("shell ends after kill");
+    }
+}
+
+#[cfg(test)]
+mod shell_list_async_tests {
+    use super::*;
+
+    fn is_async<F: std::future::Future>(_: fn(tauri::AppHandle) -> F) {}
+
+    #[test]
+    fn shell_list_is_an_async_command_that_matches_the_sync_one() {
+        is_async(shell_list);
+        let store = Mutex::new(crate::state::Store::open(&crate::test_dir::temp("shell-list-async")).unwrap());
+        let settings = store.lock().unwrap().settings();
+        assert_eq!(shell_list_on(&store), chosen_first(shells(crate::agents::find_program), &settings));
     }
 }
