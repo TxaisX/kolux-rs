@@ -52,14 +52,24 @@ const LIMITS: [RegExp, string][] = [
   [/\[\^[^\]]+\]/, "footnotes"],
   [/^ {0,3}([-*_])( *\1){2,} *$/m, "horizontal rules"],
   [/^ {0,3}\S.*\r?\n {0,3}(=+|-+) *$/m, "underlined headings"],
+  // Row 94 round 4: the view reads a blank `>` line as a literal `>` and joins the quote's paragraphs.
+  [/^ {0,3}>[ \t>]*\r?$/m, "block quotes with blank lines"],
 ];
+
+/** The reasons from the cheap, line-level part of `unsupported` that `md` trips (no round trip). */
+export function limitsOf(md: string): string[] {
+  const prose = withoutCode(md);
+  const hit = LIMITS.filter(([re]) => re.test(prose)).map(([, what]) => `it has ${what}`);
+  // ~~~ fences and indented code would be reflowed into one line or lose their indent.
+  if (looseCodeRows(md.split("\n")).some(Boolean)) hit.push("it has code blocks the rich view would reflow");
+  return hit;
+}
 
 /** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
 export function unsupported(md: string): string | null {
+  const hit = limitsOf(md);
+  if (hit.length) return hit[0];
   const prose = withoutCode(md);
-  for (const [re, what] of LIMITS) if (re.test(prose)) return `it has ${what}`;
-  // ~~~ fences and indented code would be reflowed into one line or lose their indent.
-  if (looseCodeRows(md.split("\n")).some(Boolean)) return "it has code blocks the rich view would reflow";
   const back = roundTrip(md);
   if (back === null) return "it could not be read as markdown";
   if (words(back) !== words(md)) return "some of its text would be lost";

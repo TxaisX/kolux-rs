@@ -4,7 +4,7 @@
 // byte as it was. The text here is the buffer's (CodeMirror joins lines with \n; the file's own
 // line ends are put back when it is written).
 import { diff } from "@codemirror/merge";
-import { changeBetween, RICH_LIMIT, roundTrip, unsupported } from "./markdown";
+import { changeBetween, limitsOf, RICH_LIMIT, roundTrip, unsupported } from "./markdown";
 
 /** The front matter block including its closing line and that line's end ("" when there is none),
  *  and the rest of the note. `front + body` is always the whole text. */
@@ -57,39 +57,60 @@ export function keepRaw(body: string, out: string, prev?: string): string {
 
 type Edit = { from: number; to: number; insert: string };
 
-/** How each rich edit was placed (the fuzz test reads it): by word number, by retyping the touched blocks, or refused. */
-export const placeStats = { fast: 0, block: 0, refused: 0 };
+/** How each rich edit was placed (the fuzz test reads it): by word number, by retyping the touched blocks, or refused;
+ *  `whole` counts the placements that needed a whole list or section, not just its touched item or child. */
+export const placeStats = { fast: 0, block: 0, refused: 0, whole: 0 };
 
 /** The body with the rich edit (`prev` -> `out`) made in it, or null when the edit cannot be placed for sure.
  *  Round 3 of row 94: the word-mapped placement keeps every byte, but the word check cannot see a marker or a line break
- *  it damaged, so the touched blocks of the result must read back as the same blocks of `out`. When they do not, those
- *  blocks are taken in `out`'s spelling (the file loses its own spelling only in the paragraphs the user edited) and
- *  checked again with one block of context on each side; only a failure there refuses. */
+ *  it damaged, so the touched blocks of the result, with one block of context on each side, must read back as the same
+ *  blocks of `out`, and must not trip a line rule of `unsupported` that `out` does not (round 4: a wrap left as a setext
+ *  underline, a rule or a reference definition). When they do not, the touched blocks are taken in `out`'s spelling and
+ *  checked the same way; only a failure there refuses. Round 4: a bullet list's items and a section's children are
+ *  blocks of their own, so only the touched item is retyped and checked; the whole list or section is used when the
+ *  edit adds or removes a fence or section line, or the item-level placement fails. */
 export function mapEdit(body: string, out: string, prev: string): string | null {
   const e = changeBetween(prev, out);
   if (!e) return body;
   const bw = wordSpans(body);
   const pw = wordSpans(prev);
   if (bw.length !== pw.length || !sameWords(body, prev)) return (placeStats.refused++, null);
-  const bb = blockSpans(body);
-  const pb = blockSpans(prev);
+  const fast = wordPlace(body, out, prev, e, bw, pw);
+  const got = placeIn(body, out, prev, e, bw, pw, fast, true) ?? placeIn(body, out, prev, e, bw, pw, fast, false);
+  if (!got) return (placeStats.refused++, null);
+  placeStats[got[1]]++;
+  if (got[2]) placeStats.whole++;
+  return got[0];
+}
+
+/** One try of `mapEdit` on `fine` (item and child) or whole blocks: [the body, how, whether whole blocks] or null. */
+function placeIn(body: string, out: string, prev: string, e: Edit, bw: Span[], pw: Span[], fast: string | null, fine: boolean): [string, "fast" | "block", boolean] | null {
+  const bb = blockSpans(body, fine);
+  const pb = blockSpans(prev, fine);
   const delta = out.length - prev.length;
   const r = touched(body, prev, bw, pw, bb, pb, e);
+  const n = bw.length;
+  const w = r.i0 === 0 && r.i1 === n ? r : regionOf(body, prev, bw, pw, bb, pb, Math.max(0, r.i0 - 1), Math.min(n, r.i1 + 1));
   const outPart = out.slice(r.p.s, r.p.e + delta);
-  const fast = wordPlace(body, out, prev, e, bw, pw);
+  const outCtx = out.slice(w.p.s, w.p.e + delta);
+  const bodyCtx = body.slice(w.b.s, w.b.e);
+  // A fence or section line added or removed can change how every later block reads: only whole blocks are sure.
+  if (fine && shape(prev.slice(w.p.s, w.p.e)) !== shape(outCtx)) return null;
+  // A loose list reads every item loose, so one item of context on each side is not the whole list's reading.
+  if (fine && (looseList(body, bb, r.b) || looseList(prev, pb, r.p))) return null;
+  const allowed = new Set([...limitsOf(outCtx), ...limitsOf(bodyCtx)]);
+  const reads = (cand: string) => {
+    const ctx = cand.slice(w.b.s, w.b.e + cand.length - body.length);
+    return (!fine || shape(ctx) === shape(bodyCtx)) && limitsOf(ctx).every((x) => allowed.has(x)) && same(ctx, outCtx);
+  };
   if (fast !== null) {
     const end = fast.length - (body.length - r.b.e);
     const kept = end >= r.b.s && fast.startsWith(body.slice(0, r.b.s)) && fast.endsWith(body.slice(r.b.e));
     // L2: a line left holding only spaces reads as a blank line on disk, even where the rich view's reading agrees.
-    const part = fast.slice(r.b.s, end);
-    if (kept && spaceLines(part) <= spaceLines(body.slice(r.b.s, r.b.e)) && same(part, outPart)) return (placeStats.fast++, fast);
+    if (kept && spaceLines(fast.slice(r.b.s, end)) <= spaceLines(body.slice(r.b.s, r.b.e)) && reads(fast)) return [fast, "fast", !fine];
   }
   const next = body.slice(0, r.b.s) + outPart + body.slice(r.b.e);
-  const n = bw.length;
-  const w = r.i0 === 0 && r.i1 === n ? r : regionOf(body, prev, bw, pw, bb, pb, Math.max(0, r.i0 - 1), Math.min(n, r.i1 + 1));
-  const shift = next.length - body.length;
-  if (same(next.slice(w.b.s, w.b.e + shift), out.slice(w.p.s, w.p.e + delta))) return (placeStats.block++, next);
-  return (placeStats.refused++, null);
+  return reads(next) ? [next, "block", !fine] : null;
 }
 
 /** Whether the rich view reads `a` and `b` the same (never when it fails on either). */
@@ -102,34 +123,82 @@ const spaceLines = (t: string) => (t.match(/^[ \t]+\r?$/gm) ?? []).length;
 
 const OPEN = /^<details>[ \t]*\r?$/i;
 const CLOSE = /^<\/details>[ \t]*\r?$/i;
+const BULLET = /^[-*+][ \t]/;
+const STRUCT = /^ {0,3}(`{3,}|~{3,})|^<\/?details>[ \t]*\r?$/gim;
+
+const BLANK = /\n[ \t]*\r?\n/;
+
+/** Whether a bullet list that blocks `g` of `t` reach into has a blank line inside or between its items. */
+function looseList(t: string, spans: Span[], g: Span): boolean {
+  const item = (i: number) => i >= 0 && i < spans.length && BULLET.test(t.slice(spans[i].s, spans[i].s + 2));
+  let lo = spans.findIndex((x) => x.e >= g.s);
+  if (lo < 0) return false;
+  let hi = lo;
+  while (hi + 1 < spans.length && spans[hi + 1].s <= g.e) hi++;
+  while (item(lo - 1) && item(lo)) lo--;
+  while (item(hi + 1) && item(hi)) hi++;
+  for (let i = lo; i <= hi; i++) {
+    if (!item(i)) continue;
+    if (BLANK.test(t.slice(spans[i].s, spans[i].e)) || (i < hi && item(i + 1) && BLANK.test(t.slice(spans[i].e, spans[i + 1].s)))) return true;
+  }
+  return false;
+}
+
+/** The fence and section lines of `t` in order: what decides which of its lines are code, prose or a section. */
+const shape = (t: string) => (t.match(STRUCT) ?? []).map((x) => x.trim().toLowerCase()).join("|");
 
 /** Top-level markdown blocks: runs of lines between blank lines (a line end's \r left out). A fence or a section is
- *  one block, and an indented line after a blank line stays with the block above it (a list item's next paragraph). */
-export function blockSpans(text: string): Span[] {
+ *  one block, and an indented line after a blank line stays with the block above it (a list item's next paragraph).
+ *  `fine` (round 4) also splits a bullet list at each top-level item (with its nested lines) and a section that
+ *  starts a block into its opening lines, each child, and its closing line. */
+export function blockSpans(text: string, fine = false): Span[] {
   const spans: Span[] = [];
   let fence = "";
   let depth = 0;
   let cur: Span | null = null;
   let gap = false;
+  let list = false;
+  let sec = false;
   let pos = 0;
   for (const line of text.split("\n")) {
     const start = pos;
     pos += line.length + 1;
-    if (!fence && !depth && /^[ \t]*\r?$/.test(line)) {
+    if (!fence && (!depth || (sec && depth === 1)) && /^[ \t]*\r?$/.test(line)) {
       gap = cur !== null;
       continue;
     }
     const end = start + line.length - (line.endsWith("\r") ? 1 : 0);
-    if (cur && (!gap || /^[ \t]/.test(line))) cur.e = end;
-    else spans.push((cur = { s: start, e: end }));
-    gap = false;
     const f = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    const split = !fence && ((list && !depth && BULLET.test(line)) || (sec && depth === 1 && CLOSE.test(line)));
+    if (cur && (!gap || /^[ \t]/.test(line)) && !split) cur.e = end;
+    else {
+      if (!depth) {
+        list = fine && !f && BULLET.test(line);
+        sec = fine && OPEN.test(line);
+      }
+      spans.push((cur = { s: start, e: end }));
+    }
+    gap = false;
     if (f && (!fence || (f[0] === fence[0] && f.length >= fence.length))) fence = fence ? "" : f;
     else if (!fence && OPEN.test(line)) depth++;
     else if (!fence && depth && CLOSE.test(line)) depth--;
+    if (!depth) sec = false;
   }
   return spans;
 }
+
+/** How many of the (sorted) words end at or before `p`, and how many start before it. */
+const count = (w: Span[], ok: (x: Span) => boolean) => {
+  let g = 0;
+  for (let h = w.length; g < h; ) {
+    const mid = (g + h) >> 1;
+    if (ok(w[mid])) g = mid + 1;
+    else h = mid;
+  }
+  return g;
+};
+const endsBy = (w: Span[], p: number) => count(w, (x) => x.e <= p);
+const startsBefore = (w: Span[], p: number) => count(w, (x) => x.s < p);
 
 function findLast<T>(a: T[], f: (x: T) => boolean): T | undefined {
   for (let i = a.length - 1; i >= 0; i--) if (f(a[i])) return a[i];
@@ -142,8 +211,8 @@ type Region = { i0: number; i1: number; b: Span; p: Span };
 function touched(body: string, prev: string, bw: Span[], pw: Span[], bb: Span[], pb: Span[], e: Edit): Region {
   const first = findLast(pb, (b) => b.s <= e.from);
   const last = pb.find((b) => b.e >= e.to);
-  const i0 = first ? pw.filter((w) => w.e <= first.s).length : 0;
-  const i1 = last ? pw.filter((w) => w.s < last.e).length : pw.length;
+  const i0 = first ? endsBy(pw, first.s) : 0;
+  const i1 = last ? startsBefore(pw, last.e) : pw.length;
   const r = regionOf(body, prev, bw, pw, bb, pb, i0, i1);
   return r.p.s <= e.from && r.p.e >= e.to ? r : { i0: 0, i1: pw.length, b: { s: 0, e: body.length }, p: { s: 0, e: prev.length } };
 }
@@ -171,8 +240,8 @@ function edges(text: string, w: Span[], blocks: Span[], i0: number, i1: number):
   const hi1 = i1 < w.length ? w[i1].s : text.length;
   const e = findLast(blocks, (b) => b.e >= lo1 && b.e <= hi1)?.e;
   // A block that holds word i0-1 and word i0 (or i1-1 and i1) goes in whole.
-  const j0 = s === undefined && i0 ? w.filter((x) => x.e <= findLast(blocks, (b) => b.s <= w[i0 - 1].s)!.s).length : i0;
-  const j1 = e === undefined && i1 < w.length ? w.filter((x) => x.s < blocks.find((b) => b.e >= w[i1].e)!.e).length : i1;
+  const j0 = s === undefined && i0 ? endsBy(w, findLast(blocks, (b) => b.s <= w[i0 - 1].s)!.s) : i0;
+  const j1 = e === undefined && i1 < w.length ? startsBefore(w, blocks.find((b) => b.e >= w[i1].e)!.e) : i1;
   return { s: s ?? 0, e: e ?? text.length, i0: j0, i1: j1 };
 }
 
@@ -226,10 +295,13 @@ const blockedBy = (why: string | null) => (why ? { text: `Showing source: the ri
  *  block on each side are checked, so a twin pane's keystroke does not round-trip the whole note. */
 export function richBlockerSince(before: string, text: string, bigOk: boolean): { text: string; big?: boolean } | null {
   if (text.length > RICH_LIMIT && !bigOk) return richBlocker(text, bigOk);
+  const was = splitFront(before).body;
   const body = splitFront(text).body;
-  const c = changeBetween(splitFront(before).body, body);
+  const c = changeBetween(was, body);
   if (!c) return null;
-  const blocks = blockSpans(body);
+  // Round 4 (M2): a fence or section line added or removed turns code into prose (or back) past the window.
+  if (shape(linesOf(was, c.from, c.to)) || shape(linesOf(body, c.from, c.from + c.insert.length))) return richBlocker(text, bigOk);
+  const blocks = blockSpans(body, true);
   const hi = c.from + c.insert.length;
   const k = blocks.findIndex((b) => b.e >= c.from);
   const i = Math.max(0, (k < 0 ? blocks.length - 1 : k) - 1);
@@ -238,6 +310,12 @@ export function richBlockerSince(before: string, text: string, bigOk: boolean): 
   j = Math.min(blocks.length - 1, j + 1);
   return blocks.length ? blockedBy(unsupported(body.slice(blocks[i].s, blocks[j].e))) : null;
 }
+
+/** The whole lines of `t` that hold `from..to`. */
+const linesOf = (t: string, from: number, to: number) => {
+  const e = t.indexOf("\n", to);
+  return t.slice(t.lastIndexOf("\n", from - 1) + 1, e < 0 ? t.length : e);
+};
 
 /** Whether the front matter is hidden for `path`: the choice made while this file was shown, else the saved one. */
 export function hideFrontFor(held: { path: string; hide: boolean }, path: string, saved: (path: string) => boolean): boolean {

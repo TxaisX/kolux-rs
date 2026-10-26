@@ -83,7 +83,9 @@ describe("row 135: a rich edit rewrites only what the user changed", () => {
   });
 
   it("typing at the very end keeps the file's last line end after the new text", () => {
-    expect(keepRaw("* a\n* b\n\ntext here\n", "- a\n- b\n\ntext here!", "- a\n- b\n\ntext here")).toBe("* a\n* b\n\ntext here!\n");
+    // Round 4: the edit is checked with its neighbour block too, so `prev` is the rich view's real spelling.
+    const prev = roundTrip("* a\n* b\n\ntext here\n")!;
+    expect(keepRaw("* a\n* b\n\ntext here\n", prev.replace("text here", "text here!"), prev)).toBe("* a\n* b\n\ntext here!\n");
   });
 
   it("an edit that touches a respelt bit replaces that bit, and only that bit", () => {
