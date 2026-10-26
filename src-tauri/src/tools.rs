@@ -174,8 +174,11 @@ pub async fn tools_check(app: tauri::AppHandle, refresh: bool) -> Result<Tools, 
 /// Hides one notice until the GitHub project set differs from `under`.
 #[tauri::command]
 pub fn tools_dismiss(store: tauri::State<'_, Mutex<Store>>, id: String, under: String) -> Result<(), String> {
-    let s = store.lock().map_err(|e| e.to_string())?;
-    let mut all = dismissed(&s);
+    dismiss(&*store.lock().map_err(|e| e.to_string())?, id, under)
+}
+
+fn dismiss(s: &Store, id: String, under: String) -> Result<(), String> {
+    let mut all: serde_json::Map<String, serde_json::Value> = crate::orchestration::kept::load(s, KEY_DISMISSED)?;
     all.insert(id, serde_json::Value::String(under));
     s.set(KEY_DISMISSED, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
@@ -804,5 +807,19 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(wait_webviews_closed(), 0);
         assert!(t0.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn card13_dismissed_notices_that_could_not_be_kept_aside_are_never_saved_over() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-tools-c13-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir).unwrap();
+        let broken = "{\"gh\": \"abc";
+        store.set(KEY_DISMISSED, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(dismiss(&store, "gh".into(), "x".into()).unwrap_err().contains(KEY_DISMISSED));
+        assert_eq!(store.get(KEY_DISMISSED).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
