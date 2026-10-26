@@ -76,7 +76,7 @@ AUDIT
   | the browser pane's pages | engine proxy from the sealed httpProxy (browser.rs:1036, BROW-033) | unchanged |
   No ureq or other HTTP crate is in Cargo.toml.
 BUILT
-  new src-tauri/src/resources/app_http.rs: Plan {route, http1}, plan_from_store, plan_for(app,url), apply(plan, ClientBuilder), with_plan(app,url,builder), updater_fields; it builds no client itself (artifacts.rs keeps its one builder); six tests
+  new src-tauri/src/resources/app_http.rs: Plan {route, http1}, plan_from_store, plan_for(app,url), updater_fields; it names no network client (the reqwest side is artifacts.rs proxied(plan, ClientBuilder), test app_032_each_route_reaches_the_client there, so privacy-audit.test.mjs needs no change); five tests
   (set_040_*, app_032_*), including app_032_no_command_returns_the_proxy_address (no #[tauri::command] in app_proxy.rs or app_http.rs; the stored
   setting holds neither the password nor the host in the settings value or on disk).
   The address is read only through secrets::read_setting in Rust; settings reach the page sealed, secret_status returns a bool.
@@ -84,11 +84,10 @@ PATCHES (apply in this order, from the repo root; they touch other lanes' files 
   evidence/editor-T-323-b-1-resources-mod.patch      src-tauri/src/resources.rs (pub mod app_http;)
   evidence/editor-T-323-b-2-update.patch             src-tauri/src/update.rs (check, download, HEAD probe, its two source tests)
   evidence/editor-T-323-b-3-artifact-scripts.patch   src-tauri/src/artifacts.rs + capture.rs (fetch_script takes the app handle)
-  evidence/editor-T-323-b-4-privacy-audit.patch      scripts/privacy-audit.test.mjs (app_http.rs allowed for reqwest paths and pinned to build zero clients; without it app070 gains a finding)
   No lib.rs change is needed (no new command).
 VERIFY (committed tree with the patch chain applied, then reverted)
   cargo clippy --all-targets -- -D warnings: clean
-  cargo test: 2154 passed, 1 failed (s9_hook_hostile_size_time, a timing flake under load; the first full run also failed pty after696_an_update_stops_the_service; both pass alone)
-  pnpm tsc --noEmit: exit 0; pnpm vitest run: 570 files passed, 2 failed = app070 (known red, same 4 findings as before; mine cleared by patch 4) and outputFlood (flake, passes alone)
+  cargo test: 2153 passed, 2 failed (s9_mask_diag_hostile_size_time, fix_4_a_missing_holding_folder_is_not_tried_again: load flakes, both pass alone); privacy audit with the chain: the same 4 findings as main
+  pnpm tsc --noEmit: exit 0; pnpm vitest run: 570 files passed, 2 failed = app070 (known red, same 4 findings as before, none from this task, no audit change) and outputFlood (flake, passes alone)
 LIVE PROOF (batched): set a proxy that logs requests, check for updates, then open an artifact from a page that loads a CDN script; both requests
   reach the proxy; add the CDN host to the bypass list and the script fetch goes direct; clear the proxy and both go direct again.

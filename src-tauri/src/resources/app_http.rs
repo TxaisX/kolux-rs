@@ -33,28 +33,13 @@ pub fn updater_fields(route: &Route) -> (Option<Url>, bool) {
     }
 }
 
-/// `b` with the plan applied. The error never carries the address.
-pub fn apply(plan: &Plan, b: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder, String> {
-    let b = match &plan.route {
-        Route::Default => b,
-        Route::Direct => b.no_proxy(),
-        Route::Via(p) => b.proxy(reqwest::Proxy::all(p.as_str()).map_err(|_| "the network proxy setting cannot be used by this build; app traffic that needs it stays off until it is cleared".to_string())?),
-    };
-    Ok(if plan.http1 { b.http1_only() } else { b })
-}
-
 /// The plan for a request to `url`, from the open store of `app` (the lock is released before it returns).
+/// The HTTP client side lives with the client (artifacts.rs `proxied`), so this file names no network client.
 pub fn plan_for(app: &tauri::AppHandle, url: &Url) -> Result<Plan, String> {
     use tauri::Manager;
     let store = app.state::<std::sync::Mutex<Store>>();
     let store = store.lock().map_err(|e| e.to_string())?;
     plan_from_store(&store, url)
-}
-
-/// `b` (a client the caller builds) set up for a request to `url`. This file builds no client of its own.
-pub fn with_plan(app: &tauri::AppHandle, url: &str, b: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder, String> {
-    let url: Url = url.parse().map_err(|_| "not an address".to_string())?;
-    apply(&plan_for(app, &url)?, b)
 }
 
 #[cfg(test)]
@@ -106,24 +91,10 @@ mod tests {
     }
 
     #[test]
-    fn app_032_each_route_reaches_the_client_and_the_updater_fields() {
-        let via = Plan { route: Route::Via(u("http://p:8080")), http1: true };
-        assert!(apply(&via, reqwest::Client::builder()).unwrap().build().is_ok());
-        for route in [Route::Default, Route::Direct] {
-            assert!(apply(&Plan { route, http1: false }, reqwest::Client::builder()).unwrap().build().is_ok());
-        }
+    fn app_032_each_route_reaches_the_updater_fields() {
         assert_eq!(updater_fields(&Route::Default), (None, false));
         assert_eq!(updater_fields(&Route::Direct), (None, true));
         assert_eq!(updater_fields(&Route::Via(u("http://p:8080"))), (Some(u("http://p:8080")), false));
-    }
-
-    #[test]
-    fn app_032_a_proxy_the_build_cannot_speak_is_refused_without_its_address() {
-        // socks5 needs reqwest's socks feature, which this build leaves out: that stops the request.
-        let socks = Plan { route: Route::Via(u("socks5://me:SECRET@p:1080")), http1: false };
-        if let Err(e) = apply(&socks, reqwest::Client::builder()) {
-            assert!(!e.contains("SECRET") && !e.contains("socks5://"), "{e}");
-        }
     }
 
     // The address is read only inside the back end; no command here hands it to the page, and the stored copy is sealed.
