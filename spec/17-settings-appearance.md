@@ -61,10 +61,10 @@ Rules: switching off the agent that is the default leaves no default; Refresh lo
   that in-terminal sign-in needs an open workspace, and with none, or when the launch fails, Settings
   stays open and nothing else changes.
 Acceptance:
-  - [x] Switch off the agent that is the default → the page shows no default; a new session asks, or
-        takes the first agent available. (cards; evidence/cards-SET-027.txt)
-  - [x] Remove every agent CLI and press Refresh → the saved default is still recorded, and it is used
-        again once one CLI is reinstalled. (cards; evidence/cards-SET-027.txt)
+  - [ ] Switch off the agent that is the default → the page shows no default; a new session asks, or
+        takes the first agent available.
+  - [ ] Remove every agent CLI and press Refresh → the saved default is still recorded, and it is used
+        again once one CLI is reinstalled.
 Compat: the saved default agent, the list of switched-off agents, and each agent's command override,
   default arguments and default environment variables all import.
 Source: D-17-027

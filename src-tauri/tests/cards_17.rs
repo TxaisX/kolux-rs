@@ -1,6 +1,8 @@
 //! spec/17 P0 boxes SET-032 and SET-030 (Rust halves): the real projects/Store/Git code on real folders under
-//! G:\Temp\cards-v3\set17\, and the real claude_accounts reader run against a fake `claude` program in scratch.
+//! the scratch root (folder set17), and the real claude_accounts reader run against a fake `claude` program in scratch.
 //! The TS halves are src/projects/__cards__/SET-032.test.ts and src/settings/__cards__/SET-030.test.ts.
+
+mod scratch_root;
 
 use kolux_rs_lib::claude_accounts::{auth_status, own_sign_in};
 use kolux_rs_lib::git::Git;
@@ -11,21 +13,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
-const ROOT: &str = r"G:\Temp\cards-v3";
 /// KOLUX_WORKSPACES_DIR is process-wide: every test that makes a worktree holds this.
 static ENV: Mutex<()> = Mutex::new(());
 
-fn norm(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase()
-}
-
 /// A fresh folder under the scratch root; refuses to run when the agent homes are not redirected there.
 fn scratch(tag: &str) -> PathBuf {
-    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
-        let v = std::env::var(var).unwrap_or_default();
-        assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
-    }
-    let d = Path::new(ROOT).join("set17").join(format!("{tag}-{}", std::process::id()));
+    let d = scratch_root::root().join("set17").join(format!("{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join(".kolux-rs-scratch"), "").unwrap();
@@ -161,11 +154,15 @@ fn set030_box2_the_auto_resume_switch_is_off_by_default_and_on_after_a_restart()
 
 static REPLAY: Mutex<()> = Mutex::new(());
 
-/// Keeps a produced value in evidence/cards-<file> for the TS half to run against.
+/// Checks a produced value against evidence/cards-<file> (parsed JSON) for the TS half; CARDS_REGEN=1 rewrites it, in LF.
 fn save_replay(file: &str, key: &str, value: Value) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("evidence").join(format!("cards-{file}"));
     let _guard = REPLAY.lock().unwrap_or_else(|e| e.into_inner());
     let mut doc: Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(json!({}));
+    if std::env::var_os("CARDS_REGEN").is_none() {
+        assert_eq!(doc.get(key), Some(&value), "fixture stale: rerun with CARDS_REGEN=1 ({key})");
+        return;
+    }
     doc[key] = value;
     std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap() + "\n").unwrap();
 }

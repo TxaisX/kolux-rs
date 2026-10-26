@@ -1,22 +1,14 @@
 //! spec/12 P0 boxes (batch 1): EDIT-001 and EDIT-003 file back end, on real files under the scratch
-//! root G:\Temp\cards-v3\edit12\.
+//! root (found from the home marker), folder edit12.
+
+mod scratch_root;
 
 use kolux_rs_lib::files::{read_text, stamp_of, text_hash, write_checked};
 use std::path::{Path, PathBuf};
 
-const ROOT: &str = r"G:\Temp\cards-v3";
-
-fn norm(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/").to_lowercase()
-}
-
 /// A fresh folder under the scratch root; refuses to run when the agent homes are not redirected there.
 fn scratch(tag: &str) -> PathBuf {
-    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
-        let v = std::env::var(var).unwrap_or_default();
-        assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
-    }
-    let base = Path::new(ROOT).join("edit12");
+    let base = scratch_root::root().join("edit12");
     let d = base.join(format!("{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -73,11 +65,7 @@ fn edit003_box4_kolux_save_leaves_a_stable_stamp_that_an_outside_rewrite_changes
 use kolux_rs_lib::fsops::{copy_into, create, restore, trash_each};
 
 fn scratch_b(tag: &str) -> PathBuf {
-    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
-        let v = std::env::var(var).unwrap_or_default();
-        assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
-    }
-    let d = Path::new(ROOT).join("edit12b").join(format!("{tag}-{}", std::process::id()));
+    let d = scratch_root::root().join("edit12b").join(format!("{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join(".kolux-rs-scratch"), "").unwrap();
@@ -152,11 +140,7 @@ fn edit034_box3_a_dropped_folder_onto_one_that_holds_the_same_name_arrives_under
 use kolux_rs_lib::{fence, links};
 
 fn scratch_c(tag: &str) -> PathBuf {
-    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
-        let v = std::env::var(var).unwrap_or_default();
-        assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
-    }
-    let d = Path::new(ROOT).join("edit12c").join(format!("{tag}-{}", std::process::id()));
+    let d = scratch_root::root().join("edit12c").join(format!("{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join(".kolux-rs-scratch"), "").unwrap();

@@ -1,23 +1,15 @@
 //! spec/15 P0 boxes SKILL-035 and SKILL-036 (Rust halves): the real artifacts::Library on real files under the
-//! scratch root G:\Temp\cards-v3\skill15\. No network: the CDN fetch closure is always a stand-in.
+//! scratch root, folder skill15. No network: the CDN fetch closure is always a stand-in.
+
+mod scratch_root;
 
 use kolux_rs_lib::artifacts::{self, Library, Origin};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-const ROOT: &str = r"G:\Temp\cards-v3";
-
-fn norm(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/").to_lowercase()
-}
-
 /// A fresh folder under the scratch root; refuses to run when the agent homes are not redirected there.
 fn scratch(tag: &str) -> PathBuf {
-    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
-        let v = std::env::var(var).unwrap_or_default();
-        assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
-    }
-    let d = Path::new(ROOT).join("skill15").join(format!("{tag}-{}", std::process::id()));
+    let d = scratch_root::root().join("skill15").join(format!("{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join(".kolux-rs-scratch"), "").unwrap();
@@ -178,8 +170,11 @@ fn skill036_box2_the_served_page_carries_the_link_hand_off_and_open_external_tak
 
 static REPLAY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Keeps a produced value in evidence/cards-SKILL-036-replay.json for the TS half to run against.
+/// Keeps a produced value in evidence/cards-SKILL-036-replay.json for the TS half; written only with CARDS_REGEN=1 (the id differs per run).
 fn save_replay(key: &str, value: Value) {
+    if std::env::var_os("CARDS_REGEN").is_none() {
+        return;
+    }
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("evidence").join("cards-SKILL-036-replay.json");
     let _guard = REPLAY.lock().unwrap_or_else(|e| e.into_inner());
     let mut doc: Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(json!({}));
