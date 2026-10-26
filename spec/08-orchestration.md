@@ -47,8 +47,8 @@ Rules: exactly one of an existing task or a new task text is given, and the text
 Acceptance:
   - [ ] `kolux orchestration worker-start --spec "add a test" --agent claude` → exit 0, a ready
       status in JSON, and a new worktree plus a background tab exist.
-  - [ ] `kolux orchestration worker-start --worktree current --base-branch main` → turned away
-      before anything is created.
+  - [x] `kolux orchestration worker-start --worktree current --base-branch main` → turned away
+      before anything is created. (cards; evidence/cards-ORCH-016.txt)
   - [ ] Leave the workspace and come back → still exactly one worker tab.
 Compat: `kolux orchestration worker-start (--task <id>|--spec <text>) [--worktree current|<selector>|new-child|new-top-level] (--agent <agent>|--terminal <handle>|--tier major|deep|build|light) [--model <m>] [--effort <e>] [--name <n>] [--repo <r>] [--base-branch <b>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit] [--retry-of <dispatch>] [--timeout-ms <ms>] [--json]`.
 Source: D-08-016
@@ -96,11 +96,11 @@ Rules: a done report has to carry an outcome; a heartbeat that arrives after the
   done reports and heartbeats from a worker started with worker-start must include its dispatch pass
   (see ORCH-067)
 Acceptance:
-  - [ ] A worker sends a succeeded done report listing one changed file → the coordinator's check
-      shows it and task-list shows the task completed.
-  - [ ] A heartbeat arrives after the worker was stopped → the worker's state does not change.
-  - [ ] The coordinator sends a done report on the worker's behalf → it arrives as mail, but the
-      task stays dispatched.
+  - [x] A worker sends a succeeded done report listing one changed file → the coordinator's check
+      shows it and task-list shows the task completed. (cards; evidence/cards-ORCH-015.txt)
+  - [x] A heartbeat arrives after the worker was stopped → the worker's state does not change. (cards; evidence/cards-ORCH-015.txt)
+  - [x] The coordinator sends a done report on the worker's behalf → it arrives as mail, but the
+      task stays dispatched. (cards; evidence/cards-ORCH-015.txt)
 Compat: `kolux orchestration send --type worker_done --outcome succeeded|failed [--files-modified <list>] [--report-path <path>]`
   and `kolux orchestration send --type heartbeat`.
 Source: D-08-015
@@ -117,9 +117,9 @@ Rules: the waiting evidence comes from a hook, the prompt text on screen, or the
   whether a worker's latest sign of life is fresh is judged by when Kolux received it, never by a
   time the sender stamped, so a wrong clock cannot make a worker look alive or stale.
 Acceptance:
-  - [ ] A worker reaches a permission prompt → worker-show reports the waiting field with that
-      prompt and a source of hook or prompt text.
-  - [ ] A worker in the middle of a tool call → the waiting field is empty.
+  - [x] A worker reaches a permission prompt → worker-show reports the waiting field with that
+      prompt and a source of hook or prompt text. (cards; evidence/cards-ORCH-020.txt)
+  - [x] A worker in the middle of a tool call → the waiting field is empty. (cards; evidence/cards-ORCH-020.txt)
 Compat: `kolux orchestration worker-show --dispatch <id> [--json]`.
 Source: D-08-020
 
@@ -139,9 +139,9 @@ Rules: the automatic source prefers the provider's transcript and falls back to 
   belongs to the worker's own session; for WSL workers a transcript reported from a different Linux
   distribution is ignored; dispatch passes are hidden in every read (see ORCH-067)
 Acceptance:
-  - [ ] Claude worker, worker-read → transcript turns; hand back the returned cursor → only newer
-      turns.
-  - [ ] Gemini worker, automatic source → terminal output, labelled as terminal output.
+  - [x] Claude worker, worker-read → transcript turns; hand back the returned cursor → only newer
+      turns. (cards; evidence/cards-ORCH-021.txt)
+  - [x] Gemini worker, automatic source → terminal output, labelled as terminal output. (cards; evidence/cards-ORCH-021.txt)
 Compat: `kolux orchestration worker-read --dispatch <id> [--source auto|transcript|terminal] [--cursor <c>] [--limit <n>] [--json]`.
 Source: D-08-021
 
@@ -171,8 +171,8 @@ Rules: stopping never deletes the worktree and never closes the setup terminal o
   a terminal the user has typed into is left open (see ORCH-036)
 Acceptance:
   - [ ] Stop a running worker → its agent terminal ends and the worktree folder is still on disk.
-  - [ ] Cut the daemon connection, then stop the worker → the receipt says unverifiable, not
-      stopped.
+  - [x] Cut the daemon connection, then stop the worker → the receipt says unverifiable, not
+      stopped. (cards; evidence/cards-ORCH-022.txt)
 Compat: `kolux orchestration worker-stop --dispatch <id> [--json]`.
 Source: D-08-022
 
@@ -391,10 +391,10 @@ Rules: what each tier is for: major for big system changes, planning and final r
   mapping applies instead of failing the start; naming an agent alongside a tier is allowed only
   when it is the coordinator's own agent.
 Acceptance:
-  - [ ] Claude coordinator, `kolux orchestration worker-start --spec x --tier light` → the worker
-      runs haiku with no effort setting.
-  - [ ] `kolux orchestration worker-start --tier deep --model opus` → turned away for mixing
-      options.
+  - [x] Claude coordinator, `kolux orchestration worker-start --spec x --tier light` → the worker
+      runs haiku with no effort setting. (cards; evidence/cards-ORCH-018.txt)
+  - [x] `kolux orchestration worker-start --tier deep --model opus` → turned away for mixing
+      options. (cards; evidence/cards-ORCH-018.txt)
 Compat: `kolux orchestration worker-start --tier major|deep|build|light`; carried-over routing
   preferences map each agent and tier to a model and an optional effort.
 Source: D-08-018

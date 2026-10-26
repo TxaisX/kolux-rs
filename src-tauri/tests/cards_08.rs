@@ -718,3 +718,193 @@ fn orch014_box2_a_worktree_two_commits_behind_its_base_gets_the_base_drift_secti
     assert!(!behind_brief(Some((0, "main".into()))).contains("Base drift"));
     assert!(!behind_brief(None).contains("Base drift"));
 }
+
+// ---------------------------------------------------------------- ORCH-015, 016, 018, 022
+
+/// A Run with its coordinator (term-1) and one worker (term-2) holding task-1 as dispatch-1.
+fn reporting_world() -> (Mail, String, Vec<Peer>, Vec<Value>, Vec<Value>) {
+    let (m, run, peers) = two_panes();
+    let tasks = vec![json!({ "id": "task-1", "runId": run, "spec": "do it", "status": "dispatched", "deps": [], "dispatchId": "dispatch-1" })];
+    let dispatches = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": std::process::id(), "worktree": "C:/work/w1" })];
+    (m, run, peers, tasks, dispatches)
+}
+
+/// MIRROR cli.rs:2926-2937 (the `orchestration send` arm): mail first, then `report` settles what that report may.
+fn send_and_settle(m: &mut Mail, tasks: &mut [Value], dispatches: &mut [Value], from: &str, line: &str, peers: &[Peer], now: u64) -> Result<Value, Fail> {
+    let (_, args) = typed(line);
+    let mut v = m.post(from, &args, dispatches, peers, now)?;
+    let settled = o::report(tasks, dispatches, from, &args, now, &|_| None)?;
+    if !settled.is_null() {
+        v["settled"] = settled;
+    }
+    Ok(v)
+}
+
+#[test]
+fn orch015_box1_a_succeeded_done_report_with_one_changed_file_shows_in_check_and_task_list_says_completed() {
+    let (mut m, run, peers, mut tasks, mut dispatches) = reporting_world();
+    let line = format!("orchestration send --to run:{run} --subject task-1-done --type worker_done --outcome succeeded --files-modified src/a.rs --report-path reports/task-1.md --task-id task-1 --dispatch-id dispatch-1");
+    let sent = send_and_settle(&mut m, &mut tasks, &mut dispatches, "term-2", &line, &peers, 500).unwrap();
+    assert_eq!(sent["settled"]["status"], "completed", "{sent}");
+    // The coordinator's check shows the report with its outcome, the file and the report path.
+    let boxes = m.boxes_of("term-1", &dispatches);
+    let got = m.check("term-1", "term-1", &boxes, Mode::Next, None, None, None).unwrap();
+    let msg = &got["messages"][0];
+    assert_eq!((msg["type"].as_str(), msg["from"].as_str(), msg["outcome"].as_str()), (Some("worker_done"), Some("term-2"), Some("succeeded")), "{got}");
+    assert!(msg["filesModified"].to_string().contains("src/a.rs"), "{msg}");
+    assert_eq!(msg["reportPath"], "reports/task-1.md");
+    // The task list, read from the saved store the way the next command sees it, shows it completed.
+    let store = store_with("o15b1", &tasks, &dispatches);
+    m.save(&store.lock().unwrap()).unwrap();
+    let list = run_line(&store, &format!("orchestration task-list --run {run}"), None).unwrap();
+    assert_eq!(status_of(&list, "task-1"), "completed", "{list}");
+}
+
+#[test]
+fn orch015_box2_a_heartbeat_after_the_worker_was_stopped_changes_nothing() {
+    let (mut m, run, peers, mut tasks, mut dispatches) = reporting_world();
+    let (receipt, _) = o::stop_with(&mut tasks, &mut dispatches, "dispatch-1", Some(&run), 100, &|_| None).unwrap();
+    assert_eq!(receipt["status"], "stopped");
+    let before = dispatches.clone();
+    let messages_before = m.messages.len();
+    let beat = format!("orchestration send --to run:{run} --subject alive --type heartbeat --dispatch-id dispatch-1");
+    let err = send_and_settle(&mut m, &mut tasks, &mut dispatches, "term-2", &beat, &peers, 900).unwrap_err();
+    assert_eq!(err.code, "dispatch_finished", "{}", err.message);
+    assert_eq!(dispatches, before, "the worker's state is exactly what it was: still stopped, no beat stamped");
+    assert!(dispatches[0].get("lastBeatAt").is_none());
+    assert_eq!(m.messages.len(), messages_before, "nothing was recorded either");
+}
+
+#[test]
+fn orch015_box3_a_done_report_the_coordinator_writes_for_the_worker_arrives_as_mail_and_the_task_stays_dispatched() {
+    let (mut m, run, peers, mut tasks, mut dispatches) = reporting_world();
+    let line = format!("orchestration send --to run:{run} --subject task-1-done --type worker_done --outcome succeeded --task-id task-1 --dispatch-id dispatch-1");
+    let sent = send_and_settle(&mut m, &mut tasks, &mut dispatches, "term-1", &line, &peers, 500).unwrap();
+    assert_eq!(sent["settled"]["settles"], false, "{sent}");
+    // It is mail: the Run's mailbox holds it.
+    let boxes = m.boxes_of("term-1", &dispatches);
+    let got = m.check("term-1", "term-1", &boxes, Mode::Next, None, None, None).unwrap();
+    assert_eq!((got["messages"][0]["type"].as_str(), got["messages"][0]["from"].as_str()), (Some("worker_done"), Some("term-1")), "{got}");
+    // And the task is still dispatched, its worker still running.
+    assert_eq!((tasks[0]["status"].as_str(), dispatches[0]["status"].as_str()), (Some("dispatched"), Some("running")));
+    let store = store_with("o15b3", &tasks, &dispatches);
+    m.save(&store.lock().unwrap()).unwrap();
+    let list = run_line(&store, &format!("orchestration task-list --run {run}"), None).unwrap();
+    assert_eq!(status_of(&list, "task-1"), "dispatched", "{list}");
+}
+
+// ---------------------------------------------------------------- ORCH-016 / ORCH-018 option checks
+
+fn refused(line: &str) -> Fail {
+    let words: Vec<String> = line.split_whitespace().map(String::from).collect();
+    parse(&words).1.expect_err("the command line is turned away")
+}
+
+fn accepted(line: &str) -> bool {
+    let words: Vec<String> = line.split_whitespace().map(String::from).collect();
+    parse(&words).1.unwrap().is_some()
+}
+
+#[test]
+fn orch016_box2_worker_start_on_the_current_worktree_with_a_base_branch_is_turned_away_before_anything_is_made() {
+    // Parsing is the whole of the client side: a refusal here means no request reached the app.
+    let e = refused("orchestration worker-start --spec x --agent claude --worktree current --base-branch main");
+    assert!(e.message.contains("--base-branch") && e.message.contains("new worktree") && e.message.contains("--worktree current"), "{}", e.message);
+    // The literal command of the box (no task given) is also turned away.
+    refused("orchestration worker-start --worktree current --base-branch main");
+    // The same holds for every option that only shapes a new worktree, and for an existing worktree.
+    for flag in ["--name n", "--repo r", "--display-name d", "--comment c"] {
+        assert!(refused(&format!("orchestration worker-start --spec x --agent claude --worktree current {flag}")).message.contains("shapes a new worktree"), "{flag}");
+    }
+    assert!(refused("orchestration worker-start --spec x --agent claude --worktree name:feature --base-branch main").message.contains("--base-branch"));
+    // A new worktree takes them.
+    assert!(accepted("orchestration worker-start --spec x --agent claude --worktree new-child --base-branch main"));
+}
+
+#[test]
+fn orch018_box2_a_tier_mixed_with_a_model_effort_or_reused_terminal_is_turned_away() {
+    let mixed = refused("orchestration worker-start --spec x --tier deep --model opus");
+    assert!(mixed.message.contains("a tier picks the model and effort; drop --model and --effort, or drop the tier"), "{}", mixed.message);
+    // The box's own wording, with no task text: turned away as well.
+    refused("orchestration worker-start --tier deep --model opus");
+    assert!(refused("orchestration worker-start --spec x --tier deep --model opus --effort high").message.contains("a tier picks the model and effort"));
+    assert!(refused("orchestration worker-start --spec x --tier build --terminal term-3 --worktree current").message.contains("a reused terminal keeps its own model"));
+    assert!(refused("orchestration worker-start --spec x --tier huge").message.contains("--tier takes major, deep, build or light"));
+    // A tier alone is accepted.
+    for t in ["major", "deep", "build", "light"] {
+        assert!(accepted(&format!("orchestration worker-start --spec x --tier {t}")), "{t}");
+    }
+}
+
+#[test]
+fn orch018_box1_a_claude_light_tier_worker_starts_on_haiku_with_no_effort_setting() {
+    let root = scratch("o18b1");
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_ok(&repo, &["init", "-q", "-b", "main"]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    let git = Git::detect().unwrap();
+    let store = Mutex::new(Store::open(&root.join("data")).unwrap());
+    kolux_rs_lib::projects::add_project(&git, &store.lock().unwrap(), &repo).unwrap();
+    {
+        // Routing left as shipped: no modelRouting key is saved.
+        let s = store.lock().unwrap();
+        let mut settings = s.settings();
+        settings["workspacesDir"] = json!(root.join("ws").display().to_string());
+        settings["branchPrefix"] = json!("none");
+        assert!(settings.get("modelRouting").is_none(), "the user never changed a tier");
+        s.save_settings(&settings).unwrap();
+    }
+    // The stand-in window: it records every notice and answers the setup request; it starts nothing.
+    let events = Mutex::new(Vec::<Value>::new());
+    let notify = |v: Value| {
+        if let Some(r) = v["setupRequest"].as_str() {
+            kolux_rs_lib::orchestration::setup_gate::settle(r, json!({ "result": "none" }));
+        }
+        events.lock().unwrap().push(v)
+    };
+    let terminals = Terminals::default();
+    let ctx = Ctx { claude_config: root.join(".claude.json"), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+    let (command, mut args) = typed("orchestration worker-start --spec x --tier light");
+    args["timeoutMs"] = json!("1");
+    let req = Request { id: "r".into(), token: String::new(), command, cwd: repo.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+    let claude_installed = kolux_rs_lib::agents::agent_list().iter().any(|a| a.id == "claude" && a.installed);
+    let out = dispatch(&ctx, &req).unwrap_err();
+    assert!(claude_installed, "Claude Code is not installed here, so box 1 cannot be shown: {}", out.message);
+    // No window opens a terminal, so the start times out; the receipt still says what it launched.
+    assert_eq!(out.code, "timeout", "{}", out.message);
+    assert_eq!((out.data["agent"].as_str(), out.data["tier"].as_str(), out.data["model"].as_str()), (Some("claude"), Some("light"), Some("haiku")), "{}", out.data);
+    assert!(out.data["effort"].is_null(), "haiku takes no effort setting: {}", out.data);
+    let ev = events.lock().unwrap();
+    let start = ev.iter().find(|e| e["kind"] == "start").expect("the window is told to start the agent");
+    assert_eq!(start["agent"], "claude");
+    assert_eq!(start["extra"], json!(["--model", "haiku"]), "the launch line carries the model and no --effort");
+    // A Claude coordinator's own pane picks the same agent for a tier (the pane itself needs a live terminal).
+    assert_eq!(o::tier_agent(None, Some("claude"), "codex").unwrap(), "claude");
+    assert!(o::tier_agent(Some("codex"), Some("claude"), "claude").is_err(), "naming another agent next to a tier is turned away");
+    drop(ev);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---------------------------------------------------------------- ORCH-022
+
+#[test]
+fn orch022_box2_a_stop_when_kolux_holds_no_live_terminal_for_the_worker_says_unverifiable_and_keeps_the_worktree() {
+    let root = scratch("o22b2");
+    let worktree = root.join("worktree");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(worktree.join("work.txt"), "unsaved work").unwrap();
+    let wt = worktree.display().to_string();
+    // Kolux has lost touch: dispatch-1's terminal (term-7) is not one this process holds.
+    let task = json!({ "id": "task-1", "runId": null, "spec": "do it", "status": "dispatched", "deps": [], "dispatchId": "dispatch-1" });
+    let row = json!({ "id": "dispatch-1", "runtime": std::process::id(), "runId": null, "taskId": "task-1", "status": "running", "terminal": 7, "worktree": wt });
+    let store = store_with("o22b2-store", &[task], &[row]);
+    let r = run_line(&store, "orchestration worker-stop --dispatch dispatch-1", None).unwrap();
+    assert_eq!(r["process"], "unverifiable", "not reported as ended: {r}");
+    assert_eq!((r["status"].as_str(), r["worktreeKept"].as_bool()), (Some("stopped"), Some(true)), "{r}");
+    let d = &stored(&store, o::DISPATCHES_KEY)[0];
+    assert_eq!((d["status"].as_str(), d["process"].as_str()), (Some("stopped"), Some("unverifiable")));
+    assert!(worktree.join("work.txt").exists(), "the worktree folder and its files are still on disk");
+    assert_eq!(stored(&store, o::TASKS_KEY)[0]["status"], "ready", "the task can be handed on again");
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -1,0 +1,4 @@
+box 1: LIVE, not proven here (needs a ready terminal and a background tab).
+box 2: src-tauri/tests/cards_08.rs::orch016_box2_worker_start_on_the_current_worktree_with_a_base_branch_is_turned_away_before_anything_is_made — cargo test --manifest-path src-tauri/Cargo.toml --test cards_08 — test ... ok; test result: ok. 34 passed; 0 failed (cards_08)
+  (asserts parse refuses and no worktree/dispatch/task row exists)
+box 3: LIVE, not proven here (App.tsx worker-tab reuse after leaving the workspace).
