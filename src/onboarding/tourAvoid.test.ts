@@ -24,4 +24,28 @@ describe("tour placement keeps off panes", () => {
     const wide = { left: 0, top: 0, width: 1400, height: 880 };
     expect(place(button, p, b, "left", [wide])).toEqual(place(button, p, b, "left"));
   });
+
+  // Fix 10: a restored grid filling everything right of the left sidebar, the target in the top bar.
+  describe("no clear side", () => {
+    const full: Rect = { left: 289, top: 40, width: 1311, height: 836 };
+    const bar: Rect = { left: 8, top: 8, width: 1584, height: 884 };
+    const topTarget: Rect = { left: 700, top: 8, width: 80, height: 28 };
+    const sidebar: Rect = { left: 0, top: 0, width: 289, height: 876 };
+    it("with the sidebar the callout sits inside it, 0 px on the pane, arrow toward the target", () => {
+      const r = place(topTarget, p, bar, "bottom", [full], sidebar);
+      expect(hits({ left: r.left, top: r.top, width: 0, height: 0 }, r.width ?? p.width, p.height, full)).toBe(false);
+      expect(r.left).toBeGreaterThanOrEqual(sidebar.left);
+      expect(r.left + (r.width ?? p.width)).toBeLessThanOrEqual(sidebar.left + sidebar.width);
+      expect(r.side).toBe("left");
+      expect(topTarget.left).toBeGreaterThanOrEqual(r.left + (r.width ?? p.width));
+      expect(Math.abs(r.top + p.height / 2 - (topTarget.top + topTarget.height / 2))).toBeLessThanOrEqual(p.height / 2 + 8);
+    });
+    it("without the sidebar the old fallback stands", () => {
+      expect(place(topTarget, p, bar, "bottom", [full])).toEqual({ side: "bottom", left: 580, top: 46 });
+      expect(place(topTarget, p, bar, "bottom", [full], null)).toEqual({ side: "bottom", left: 580, top: 46 });
+    });
+    it("a sidebar narrower than 240 px does not change the fallback", () => {
+      expect(place(topTarget, p, bar, "bottom", [full], { ...sidebar, width: 200 })).toEqual({ side: "bottom", left: 580, top: 46 });
+    });
+  });
 });
