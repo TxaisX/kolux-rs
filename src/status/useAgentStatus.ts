@@ -238,7 +238,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       }
       // STAT-046: a stop on a sign-in failure has the account checked, so the main-window notice
       // (SignInNotice) names the lapsed account without waiting for the next start.
-      if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check").catch(() => {});
+      if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check", { cause: "signin" }).catch(() => {});
       // USAGE-001: clearing the pane (a /clear, a resume, a manual compact) forgets its reading; the
       // next status report brings the new figure. A clear or a compact keeps the agent's process, so
       // a report from before it may still turn up: the forgotten stamp is the floor. A start or a

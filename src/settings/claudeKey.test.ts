@@ -38,6 +38,16 @@ test("a key past its year reads ran out, still with Renew", () => {
   expect(c.actions[0]).toBe("renew");
 });
 
+test("a key Claude refused before its date reads ran out with Renew and the key-expired reason (ACCT-013 b1)", () => {
+  const refused = { ...made(10, 355, true, true), attention: { reason: "key-expired" as const, message: "Claude refused the 1-year key. Renew it to keep Claude connected.", resetsAt: null } };
+  expect(refused.expiresAt!).toBeGreaterThan(now);
+  const c = keyCard(refused);
+  expect(c.state).toBe("expired");
+  expect(c.headline).toBe("Connected · 1-year key ran out");
+  expect(c.actions).toEqual(["renew", "disconnect"]);
+  expect(c.attention?.reason).toBe("key-expired");
+});
+
 test("a running setup says to finish in the browser once the page is open, with Cancel", () => {
   expect(keyCard({ ...off, settingUp: true }).headline).toMatch(/Starting/);
   const c = keyCard({ ...off, settingUp: true, inBrowser: true });

@@ -497,15 +497,23 @@ pub fn mark_stale(store: &Store, id: &str, stale: bool) -> Result<bool, String> 
 
 /// ACCT-012: asks Claude Code whether the active managed account is still signed in. Only when
 /// Kolux, not Claude Code, looks after sign-ins (ACCT-006) and the 1-year key is not the
-/// connection; an answer that never came leaves the account as it was.
+/// connection; an answer that never came leaves the account as it was. In key mode a pane that
+/// stopped on a sign-in failure (`cause` "signin") means Claude refused the key (ACCT-013 b1).
 #[tauri::command]
-pub async fn claude_account_check(app: AppHandle) -> Result<(), String> {
+pub async fn claude_account_check(app: AppHandle, cause: Option<String>) -> Result<(), String> {
     let target = {
         let store = app.state::<Mutex<Store>>();
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(Value::as_str) == Some(crate::claude_key::KEY_MODE);
-        if upkeep_left_to_claude(&settings) || key_mode {
+        if key_mode {
+            let has_token = secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten().is_some();
+            if key_refused(key_mode, has_token, cause.as_deref()) {
+                crate::claude_key::mark_refused(&store, crate::claude_key::now_ms());
+                let _ = app.emit(crate::claude_key::EVENT, ());
+            }
+            None
+        } else if upkeep_left_to_claude(&settings) {
             None
         } else {
             active(&store).zip(active_dir(&store))
@@ -522,6 +530,12 @@ pub async fn claude_account_check(app: AppHandle) -> Result<(), String> {
         let _ = app.emit(EVENT, ());
     }
     Ok(())
+}
+
+/// ACCT-013 b1: only a pane that stopped on a sign-in failure, in key mode with a key stored,
+/// means Claude refused the key; the settings page and the notice ask without a cause.
+fn key_refused(key_mode: bool, has_token: bool, cause: Option<&str>) -> bool {
+    key_mode && has_token && cause == Some("signin")
 }
 
 /// SET-030: what Claude Code's own sign-in on this PC says, as the card shows it.
@@ -621,6 +635,32 @@ mod tests {
         save(&store, &[Account { id: "n1".into(), email: None, organization: None, config_dir: "x".into(), last_sign_in: 1, stale: false }]).unwrap();
         assert_eq!(test_asides(&store, LIST_KEY), vec![broken.to_string()]);
         assert_eq!(load(&store).len(), 1);
+    }
+
+    #[test]
+    fn acct_013_b1_only_a_sign_in_stop_in_key_mode_with_a_key_counts_as_a_refusal() {
+        assert!(key_refused(true, true, Some("signin")));
+        for cause in [None, Some("limit"), Some("error"), Some("")] {
+            assert!(!key_refused(true, true, cause), "{cause:?} is no refusal");
+        }
+        assert!(!key_refused(false, true, Some("signin")), "not key mode");
+        assert!(!key_refused(true, false, Some("signin")), "no key stored");
+        // The status a caller sees: only the refusal expires a key inside its date.
+        let (_dir, store) = profile("acct013b1");
+        let store = store.lock().unwrap();
+        let now = crate::claude_key::now_ms();
+        crate::claude_key::keep(&store, "sk-ant-oat01-FAKE", now).unwrap();
+        let expired = |store: &Store| crate::claude_key::status_checked(&store.settings(), true, crate::claude_key::is_refused(store), now).expired;
+        for cause in [None, Some("limit"), Some("error")] {
+            if key_refused(true, true, cause) {
+                crate::claude_key::mark_refused(&store, now);
+            }
+            assert!(!expired(&store));
+        }
+        if key_refused(true, true, Some("signin")) {
+            crate::claude_key::mark_refused(&store, now);
+        }
+        assert!(expired(&store));
     }
 
     #[test]
