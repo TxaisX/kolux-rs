@@ -1,0 +1,2 @@
+box 1: src/scm/__cards__/GIT-006-007.test.ts::GIT-007 box 1... — pnpm exec vitest run src/scm/__cards__/GIT-006-007.test.ts src/scm/model.test.ts — Test Files 2 passed, Tests 46 passed ; statuses from cards_11.rs::git007_box1_two_local_commits_are_two_to_push_and_pushing_brings_the_counts_to_zero (remote push ok, origin HEAD equals local HEAD) — cargo test --manifest-path src-tauri/Cargo.toml --test cards_11 (scratch homes under <scratch>\cards-v3) — test result: ok. 9 passed
+box 2: not ticked (LIVE)

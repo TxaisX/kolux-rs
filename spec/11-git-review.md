@@ -31,8 +31,8 @@ Rules: acting on a folder covers every file beneath it; paths are matched exactl
   clears; the bulk bar reads N selected · Stage k · Unstage m; a file with staged and unstaged
   parts is one selection counted on both sides. Folder rows come with the tree view, T-033.)
 Acceptance:
-  - [ ] Stage a folder holding three changed files → all three show as staged.
-  - [ ] Select 2,000 files and stage them → every one is staged and no error appears.
+  - [x] Stage a folder holding three changed files → all three show as staged. (cards; evidence/cards-GIT-002.txt)
+  - [x] Select 2,000 files and stage them → every one is staged and no error appears. (cards; evidence/cards-GIT-002.txt)
 Compat: —
 Source: D-11-002
 
@@ -48,7 +48,7 @@ Rules: the shortcut acts only while focus is inside Source Control and the main 
   labelled blocked; the failure notice carries a Fix with AI action that starts an agent primed with
   the error output.
 Acceptance:
-  - [ ] Stage a file, type a message, press Ctrl+Enter → exactly one new commit and a clean panel.
+  - [x] Stage a file, type a message, press Ctrl+Enter → exactly one new commit and a clean panel. (cards; evidence/cards-GIT-004.txt)
   - [ ] Type a draft, switch to another workspace and come back → the draft is still there.
   - [ ] Install a pre-commit hook that exits with 1 → the notice says blocked and shows what the
         hook printed.
@@ -67,9 +67,9 @@ Rules: unstaged edits with nothing staged lead to stage all; staged work plus a 
   identical patches, as after a rebase, leads to force push with lease; a clean, fully pushed branch
   leads to create a review, and the button waits while that check is still loading.
 Acceptance:
-  - [ ] Take a new branch through edit, stage, commit, publish and create PR → the label matches
-        each step.
-  - [ ] Rebase a pushed branch onto its base → force push with lease is offered, not pull.
+  - [x] Take a new branch through edit, stage, commit, publish and create PR → the label matches
+        each step. (cards; evidence/cards-GIT-006.txt)
+  - [x] Rebase a pushed branch onto its base → force push with lease is offered, not pull. (cards; evidence/cards-GIT-006.txt)
 Compat: —
 Source: D-11-006
 
@@ -86,7 +86,7 @@ Rules: fetch refreshes remote refs and merges nothing; publish pushes to origin 
   against the remote over and over; git and GitHub calls only reach the remotes and hosts the user
   already set up.
 Acceptance:
-  - [ ] Make two local commits → the menu offers to push 2 commits; push → the counts fall to zero.
+  - [x] Make two local commits → the menu offers to push 2 commits; push → the counts fall to zero. (cards; evidence/cards-GIT-007.txt)
   - [ ] Leave an unpublished branch open for ten minutes → git traces show no repeating remote
         checks.
 Compat: —
@@ -110,9 +110,9 @@ Rules: a branch name already taken locally or on the configured remote is caught
   worktree has it checked out; if checking whether a base branch exists fails, for example offline,
   the answer is unknown rather than missing, and malformed branch input is never run.
 Acceptance:
-  - [ ] Name an ignored file in the include file and create a workspace → the file is present in the
-        new worktree.
-  - [ ] Delete a workspace with uncommitted work → Kolux refuses or asks before anything is lost.
+  - [x] Name an ignored file in the include file and create a workspace → the file is present in the
+        new worktree. (cards; evidence/cards-GIT-067.txt)
+  - [x] Delete a workspace with uncommitted work → Kolux refuses or asks before anything is lost. (cards; evidence/cards-GIT-067.txt)
 Compat: existing repositories may already carry the root include file (one path per line, a hash
   sign starts a comment) and a shared-folders list in kolux.yaml; both are user-facing and should
   keep working under their existing names (the exact spellings are in COMPAT.md 5.6; OD-14 in
@@ -133,8 +133,8 @@ Rules: only Git workspaces get the panel, plain folders do not; a header menu fl
   updates by itself when git state moves outside Kolux, such as a commit or checkout typed in a
   terminal.
 Acceptance:
-  - [ ] Edit a tracked file, stage a second one and add a new one → three sections with the right
-        counts and line totals.
+  - [x] Edit a tracked file, stage a second one and add a new one → three sections with the right
+        counts and line totals. (cards; evidence/cards-GIT-001.txt)
   - [ ] Switch to tree view, close the panel and reopen it → it is still a tree.
   - [ ] Commit from a terminal → the panel clears with no manual refresh.
 Compat: the panel's toggle command defaults to Mod+Shift+G; existing keybinding files that rebind it
@@ -150,9 +150,9 @@ Rules: each list of files in the prompt stops at 50 entries and then says how ma
   if the branch has no changes to look at, a plain message says so and no agent launches; this
   shipped in 0.12.0.
 Acceptance:
-  - [ ] Change 60 files and run it → the prompt names the base, lists 50 files and mentions 10 more.
-  - [ ] Run it on a clean branch → a plain message explains the branch has no changes to look at; no
-        agent starts.
+  - [x] Change 60 files and run it → the prompt names the base, lists 50 files and mentions 10 more. (cards; evidence/cards-GIT-016.txt)
+  - [x] Run it on a clean branch → a plain message explains the branch has no changes to look at; no
+        agent starts. (cards; evidence/cards-GIT-016.txt)
 Compat: —
 Source: D-11-016
 
@@ -199,8 +199,8 @@ Rules: notes attach only to lines present in the diff; edits are trimmed and an 
   refused; saved notes keep their height reserved so the lines below do not shift; the note popover
   stays inside the window and closes on a click outside it.
 Acceptance:
-  - [ ] Add a note on line 12 → the card sits under line 12; switch to side-by-side → still under
-        line 12.
+  - [x] Add a note on line 12 → the card sits under line 12; switch to side-by-side → still under
+        line 12. (cards; evidence/cards-GIT-040.txt)
   - [ ] Edit the note → the open card updates; click trash → it is gone.
 Compat: Add Review Note defaults to Mod+Shift+A (its command id is an allowlist candidate).
 Source: D-11-040
@@ -218,8 +218,8 @@ Rules: a note can be opened at its line, copied or deleted, and notes can be cle
   keep notes as well; an empty notes section explains how to add one; sending notes has no default
   key and the user may bind one.
 Acceptance:
-  - [ ] Add three notes across two files and send → the agent gets all three and they show as sent.
-  - [ ] Edit a note while a send is running, then clear delivered → the edited note remains.
+  - [x] Add three notes across two files and send → the agent gets all three and they show as sent. (cards; evidence/cards-GIT-041.txt)
+  - [x] Edit a note while a send is running, then clear delivered → the edited note remains. (cards; evidence/cards-GIT-041.txt)
 Compat: the send-notes command has no default key (its command id is an allowlist candidate).
 Source: D-11-041
 
@@ -239,12 +239,12 @@ Rules: every version warns that there is no undo; the confirm button is named fo
   itself, so no target is written or removed; the confirm button is focused on open, Escape keeps
   everything.)
 Acceptance:
-  - [ ] Discard an untracked file → the dialog says it is removed for good; confirm → the file is
-        gone.
+  - [x] Discard an untracked file → the dialog says it is removed for good; confirm → the file is
+        gone. (cards; evidence/cards-GIT-003.txt)
   - [ ] Discard a section with 40 untracked files → the dialog gives the number 40 and its buttons
         can be reached without resizing.
-  - [ ] Discard a change to a symbolic link aimed at a file beyond the repository → that file is
-        left alone.
+  - [x] Discard a change to a symbolic link aimed at a file beyond the repository → that file is
+        left alone. (cards; evidence/cards-GIT-003.txt)
 Compat: —
 Source: D-11-003
 
