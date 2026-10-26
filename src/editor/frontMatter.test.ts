@@ -87,9 +87,11 @@ describe("row 135: a rich edit rewrites only what the user changed", () => {
   });
 
   it("an edit that touches a respelt bit replaces that bit, and only that bit", () => {
-    expect(keepRaw("* a\n* b\n", "- a\n- bc", "- a\n- b")).toBe("* a\n* bc\n");
+    // Round 3: `prev` is the rich view's real spelling (it keeps `*` bullets), not a made-up "- a\n- b".
+    const items = roundTrip("* a\n* b\n")!;
+    expect(keepRaw("* a\n* b\n", items + "c", items)).toBe("* a\n* bc\n");
     // The second item made plain text: its marker goes, however the file spelt it.
-    expect(keepRaw("* a\n* b\n", "- a\nb", "- a\n- b")).toBe("* a\nb\n");
+    expect(keepRaw("* a\n* b\n", items.replace("* b", "b"), items)).toBe("* a\nb\n");
   });
 
   it("with no earlier spelling it falls back to the whole rich text, as before", () => {

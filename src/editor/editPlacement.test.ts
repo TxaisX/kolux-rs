@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keepRaw, richBlocker, richChange } from "./frontMatter";
+import { keepRaw, richBlocker, richBlockerSince, richChange } from "./frontMatter";
 import { roundTrip } from "./markdown";
 
 // Row 94 review (HIGH): on repetitive text a typed word must land in the paragraph the user edited,
@@ -105,7 +105,9 @@ describe("small bodies", () => {
   it("typing into an empty note, a one-word note and a note of only markers", () => {
     expect(typed("", "first words")).toBe("first words");
     expect(typed("one\n", "one two")).toBe("one two\n");
-    expect(apply("* \n", richChange("* \n", "- a", "- "))).toBe("* a\n");
+    // Round 3: `prev` is the rich view's real spelling (it keeps `*` bullets); a made-up "- " read back as "- a", not "* a".
+    expect(roundTrip(typed("* \n", "* a\n"))).toBe("* a");
+    expect(typed("* one\n", "* one two\n")).toBe("* one two\n");
   });
 });
 
@@ -173,6 +175,28 @@ describe("the twin-pane re-show asks the same question as the first show", () =>
   it("front matter is not part of what is checked", () => {
     expect(richBlocker("---\ntags: [a, <!-- x -->]\n---\nbody\n", false)).toBeNull();
   });
+  it("L1: a twin keystroke in a ~44 KB note checks only the blocks it changed, and still catches what the full check catches", () => {
+    const paras = Array.from({ length: 330 }, (_, i) => `para ${i} first_line of some snake_case words\nsecond line with *star* here\nthird line wraps on\nand __bold__ ends the paragraph`);
+    const big = "---\ntitle: x\n---\n" + paras.join("\n\n") + "\n";
+    const typedIn = big.replace("para 200 first_line", "para 200 typed first_line");
+    expect(richBlockerSince(big, typedIn, false)).toBeNull();
+    expect(richBlockerSince(big, big, false)).toBeNull();
+    const comment = big.replace("para 200 first_line", "para 200 <!-- x --> first_line");
+    expect(richBlockerSince(big, comment, false)?.text).toBe(richBlocker(comment, false)?.text);
+    const ref = big.replace("\n\npara 200 ", "\n\n[r]: http://a.b/c\n\npara 200 ");
+    expect(richBlockerSince(big, ref, false)?.text).toBe(richBlocker(ref, false)?.text);
+    const html = big.replace("and __bold__ ends the paragraph\n", "and __bold__ ends <b>the</b> paragraph\n");
+    expect(richBlockerSince(big, html, false)?.text).toBe(richBlocker(html, false)?.text);
+    const time = (f: () => unknown, n: number) => {
+      const t0 = performance.now();
+      for (let i = 0; i < n; i++) f();
+      return (performance.now() - t0) / n;
+    };
+    const full = time(() => richBlocker(typedIn, false), 3);
+    const since = time(() => richBlockerSince(big, typedIn, false), 20);
+    console.log(`twin re-show check at ${big.length} bytes: full ${full.toFixed(1)} ms, changed blocks ${since.toFixed(2)} ms`);
+    expect(since).toBeLessThan(full / 5);
+  });
 });
 
 // Row 94 review round 3 (HOLD): the word check alone cannot see marker or line-break damage. Each edit must save a
@@ -222,4 +246,11 @@ describe("marker and line-break damage next to respelt emphasis", () => {
   it("M1: Backspace at the start of that paragraph joins it", () => check("a\n\n\n\nb", (p) => p.replace("a\n\nb", "ab"), "ab"));
   it("M2: a letter typed right after _API_", () => check("the _API_ call", (p) => p.replace("* call", "*s call")));
   it("M2: a letter typed right before __API__", () => check("the __API__ call", (p) => p.replace("the **", "the X**")));
+  it("L2: Enter after italic in a wrapped list item leaves no line of only spaces", () => {
+    check("- see _this_\n  wrapped", (p) => p.replace("* wr", "*\n- wr"));
+    const body = "- see _this_\n  wrapped\n";
+    const prev = roundTrip(body)!;
+    const next = apply(body, richChange(body, prev.replace("* wr", "*\n- wr"), prev));
+    expect(next).not.toMatch(/^[ \t]+$/m);
+  });
 });

@@ -50,7 +50,7 @@ import { drawn, underRoot, VIEW_LABEL, viewsFor, type View } from "./viewSwitch"
 import { createAutosave, covers, movingNow, prefsReader, type Autosave } from "./autosave";
 import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
-import { richBlocker, richChange, splitFront } from "./frontMatter";
+import { richBlocker, richBlockerSince, richChange, splitFront } from "./frontMatter";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, GoneNotice, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich } from "./markdown";
@@ -552,8 +552,8 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
     const off = subscribe(path, () => {
       const now = cm.state.doc.toString();
       if (now === pushed) return;
-      // Same check as the first show: a body the rich view cannot spell back faithfully goes to source view.
-      const stop = richBlocker(now, bigOk);
+      // Same check as the first show, on the blocks that changed since the last show (L1: not the whole note per keystroke).
+      const stop = richBlockerSince(pushed, now, bigOk);
       if (stop) return fallBack(stop);
       r.show(splitFront((pushed = now)).body);
     });
