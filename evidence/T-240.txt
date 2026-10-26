@@ -178,3 +178,16 @@ cookies.txt)
 7. While an import runs the Import cookies button is disabled.
 8. A cookies.txt from a real Chrome export (Txais's own run): a site signed in in Chrome opens
    signed in here; Google rows are reported as left out.
+
+2026-10-25 close-out check of BROW-035 against row 320 (lane/browser da083698; evidence/browser-fix-320.txt)
+Built by 320 on the devtools capture (Page.captureScreenshot, browser_capture): Grab button, hover outline (BROW-037 picker),
+cropped picture of the element, details sheet, Copy details, Send to agent, Esc/Close, grab ends on a pick, Esc in the page or the
+Annotate button; vitest grab.test.ts + grabFlow.test.ts. Live proof pending (batched): steps in evidence/browser-fix-320.txt.
+Acceptance boxes: "click a button -> sheet shows screenshot and text; Attach to AI puts it in the agent's input" COVERED (Send to
+agent); "Escape mid-grab -> highlight disappears" COVERED.
+NOT covered, so T-240 stays open (rules/compat of the card):
+ 1. Mod+C starts a grab only when the page is not copying selected text. browser.grabElement (src/keys/actions.ts) is unrouted:
+    src/settings/shortcutRows.ts NOT_ROUTED lists it and src/browser/keys.ts PAGE_RESERVED keeps Mod+C inside the page. Needs a
+    selection check in the page script plus a handler; keys.ts is browser lane, actions.ts/shortcutRows.ts are shared (patch).
+ 2. The sheet offers Copy details, not Copy Screenshot (the card names Copy Screenshot).
+ 3. A picture over a size budget should be left out of the grab instead of failing it; no budget exists in grabFlow.ts/picture.ts.

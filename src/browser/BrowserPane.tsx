@@ -18,6 +18,7 @@ import { dropPage, livePage } from "./pages";
 import { useKeymap } from "../keys/KeymapContext";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
+import "./dragThroughInstall"; // BROW-052 / T-319-c: app drags cross the pages
 import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
