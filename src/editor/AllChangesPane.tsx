@@ -13,7 +13,7 @@
 // the file's diff tab in the split chosen in Source Control. T-033-g: the tab reads the status once
 // when it opens (so Commit is ready at once), passes the base it already knows so a refresh runs no
 // second status, and labels a base with no shared history instead of comparing silently.
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
@@ -24,7 +24,8 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { MergeView, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, FileCode, List } from "../chrome/icons";
 import { baseName } from "./buffers";
-import { look } from "./EditorPane";
+import { copiers, look } from "./EditorPane";
+import { allChangesContext, type LastFocus } from "./allChangesCopy";
 import { withoutWhitespace } from "./DiffPane";
 import { watchStatus } from "../scm/watch";
 import { useSettings } from "../settings/useSettings";
@@ -111,6 +112,9 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   const top = useRef(0);
   const front = useRef(!hidden);
   const latest = useRef<Status | null>(null); // the last status, read by refreshes without re-running the effect
+  const last = useRef<LastFocus | null>(null); // the diff view the cursor was last in, for Copy Context
+  const [said, setSaid] = useState<string | null>(null);
+  const saidTimer = useRef(0);
   front.current = !hidden;
 
   const missed = useRef<(() => void) | null>(null);
@@ -230,6 +234,32 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
       (e) => setOutcome({ text: String(e), bad: true }),
     );
   };
+  const say = (text: string) => {
+    setSaid(text);
+    window.clearTimeout(saidTimer.current);
+    saidTimer.current = window.setTimeout(() => setSaid(null), 4000);
+  };
+  // EDIT-007: the chord (through App's copiers) and the header button copy the last-focused view's selection.
+  const copyContext = (): boolean => {
+    const text = allChangesContext(last.current, root);
+    if (text === null) return false;
+    navigator.clipboard.writeText(text).then(
+      () => say("Copied with path and lines"),
+      (err) => say(`Nothing was copied: ${String(err)}`),
+    );
+    return true;
+  };
+  useEffect(() => {
+    copiers.set(id, copyContext);
+    return () => {
+      copiers.delete(id);
+      window.clearTimeout(saidTimer.current);
+    };
+  }, [id, root]);
+  const focusedView = useCallback((f: LastFocus) => void (last.current = f), []);
+  const goneView = useCallback((v: object) => {
+    if (last.current?.view === v) last.current = null;
+  }, []);
   const foldAll = (on: boolean) => setFold(Object.fromEntries((entries ?? []).map((e) => [entryKey(e), on])));
   const allFolded = (entries?.length ?? 0) > 0 && (entries ?? []).every((e) => fold[entryKey(e)]);
   const toggle = (k: keyof Draw | "tree") => setOver((o) => ({ ...o, [k]: !layout[k] }));
@@ -267,6 +297,14 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
           </label>
           <button className="link" onClick={() => void save({ [AC_SPLIT_KEY]: layout.split, [AC_WRAP_KEY]: layout.wrap, [AC_WHITESPACE_KEY]: layout.spaces, [AC_TREE_KEY]: layout.tree })} title="New All Changes tabs start with this layout">
             Make default
+          </button>
+          {said && (
+            <span className="note" role="status">
+              {said}
+            </span>
+          )}
+          <button className="btn" onClick={() => copyContext() || say("Click in a file's diff and select some lines first")} title="Copy the selection with its path and line numbers">
+            Copy context
           </button>
           <button className="link" onClick={() => foldAll(!allFolded)} disabled={!count} aria-label={allFolded ? "Expand all" : "Collapse all"}>
             {allFolded ? "Expand all" : "Collapse all"}
@@ -330,7 +368,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
           {base?.note && <div className="menu-hint ac-note">{base.note}</div>}
           {entries && !entries.length && <div className="menu-hint">{base ? `This branch has no changes against ${base.against}.` : "This worktree has no changes."}</div>}
           {(entries ?? []).map((e, i) => (
-            <Section key={entryKey(e)} anchor={sectionId(i)} e={e} name={rel(e.path)} root={root} base={base} draw={draw} cache={cache.current} scroller={list} onReady={onReady} viewed={isViewed(e)} canView={ready[entryKey(e)] === e.stamp} onViewed={() => toggleViewed(e)} folded={!!fold[entryKey(e)]} onFold={() => setFold((f) => ({ ...f, [entryKey(e)]: !f[entryKey(e)] }))} onOpen={onOpenDiff && base === null ? () => onOpenDiff(e.path, e.staged) : undefined} />
+            <Section key={entryKey(e)} anchor={sectionId(i)} e={e} name={rel(e.path)} root={root} base={base} draw={draw} cache={cache.current} scroller={list} onReady={onReady} onFocusView={focusedView} onGoneView={goneView} viewed={isViewed(e)} canView={ready[entryKey(e)] === e.stamp} onViewed={() => toggleViewed(e)} folded={!!fold[entryKey(e)]} onFold={() => setFold((f) => ({ ...f, [entryKey(e)]: !f[entryKey(e)] }))} onOpen={onOpenDiff && base === null ? () => onOpenDiff(e.path, e.staged) : undefined} />
           ))}
         </div>
       </div>
@@ -338,9 +376,9 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   );
 }
 
-type SectionProps = { anchor: string; e: Entry; name: string; root: string; base: Base | null; draw: Draw; cache: Cache; scroller: React.RefObject<HTMLDivElement | null>; onReady: (key: string, stamp: string | null) => void; viewed: boolean; canView: boolean; onViewed: () => void; folded: boolean; onFold: () => void; onOpen?: () => void };
+type SectionProps = { anchor: string; e: Entry; name: string; root: string; base: Base | null; draw: Draw; cache: Cache; scroller: React.RefObject<HTMLDivElement | null>; onReady: (key: string, stamp: string | null) => void; onFocusView: (f: LastFocus) => void; onGoneView: (v: object) => void; viewed: boolean; canView: boolean; onViewed: () => void; folded: boolean; onFold: () => void; onOpen?: () => void };
 
-const Section = memo(function Section({ anchor, e, name, root, base, draw, cache, scroller, onReady, viewed, canView, onViewed, folded, onFold, onOpen }: SectionProps) {
+const Section = memo(function Section({ anchor, e, name, root, base, draw, cache, scroller, onReady, onFocusView, onGoneView, viewed, canView, onViewed, folded, onFold, onOpen }: SectionProps) {
   const key = entryKey(e);
   const box = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -411,16 +449,30 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
   useEffect(() => {
     if (!sides || !host.current || folded) return;
     const lang = new Compartment();
-    const common: Extension[] = [basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorState.readOnly.of(true), EditorView.editable.of(false), draw.wrap ? EditorView.lineWrapping : []];
+    const common = (old: boolean): Extension[] => [
+      basicSetup,
+      look,
+      syntaxHighlighting(oneDarkHighlightStyle),
+      lang.of([]),
+      EditorState.readOnly.of(true),
+      EditorView.editable.of(false),
+      draw.wrap ? EditorView.lineWrapping : [],
+      EditorView.domEventHandlers({
+        focus: (_e, view) => {
+          onFocusView({ path: e.path, old, view });
+          return false;
+        },
+      }),
+    ];
     const diffConfig = draw.spaces ? undefined : { override: withoutWhitespace };
     const collapseUnchanged = { margin: 3, minSize: 6 };
     let views: EditorView[];
     let merge: MergeView | null = null;
     if (draw.split) {
-      merge = new MergeView({ a: { doc: sides.original, extensions: common }, b: { doc: sides.modified, extensions: common }, parent: host.current, gutter: true, collapseUnchanged, diffConfig });
+      merge = new MergeView({ a: { doc: sides.original, extensions: common(true) }, b: { doc: sides.modified, extensions: common(false) }, parent: host.current, gutter: true, collapseUnchanged, diffConfig });
       views = [merge.a, merge.b];
     } else {
-      views = [new EditorView({ doc: sides.modified, parent: host.current, extensions: [...common, unifiedMergeView({ original: sides.original, mergeControls: false, gutter: true, collapseUnchanged, diffConfig })] })];
+      views = [new EditorView({ doc: sides.modified, parent: host.current, extensions: [...common(false), unifiedMergeView({ original: sides.original, mergeControls: false, gutter: true, collapseUnchanged, diffConfig })] })];
     }
     languageFor(baseName(e.path))
       ?.load()
@@ -428,6 +480,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
       .catch(() => undefined);
     onReady(key, e.stamp);
     return () => {
+      views.forEach(onGoneView);
       if (merge) merge.destroy();
       else views.forEach((v) => v.destroy());
     };
