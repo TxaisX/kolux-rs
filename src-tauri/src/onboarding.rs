@@ -94,7 +94,15 @@ fn save(store: &Store, rec: &Onboarding) -> Result<(), String> {
 
 /// ONB-001: the profile's first start opens a record; a profile with none counts as done (ONB-008).
 pub fn first_start(store: &Store, starts: u64) -> Result<(), String> {
-    match try_raw(store)? {
+    // Startup must never fail on an unreadable record; it is left as it is, unsaved.
+    let rec = match try_raw(store) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("kolux-rs: {e}; onboarding left as it is");
+            return Ok(());
+        }
+    };
+    match rec {
         None if starts == 1 => save(store, &Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }),
         Some(old) if upgraded(old.clone(), 0) != old => save(store, &upgraded(old, now_ms())),
         _ => Ok(()),
@@ -293,12 +301,26 @@ fn tours_decided(mut g: Guide, onboarding_open: bool) -> (Guide, bool) {
 #[tauri::command]
 pub fn tours_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    let open = load(&store).is_some_and(|r| r.closed_at.is_none());
-    let (g, fresh) = tours_decided(try_guide_load(&store)?, open);
-    if fresh {
-        store.set(GUIDE, &serde_json::to_string(&g).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    tours_read(&store)
+}
+
+/// Saves only a first decision made on a guide that loaded; an unreadable guide is answered from the
+/// default and left untouched.
+fn tours_read(store: &Store) -> Result<Guide, String> {
+    let open = load(store).is_some_and(|r| r.closed_at.is_none());
+    match try_guide_load(store) {
+        Ok(g) => {
+            let (g, fresh) = tours_decided(g, open);
+            if fresh {
+                store.set(GUIDE, &serde_json::to_string(&g).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            }
+            Ok(g)
+        }
+        Err(e) => {
+            eprintln!("kolux-rs: {e}; tours answered from the default");
+            Ok(tours_decided(Guide::default(), open).0)
+        }
     }
-    Ok(g)
 }
 
 /// `id` added once to `list` (tipsSeen, visited or tried).
@@ -832,9 +854,21 @@ mod tests {
         let broken = "{\"version\": 3, \"step\": 2";
         s.set(KEY, broken).unwrap();
         crate::orchestration::kept::refuse_copies(&dir);
-        let err = first_start(&s, 1).unwrap_err();
-        assert!(err.contains(KEY), "{err}");
+        assert_eq!(first_start(&s, 1), Ok(()), "startup never fails on an unreadable record");
         assert_eq!(s.get(KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13b_tours_read_degrades_to_the_default_without_saving_over_the_guide() {
+        let (s, dir) = store("c13b-tours");
+        let broken = "{\"toursSeen\": [\"x\"";
+        s.set(GUIDE, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let g = tours_read(&s).unwrap();
+        assert_eq!(g.tours_auto, Some(false), "no record: no wizard showing, so no automatic tours");
+        assert_eq!(s.get(GUIDE).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }

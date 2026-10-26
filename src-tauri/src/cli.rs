@@ -168,8 +168,8 @@ const MAIL: &[(&str, &str, &[&str])] = &[
 ];
 /// CLI-038: the orchestration changes. Each carries a request id that lasts, so a change whose
 /// answer was lost can be sent again and still take effect no more than once.
-/// Row 877: every orchestration command that saves; an unread mail refuses these before any change.
-const MAIL_WRITES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", ASK, RESET, "orchestration.task-create", "orchestration.dispatch", ABANDON, UPDATE, TASK_RESET, STOP, RETAIN, RELEASE, "orchestration.gate-create", "orchestration.gate-resolve"];
+/// Row 877: every orchestration command that saves (check too: it acks what it hands out); an unread mail refuses these before any change.
+const MAIL_WRITES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", ASK, RESET, CHECK, "orchestration.task-create", "orchestration.dispatch", ABANDON, UPDATE, TASK_RESET, STOP, RETAIN, RELEASE, "orchestration.gate-create", "orchestration.gate-resolve"];
 const CHANGES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", "orchestration.task-create", "orchestration.dispatch", WORKER_START];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// CLI-024 / CLI-025: reading, typing into and waiting on a terminal by its handle.
@@ -3546,8 +3546,10 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             if let Some(key) = &retry {
                 // ORCH-055: the receipt lasts in the store, so a retry after a restart sends nothing.
+                // Card 13b: unreadable receipts refuse here, before anything is typed, so a retry never types twice.
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                if let Some(receipt) = so::Receipts::load(&store).find(key) {
+                let receipts = so::Receipts::try_load(&store).map_err(|e| Fail::new("failed", e))?;
+                if let Some(receipt) = receipts.find(key) {
                     let mut again = receipt.clone();
                     again["retried"] = json!(true);
                     return Ok(again);
@@ -3563,7 +3565,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let before = if watching { Some(crate::status::activity(id)) } else { None };
             let output_mark = |r: Option<crate::terminal::Read>| r.map(|r| (r.cursor, r.pending));
             let output_before = output_mark(ctx.terminals.read(id, None, Some(1)));
-            let write = |s: &str| ctx.terminals.write(id, s).map_err(|e| Fail::new("failed", e));
+            let write = |s: &str| type_into(ctx, id, s).map_err(|e| Fail::new("failed", e));
             let mut delivered = Vec::new();
             if interrupt {
                 write("\u{3}")?;
@@ -3691,6 +3693,29 @@ fn held_line(handle: &str, o: &so::Outcome) -> String {
 /// senders: waits for the input box to settle, pastes, holds Enter back for the size-scaled pause and
 /// while a large paste is taken in, and never presses it when another writer, a cancel or a
 /// permission prompt comes between the text and Enter.
+/// Every keystroke `terminal send` types goes through here; tests count the calls.
+fn type_into(ctx: &Ctx, id: u32, data: &str) -> Result<(), String> {
+    #[cfg(test)]
+    typed::bump(id);
+    ctx.terminals.write(id, data)
+}
+
+#[cfg(test)]
+mod typed {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    static COUNTS: Mutex<BTreeMap<u32, usize>> = Mutex::new(BTreeMap::new());
+
+    pub fn bump(id: u32) {
+        *COUNTS.lock().unwrap_or_else(|p| p.into_inner()).entry(id).or_default() += 1;
+    }
+
+    pub fn count(id: u32) -> usize {
+        COUNTS.lock().unwrap_or_else(|p| p.into_inner()).get(&id).copied().unwrap_or(0)
+    }
+}
+
 fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -> Result<so::Delivery, Fail> {
     let turn = so::lane(id);
     let _turn = turn.lock().unwrap_or_else(|p| p.into_inner());
@@ -3711,7 +3736,7 @@ fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -
             live: ctx.terminals.live(&handle),
         }
     };
-    so::drive(&mut send, text, agent, look, |s| ctx.terminals.write(id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
+    so::drive(&mut send, text, agent, look, |s| type_into(ctx, id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
 }
 
 // ---------------------------------------------------------------- worker start (ORCH-016)
@@ -5461,6 +5486,9 @@ mod tests {
             assert_eq!((s.get(TASKS_KEY).unwrap(), s.get(DISPATCHES_KEY).unwrap()), (tasks_before.clone(), dispatches_before.clone()), "{command}: the lists are unchanged");
             assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "{command}: the mail blob is byte-identical");
         }
+        // Card 13b: check acks what it hands out, so it is refused too (it used to answer "no mail").
+        let err = dispatch(&ctx, &req("orchestration.check", json!({ "ack": "delivery-1" }))).unwrap_err();
+        assert!(err.message.contains("orchestration.mail") && err.message.contains("nothing was saved over it"), "check: {}", err.message);
         // Reads still answer from the empty mail, and change nothing.
         for (command, args) in [("orchestration.task-list", json!({})), ("orchestration.run-list", json!({})), ("orchestration.dispatch", json!({ "task": "task-1", "dryRun": true }))] {
             let err = dispatch(&ctx, &req(command, args)).err();
@@ -5469,6 +5497,36 @@ mod tests {
         let s = store.lock().unwrap();
         assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "reads left the mail blob alone");
         drop(s);
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13b_a_send_retry_with_unreadable_receipts_types_nothing_and_a_repaired_one_types_once() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-c13b-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        terminals.fake_session(5313, &dir.display().to_string(), None);
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.send".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-5313", "text": "hello", "retryRequest": "r1" }), pane: None, cli: String::new(), arrived: None };
+        let broken = "[{\"key\": \"term-5313|r0\", \"at\": 1, \"receipt\": {";
+        store.lock().unwrap().set(so::KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let err = dispatch(&ctx, &req).unwrap_err();
+        assert_eq!(err.code, "failed");
+        assert_eq!(typed::count(5313), 0, "nothing was typed before the refusal");
+        assert_eq!(store.lock().unwrap().get(so::KEY).unwrap().as_deref(), Some(broken), "the receipts blob is byte-identical");
+        // Repaired: the same retry types once, then answers from its receipt without typing again.
+        store.lock().unwrap().set(so::KEY, "[]").unwrap();
+        dispatch(&ctx, &req).unwrap();
+        let typed_once = typed::count(5313);
+        assert!(typed_once >= 1);
+        let again = dispatch(&ctx, &req).unwrap();
+        assert_eq!(again["retried"], true);
+        assert_eq!(typed::count(5313), typed_once, "a retry of a recorded send types nothing");
         drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }

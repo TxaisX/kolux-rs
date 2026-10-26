@@ -809,7 +809,6 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(2));
     }
 
-
     #[test]
     fn card13_dismissed_notices_that_could_not_be_kept_aside_are_never_saved_over() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-tools-c13-{}", std::process::id()));
