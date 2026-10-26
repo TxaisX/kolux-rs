@@ -28,6 +28,7 @@ import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
 import { recordPoll } from "../scm/prSearch";
+import { ScanGate, scanProjects, type Scanned } from "./worktreeScan";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, projectLabel, splitGitSaid, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
@@ -369,31 +370,54 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const fail = (err: unknown) => say("error", String(err));
 
   const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
-  const refreshSeq = useRef(0); // PROJ-068: an older refresh never replaces the result of a newer one
-  const refreshWorktrees = useCallback(async (list: Project[]) => {
-    const seq = ++refreshSeq.current;
-    const next: Record<string, Worktree[]> = {};
-    const unseen: Record<string, Worktree[]> = {};
-    for (const p of list) {
-      try {
-        next[p.id] = await invoke<Worktree[]>("workspace_list", { projectId: p.id });
-        unseen[p.id] = await invoke<Worktree[]>("workspace_unseen", { projectId: p.id });
-      } catch (err) {
-        // ACCT-056: a failed scan removes nothing; the worktrees already known stay listed.
-        next[p.id] = afterScan(scanned.current[p.id], null);
-        say("warn", `Could not list the workspaces of ${p.name}, so the last known list stays: ${String(err)}`);
-      }
-    }
-    if (seq !== refreshSeq.current) return;
-    scanned.current = next;
+  const unseenKnown = useRef<Record<string, Worktree[]>>({});
+  const scanGate = useRef(new ScanGate()); // T-442-c: a scan never overlaps itself
+  const pushedBusy = useRef(false);
+  const showScanned = (next: Record<string, Worktree[]>, unseen: Record<string, Worktree[]>) => {
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
     setFresh(unseen);
+  };
+  // `tick`: the 5 s poll, skipped while a scan runs; any other caller waits its turn and runs once.
+  const refreshWorktrees = useCallback((list: Project[], opts?: { tick?: boolean }) => scanGate.current.run(() => sweepWorktrees(list), { skipIfBusy: opts?.tick }), []);
+  const sweepWorktrees = async (list: Project[]) => {
+    const ids = new Set(list.map((p) => p.id));
+    const keep = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([id]) => ids.has(id)));
+    const next = keep(scanned.current);
+    const unseen = keep(unseenKnown.current);
+    let shownAt = 0;
+    // Each project's answer shows as it arrives (at most ~8 repaints a second), not after the whole sweep.
+    await scanProjects(
+      list,
+      (p) => invoke<Scanned>("workspace_scan", { projectId: p.id }),
+      (p, answer) => {
+        if ("ok" in answer) {
+          next[p.id] = answer.ok.list;
+          unseen[p.id] = answer.ok.unseen;
+        } else {
+          // ACCT-056: a failed scan removes nothing; the worktrees already known stay listed.
+          next[p.id] = afterScan(next[p.id], null);
+          say("warn", `Could not list the workspaces of ${p.name}, so the last known list stays: ${answer.error}`);
+        }
+        scanned.current = next;
+        unseenKnown.current = unseen;
+        if (Date.now() - shownAt >= 120) {
+          shownAt = Date.now();
+          showScanned({ ...next }, { ...unseen });
+        }
+      },
+    );
+    showScanned({ ...next }, { ...unseen });
     // GIT-065: the same poll keeps each row's unpushed badge current; a failed read keeps the last.
     const shown = Object.values(next).flat().filter((w) => !w.hidden).map((w) => w.path);
-    invoke<Pushed[]>("scm_pushed", { worktrees: shown })
-      .then((list) => setPushedBy(Object.fromEntries(list.map((p) => [p.path, p]))))
-      .catch(() => {});
+    // One read at a time: a slow round must not pile up behind the next poll.
+    if (!pushedBusy.current) {
+      pushedBusy.current = true;
+      invoke<Pushed[]>("scm_pushed", { worktrees: shown })
+        .then((list) => setPushedBy(Object.fromEntries(list.map((p) => [p.path, p]))))
+        .catch(() => {})
+        .finally(() => (pushedBusy.current = false));
+    }
     const owner: Record<string, string> = {};
     const names: Record<string, string> = {};
     for (const p of list)
@@ -404,7 +428,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const key = JSON.stringify([list, owner, names]);
     if (key !== indexed.current) index.current(list, owner, names);
     indexed.current = key;
-  }, []);
+  };
   // GIT-027 / GIT-028: every shown workspace's pull request, polled in the background: the visible
   // workspace first, one gh call per GitHub project, a round every few minutes while the window is
   // shown (backing off after failures, waiting out a rate limit), and again on focus when stale.
@@ -458,7 +482,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
   // PROJ-041: the same poll notices worktrees made outside Kolux, in both layouts (DT-O2).
   useEffect(() => {
-    const t = window.setInterval(() => document.visibilityState === "visible" && refreshWorktrees(projects).catch(fail), 5000);
+    const t = window.setInterval(() => document.visibilityState === "visible" && refreshWorktrees(projects, { tick: true }).catch(fail), 5000);
     return () => window.clearInterval(t);
   }, [projects, refreshWorktrees]);
 
