@@ -2928,7 +2928,7 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let v = m.once(retry, |m| {
                 let mut v = m.post(&p, a, &dispatches, &peers, now_ms())?;
                 // ORCH-015: the worker's own done report settles its task with the mail.
-                let settled = crate::orchestration::report(&mut tasks, &mut dispatches, &p, a, now_ms())?;
+                let settled = crate::orchestration::report(&mut tasks, &mut dispatches, &p, a, now_ms(), &|t| crate::orchestration::process_generation(ctx.terminals, t))?;
                 if !settled.is_null() {
                     v["settled"] = settled;
                 }
@@ -4691,7 +4691,11 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let mut dispatches = load_list(&store, DISPATCHES_KEY);
-        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "pass": pass, "retryOf": text("retryOf") })));
+        let mut row = worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "pass": pass, "retryOf": text("retryOf") }));
+        if let Some(g) = terminal.and_then(|t| crate::orchestration::process_generation(ctx.terminals, t)) {
+            row[crate::orchestration::PASS_GENERATION] = json!(g);
+        }
+        dispatches.push(row);
         save_list(&store, DISPATCHES_KEY, &dispatches)?;
     }
     if ready {
@@ -8153,7 +8157,14 @@ mod tests {
             s.save_settings(&settings).unwrap();
         }
         let sent: Mutex<Vec<Value>> = Mutex::new(Vec::new());
-        let notify = |v: Value| sent.lock().unwrap().push(v);
+        // Row 65: a listening window that confirms every file it is told about.
+        file_cli::ACKS.listen(true);
+        let notify = |v: Value| {
+            if let Some(id) = v["ack"].as_u64() {
+                file_cli::ACKS.report(id, None);
+            }
+            sent.lock().unwrap().push(v);
+        };
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
         let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
@@ -8201,6 +8212,7 @@ mod tests {
         assert_eq!(e["skipped"], json!([{ "path": "gone.txt", "kind": "edit", "why": "deleted" }]));
         assert_eq!(e["opened"].as_array().unwrap().len(), 3);
         assert!(dispatch(&ctx, &req("file.open-changed", &one, json!({ "mode": "tabs" }))).is_err());
+        file_cli::ACKS.listen(false);
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

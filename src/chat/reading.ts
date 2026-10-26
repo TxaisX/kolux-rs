@@ -5,9 +5,10 @@
 // conversation at once, and a read that fails afterwards leaves it in place: a full-pane error
 // appears only when nothing was kept.
 import { applyRead, type ChatItem, type ChatRead } from "./model";
+import { OLDER_LINES, pageIsCurrent, prependOlder } from "./page";
 
 /** What the chat shows of its transcript: the conversation, what the reading says of it, and the error if any. */
-export type Seen = { items: ChatItem[]; state: ChatRead["state"]; error: string | null; open: boolean };
+export type Seen = { items: ChatItem[]; state: ChatRead["state"]; error: string | null; open: boolean; /** CHAT-008: cursor of the lines before the first one read; 0 or absent = the top. */ older?: number };
 
 /** Nothing read yet. */
 export const NOTHING: Seen = { items: [], state: "loading", error: null, open: false };
@@ -64,8 +65,10 @@ export function takeRead(prev: Seen, got: ChatRead | { failed: string }, first: 
     if (keptSome) return prev;
     return { items: [], state: got.state, error: got.error ?? null, open: false };
   }
-  const items = first || got.reset ? got.items : applyRead(prev.items, got);
-  return { items, state: got.state, error: null, open: got.open };
+  const fresh = first || got.reset;
+  const items = fresh ? got.items : applyRead(prev.items, got);
+  const older = fresh ? got.older : prev.older;
+  return { items, state: got.state, error: null, open: got.open, ...(older ? { older } : {}) };
 }
 
 export type Timers = { set: (f: () => void, ms: number) => unknown; clear: (t: unknown) => void };
@@ -77,6 +80,8 @@ export type ReaderOptions = {
   /** True when the chat begins hidden: it reads nothing until `show`. */
   hidden: boolean;
   read: () => Promise<ChatRead>;
+  /** CHAT-008: the page of lines before `cursor` (at most `lines` of them). Absent: the transcript cannot be paged back. */
+  readEarlier?: (cursor: number, lines: number) => Promise<ChatRead>;
   /** Lets go of the transcript, so the next read starts from the top. FIX-2: return the call's promise so the next read
    * (of this or a new reader for the pane) waits for it. */
   close: () => void | PromiseLike<unknown>;
@@ -92,6 +97,9 @@ export class ChatReader {
   private turn = 0;
   private timer: unknown = undefined;
   private timers: Timers;
+  /** CHAT-008: bumped when the chat is shown or hidden, so an older page that finishes after that is dropped. */
+  private epoch = 0;
+  private paging = false;
 
   constructor(private o: ReaderOptions) {
     this.timers = o.timers ?? { set: (f, ms) => setTimeout(f, ms), clear: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) };
@@ -103,6 +111,7 @@ export class ChatReader {
   show() {
     if (this.on) return;
     this.on = true;
+    this.epoch++;
     this.first = true;
     this.look();
   }
@@ -111,6 +120,7 @@ export class ChatReader {
   hide() {
     if (!this.on) return;
     this.on = false;
+    this.epoch++;
     this.turn++;
     this.stopTimer();
     keepSeen(this.o.pane, this.o.session, this.seen);
@@ -127,6 +137,30 @@ export class ChatReader {
     const pending: Promise<unknown> = Promise.all(waits).then(() => {});
     closing.set(pane, pending);
     void pending.then(() => void (closing.get(pane) === pending && closing.delete(pane)));
+  }
+
+  /** CHAT-008: fetches the next older page and puts it before what is shown. `before` runs just ahead of the change
+   * (the view saves its reading position there). False when nothing was added: at the top, a page already out, the call
+   * failed, or the view was replaced meanwhile (a page for a cursor that is no longer the view's own is dropped). */
+  async loadEarlier(before?: () => void): Promise<boolean> {
+    const cursor = this.seen.older ?? 0;
+    const { readEarlier } = this.o;
+    if (!this.on || this.paging || cursor <= 0 || !readEarlier) return false;
+    const started = this.epoch;
+    this.paging = true;
+    try {
+      const got = await readEarlier(cursor, OLDER_LINES);
+      if (!got.earlier || !this.on || !pageIsCurrent(started, this.epoch) || (this.seen.older ?? 0) !== cursor) return false;
+      before?.();
+      this.seen = { ...this.seen, items: prependOlder(this.seen.items, got.items), older: got.older ?? 0 };
+      keepSeen(this.o.pane, this.o.session, this.seen);
+      this.o.onChange(this.seen);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.paging = false;
+    }
   }
 
   private stopTimer() {

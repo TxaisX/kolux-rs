@@ -90,12 +90,17 @@ struct Inner {
     panes: HashMap<u32, u32>,
     /// ORCH-057: each session's output count and raw tail, for a viewer's resync.
     snaps: HashMap<u32, Snap>,
+    /// Row 211: which process each session id holds now; a new number every time an id starts (a reused id too).
+    process_gen: HashMap<u32, u64>,
+    process_count: u64,
 }
 
 impl Inner {
     /// ORCH-059: a session id about to be (re)used starts as a new incarnation: nothing an earlier
     /// session under the same handle left behind (log, screen bits, end flag, marks, snapshot) carries over.
     fn fresh_incarnation(&mut self, id: u32) {
+        self.process_count += 1;
+        self.process_gen.insert(id, self.process_count);
         self.dirs.remove(&id);
         self.marks.remove(&id);
         self.keys.remove(&id);
@@ -1381,6 +1386,11 @@ impl Terminals {
         (inner.sessions.contains_key(&id) && !inner.ended.contains(&id)).then_some(id)
     }
 
+    /// Row 211: the process generation of session `id` (changes on every spawn, respawn or adoption of that id), None for an unknown id.
+    pub fn process_generation(&self, id: u32) -> Option<u64> {
+        self.inner.lock().ok()?.process_gen.get(&id).copied()
+    }
+
     /// Is `handle` an open terminal?
     pub fn live(&self, handle: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };
@@ -2076,6 +2086,23 @@ mod tests {
         assert_eq!(young.snapshot(), Snapshot { seq: 17, data: base64::engine::general_purpose::STANDARD.encode(b"no line break yet") });
         assert_eq!(outcome_of(Some(0)), "exited");
         assert_eq!(outcome_of(None), "unverifiable", "an end Kolux could not confirm is not called an exit");
+    }
+
+    /// Row 211: every process started under a session id has its own generation, so a pass minted
+    /// for the earlier one can be told from the one running now.
+    #[test]
+    fn orch067_f_a_restarted_session_id_has_a_new_process_generation() {
+        let t = Terminals::default();
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        assert_eq!(t.process_generation(9), None, "an unknown id");
+        t.fake_session(9, &dir, Some("claude"));
+        t.fake_session(10, &dir, None);
+        let (first, other) = (t.process_generation(9).unwrap(), t.process_generation(10).unwrap());
+        assert_ne!(first, other);
+        assert_eq!(t.process_generation(9), Some(first), "stable while the process runs");
+        t.fake_session(9, &dir, Some("claude"));
+        assert_ne!(t.process_generation(9), Some(first), "the reused id is a new process");
+        assert_eq!(t.process_generation(10), Some(other), "another pane is untouched");
     }
 
     /// ORCH-059: a closed terminal is gone from every list and lookup at once, and a session opened again
