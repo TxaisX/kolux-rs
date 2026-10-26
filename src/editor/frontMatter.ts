@@ -31,7 +31,18 @@ export function richChange(now: string, out: string, prev?: string, refused?: ()
   // The rich view drops the body's last line end; keep it.
   const next = body.endsWith("\n") && !placed.endsWith("\n") ? placed + "\n" : placed;
   const c = changeBetween(body, next);
-  return c && { from: c.from + front.length, to: c.to + front.length, insert: c.insert };
+  if (!c) return null;
+  const crlf = inFileEnds(now, body[c.from - 1], c.insert);
+  // Code lines keep their CR in the view, so the CRLF spelling is used only where the view reads it as it read the added lines.
+  const insert = crlf !== c.insert && same(body.slice(0, c.from) + crlf + body.slice(c.to), next) ? crlf : c.insert;
+  return { from: c.from + front.length, to: c.to + front.length, insert };
+}
+
+/** Round 8 (LOW-3): the view's lines end in \n; a note whose every line ends in \r\n gets its added lines the same way. */
+function inFileEnds(now: string, before: string | undefined, insert: string): string {
+  const bare = (s: string) => /(^|[^\r])\n/.test(s);
+  if (!bare(before === "\r" ? "\r" + insert : insert) || bare(now) || !now.includes("\r\n")) return insert;
+  return (before === "\r" ? "\r" + insert : insert).replace(/(?<!\r)\n/g, "\r\n").slice(before === "\r" ? 1 : 0);
 }
 
 const WORD = /[\p{L}\p{N}]+/gu;

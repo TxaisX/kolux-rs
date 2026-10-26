@@ -464,4 +464,20 @@ describe("round 8", () => {
       expect(next).toBe(want + P);
     });
   });
+
+  describe("LOW-3: a line the edit adds to a CRLF note ends in CRLF", () => {
+    const crlf = (s: string) => s.replace(/\n/g, "\r\n");
+    const shapes: [string, string, string, string, string][] = [
+      ["insert", "- a\n- b\n", "- a\n", "- a\n- x\n", "- a\n- x\n- b\n"],
+      ["split", "Para one two\n", "one two", "one\n\ntwo", "Para one\n\ntwo\n"],
+      ["add at the end", "- a\n- b\n", "- b", "- b\n- c", "- a\n- b\n- c\n"],
+      ["add at the end of a loose list", "- a\n\n- b\n", "- b", "- b\n- c", "- a\n\n- b\n- c\n"],
+      ["new paragraph", "# H\n\ntext", "text", "text\n\nmore", "# H\n\ntext\n\nmore"],
+    ];
+    it.each(shapes)("%s", (_, b, from, to, want) => {
+      const { next, refused } = edit(crlf(b + P), from, to);
+      expect(refused).toBe(0);
+      expect(next).toBe(crlf(want + P));
+    });
+  });
 });
