@@ -222,3 +222,40 @@ fn sess023_three_separate_copy_seats_get_three_distinct_creature_worktrees_and_a
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+// ---- SESS-027: no-prompt approval modes by default; the user's own arguments replace them ----
+
+use kolux_rs_lib::agents::{start_line_as, Start, StartLine};
+
+fn start_line(s: &serde_json::Value, id: &str, extra: &[String], prompt: &str, picked: bool) -> Result<StartLine, String> {
+    start_line_as(s, id, extra, prompt, picked, Start::Fresh)
+}
+
+fn strs(a: &[&str]) -> Vec<String> {
+    a.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn sess027_box1_a_plain_claude_start_carries_permission_mode_auto() {
+    let none = serde_json::json!({});
+    // the plus menu / a fresh tab asks with no extra arguments and no lineup pick
+    let args = start_line(&none, "claude", &[], "", false).unwrap().args;
+    let at = args.iter().position(|a| a == "--permission-mode").expect("--permission-mode present");
+    assert_eq!(args[at + 1], "auto");
+    assert!(!args.iter().any(|a| a.contains("bypass") || a == "--dangerously-skip-permissions"), "{args:?}");
+}
+
+#[test]
+fn sess027_box2_codex_custom_default_arguments_replace_the_built_in_ones() {
+    let none = serde_json::json!({});
+    assert_eq!(start_line(&none, "codex", &[], "", false).unwrap().args, strs(&["--sandbox", "workspace-write", "--ask-for-approval", "never"]));
+    for perms in [None, Some("manual")] {
+        let mut set = serde_json::json!({ "agentOptions": { "codex": { "args": "--model gpt-x --full-auto" } } });
+        if let Some(p) = perms {
+            set["agentPermissions"] = serde_json::json!(p);
+        }
+        let args = start_line(&set, "codex", &[], "", false).unwrap().args;
+        assert_eq!(args, strs(&["--model", "gpt-x", "--full-auto"]), "perms {perms:?}");
+        assert!(!args.iter().any(|a| a == "--sandbox" || a == "--ask-for-approval" || a == "never"), "built-ins must be gone: {args:?}");
+    }
+}

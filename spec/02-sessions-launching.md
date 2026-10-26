@@ -178,8 +178,8 @@ Rules: default arguments the user sets replace the built-in ones; an argument an
   accept is removed (Kilo Code); Goose receives its mode through an environment variable rather
   than a flag.
 Acceptance:
-  - [ ] Start Claude Code from the plus menu → its process runs in auto permission mode.
-  - [ ] Give Codex custom default arguments → those are used instead of the built-in ones.
+  - [x] Start Claude Code from the plus menu → its process runs in auto permission mode. (cards; evidence/cards-SESS-027.txt)
+  - [x] Give Codex custom default arguments → those are used instead of the built-in ones. (cards; evidence/cards-SESS-027.txt)
 Compat: the built-in no-prompt switches, spelled exactly as each agent's own command line
   expects them: for Claude Code, `--permission-mode` with the value auto; for Codex,
   `--sandbox` with the value workspace-write and `--ask-for-approval` with the value never (DT-C46:
