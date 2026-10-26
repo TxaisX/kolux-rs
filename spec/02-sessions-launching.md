@@ -257,7 +257,7 @@ Rules: the rules block is left out wherever the prompt is shown back to the user
   exists before the first change; a single-seat launch gets no rules block.
 Acceptance:
   - [ ] Launch Pair with a task → each agent writes its handoff note before editing anything, and the prompt shown to the user contains only the task.
-  - [ ] Launch Solo with a task → the agent's opening prompt carries no rules block.
+  - [x] Launch Solo with a task → the agent's opening prompt carries no rules block. (cards; evidence/cards-SESS-025.txt)
 Compat: one handoff note per worktree, a markdown file kept in the project's hidden Kolux folder
   and named after the worktree.
 Source: D-02-025
