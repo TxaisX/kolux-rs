@@ -199,7 +199,8 @@ describe("fuzz: chained everyday rich-view edits save a note that reads back as 
         // (4) Round 5: the blank lines between list items away from the edit survive (a retyped list keeps them as a count).
         expect(collapseGaps(nb)?.gaps.length ?? 0, why).toBeGreaterThanOrEqual(farGaps(body, prev, out));
         // (3) A note the view could show stays one it can show, unless the view's own text cannot be shown.
-        if (unsupported(out) === null) expect(unsupported(nb), why).toBeNull();
+        // richChange puts the body's last line end back, so that is the text the view's `out` becomes.
+        if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null) expect(unsupported(nb), why).toBeNull();
         now = next;
         prev = out;
         if (s) chained++;

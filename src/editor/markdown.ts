@@ -48,7 +48,7 @@ const LIMITS: [RegExp, string][] = [
   [/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "front matter"],
   [/<!--/, "HTML comments"],
   [/!\[[^\]]*\]\(/, "images"],
-  [/^ {0,3}\[[^\]^]+\]:\s/m, "reference links"],
+  [/^ {0,3}\[[^\]^\n]+\]:\s/m, "reference links"],
   [/\[\^[^\]]+\]/, "footnotes"],
   [/^ {0,3}([-*_])( *\1){2,} *$/m, "horizontal rules"],
   [/^ {0,3}\S.*\r?\n {0,3}(=+|-+) *$/m, "underlined headings"],

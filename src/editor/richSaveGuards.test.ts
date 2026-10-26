@@ -196,3 +196,20 @@ describe("LOW-2: a placement never makes a span the rich view reads as HTML", ()
     }
   });
 });
+
+// Round 5 (LOW-1): a reference definition is one line, so a `[` typed in front of text with a later `[r]:` is not one.
+describe("LOW-1: the reference-definition rule stops at a line end", () => {
+  const body = "see 4\nthere [r]:\n";
+  it("a `[` typed at the start does not read as a reference definition", () => {
+    expect(unsupported("[see 4\nthere [r]:\n")).toBeNull();
+    expect(unsupported("[r]: http://x\n")).not.toBeNull();
+    expect(unsupported("  [r]:\nhttp://x\n")).not.toBeNull();
+  });
+  it("seed 105's edit saves a note the view can still show", () => {
+    const prev = roundTrip(body)!;
+    const out = "[" + prev;
+    const next = apply(body, richChange(body, out, prev));
+    expect(roundTrip(next) + "\n").toBe(out + "\n");
+    expect(unsupported(next)).toBeNull();
+  });
+});
