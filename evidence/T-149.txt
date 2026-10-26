@@ -52,3 +52,10 @@ LIVE PROOF PENDING (batched)
 3. Cleanup dialog with 12 ticked workspaces (one with changes forced ticked, one with a child
    workspace): the question lists the lost kinds and "and 4 more"; progress counts up; the child
    goes before its parent; a locked one stays and is listed.
+
+2026-10-25 rebase onto main 690e63dc and create-flow wiring (PROJ-034):
+- STATE-history.md conflict: main kept, T-149 line appended; no other bookkeeping conflict; no decision ids touched.
+- src/setup/DefaultTabs.ts: nearestTabColor, tabPanes, openDefaultTabs (never throws; a refused file is said). vitest DefaultTabs.test.ts 10 passed.
+- evidence/setup-T-149-App.tsx.patch: openTabs() in runSetup (after the Setup tab ends when there is one) and after the composer makes panes.
+- bulkRemove.ts now takes main's function-shaped parentOf and main's childrenFirst (one copy); CleanupDialog patch regenerated on main's dialog.
+- LIVE PROOF PENDING: create a workspace in a repo whose kolux.yaml has defaultTabs: the tabs show beside the first pane with their colours and the commands run once the shell is up (after Setup ends when the repo has a setup script).
