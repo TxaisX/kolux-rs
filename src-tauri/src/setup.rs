@@ -493,7 +493,7 @@ pub fn trust_grant(store: &crate::state::Store, root: &Path, kind: &str, script:
     kind_ok(kind)?;
     let project = trust_project(store, root)?;
     let key = format!("{TRUST_PREFIX}{}", project.id);
-    let mut trust: Trust = crate::orchestration::kept::or_default(store, &key);
+    let mut trust: Trust = crate::orchestration::kept::load(store, &key)?;
     trust.scripts.insert(kind.into(), fingerprint(script));
     trust.all |= always;
     store.set(&key, &serde_json::to_string(&trust).map_err(|e| e.to_string())?).map_err(|e| format!("Kolux could not save the trust ({e})"))
@@ -854,7 +854,7 @@ fn save_local(store: &crate::state::Store, root: &Path, script: &str) -> Result<
     if script.trim().is_empty() || script.len() > LOCAL_MAX {
         return Err(format!("A setup script has to be between 1 character and {} KB.", LOCAL_MAX / 1024));
     }
-    let mut all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::or_default(store, LOCAL_KEY);
+    let mut all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::load(store, LOCAL_KEY)?;
     all.insert(crate::projects::name_key(&root.to_string_lossy()), script.to_string());
     store.set(LOCAL_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
@@ -876,6 +876,11 @@ fn repo_map<T: serde::de::DeserializeOwned + serde::Serialize>(store: &crate::st
     crate::orchestration::kept::or_default(store, key)
 }
 
+/// Card 13: the map a save starts from; a store or copy that fails is an error, never an empty map.
+fn repo_map_to_change<T: serde::de::DeserializeOwned + serde::Serialize>(store: &crate::state::Store, key: &str) -> Result<std::collections::BTreeMap<String, T>, String> {
+    crate::orchestration::kept::load(store, key)
+}
+
 fn put_repo_map<T: serde::Serialize>(store: &crate::state::Store, key: &str, map: &std::collections::BTreeMap<String, T>) -> Result<(), String> {
     store.set(key, &serde_json::to_string(map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
@@ -888,7 +893,7 @@ pub fn repo_policy(store: &crate::state::Store, root: &Path) -> Option<String> {
 /// Sets the repository's own policy; None goes back to inheriting. Anything but the three
 /// choices is refused, so a stray value can never change which script runs.
 pub fn set_repo_policy(store: &crate::state::Store, root: &Path, policy: Option<&str>) -> Result<(), String> {
-    let mut all = repo_map::<String>(store, POLICIES_KEY);
+    let mut all = repo_map_to_change::<String>(store, POLICIES_KEY)?;
     let key = crate::projects::name_key(&root.to_string_lossy());
     match policy.map(str::trim).filter(|p| !p.is_empty()) {
         None => all.remove(&key),
@@ -904,7 +909,7 @@ pub fn repo_wait(store: &crate::state::Store, root: &Path) -> bool {
 }
 
 pub fn set_repo_wait(store: &crate::state::Store, root: &Path, wait: bool) -> Result<(), String> {
-    let mut all = repo_map::<bool>(store, WAITS_KEY);
+    let mut all = repo_map_to_change::<bool>(store, WAITS_KEY)?;
     let key = crate::projects::name_key(&root.to_string_lossy());
     if wait {
         all.insert(key, true);
@@ -922,7 +927,7 @@ pub fn repo_mode(store: &crate::state::Store, root: &Path) -> String {
 /// Sets the repository's setup launch mode; None (or the default) goes back to a new tab. Anything
 /// but the four choices is refused and changes nothing.
 pub fn set_repo_mode(store: &crate::state::Store, root: &Path, mode: Option<&str>) -> Result<(), String> {
-    let mut all = repo_map::<String>(store, MODES_KEY);
+    let mut all = repo_map_to_change::<String>(store, MODES_KEY)?;
     let key = crate::projects::name_key(&root.to_string_lossy());
     match mode.map(str::trim).filter(|m| !m.is_empty()) {
         None | Some(DEFAULT_MODE) => all.remove(&key),
@@ -934,7 +939,7 @@ pub fn set_repo_mode(store: &crate::state::Store, root: &Path, mode: Option<&str
 
 /// PROJ-035 / SET-033: takes the repository's saved local setup away. Ok(false) when it had none.
 pub fn remove_local(store: &crate::state::Store, root: &Path) -> Result<bool, String> {
-    let mut all = repo_map::<String>(store, LOCAL_KEY);
+    let mut all = repo_map_to_change::<String>(store, LOCAL_KEY)?;
     if all.remove(&crate::projects::name_key(&root.to_string_lossy())).is_none() {
         return Ok(false);
     }
@@ -1039,12 +1044,12 @@ fn dismissed_ids(store: &crate::state::Store) -> Vec<String> {
 /// A forgotten project's card state goes with it: its dismissal (by id) and its saved local setup
 /// (by the folder it lived in).
 pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]) -> Result<(), String> {
-    let before = dismissed_ids(store);
+    let before: Vec<String> = crate::orchestration::kept::load(store, DISMISSED_KEY)?;
     let kept: Vec<String> = before.iter().filter(|i| !ids.contains(i)).cloned().collect();
     if kept.len() != before.len() {
         store.set(DISMISSED_KEY, &serde_json::to_string(&kept).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    let mut all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::or_default(store, LOCAL_KEY);
+    let mut all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::load(store, LOCAL_KEY)?;
     let count = all.len();
     for r in roots {
         all.remove(&crate::projects::name_key(r));
@@ -1054,19 +1059,19 @@ pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]
     }
     // SET-033: its own policy and wait choice go with it
     let keys: Vec<String> = roots.iter().map(|r| crate::projects::name_key(r)).collect();
-    let mut policies = repo_map::<String>(store, POLICIES_KEY);
+    let mut policies = repo_map_to_change::<String>(store, POLICIES_KEY)?;
     let before = policies.len();
     policies.retain(|k, _| !keys.contains(k));
     if policies.len() != before {
         put_repo_map(store, POLICIES_KEY, &policies)?;
     }
-    let mut waits = repo_map::<bool>(store, WAITS_KEY);
+    let mut waits = repo_map_to_change::<bool>(store, WAITS_KEY)?;
     let before = waits.len();
     waits.retain(|k, _| !keys.contains(k));
     if waits.len() != before {
         put_repo_map(store, WAITS_KEY, &waits)?;
     }
-    let mut modes = repo_map::<String>(store, MODES_KEY);
+    let mut modes = repo_map_to_change::<String>(store, MODES_KEY)?;
     let before = modes.len();
     modes.retain(|k, _| !keys.contains(k));
     if modes.len() != before {
@@ -1080,7 +1085,7 @@ pub fn card_dismissed(store: &crate::state::Store, project_id: &str) -> bool {
 }
 
 pub fn dismiss_card(store: &crate::state::Store, project_id: &str) -> Result<(), String> {
-    let mut ids = dismissed_ids(store);
+    let mut ids: Vec<String> = crate::orchestration::kept::load(store, DISMISSED_KEY)?;
     if !ids.iter().any(|i| i == project_id) {
         ids.push(project_id.to_string());
         store.set(DISMISSED_KEY, &serde_json::to_string(&ids).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -2512,5 +2517,24 @@ mod tests {
         for d in [profile, root] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn card13_setup_choices_that_could_not_be_kept_aside_are_never_saved_over() {
+        let dir = tree(&[]);
+        let store = crate::state::Store::open(&dir).unwrap();
+        let broken = "[\"p-1\", \"p-2\"";
+        let policies = "{\"c:/a\": \"loc";
+        store.set(DISMISSED_KEY, broken).unwrap();
+        store.set(POLICIES_KEY, policies).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let err = dismiss_card(&store, "p-9").unwrap_err();
+        assert!(err.contains(DISMISSED_KEY) && !err.contains("p-1"), "{err}");
+        let err = set_repo_policy(&store, Path::new("C:/a"), Some("local")).unwrap_err();
+        assert!(err.contains(POLICIES_KEY), "{err}");
+        assert_eq!(store.get(DISMISSED_KEY).unwrap().as_deref(), Some(broken));
+        assert_eq!(store.get(POLICIES_KEY).unwrap().as_deref(), Some(policies));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -19,6 +19,11 @@ fn folder_ids(store: &Store) -> Vec<String> {
     crate::orchestration::kept::or_default(store, FOLDERS_KEY)
 }
 
+/// Card 13: the list a save starts from; a store or copy that fails is an error, never an empty list.
+fn ids_to_change(store: &Store) -> Result<Vec<String>, String> {
+    crate::orchestration::kept::load(store, FOLDERS_KEY)
+}
+
 fn put_ids(store: &Store, ids: &[String]) -> Result<(), String> {
     store.set(FOLDERS_KEY, &serde_json::to_string(ids).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
@@ -29,7 +34,7 @@ pub fn is_folder(store: &Store, id: &str) -> bool {
 
 /// Drops projects from the folder list (removed, or now Git projects).
 pub(crate) fn unflag(store: &Store, ids: &[String]) -> Result<(), String> {
-    let before = folder_ids(store);
+    let before = ids_to_change(store)?;
     let kept: Vec<String> = before.iter().filter(|i| !ids.contains(i)).cloned().collect();
     if kept.len() == before.len() {
         return Ok(());
@@ -93,7 +98,7 @@ pub fn add_folder(store: &Store, folder: &Path) -> Result<Project, String> {
     crate::visibility::ensure(store, &list)?;
     list.insert(0, project.clone());
     projects::save_projects(store, &list)?;
-    let mut ids = folder_ids(store);
+    let mut ids = ids_to_change(store)?;
     ids.push(project.id.clone());
     put_ids(store, &ids)?;
     let _ = crate::activity::touch(store, &project.path);
@@ -249,5 +254,22 @@ mod tests {
         let p = Project { id: "p".into(), name: "p".into(), path: "C:/work/p".into(), workspaces_dir: None, base: None, display_name: None };
         let dirs = session_dirs(&p, &["C:/work/p".to_string(), "C:/ws/p/a".to_string(), "C:/ws/p/a".to_string()]);
         assert_eq!(dirs, vec![PathBuf::from("C:/work/p"), PathBuf::from("C:/ws/p/a")]);
+    }
+
+    #[test]
+    fn card13_a_folder_list_that_could_not_be_kept_aside_is_never_saved_over() {
+        let base = temp("c13");
+        let store = store(&base);
+        let broken = "[\"p-1\", \"p-2\"";
+        store.set(FOLDERS_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&base.join("db"));
+        let folder = base.join("notes");
+        fs::create_dir_all(&folder).unwrap();
+        let err = add_folder(&store, &folder).unwrap_err();
+        assert!(err.contains(FOLDERS_KEY) && !err.contains("p-1"), "{err}");
+        assert!(unflag(&store, &["p-1".to_string()]).is_err());
+        assert_eq!(store.get(FOLDERS_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
     }
 }

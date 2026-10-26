@@ -387,10 +387,6 @@ pub fn on_poll(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr]) {
 /// does not see "failing" as a new state and fire a second time.
 const CHECKS_SEEN_KEY: &str = "automations.checksSeen";
 
-fn load_checks_seen(store: &Store) -> std::collections::HashMap<String, String> {
-    crate::orchestration::kept::or_default(store, CHECKS_SEEN_KEY)
-}
-
 /// AUTO-004 (T-085-d): the open pull requests whose checks went from pending (or passing) to
 /// failing since the last round. `checks` is the poll round's checks word per folder (GIT-043's
 /// words, from the scm module). The first state learned about a pull request is only a starting
@@ -414,7 +410,7 @@ pub fn checks_failed(seen: &mut std::collections::HashMap<String, String>, polle
 
 /// AUTO-004 (T-085-d): one round's checks readings through the saved state; returns what to fire.
 pub fn checks_round(store: &Store, polled: &[crate::scm::PolledPr], checks: &std::collections::HashMap<String, String>) -> Result<Vec<(String, crate::scm::Pr)>, String> {
-    let mut seen = load_checks_seen(store);
+    let mut seen: std::collections::HashMap<String, String> = crate::orchestration::kept::load(store, CHECKS_SEEN_KEY)?;
     let before = seen.clone();
     let fired = checks_failed(&mut seen, polled, checks);
     if seen != before {
@@ -1703,7 +1699,7 @@ mod tests {
         let mut next = polled("C:/a", Some("OPEN"));
         next.pr.as_mut().unwrap().number = 8;
         assert!(checks_round(&store, &[next], &checked(&[("C:/a", "failing")])).unwrap().is_empty());
-        assert_eq!(load_checks_seen(&store).len(), 1);
+        assert_eq!(crate::orchestration::kept::load::<std::collections::HashMap<String, String>>(&store, CHECKS_SEEN_KEY).unwrap().len(), 1);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2756,6 +2752,22 @@ mod tests {
         on_status(&store, Some(1), 10, "working", true, false, None, 2_000).unwrap();
         on_status(&store, Some(1), 10, "done", false, false, None, 2_001).unwrap();
         assert_eq!(status_of(&store, "run-1").0, "completed");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13_a_checks_state_that_could_not_be_kept_aside_is_never_saved_over() {
+        let dir = temp("c13");
+        let db = dir.join("db");
+        let store = Store::open(&db).unwrap();
+        let broken = "{\"c:/a#1\": \"running";
+        store.set(CHECKS_SEEN_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        let open = [polled("C:/a", Some("OPEN"))];
+        let err = checks_round(&store, &open, &checked(&[("C:/a", "failing")])).unwrap_err();
+        assert!(err.contains(CHECKS_SEEN_KEY), "{err}");
+        assert_eq!(store.get(CHECKS_SEEN_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

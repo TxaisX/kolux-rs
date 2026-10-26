@@ -34,10 +34,6 @@ pub struct Source {
     pub root: Option<String>,
 }
 
-fn load(store: &Store) -> Value {
-    crate::orchestration::kept::or_default::<Value>(store, KEY)
-}
-
 fn save(store: &Store, v: &Value) -> Result<(), String> {
     store.set(KEY, &v.to_string()).map_err(|e| format!("could not save the visibility choice: {e}"))
 }
@@ -45,7 +41,7 @@ fn save(store: &Store, v: &Value) -> Result<(), String> {
 /// The choices, made on first use. Projects already there keep showing worktrees made elsewhere, as
 /// they did before this choice existed (PROJ-042); projects added later start with them hidden.
 pub fn ensure(store: &Store, projects: &[Project]) -> Result<Value, String> {
-    let v = load(store);
+    let v: Value = crate::orchestration::kept::load(store, KEY)?;
     if v.is_object() {
         return Ok(v);
     }
@@ -92,7 +88,11 @@ fn chosen_root(store: &Store, project: &Project) -> Option<String> {
 /// a dot-folder of the main checkout other than Claude Code's, unless the user's own workspaces
 /// folder holds them.
 pub fn apply(store: &Store, project: &Project, hidden_by_hand: &Map<String, Value>, list: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
-    let v = ensure(store, &crate::projects::load_projects(store))?;
+    // A listing only reads: an unreadable record hides external worktrees and is never saved over.
+    let v = ensure(store, &crate::projects::load_projects(store)).unwrap_or_else(|e| {
+        eprintln!("kolux-rs: {e}; external worktrees stay hidden");
+        Value::Null
+    });
     let extra = roots(&v);
     let chosen = chosen_root(store, project);
     // The scratch folders sit in the main checkout even when the project is a linked worktree (PROJ-006).
@@ -197,4 +197,38 @@ pub fn remove_root(store: &Store, path: &str) -> Result<(), String> {
         }
     }
     save(store, &v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn card13_visibility_choices_that_could_not_be_kept_aside_are_never_saved_over() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-vis-c13-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir).unwrap();
+        let broken = "{\"global\": {\"claude\": true";
+        store.set(KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(ensure(&store, &[]).unwrap_err().contains(KEY));
+        assert_eq!(store.get(KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13b_listing_worktrees_degrades_when_the_choices_cannot_be_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-vis-c13b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir).unwrap();
+        let broken = "{\"global\": {\"claude\": true";
+        store.set(KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let project = Project { id: "p".into(), name: "p".into(), path: dir.display().to_string(), workspaces_dir: None, base: None, display_name: None };
+        assert!(apply(&store, &project, &Map::new(), Vec::new()).unwrap().is_empty());
+        assert_eq!(store.get(KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

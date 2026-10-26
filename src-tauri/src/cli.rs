@@ -168,6 +168,8 @@ const MAIL: &[(&str, &str, &[&str])] = &[
 ];
 /// CLI-038: the orchestration changes. Each carries a request id that lasts, so a change whose
 /// answer was lost can be sent again and still take effect no more than once.
+/// Row 877: every orchestration command that saves (check too: it acks what it hands out); an unread mail refuses these before any change.
+const MAIL_WRITES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", ASK, RESET, CHECK, "orchestration.task-create", "orchestration.dispatch", ABANDON, UPDATE, TASK_RESET, STOP, RETAIN, RELEASE, "orchestration.gate-create", "orchestration.gate-resolve"];
 const CHANGES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", "orchestration.task-create", "orchestration.dispatch", WORKER_START];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// CLI-024 / CLI-025: reading, typing into and waiting on a terminal by its handle.
@@ -2570,7 +2572,14 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
     let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs_for_socket(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
     let home = |dir: &str| lists.iter().flat_map(|(_, all, _)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
     let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
-    let dispatches = load_list(&*lock()?, DISPATCHES_KEY)?;
+    // ps only reads: an unreadable dispatch list degrades to no workers (and says so), it does not fail the listing.
+    let (dispatches, dispatches_unread) = match load_list(&*lock()?, DISPATCHES_KEY) {
+        Ok(d) => (d, false),
+        Err(e) => {
+            eprintln!("kolux-rs: worktree ps: {}", e.message);
+            (Vec::new(), true)
+        }
+    };
     let mut rows = Vec::new();
     for (p, all, degraded) in &lists {
         for w in all {
@@ -2589,7 +2598,10 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
         }
     }
     let worktrees: usize = lists.iter().map(|(_, all, _)| all.len()).sum();
-    let scope = json!({ "repos": repos, "worktrees": worktrees, "shown": rows.len(), "machine": "this computer only", "hosts": hosts() });
+    let mut scope = json!({ "repos": repos, "worktrees": worktrees, "shown": rows.len(), "machine": "this computer only", "hosts": hosts() });
+    if dispatches_unread {
+        scope["workersUnread"] = json!(true);
+    }
     let truncated = limit.is_some_and(|n| rows.len() > n);
     rows.truncate(limit.unwrap_or(usize::MAX));
     let mut out = json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts(), "scope": scope });
@@ -2910,6 +2922,10 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let need = || pane.clone().ok_or_else(unbound);
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut m = Mail::load(&store);
+    // Row 877: a mail that could not be read is refused by every command that saves, before it changes anything.
+    if MAIL_WRITES.contains(&req.command.as_str()) && !(req.command == "orchestration.dispatch" && a["dryRun"] == true) {
+        m.ensure_readable()?;
+    }
     let retry = text("retryRequest").map(|r| format!("{}|{}|{r}", req.command, pane.clone().unwrap_or_default()));
     let out = match req.command.as_str() {
         "orchestration.run-create" => {
@@ -3008,8 +3024,11 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "orchestration.task-create" | "orchestration.task-list" | "orchestration.dispatch" | "orchestration.dispatch-show" | ABANDON | UPDATE | TASK_RESET | STOP | WORKER_LIST | RETAIN | RELEASE | WORKER_SHOW | WORKER_READ | "orchestration.gate-create" | "orchestration.gate-resolve" | "orchestration.gate-list" => tasks(ctx, &store, &mut m, req, pane.as_deref(), retry)?,
         other => return Err(Fail::args(format!("unknown command {other}"))),
     };
-    m.save(&store)?;
-    crate::orchestration::pointer::rebind(&m);
+    // Reads on an unread mail answer from the empty mail; there is nothing to save or rebind.
+    if !m.unread {
+        m.save(&store)?;
+        crate::orchestration::pointer::rebind(&m);
+    }
     Ok(out)
 }
 
@@ -3486,14 +3505,14 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 crate::terminal::screen_open(&request);
                 (ctx.notify)(json!({ "emit": crate::terminal::SCREEN_EVENT, "payload": { "id": id, "request": request } }));
                 if let Some(rows) = crate::terminal::screen_wait(&request) {
-                    return Ok(hidden(ctx, json!({ "terminal": handle, "screen": true, "rows": rows })));
+                    return hidden(ctx, json!({ "terminal": handle, "screen": true, "rows": rows }));
                 }
                 let r = ctx.terminals.read(id, None, limit).ok_or_else(gone)?;
                 let mut out = serde_json::to_value(r).unwrap_or_default();
                 out["terminal"] = json!(handle);
                 out["screen"] = json!(false);
                 out["warnings"] = json!([format!("the window did not supply {handle}'s screen; this is its output stream, not a screen")]);
-                return Ok(hidden(ctx, out));
+                return hidden(ctx, out);
             }
             let r = ctx.terminals.read(id, cursor, limit).ok_or_else(gone)?;
             let mut warnings = Vec::new();
@@ -3510,7 +3529,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             out["terminal"] = json!(handle);
             out["screen"] = json!(false);
             out["warnings"] = json!(warnings);
-            Ok(hidden(ctx, out))
+            hidden(ctx, out)
         }
         "terminal.send" => {
             let body = text("text");
@@ -3527,8 +3546,10 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             if let Some(key) = &retry {
                 // ORCH-055: the receipt lasts in the store, so a retry after a restart sends nothing.
+                // Card 13b: unreadable receipts refuse here, before anything is typed, so a retry never types twice.
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                if let Some(receipt) = so::Receipts::load(&store).find(key) {
+                let receipts = so::Receipts::try_load(&store).map_err(|e| Fail::new("failed", e))?;
+                if let Some(receipt) = receipts.find(key) {
                     let mut again = receipt.clone();
                     again["retried"] = json!(true);
                     return Ok(again);
@@ -3544,7 +3565,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let before = if watching { Some(crate::status::activity(id)) } else { None };
             let output_mark = |r: Option<crate::terminal::Read>| r.map(|r| (r.cursor, r.pending));
             let output_before = output_mark(ctx.terminals.read(id, None, Some(1)));
-            let write = |s: &str| ctx.terminals.write(id, s).map_err(|e| Fail::new("failed", e));
+            let write = |s: &str| type_into(ctx, id, s).map_err(|e| Fail::new("failed", e));
             let mut delivered = Vec::new();
             if interrupt {
                 write("\u{3}")?;
@@ -3603,7 +3624,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             if let Some(key) = retry {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                let mut receipts = so::Receipts::load(&store);
+                let mut receipts = so::Receipts::try_load(&store).map_err(|e| Fail::new("failed", e))?;
                 receipts.record(&key, now_ms(), out.clone());
                 receipts.save(&store).map_err(|e| Fail::new("failed", e))?;
             }
@@ -3672,6 +3693,29 @@ fn held_line(handle: &str, o: &so::Outcome) -> String {
 /// senders: waits for the input box to settle, pastes, holds Enter back for the size-scaled pause and
 /// while a large paste is taken in, and never presses it when another writer, a cancel or a
 /// permission prompt comes between the text and Enter.
+/// Every keystroke `terminal send` types goes through here; tests count the calls.
+fn type_into(ctx: &Ctx, id: u32, data: &str) -> Result<(), String> {
+    #[cfg(test)]
+    typed::bump(id);
+    ctx.terminals.write(id, data)
+}
+
+#[cfg(test)]
+mod typed {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    static COUNTS: Mutex<BTreeMap<u32, usize>> = Mutex::new(BTreeMap::new());
+
+    pub fn bump(id: u32) {
+        *COUNTS.lock().unwrap_or_else(|p| p.into_inner()).entry(id).or_default() += 1;
+    }
+
+    pub fn count(id: u32) -> usize {
+        COUNTS.lock().unwrap_or_else(|p| p.into_inner()).get(&id).copied().unwrap_or(0)
+    }
+}
+
 fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -> Result<so::Delivery, Fail> {
     let turn = so::lane(id);
     let _turn = turn.lock().unwrap_or_else(|p| p.into_inner());
@@ -3692,7 +3736,7 @@ fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -
             live: ctx.terminals.live(&handle),
         }
     };
-    so::drive(&mut send, text, agent, look, |s| ctx.terminals.write(id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
+    so::drive(&mut send, text, agent, look, |s| type_into(ctx, id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
 }
 
 // ---------------------------------------------------------------- worker start (ORCH-016)
@@ -3769,7 +3813,7 @@ pub(crate) fn worker_exited(store: &Store, terminal: u32, code: Option<u32>, now
     let worktree = d["worktree"].as_str().unwrap_or_default().to_string();
     // Only the title comes from the tasks and they are not saved here, so an unreadable list just falls back to the id.
     let tasks = load_list(store, TASKS_KEY).unwrap_or_default();
-    let title =tasks.iter().find(|t| t["id"] == task_id.as_str()).and_then(|t| t["title"].as_str()).filter(|t| !t.trim().is_empty()).unwrap_or(&task_id).to_string();
+    let title = tasks.iter().find(|t| t["id"] == task_id.as_str()).and_then(|t| t["title"].as_str()).filter(|t| !t.trim().is_empty()).unwrap_or(&task_id).to_string();
     let how = code.map(|c| format!("with exit code {c}")).unwrap_or_else(|| "without an exit code".into());
     let body = format!(
         "The worker on {task_id} ({id}, in {worktree}) ended {how} before it reported done. Retry it with `{cli} orchestration worker-stop --dispatch {id}` then `{cli} orchestration worker-start --task {task_id}`, or hand the task to someone else.",
@@ -4256,6 +4300,8 @@ fn reuse(ctx: &Ctx, req: &Request, to: &str) -> Result<Value, Fail> {
 /// second worker. A start turned away leaves no receipt; one that timed out keeps its outcome. A
 /// start left pending by an earlier run of Kolux is over (its terminals went with it): it runs fresh.
 fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    // Row 877: an unread mail cannot be saved, so refuse before a task, worktree or terminal is made.
+    crate::orchestration::Mail::load(&*ctx.store.lock().map_err(|e| e.to_string())?).ensure_readable()?;
     // ORCH-017: the same start is the same caller, folder and flags; the CLI gives every send a
     // request id of its own, so that one is left out.
     let start = || {
@@ -4370,10 +4416,13 @@ fn claim_task(tasks: &[Value], dispatches: &mut [Value], i: usize, retry_of: Opt
 /// are missing, so a cut-short archive is never taken for the whole output.
 /// ORCH-067 (T-155-b): a read of a terminal never shows a dispatch pass, echoed in a command line
 /// or sitting typed but unsubmitted in the input box; a warning says when one was hidden.
-fn hidden(ctx: &Ctx, mut out: Value) -> Value {
-    let passes = ctx.store.lock().ok().and_then(|s| load_list(&s, DISPATCHES_KEY).ok()).map(|d| crate::orchestration::passes(&d)).unwrap_or_default();
-    crate::orchestration::redact_read(&mut out, &passes);
-    out
+/// Fails closed: when the dispatches cannot be loaded the passes are unknown, so the read is refused and no output is returned.
+fn hidden(ctx: &Ctx, mut out: Value) -> Result<Value, Fail> {
+    let refused = |why: &str| Fail::new("failed", format!("can't check for secrets to hide; read refused ({why})"));
+    let store = ctx.store.lock().map_err(|_| refused("the store is busy"))?;
+    let dispatches = load_list(&store, DISPATCHES_KEY).map_err(|e| refused(&e.message))?;
+    crate::orchestration::redact_read(&mut out, &crate::orchestration::passes(&dispatches));
+    Ok(out)
 }
 
 fn archive_lines(r: crate::terminal::Read) -> Vec<String> {
@@ -5398,6 +5447,132 @@ mod tests {
             assert_eq!((load_list(&s, TASKS_KEY).unwrap().len(), load_list(&s, DISPATCHES_KEY).unwrap().len()), (1, 1), "{scope}: the lists were not cleared");
             assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "{scope}: the mail blob is byte-identical");
         }
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row877_mutating_mail_commands_on_an_unread_mail_are_refused_before_saving_anything() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row877-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let broken = "{\"runs\": [{\"id\": \"run-1\"}], \"messages\": [tru";
+        {
+            let s = store.lock().unwrap();
+            save_list(&s, TASKS_KEY, &[json!({ "id": "task-1", "status": "ready" })]).unwrap();
+            save_list(&s, DISPATCHES_KEY, &[json!({ "id": "d-1" })]).unwrap();
+            s.set("orchestration.mail", broken).unwrap();
+        }
+        let (tasks_before, dispatches_before) = {
+            let s = store.lock().unwrap();
+            (s.get(TASKS_KEY).unwrap(), s.get(DISPATCHES_KEY).unwrap())
+        };
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        for (command, args) in [
+            ("orchestration.task-create", json!({ "spec": "new work" })),
+            ("orchestration.task-update", json!({ "id": "task-1", "status": "blocked" })),
+            ("orchestration.worker-start", json!({ "spec": "x", "terminal": "term-9", "worktree": "current" })),
+            ("orchestration.run-create", json!({ "objective": "ship" })),
+            ("orchestration.dispatch", json!({ "task": "task-1", "to": "term-9" })),
+        ] {
+            let err = dispatch(&ctx, &req(command, args)).unwrap_err();
+            assert!(err.message.contains("orchestration.mail") && err.message.contains("nothing was saved over it"), "{command}: {}", err.message);
+            let s = store.lock().unwrap();
+            assert_eq!((s.get(TASKS_KEY).unwrap(), s.get(DISPATCHES_KEY).unwrap()), (tasks_before.clone(), dispatches_before.clone()), "{command}: the lists are unchanged");
+            assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "{command}: the mail blob is byte-identical");
+        }
+        // Card 13b: check acks what it hands out, so it is refused too (it used to answer "no mail").
+        let err = dispatch(&ctx, &req("orchestration.check", json!({ "ack": "delivery-1" }))).unwrap_err();
+        assert!(err.message.contains("orchestration.mail") && err.message.contains("nothing was saved over it"), "check: {}", err.message);
+        // Reads still answer from the empty mail, and change nothing.
+        for (command, args) in [("orchestration.task-list", json!({})), ("orchestration.run-list", json!({})), ("orchestration.dispatch", json!({ "task": "task-1", "dryRun": true }))] {
+            let err = dispatch(&ctx, &req(command, args)).err();
+            assert!(err.is_none_or(|e| !e.message.contains("nothing was saved over it")), "{command} must not be refused for the unread mail");
+        }
+        let s = store.lock().unwrap();
+        assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "reads left the mail blob alone");
+        drop(s);
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13b_a_send_retry_with_unreadable_receipts_types_nothing_and_a_repaired_one_types_once() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-c13b-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        terminals.fake_session(5313, &dir.display().to_string(), None);
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.send".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-5313", "text": "hello", "retryRequest": "r1" }), pane: None, cli: String::new(), arrived: None };
+        let broken = "[{\"key\": \"term-5313|r0\", \"at\": 1, \"receipt\": {";
+        store.lock().unwrap().set(so::KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let err = dispatch(&ctx, &req).unwrap_err();
+        assert_eq!(err.code, "failed");
+        assert_eq!(typed::count(5313), 0, "nothing was typed before the refusal");
+        assert_eq!(store.lock().unwrap().get(so::KEY).unwrap().as_deref(), Some(broken), "the receipts blob is byte-identical");
+        // Repaired: the same retry types once, then answers from its receipt without typing again.
+        store.lock().unwrap().set(so::KEY, "[]").unwrap();
+        dispatch(&ctx, &req).unwrap();
+        let typed_once = typed::count(5313);
+        assert!(typed_once >= 1);
+        let again = dispatch(&ctx, &req).unwrap();
+        assert_eq!(again["retried"], true);
+        assert_eq!(typed::count(5313), typed_once, "a retry of a recorded send types nothing");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hidden_fails_closed_when_the_dispatch_passes_cannot_be_loaded() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-hidden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        terminals.fake_session(41, &dir.display().to_string(), None);
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.read".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-41" }), pane: None, cli: String::new(), arrived: None };
+        // Readable dispatches: the read answers.
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[json!({ "id": "d-1", "pass": "pass-SECRET-123" })]).unwrap();
+        assert!(dispatch(&ctx, &req).is_ok());
+        // A list that cannot be read or kept aside: the passes are unknown, so the read is refused (no output).
+        let broken = "[{\"id\": \"d-1\", \"pass\": \"pass-SECRET-123\"}, tru";
+        store.lock().unwrap().set(DISPATCHES_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let err = dispatch(&ctx, &req).unwrap_err();
+        assert!(err.message.contains("can't check for secrets to hide; read refused") && err.message.contains(DISPATCHES_KEY), "{}", err.message);
+        assert!(!err.message.contains("pass-SECRET-123") && !err.data.to_string().contains("pass-SECRET-123"), "the error never carries a pass");
+        assert_eq!(store.lock().unwrap().get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_ps_still_answers_when_the_dispatch_list_cannot_be_read() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-ps-unread-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "worktree.ps".into(), cwd: dir.display().to_string(), args: json!({}), pane: None, cli: String::new(), arrived: None };
+        let broken = "[{\"id\": \"dispatch-3\"}, ";
+        store.lock().unwrap().set(DISPATCHES_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let out = dispatch(&ctx, &req).unwrap();
+        assert_eq!(out["scope"]["workersUnread"], true);
+        assert_eq!(store.lock().unwrap().get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken), "ps changed nothing");
         drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
