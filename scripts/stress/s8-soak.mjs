@@ -123,6 +123,13 @@ export async function run({ launch, checks, opts }) {
   const due = (key, atS) => !done.has(key) && (Date.now() - t0) / 1000 >= atS && (done.add(key), true);
   const patchTheme = (k) => app.invoke("settings_patch", { set: { theme: k % 2 ? "dark" : "classic" }, remove: [] });
 
+  const closeEditorTab = async () => {
+    await app.click('button[title^="Close tab"]');
+    await app.sleep(600);
+    await app.evalJs(`(() => { const d = document.querySelector('[role="alertdialog"] .btn-row'); if (d) [...d.querySelectorAll("button")].find((x) => /danger|primary/.test(x.className))?.click(); return "x"; })()`).catch(() => {});
+    return {};
+  };
+
   async function sample() {
     const t = Math.round((Date.now() - t0) / 1000);
     const p0 = Date.now();
@@ -180,12 +187,7 @@ export async function run({ launch, checks, opts }) {
       }
       if (due(`setting-${k}`, base + EVENT_S * 0.4)) await ev("change a setting (theme)", () => patchTheme(k));
       if (due(`editor-close-${k}`, base + EVENT_S * 0.55) && editorOpen) {
-        await ev("close the editor tab", async () => {
-          await app.click('button[title^="Close tab"]');
-          await app.sleep(600);
-          await app.evalJs(`(() => { const d = document.querySelector('[role="alertdialog"] .btn-row'); if (d) [...d.querySelectorAll("button")].find((x) => /danger|primary/.test(x.className))?.click(); return "x"; })()`).catch(() => {});
-          return {};
-        });
+        await ev("close the editor tab", closeEditorTab);
         editorOpen = false;
       }
       if (due(`pane-close-${k}`, base + EVENT_S * 0.7) && extraOpen) {
@@ -200,6 +202,11 @@ export async function run({ launch, checks, opts }) {
   // ---- wind down: pane output still flowing, then close everything and look for leftovers ----
   const live = [];
   for (let k = 0; k < PANES; k++) live.push(/soak \d+ line \d+/.test(String(unwrap(await paneText(app, k).catch(() => "")) ?? "")));
+  // An open editor tab sits in the 7th pane's tab group and hides that shell behind it (App.tsx openFile + terminal pane hidden={p.key !== active}): close the tab first so the shell is shown.
+  const hiddenAtEnd = unwrap(await app.evalJs(`[...document.querySelectorAll(${JSON.stringify(TERM)})].filter((e) => e.offsetParent === null).length`).catch(() => -1));
+  if (editorOpen) await closeEditorTab().catch(() => {});
+  await app.sleep(800);
+  checks.note(`wind-down start: editor tab open ${editorOpen}, 7th pane open ${extraOpen}, panes hidden before the editor tab was closed ${hiddenAtEnd}, shown after ${await app.shown(TERM)}`);
   const closeLog = [];
   for (let n = 0; n < 12 && (await app.shown(TERM)) > 0; n++) {
     const r = unwrap(await app.evalJs(closeExtra(true)).catch((e) => ({ error: e.message })));
