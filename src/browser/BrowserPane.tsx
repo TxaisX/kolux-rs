@@ -6,7 +6,8 @@
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop, Target } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
@@ -28,6 +29,7 @@ import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
 import { CHROME_STEPS, type CookieReport, cookieReportText, type CookieSource, dismissHint, GOOGLE_NOTE, hintDismissed, importHintText, IMPORT_SOURCES, pickerFor } from "./cookies";
 import { chipCommit } from "./preview";
+import { documentPathOf, dropVerdict, openSource, openWithSystemApp, overPane, previewAddress } from "./previewActions";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
 import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
@@ -360,7 +362,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       startBridge();
       if (!alive) return;
       try {
-        const first = url ? resolveAddress(url) : null;
+        // T-241 (BROW-039): a tab the app opens on a document's path previews it (the loopback address is never shown).
+        const doc = documentPathOf(url);
+        const shownDoc = doc ? await previewAddress(doc, invoke) : null;
+        if (shownDoc && "error" in shownDoc) setNote(shownDoc.error);
+        const first = shownDoc && "url" in shownDoc ? { url: shownDoc.url } : url && !doc ? resolveAddress(url) : null;
         // A tab opened behind (its section hidden, so no size) starts off screen: its page may not
         // open tabs or send chords until it is shown (council FIX-2).
         const body = host.current!;
@@ -553,6 +559,37 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     feed({ t: "navigate" }); // a new address gets its own recovery allowance (BROW-009)
     invoke("browser_navigate", { id, url }).catch((err) => setNote(String(err)));
   };
+  // BROW-039: the chip's other actions; the front end says why when one cannot run.
+  const sayIf = (p: Promise<string | null>) => void p.then((m) => m && setNote(m));
+  // BROW-039: an HTML document dropped on this tab becomes its preview. The webview's drag events carry
+  // physical pixels; the hit test needs the pointer inside this pane's box and on nothing laid over it.
+  const dropped = useRef<(paths: string[]) => void>(() => {});
+  dropped.current = (paths) => {
+    const v = dropVerdict(paths);
+    if (v.kind === "say") return setNote(v.text);
+    void previewAddress(v.path, invoke).then((r) => ("url" in r ? navigateTo(r.url) : setNote(r.error)));
+  };
+  useEffect(() => {
+    if (hidden) return;
+    let live = true;
+    let stop: UnlistenFn | undefined;
+    getCurrentWebview()
+      .onDragDropEvent(({ payload: p }) => {
+        if (p.type !== "drop") return;
+        const el = host.current?.closest(".pane");
+        if (!el) return;
+        const scale = window.devicePixelRatio || 1;
+        const x = p.position.x / scale;
+        const y = p.position.y / scale;
+        const under = document.elementFromPoint(x, y);
+        if (overPane(x, y, el.getBoundingClientRect()) && under !== null && el.contains(under)) dropped.current(p.paths);
+      })
+      .then((u) => (live ? (stop = u) : u()), () => {});
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, [hidden]);
   // T-319-b (BROW-041): Enter in the chip: a web address turns this tab into that page (Back returns
   // to the preview, Forward goes to the page again); another document swaps the preview; the same
   // document does nothing. Escape or leaving the field puts the chip back unchanged.
@@ -745,6 +782,12 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
               <b>{preview.file}</b>
               <button type="button" className="ib preview-copy" title="Copy the file's path" aria-label="Copy path" onClick={() => void navigator.clipboard?.writeText(preview.path).catch(() => {})}>
                 copy
+              </button>
+              <button type="button" className="ib preview-copy" title="Open the file in an editor tab" aria-label="Open source in the editor" onClick={() => sayIf(openSource(preview.path, cwd, emit))}>
+                source
+              </button>
+              <button type="button" className="ib preview-copy" title="Open the file in the system's default app" aria-label="Open with the system app" onClick={() => sayIf(openWithSystemApp(preview.path, invoke))}>
+                open
               </button>
               {!preview.granted && (
                 // T-159 (BROW-040): until allowed, the preview reads only its own document.
