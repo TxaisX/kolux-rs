@@ -1073,3 +1073,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-25 · fix-other T-324-b APP-014 · spec/19 APP-014 as given; public docs learn.microsoft.com/microsoft-edge/webview2/reference/win32/icorewebview2contextmenuitem (spell-check item name, label); this tree's own PaneMenu and keys code
 > 2026-10-26 · prove T-025-d · claude --help text for --settings and --permission-mode as given; this tree's own agent_hooks, hooks.rs and terminal code; no outside source
 > 2026-10-26 · prove T-058-b · this tree's own protected.rs (rule discard, reason text) and hooks.rs PreToolUse ask; claude --help text for --permission-mode as given; no outside source
+> 2026-10-26 · prove T-032-c · this tree's own PlanSheet, TerminalPane and hooks code; claude --help text for --permission-mode as given; no outside source
