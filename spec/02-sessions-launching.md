@@ -115,8 +115,8 @@ Rules: switching a seat's agent resets its model to that agent's own list; the S
   replaced; a seat may be a plain terminal instead of an AI, and then it has no model step; the
   verification on record predates this blank-seat rule, so the rebuild verifies it afresh.
 Acceptance:
-  - [ ] Open the launch screen with 3 seats → all are blank and launch is disabled.
-  - [ ] Finish seat 1, click Same for all → seats 2 and 3 copy it and launch becomes enabled.
+  - [x] Open the launch screen with 3 seats → all are blank and launch is disabled. (cards; evidence/cards-SESS-015.txt)
+  - [x] Finish seat 1, click Same for all → seats 2 and 3 copy it and launch becomes enabled. (cards; evidence/cards-SESS-015.txt)
 Compat: —
 Source: D-02-015
 
