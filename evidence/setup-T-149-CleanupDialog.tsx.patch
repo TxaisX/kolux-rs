@@ -1,8 +1,8 @@
 diff --git a/src/projects/CleanupDialog.tsx b/src/projects/CleanupDialog.tsx
-index c164ecd0..47f23533 100644
+index 7e773bb8..152e21c3 100644
 --- a/src/projects/CleanupDialog.tsx
 +++ b/src/projects/CleanupDialog.tsx
-@@ -22,10 +22,10 @@ import {
+@@ -23,10 +23,10 @@ import {
    shownRows,
    tickedPaths,
    ticksAfterScan,
@@ -10,24 +10,11 @@ index c164ecd0..47f23533 100644
    type KeptItem,
    type Scan,
  } from "./cleanup";
-+import { canStart, finished, lossKinds, namedList, removeOne, runBulk, summary, unchecked, type Item, type ParentOf } from "./bulkRemove";
++import { canStart, finished, lossKinds, namedList, removeOne, runBulk, summary, unchecked, type Item } from "./bulkRemove";
  
  type Props = {
    project: { id: string; name: string };
-@@ -34,9 +34,11 @@ type Props = {
-   onRemoved: (paths: string[]) => void;
-   /** Branches left behind by removed workspaces opened on an existing branch (PROJ-073). */
-   onKept: (items: KeptItem[]) => void;
-+  /** PROJ-082: each workspace's parent by path, so a parent is removed after its children. */
-+  parentOf?: ParentOf;
- };
- 
--export default function CleanupDialog({ project, onClose, onRemoved, onKept }: Props) {
-+export default function CleanupDialog({ project, onClose, onRemoved, onKept, parentOf = {} }: Props) {
-   // The previous result shows straight away while the new scan runs.
-   const [scan, setScan] = useState<Scan | null>(() => lastScan(project.id));
-   const [ticks, setTicks] = useState<Record<string, boolean>>(() => {
-@@ -47,6 +49,10 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
+@@ -50,6 +50,10 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept, par
    const [scanning, setScanning] = useState(true);
    const [removing, setRemoving] = useState(false);
    const [said, setSaid] = useState<string[]>([]);
@@ -38,7 +25,7 @@ index c164ecd0..47f23533 100644
    // PROJ-081: filters, search and sort; sizes are read only once a size filter or sort needs them.
    const [view, setView] = useState<CleanupView>(DEFAULT_VIEW);
    const [sizes, setSizes] = useState<Sizes>({});
-@@ -88,17 +94,23 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
+@@ -91,17 +95,23 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept, par
      };
    }, [unread.join("\n")]);
    const pick = <K extends keyof CleanupView>(k: K, v: CleanupView[K]) => setView((old) => ({ ...old, [k]: v }));
@@ -53,7 +40,7 @@ index c164ecd0..47f23533 100644
 -      if (out.kept.length > 0) onKept(out.kept.map((k) => ({ ...k, projectId: project.id })));
 -      setSaid(out.left.map((l) => `${l.path}: ${l.why}`));
 +      const kept: KeptItem[] = [];
-+      const done = await runBulk(chosen, parentOf, removeOne(project.id, (k) => kept.push(...k.map((b) => ({ ...b, projectId: project.id })))), { onProgress: setProgress });
++      const done = await runBulk(chosen, parentOf ?? (() => null), removeOne(project.id, (k) => kept.push(...k.map((b) => ({ ...b, projectId: project.id })))), { onProgress: setProgress });
 +      const gone = done.filter((i) => i.state === "removed").map((i) => i.path);
 +      if (gone.length > 0) onRemoved(gone);
 +      if (kept.length > 0) onKept(kept);
@@ -66,7 +53,7 @@ index c164ecd0..47f23533 100644
      }
      await rescan();
    };
-@@ -175,8 +187,50 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
+@@ -178,8 +188,50 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept, par
            {line}
          </span>
        ))}

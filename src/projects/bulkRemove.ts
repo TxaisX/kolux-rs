@@ -4,10 +4,10 @@
 // `cleanup_remove` still decides what is safe to remove and never forces; this side calls it one
 // workspace at a time so progress can show and a slow one does not hold the rest.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { rowLabel, type Cleaned, type KeptBranch, type ScanRow } from "./cleanup";
+import { childrenFirst, rowLabel, type Cleaned, type KeptBranch, type ScanRow } from "./cleanup";
 
 /** The parent of each workspace by path (PROJ-047); a missing or null entry is a top-level one. */
-export type ParentOf = Record<string, string | null | undefined>;
+export type ParentOf = (path: string) => string | null | undefined;
 
 /** A long selection is listed by name only up to this many; the rest is a count. */
 export const LIST_MAX = 8;
@@ -47,25 +47,6 @@ export function lossKinds(rows: ScanRow[]): string[] {
   return out;
 }
 
-/** Children before parents: deepest first, ties in the order given. A loop in the records is cut. */
-export function childrenFirst(paths: string[], parentOf: ParentOf): string[] {
-  const parents = new Map<string, string | null>();
-  for (const [p, up] of Object.entries(parentOf)) parents.set(key(p), up ? key(up) : null);
-  const depth = (p: string): number => {
-    const seen = new Set<string>([key(p)]);
-    let n = 0;
-    for (let at = parents.get(key(p)) ?? null; at && !seen.has(at); at = parents.get(at) ?? null) {
-      seen.add(at);
-      n += 1;
-    }
-    return n;
-  };
-  return paths
-    .map((p, i) => ({ p, i, d: depth(p) }))
-    .sort((a, b) => b.d - a.d || a.i - b.i)
-    .map((x) => x.p);
-}
-
 export type ItemState = "waiting" | "removing" | "slow" | "removed" | "left" | "skipped";
 export type Item = { path: string; state: ItemState; why: string | null };
 /** One workspace's removal as the dialog's adapter reports it. */
@@ -94,7 +75,7 @@ export async function runBulk(paths: string[], parentOf: ParentOf, remove: Remov
   const items = new Map<string, Item>(order.map((p) => [key(p), { path: p, state: "waiting", why: null }]));
   const chosen = new Set(items.keys());
   const kidsOf = (p: string) => order.filter((c) => {
-    const up = parentOf[c] ?? Object.entries(parentOf).find(([k]) => key(k) === key(c))?.[1];
+    const up = parentOf(c);
     return up && chosen.has(key(up)) && key(up) === key(p);
   });
   const snapshot = () => order.map((p) => ({ ...items.get(key(p))! }));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Cleaned, ScanRow } from "./cleanup";
-import { canStart, childrenFirst, finished, hasCandidates, lossKinds, namedList, removeOne, runBulk, summary, unchecked, type RemoveResult } from "./bulkRemove";
+import { canStart, finished, hasCandidates, lossKinds, namedList, removeOne, runBulk, summary, unchecked, type RemoveResult } from "./bulkRemove";
 
 const row = (path: string, extra: Partial<ScanRow> = {}): ScanRow => ({
   path, branch: null, name: null, idleDays: 30, changes: 0, merged: true, unmerged: false, active: false, locked: false,
@@ -48,23 +48,11 @@ describe("PROJ-082 the question before a bulk removal", () => {
   });
 });
 
-describe("PROJ-082 the order of removal", () => {
-  it("puts children before parents, deepest first, and keeps the given order among equals", () => {
-    const parentOf = { "/w/kid": "/w/mid", "/w/mid": "/w/top", "/w/other": null };
-    expect(childrenFirst(["/w/top", "/w/other", "/w/mid", "/w/kid"], parentOf)).toEqual(["/w/kid", "/w/mid", "/w/top", "/w/other"]);
-    expect(childrenFirst(["/W/Kid\\", "/w/mid"], { "/w/kid": "/w/mid" })).toEqual(["/W/Kid\\", "/w/mid"]);
-  });
-
-  it("survives a loop in the parent records", () => {
-    expect(childrenFirst(["/w/a", "/w/b"], { "/w/a": "/w/b", "/w/b": "/w/a" })).toHaveLength(2);
-  });
-});
-
 describe("PROJ-082 the background run", () => {
   it("removes children first, reports progress, and counts everything removed", async () => {
     const order: string[] = [];
     const seen: string[] = [];
-    const items = await runBulk(["/w/top", "/w/kid"], { "/w/kid": "/w/top" }, async (p) => (order.push(p), ok), { onProgress: (i) => seen.push(summary(i)) });
+    const items = await runBulk(["/w/top", "/w/kid"], (p) => ({ "/w/kid": "/w/top" } as Record<string, string>)[p], async (p) => (order.push(p), ok), { onProgress: (i) => seen.push(summary(i)) });
     expect(order).toEqual(["/w/kid", "/w/top"]);
     expect(items.map((i) => i.state)).toEqual(["removed", "removed"]);
     expect(seen[0]).toBe("Removed 0 of 2");
@@ -74,7 +62,7 @@ describe("PROJ-082 the background run", () => {
 
   it("skips a parent whose child failed, and says so", async () => {
     const order: string[] = [];
-    const items = await runBulk(["/w/kid", "/w/top", "/w/solo"], { "/w/kid": "/w/top" }, async (p) => (order.push(p), p === "/w/kid" ? { ok: false, why: "it is locked" } : ok));
+    const items = await runBulk(["/w/kid", "/w/top", "/w/solo"], (p) => ({ "/w/kid": "/w/top" } as Record<string, string>)[p], async (p) => (order.push(p), p === "/w/kid" ? { ok: false, why: "it is locked" } : ok));
     expect(order).toEqual(["/w/kid", "/w/solo"]);
     expect(items.map((i) => [i.path, i.state])).toEqual([["/w/kid", "left"], ["/w/top", "skipped"], ["/w/solo", "removed"]]);
     expect(items.find((i) => i.path === "/w/kid")?.why).toBe("it is locked");
@@ -87,7 +75,7 @@ describe("PROJ-082 the background run", () => {
     const states: string[] = [];
     const items = await runBulk(
       ["/w/kid", "/w/top"],
-      { "/w/kid": "/w/top" },
+      (p) => ({ "/w/kid": "/w/top" } as Record<string, string>)[p],
       async (p) => {
         if (p === "/w/kid") await sleep(60);
         order.push(p);
@@ -102,7 +90,7 @@ describe("PROJ-082 the background run", () => {
 
   it("lets a slow sibling run on while the next one starts", async () => {
     const order: string[] = [];
-    await runBulk(["/w/a", "/w/b"], {}, async (p) => {
+    await runBulk(["/w/a", "/w/b"], () => null, async (p) => {
       if (p === "/w/a") await sleep(60);
       order.push(p);
       return ok;
@@ -111,7 +99,7 @@ describe("PROJ-082 the background run", () => {
   });
 
   it("leaves the parent when a slow child fails late", async () => {
-    const items = await runBulk(["/w/kid", "/w/top"], { "/w/kid": "/w/top" }, async (p) => {
+    const items = await runBulk(["/w/kid", "/w/top"], (p) => ({ "/w/kid": "/w/top" } as Record<string, string>)[p], async (p) => {
       await sleep(p === "/w/kid" ? 40 : 0);
       return p === "/w/kid" ? { ok: false, why: "late failure" } : ok;
     }, { slowMs: 10 });
@@ -119,7 +107,7 @@ describe("PROJ-082 the background run", () => {
   });
 
   it("turns a thrown removal into a left-in-place row and keeps going", async () => {
-    const items = await runBulk(["/w/a", "/w/b"], {}, async (p) => {
+    const items = await runBulk(["/w/a", "/w/b"], () => null, async (p) => {
       if (p === "/w/a") throw new Error("boom");
       return ok;
     });
