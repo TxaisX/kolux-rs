@@ -1,0 +1,4 @@
+box 1: OPEN (LIVE) — branch and folder exist and terminals of different folders stay apart are tested (create_and_remove_workspace_through_the_project ... ok; src/workspaces.test.ts switching test), but no test shows the new terminal starting in that folder (addShell/terminal_spawn wiring, no test of pty cwd)
+box 2: OPEN (LIVE) — the focus decision (front = !keepOpen && !lost && shown.current === from) is inline in ProjectsPanel.tsx create(), no pure function to test; overtake logic itself: proj020_an_overtaken_create_is_cancelled_and_its_half_made_checkout_removed ... ok, model.test.ts "a newer create overtakes..." ok
+  cargo test --manifest-path src-tauri/Cargo.toml --lib -- add_project_dedupes own_worktrees_are_managed a_picked_worktree_is_added create_and_remove_workspace_through sess037_the_advanced proj020_an_overtaken names::tests   (CLAUDE_CONFIG_DIR, CODEX_HOME, USERPROFILE, HOME on scratch under G:\Temp\cards-v3)
+  test result: ok. 12 passed; 0 failed
