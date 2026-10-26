@@ -119,7 +119,7 @@ Rules: the waiting evidence comes from a hook, the prompt text on screen, or the
 Acceptance:
   - [x] A worker reaches a permission prompt → worker-show reports the waiting field with that
       prompt and a source of hook or prompt text. (cards; evidence/cards-ORCH-020.txt)
-  - [x] A worker in the middle of a tool call → the waiting field is empty. (cards; evidence/cards-ORCH-020.txt)
+  - [ ] A worker in the middle of a tool call → the waiting field is empty.
 Compat: `kolux orchestration worker-show --dispatch <id> [--json]`.
 Source: D-08-020
 
