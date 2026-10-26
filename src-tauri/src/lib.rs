@@ -20,7 +20,7 @@ mod cli_accounts;
 mod claude_accounts;
 mod claude_key;
 mod codex_accounts;
-mod codex_usage;
+pub mod codex_usage;
 mod creatures;
 mod diag;
 mod editor_drafts;
