@@ -252,8 +252,8 @@ Rules: parts that cannot be read are dropped and the rest is kept; the workspace
   agent tab comes back at its prompt in its folder, the session itself is SESS-030; a browser tab comes
   back as a fresh tab; tabs whose folder is gone are dropped.)
 Acceptance:
-  - [ ] Corrupt one tab's saved entry → the other tabs still come back.
-  - [ ] Quit with workspace B active → B is active after reopening.
+  - [x] Corrupt one tab's saved entry → the other tabs still come back. (cards; evidence/cards-PROJ-067.txt)
+  - [x] Quit with workspace B active → B is active after reopening. (cards; evidence/cards-PROJ-067.txt)
 Compat: —
 Source: D-01-067
 
@@ -264,8 +264,8 @@ User sees: children sit indented under the parent, can be folded away, and can n
 Rules: a child whose parent is gone stays at the top level; with nesting switched off the list is
   flat; folding the children does not fold an agent summary that is open.
 Acceptance:
-  - [ ] Create a child of P → it sits under P; fold P → the child is hidden.
-  - [ ] Switch nesting off → every workspace is listed at one level.
+  - [x] Create a child of P → it sits under P; fold P → the child is hidden. (cards; evidence/cards-PROJ-047.txt)
+  - [x] Switch nesting off → every workspace is listed at one level. (cards; evidence/cards-PROJ-047.txt)
 Compat: —
 Source: D-01-047
 
