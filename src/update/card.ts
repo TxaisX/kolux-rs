@@ -236,10 +236,23 @@ export function mainAction(p: Phase): "close" | "download" | "restart" | "retryC
     case "ready":
       return "restart";
     case "error":
+      if (p.security) return "close";
       return ({ none: null, check: "retryCheck", download: "retryDownload", compat: "compat", restart: "restart" } as const)[p.retry];
     default:
       return null;
   }
+}
+
+/** The words on the card's main button. A security stop closes with "Close" (council FIX-2 AFTER 5):
+ *  "OK" there could read as agreeing to the stopped update. */
+export function actionLabel(p: Phase): string | null {
+  const action = mainAction(p);
+  if (action === "restart") return "Restart to update";
+  if (action === "download") return "Download";
+  if (action === "retryCheck" || action === "retryDownload") return "Try again";
+  if (action === "compat") return "Use compatibility mode";
+  if (action === "close") return p.kind === "error" ? "Close" : "OK";
+  return null;
 }
 
 export interface BarItem {

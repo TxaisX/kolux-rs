@@ -266,9 +266,9 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
     let mut found = found;
     if let Ok(store) = app.state::<Mutex<Store>>().lock() {
         let _ = store.set(KEY_LAST_CHECK, &now_ms().to_string());
-        // T-293 (APP-030): a version refused for its Windows signature is never offered again.
+        // T-293 (APP-030): an installer refused for its Windows signature is never offered again (known by the feed's signature).
         let refused = store.get(guard::KEY_REFUSED).ok().flatten();
-        if found.as_ref().is_some_and(|u| guard::refused_has(refused.as_deref(), &u.version)) {
+        if found.as_ref().is_some_and(|u| guard::refused_has(refused.as_deref(), None, &u.signature)) {
             found = None;
         }
     }
@@ -320,18 +320,27 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
     let (checked, version) = (bytes.clone(), update.version.clone());
     let verdict = tauri::async_runtime::spawn_blocking(move || {
         let dir = std::env::temp_dir().join("kolux-rs-update-check");
-        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::PINNED_PUBLISHER, guard::check_file)
+        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::PINNED_PUBLISHER, guard::SIGNED_BUILD || guard::PINNED_PUBLISHER.is_some(), guard::check_file)
     })
     .await
     .map_err(|e| e.to_string())?;
-    if let guard::Verdict::Stop(why) = verdict {
-        if let Ok(store) = app.state::<Mutex<Store>>().lock() {
-            let list = store.get(guard::KEY_REFUSED).ok().flatten();
-            let _ = store.set(guard::KEY_REFUSED, &guard::refused_add(list.as_deref(), &update.version));
+    let (why, remember) = match verdict {
+        guard::Verdict::Install => (None, false),
+        guard::Verdict::Stop(why) => (Some(why), true),
+        // An unclear signature answer stops this download only; the next check offers it again.
+        guard::Verdict::Retry(why) => (Some(why), false),
+    };
+    if let Some(why) = why {
+        if remember {
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                let list = store.get(guard::KEY_REFUSED).ok().flatten();
+                let entry = guard::Refused { sha256: guard::sha256_hex(&bytes), signature: update.signature.clone(), version: update.version.clone() };
+                let _ = store.set(guard::KEY_REFUSED, &guard::refused_add(list.as_deref(), entry));
+            }
         }
         *updates.pending.lock().map_err(|e| e.to_string())? = None;
         if let Ok(dir) = app.path().app_data_dir() {
-            crate::diag::write(&dir, &format!("update {} refused: {why} (APP-030)", update.version));
+            crate::diag::write(&dir, &format!("update {} {}: {why} (APP-030)", update.version, if remember { "refused" } else { "stopped once" }));
         }
         return Err(format!("{}{why}", guard::REFUSED_MARK));
     }

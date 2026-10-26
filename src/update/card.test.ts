@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barItem, cardReducer, initialCard, mainAction, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
+import { actionLabel, barItem, cardReducer, initialCard, mainAction, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
 
 const info = (version: string, notes: string[] = ["One", "Two", "Three", "Four", "Five"]): UpdateInfo => ({ version, currentVersion: "0.1.0", notes });
 const run = (s: CardState, ...actions: Action[]) => actions.reduce(cardReducer, s);
@@ -190,9 +190,17 @@ describe("status bar item (VIEW-100)", () => {
     s = run(s, { type: "downloadFailed", info: info("0.2.0"), message: "update:refused|Kolux RS refused this update: signed by Mallory.", offline: false });
     expect(s.shown && !s.collapsed).toBe(true);
     expect(s.phase).toMatchObject({ kind: "error", retry: "none", security: true, message: "Kolux RS refused this update: signed by Mallory." });
-    expect(mainAction(s.phase)).toBeNull();
+    expect(mainAction(s.phase)).toBe("close");
     expect(barItem(s.phase)).toMatchObject({ tone: "error", text: "Update refused" });
     expect(s.popup).toBeNull();
+  });
+
+  it("FIX-2 AFTER 5: the stop card closes with a Close button, not OK", () => {
+    let s = run(initialCard(null, true), { type: "downloadStart", info: info("0.2.0") });
+    s = run(s, { type: "downloadFailed", info: info("0.2.0"), message: "update:refused|Kolux RS refused this update: signed by Mallory.", offline: false });
+    expect(actionLabel(s.phase)).toBe("Close");
+    expect(actionLabel({ kind: "upToDate" })).toBe("OK");
+    expect(actionLabel(run(s, { type: "dismiss" }).phase)).toBeNull();
   });
 
   it("T-199 (APP-029): an installer that cannot start keeps the update ready with the reason and Restart again", () => {
