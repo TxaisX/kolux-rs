@@ -1,0 +1,4 @@
+cmd: pnpm exec vitest run src/browser/__cards__ src/browser/address.test.ts src/browser/history.test.ts --reporter=verbose (KOLUX_* unset)
+result: 6 files, 16 tests passed (tsc --noEmit clean)
+box 1: NOT TICKED (LIVE). Parts proven: src/browser/__cards__/BROW-001.test.ts::Mod+Shift+B is the New browser tab command on every platform — pass; ::a new browser pane is titled New Tab and hands the keyboard to its address bar once the page exists — pass. The tab-in-focused-split, selected-straight-away decision is inline in src/App.tsx newTab (no function), so the whole box needs the window.
+box 2: NOT TICKED (LIVE). No test: a page's window.close() is the engine's event; src-tauri has no handler for it (grep window.close in browser*.rs finds none).
