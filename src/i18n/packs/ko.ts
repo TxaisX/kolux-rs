@@ -20,6 +20,8 @@ const pack = {
   "glossary.cli.hover": "이 PC에 있는 AI 전용 프로그램(CLI)",
   "glossary.pty.plain": "터미널",
   "glossary.pty.hover": "터미널(PTY, 즉 의사 터미널)",
+  "inbox.bell.needs.one": "받은편지함, {count}건이 확인을 기다립니다",
+  "inbox.bell.needs.many": "받은편지함, {count}건이 확인을 기다립니다",
   "connect.claude": "연결을 누르면 브라우저에서 Claude 로그인 페이지가 한 번 열리고, 1년간 유효한 키가 저장됩니다.",
   "connect.codex": "연결을 누르면 Kolux 전용 Codex 홈에 ChatGPT 계정이 추가됩니다. 기존 Codex 폴더는 그대로 유지됩니다.",
 } satisfies Record<TextKey, string>;

@@ -49,9 +49,9 @@ Rules: an agent counts as installed only when a program that can actually run is
   Path then the user Path from the registry, expanded; on macOS and Linux the process PATH plus
   the usual install folders stand for it, DT-C10.)
 Acceptance:
-  - [ ] Install only Claude Code and Codex, open the plus menu → exactly those two agents are offered.
-  - [ ] Launch Kolux from the Start menu while an agent exists only in its default install location → that agent is still offered.
-  - [ ] Put a non-executable file named after an agent on the search path → that agent is not offered.
+  - [x] Install only Claude Code and Codex, open the plus menu → exactly those two agents are offered. (cards; evidence/cards-SESS-001.txt)
+  - [x] Launch Kolux from the Start menu while an agent exists only in its default install location → that agent is still offered. (cards; evidence/cards-SESS-001.txt)
+  - [x] Put a non-executable file named after an agent on the search path → that agent is not offered. (cards; evidence/cards-SESS-001.txt)
 Compat: every agent keeps a stable id; settings, saved shapes and per-agent shortcut ids refer to
   agents by it.
 Source: D-02-001
@@ -67,7 +67,7 @@ Rules: the menu lists only agents that are detected and switched on, the default
   default), a temporary starting row shows until it is ready.
 Acceptance:
   - [ ] Click plus, then Claude Code → a new pane appears with Claude Code running in it.
-  - [ ] Make Codex the default → Codex moves to the top of the plus menu with its shortcut shown.
+  - [x] Make Codex the default → Codex moves to the top of the plus menu with its shortcut shown. (cards; evidence/cards-SESS-004.txt)
 Compat: —
 Source: D-02-004
 
@@ -84,8 +84,8 @@ Rules: an AI cannot start until a model is picked explicitly, and the model row 
   users; the verification on record predates the empty-pick rule, so the rebuild verifies that
   rule afresh.
 Acceptance:
-  - [ ] Open a chooser pane and pick Claude Code with no model → Start is disabled; pick a model → Start becomes enabled.
-  - [ ] Pick Terminal → Start is enabled at once.
+  - [x] Open a chooser pane and pick Claude Code with no model → Start is disabled; pick a model → Start becomes enabled. (cards; evidence/cards-SESS-007.txt)
+  - [x] Pick Terminal → Start is enabled at once. (cards; evidence/cards-SESS-007.txt)
   - [ ] Leave a chooser as the grid's only pane → it has no close button.
 Compat: —
 Source: D-02-007
@@ -99,8 +99,8 @@ Rules: the older dialog offers 1 through 12 plus "More…" for any number, never
   session page offers 1, 2, 3, 4, 6 and 8 (the rebuild should settle on one set); new seats arrive
   empty and never copy another seat's agent; shrinking removes seats from the bottom.
 Acceptance:
-  - [ ] Set the count to 3 → three empty seats; set it to 2 → the third seat goes and the first two are untouched.
-  - [ ] Enter 15 in the free field → fifteen seats appear.
+  - [x] Set the count to 3 → three empty seats; set it to 2 → the third seat goes and the first two are untouched. (cards; evidence/cards-SESS-013.txt)
+  - [x] Enter 15 in the free field → fifteen seats appear. (cards; evidence/cards-SESS-013.txt)
 Compat: —
 Source: D-02-013
 
@@ -115,8 +115,8 @@ Rules: switching a seat's agent resets its model to that agent's own list; the S
   replaced; a seat may be a plain terminal instead of an AI, and then it has no model step; the
   verification on record predates this blank-seat rule, so the rebuild verifies it afresh.
 Acceptance:
-  - [ ] Open the launch screen with 3 seats → all are blank and launch is disabled.
-  - [ ] Finish seat 1, click Same for all → seats 2 and 3 copy it and launch becomes enabled.
+  - [x] Open the launch screen with 3 seats → all are blank and launch is disabled. (cards; evidence/cards-SESS-015.txt)
+  - [x] Finish seat 1, click Same for all → seats 2 and 3 copy it and launch becomes enabled. (cards; evidence/cards-SESS-015.txt)
 Compat: —
 Source: D-02-015
 
@@ -133,7 +133,7 @@ Rules: a seat's title wins over any title the agent sets later; a pane whose ses
   a toast says so; the lineup is remembered only if at least one agent seat started.
 Acceptance:
   - [ ] Launch 4 seats → 4 panes in a re-tiled grid, each tab named after its seat.
-  - [ ] Make one seat fail to start → 3 panes and no blank one.
+  - [x] Make one seat fail to start → 3 panes and no blank one. (cards; evidence/cards-SESS-024.txt)
 Compat: —
 Source: D-02-024
 
@@ -148,9 +148,9 @@ Rules: the default is one copy per seat for 2+ seats in a git project, and the s
   short explanation; plain terminal seats always open in the current folder, whichever option is
   chosen.
 Acceptance:
-  - [ ] Open the launch screen with 3 seats in a git project → separate copies is selected.
-  - [ ] Switch to the shared folder → a warning with a fix button appears; click the fix → separate copies is selected again.
-  - [ ] Open the launch screen on a folder outside git → the separate-copy option is disabled and explained.
+  - [x] Open the launch screen with 3 seats in a git project → separate copies is selected. (cards; evidence/cards-SESS-014.txt)
+  - [x] Switch to the shared folder → a warning with a fix button appears; click the fix → separate copies is selected again. (cards; evidence/cards-SESS-014.txt)
+  - [x] Open the launch screen on a folder outside git → the separate-copy option is disabled and explained. (cards; evidence/cards-SESS-014.txt)
 Compat: —
 Source: D-02-014
 
@@ -163,8 +163,8 @@ Rules: a generated name never repeats a current or retired worktree name; each s
   model, effort and options and always starts as a terminal session; the count picker is the only
   limit on how many seats launch.
 Acceptance:
-  - [ ] Launch 3 Codex seats with separate copies → 3 new worktrees with different names, one agent in each.
-  - [ ] Launch again in the same project → none of the new names repeats an earlier one.
+  - [x] Launch 3 Codex seats with separate copies → 3 new worktrees with different names, one agent in each. (cards; evidence/cards-SESS-023.txt)
+  - [x] Launch again in the same project → none of the new names repeats an earlier one. (cards; evidence/cards-SESS-023.txt)
 Compat: —
 Source: D-02-023
 
@@ -178,8 +178,8 @@ Rules: default arguments the user sets replace the built-in ones; an argument an
   accept is removed (Kilo Code); Goose receives its mode through an environment variable rather
   than a flag.
 Acceptance:
-  - [ ] Start Claude Code from the plus menu → its process runs in auto permission mode.
-  - [ ] Give Codex custom default arguments → those are used instead of the built-in ones.
+  - [x] Start Claude Code from the plus menu → its process runs in auto permission mode. (cards; evidence/cards-SESS-027.txt)
+  - [x] Give Codex custom default arguments → those are used instead of the built-in ones. (cards; evidence/cards-SESS-027.txt)
 Compat: the built-in no-prompt switches, spelled exactly as each agent's own command line
   expects them: for Claude Code, `--permission-mode` with the value auto; for Codex,
   `--sandbox` with the value workspace-write and `--ask-for-approval` with the value never (DT-C46:
@@ -202,8 +202,8 @@ Rules: the page belongs to the new look, while the older look keeps the dialog (
   such as OpenCode.
 Acceptance:
   - [ ] Open New session → a full-page sheet fills the workspace area.
-  - [ ] With one blank seat, press Ctrl+Enter → nothing starts and the footer names that seat.
-  - [ ] Press Escape → the page closes.
+  - [x] With one blank seat, press Ctrl+Enter → nothing starts and the footer names that seat. (cards; evidence/cards-SESS-018.txt)
+  - [x] Press Escape → the page closes. (cards; evidence/cards-SESS-018.txt)
 Compat: —
 Source: D-02-018
 
@@ -223,7 +223,7 @@ Rules: works for every agent that can resume, among them Claude Code, Codex, Dev
 Acceptance:
   - [ ] Run Claude Code, quit, reopen → the same conversation carries on in the same pane.
   - [ ] Kill Kolux during a session and reopen → the session resumes.
-  - [ ] On Windows, with a project path that contains spaces → resume still starts.
+  - [x] On Windows, with a project path that contains spaces → resume still starts. (cards; evidence/cards-SESS-030.txt)
 Compat: —
 Source: D-02-030
 
@@ -240,9 +240,9 @@ Rules: the four roles are builder, reviewer, scout and tester, each with its own
   itself when no task was typed;
   the whole lineup is visible for review before anything starts.
 Acceptance:
-  - [ ] Pick Swarm → five seats labelled scout, builder, builder, tester, reviewer.
-  - [ ] Pick Workbench, then change the count to 2 → the shape reads Custom.
-  - [ ] Launch Pair with a task → each session's first prompt begins with its role brief, then the task.
+  - [x] Pick Swarm → five seats labelled scout, builder, builder, tester, reviewer. (cards; evidence/cards-SESS-012.txt)
+  - [x] Pick Workbench, then change the count to 2 → the shape reads Custom. (cards; evidence/cards-SESS-012.txt)
+  - [x] Launch Pair with a task → each session's first prompt begins with its role brief, then the task. (cards; evidence/cards-SESS-012.txt)
 Compat: —
 Source: D-02-012
 
@@ -257,7 +257,7 @@ Rules: the rules block is left out wherever the prompt is shown back to the user
   exists before the first change; a single-seat launch gets no rules block.
 Acceptance:
   - [ ] Launch Pair with a task → each agent writes its handoff note before editing anything, and the prompt shown to the user contains only the task.
-  - [ ] Launch Solo with a task → the agent's opening prompt carries no rules block.
+  - [x] Launch Solo with a task → the agent's opening prompt carries no rules block. (cards; evidence/cards-SESS-025.txt)
 Compat: one handoff note per worktree, a markdown file kept in the project's hidden Kolux folder
   and named after the worktree.
 Source: D-02-025
@@ -314,14 +314,14 @@ Rules: one program name per agent decides that it is installed and also marks it
   an agent Kolux starts is the pane's own program and is credited for its whole run; an agent
   typed into a shell is credited through its hooks when it has them, else not at all; DT-C11.)
 Acceptance:
-  - [ ] Install Antigravity, Continue and Cursor only under agy, cn and cursor-agent → all three are offered; a program called plain kiro does not make Kiro count.
-  - [ ] Launch Grok with a prompt that begins with a double dash → Grok works on it as the task instead of reading it as an option.
-  - [ ] Launch GitHub Copilot with a prompt → it works the prompt and the session stays open in the pane.
-  - [ ] Launch Gemini CLI with a prompt → the prompt is submitted at start and the session stays interactive.
-  - [ ] Launch Aider with a prompt → Aider starts bare and the prompt is typed in once, after it is ready.
-  - [ ] Launch Kiro → it opens directly on its chat screen.
-  - [ ] Launch Hermes with and without a prompt → both open its full-screen interface; with a prompt, Hermes submits it exactly once.
-  - [ ] Run Kimi so its process shows as kimi-code → the pane is still credited to Kimi.
+  - [x] Install Antigravity, Continue and Cursor only under agy, cn and cursor-agent → all three are offered; a program called plain kiro does not make Kiro count. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Grok with a prompt that begins with a double dash → Grok works on it as the task instead of reading it as an option. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch GitHub Copilot with a prompt → it works the prompt and the session stays open in the pane. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Gemini CLI with a prompt → the prompt is submitted at start and the session stays interactive. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Aider with a prompt → Aider starts bare and the prompt is typed in once, after it is ready. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Kiro → it opens directly on its chat screen. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Hermes with and without a prompt → both open its full-screen interface; with a prompt, Hermes submits it exactly once. (cards; evidence/cards-SESS-051.txt)
+  - [x] Run Kimi so its process shows as kimi-code → the pane is still credited to Kimi. (cards; evidence/cards-SESS-051.txt)
 Compat: —
 Source: D-02-051
 

@@ -506,7 +506,6 @@ fn session_shutting_down() -> bool {
 
 /// Called first thing when the app exits (lib.rs): a session end is logged before the final save,
 /// which Windows may cut short, so the next start does not report the run as a crash.
-#[allow(dead_code)] // dropped when evidence/fix-other-fix-T-324-b-sessionend-lib.rs.patch lands
 pub fn note_session_end(app: &tauri::AppHandle) {
     if !session_end(cfg!(windows), session_shutting_down(), EXIT_ASKED.load(Ordering::SeqCst)) {
         return;
