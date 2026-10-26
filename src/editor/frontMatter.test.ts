@@ -83,16 +83,36 @@ describe("row 135: a rich edit rewrites only what the user changed", () => {
   });
 
   it("typing at the very end keeps the file's last line end after the new text", () => {
-    expect(keepRaw("* a\n* b\n\ntext here\n", "- a\n- b\n\ntext here!", "- a\n- b\n\ntext here")).toBe("* a\n* b\n\ntext here!\n");
+    // Round 4: the edit is checked with its neighbour block too, so `prev` is the rich view's real spelling.
+    const prev = roundTrip("* a\n* b\n\ntext here\n")!;
+    expect(keepRaw("* a\n* b\n\ntext here\n", prev.replace("text here", "text here!"), prev)).toBe("* a\n* b\n\ntext here!\n");
   });
 
   it("an edit that touches a respelt bit replaces that bit, and only that bit", () => {
-    expect(keepRaw("* a\n* b\n", "- a\n- bc", "- a\n- b")).toBe("* a\n* bc\n");
+    // Round 3: `prev` is the rich view's real spelling (it keeps `*` bullets), not a made-up "- a\n- b".
+    const items = roundTrip("* a\n* b\n")!;
+    expect(keepRaw("* a\n* b\n", items + "c", items)).toBe("* a\n* bc\n");
     // The second item made plain text: its marker goes, however the file spelt it.
-    expect(keepRaw("* a\n* b\n", "- a\nb", "- a\n- b")).toBe("* a\nb\n");
+    expect(keepRaw("* a\n* b\n", items.replace("* b", "b"), items)).toBe("* a\nb\n");
   });
 
   it("with no earlier spelling it falls back to the whole rich text, as before", () => {
     expect(keepRaw("x\n", "y", undefined)).toBe("y");
+  });
+});
+
+// Row 94 (EDIT-019): the Preview tab shows the front matter as its own block (PreviewPane renders splitFront(...).body).
+describe("preview of a note with front matter", () => {
+  it("whole-note markdown turns the front matter into a rule and a heading; the body alone does not", async () => {
+    const { marked } = await import("marked");
+    const whole = marked.parse(note, { async: false });
+    expect(whole).toContain("<hr");
+    expect(whole).toContain("<h2");
+    const { front, body } = splitFront(note);
+    const page = marked.parse(body, { async: false });
+    expect(page).not.toContain("<hr");
+    expect(page).not.toContain("<h2");
+    expect(page).toContain("<h1");
+    expect(front).toBe("---\ntitle: Plan\ntags: [a, b]\n---\n");
   });
 });

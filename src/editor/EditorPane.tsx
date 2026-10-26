@@ -50,10 +50,10 @@ import { drawn, underRoot, VIEW_LABEL, viewsFor, type View } from "./viewSwitch"
 import { createAutosave, covers, movingNow, prefsReader, type Autosave } from "./autosave";
 import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
-import { richChange, splitFront } from "./frontMatter";
+import { richBlocker, richBlockerSince, richChange, splitFront } from "./frontMatter";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, GoneNotice, UndoToast } from "./DiskBanner";
-import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
+import { isMarkdown, mountRich } from "./markdown";
 import { minimap } from "./minimap";
 import { SlashMenu, TableMenu, WikiMenu } from "./SlashPanel";
 import TableControls from "./TableControls";
@@ -522,15 +522,15 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
       setBanner(b);
       setMode("source");
     };
-    if (text.length > RICH_LIMIT && !bigOk) return fallBack({ text: `This file is ${(text.length / 1048576).toFixed(1)} MB, so it opened in source view.`, big: true });
     // EDIT-019: front matter stays out of the rich view's text and is never touched by it.
-    const why = unsupported(splitFront(text).body);
-    if (why) return fallBack({ text: `Showing source: the rich view cannot show this file because ${why}.` });
+    const blocked = richBlocker(text, bigOk);
+    if (blocked) return fallBack(blocked);
     let pushed = text;
     try {
       rich.current = mountRich(richHost.current, splitFront(text).body, (out, prev) => {
         const now = cm.state.doc.toString();
-        const change = richChange(now, out, prev);
+        // An edit that cannot be placed for sure is not written; the note shows as source so the view and the file cannot drift.
+        const change = richChange(now, out, prev, () => fallBack({ text: "Showing source: the rich view could not place your last edit in the note, so it was not applied. The file is unchanged." }));
         if (change) {
           pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
           cm.dispatch({ changes: change, userEvent: "input" });
@@ -551,7 +551,11 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
     // Text changed elsewhere (a twin pane, a reload) is shown afresh.
     const off = subscribe(path, () => {
       const now = cm.state.doc.toString();
-      if (now !== pushed) r.show(splitFront((pushed = now)).body);
+      if (now === pushed) return;
+      // Same check as the first show, on the blocks that changed since the last show (L1: not the whole note per keystroke).
+      const stop = richBlockerSince(pushed, now, bigOk);
+      if (stop) return fallBack(stop);
+      r.show(splitFront((pushed = now)).body);
     });
     return () => {
       off();

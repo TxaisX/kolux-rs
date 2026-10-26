@@ -4741,10 +4741,17 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn fix5_without_a_job_a_finished_gh_with_a_holder_asks_only_the_leftover_kill_once_and_still_answers_in_time() {
+        // Load flake fix: the holder outlives the limit by a wide margin (60 s against 8 s) and the
+        // bound on the answer sits between them, so a PC where the kills themselves take seconds
+        // (a taskkill took 6.8 s under two parallel builds) still tells "answered at the limit" from
+        // "waited for the holder". The holder is a copy of ping in the folder, found and ended below.
+        const LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-nojob-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
-        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+        fs::copy(system.join("System32").join("PING.EXE"), tools.join("ping.exe")).unwrap();
+        fs::write(tools.join("late.cmd"), "@echo off\r\n\"%~dp0ping.exe\" -n 61 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
         let gh = tools.join("gh.cmd");
         fs::write(&gh, "@echo off\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\necho octo\r\n").unwrap();
         let tree = std::sync::Mutex::new(Vec::new());
@@ -4752,24 +4759,30 @@ mod tests {
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
         let started = std::time::Instant::now();
-        let got = run_within_in(cmd, None, std::time::Duration::from_secs(3), false, &|p| tree.lock().unwrap().push(p), &|p| {
+        let got = run_within_in(cmd, None, LIMIT, false, &|p| tree.lock().unwrap().push(p), &|p| {
             leftover.lock().unwrap().push(p);
             crate::procs::kill_tree(p);
         })
         .unwrap();
+        let took = started.elapsed();
         assert_eq!(got.1.trim(), "octo");
-        assert!(started.elapsed() < std::time::Duration::from_secs(4), "took {:?}", started.elapsed());
+        assert!(took < std::time::Duration::from_secs(45), "took {took:?} against a limit of {LIMIT:?}: the call waited for the holder");
         assert!(tree.lock().unwrap().is_empty(), "the tree kill was asked for a pid gh had already given up: {:?}", tree.lock().unwrap());
         assert_eq!(leftover.lock().unwrap().len(), 1, "the leftover kill runs once for the holder");
-        // Windows cannot end the leftover without a job, so it is still running: wait (bounded) for
-        // its mark before the folder goes, instead of leaving it behind.
-        let mark = tools.join("late.txt");
-        for _ in 0..100 {
-            if mark.exists() {
+        // Windows cannot end the leftover without a job, so it is still running: end it here, and
+        // wait (bounded) until nothing from the folder is alive before the folder goes.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let alive = processes_under(&tools);
+            if alive.is_empty() || std::time::Instant::now() >= end {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            for pid in alive.iter().filter_map(|l| l.rsplit(' ').next()).filter_map(|p| p.parse::<u32>().ok()) {
+                crate::procs::kill_tree(pid);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
+        assert!(processes_under(&tools).is_empty(), "the holder was left running: {:?}", processes_under(&tools));
         let _ = fs::remove_dir_all(&tools);
     }
 

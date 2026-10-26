@@ -67,7 +67,11 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
       const t = el.getBoundingClientRect();
       const host = el.closest("[role=dialog]:not(.tour)")?.getBoundingClientRect();
       const b = host ?? { left: 8, top: 8, width: window.innerWidth - 16, height: window.innerHeight - 16 };
-      const p = place(t, { width: box.current?.offsetWidth ?? 320, height: box.current?.offsetHeight ?? 140 }, b, step.side);
+      // Panes the target is not in stay uncovered where there is room.
+      const panes = [...document.querySelectorAll(".pane")].filter((n) => !n.contains(el) && !n.closest("[role=dialog]")).map((n) => n.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0);
+      const sb = document.querySelector('aside.sidebar[aria-label="Sidebar"]')?.getBoundingClientRect();
+      const sidebar = sb && sb.width > 0 && sb.height > 0 ? { left: sb.left, top: sb.top, width: sb.width, height: sb.height } : null;
+      const p = place(t, { width: Math.min(320, window.innerWidth - 32), height: box.current?.offsetHeight ?? 140 }, b, step.side, panes, sidebar);
       const k = [t.left, t.top, t.width, t.height, p.left, p.top, p.side].map(String).join();
       if (k !== key) {
         key = k;
@@ -114,7 +118,7 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
   return (
     <>
       {tour.ring && geo && <div className="tour-ring" style={{ left: geo.t.left - 4, top: geo.t.top - 4, width: geo.t.width + 8, height: geo.t.height + 8 }} aria-hidden="true" />}
-      <div ref={box} className="tour" role="dialog" aria-modal="false" aria-label={`${tour.name} tour`} data-tour={tour.id} style={geo ? { left: geo.p.left, top: geo.p.top } : { visibility: "hidden", left: 0, top: 0 }}>
+      <div ref={box} className="tour" role="dialog" aria-modal="false" aria-label={`${tour.name} tour`} data-tour={tour.id} style={geo ? { left: geo.p.left, top: geo.p.top, ...(geo.p.width ? { width: geo.p.width } : {}) } : { visibility: "hidden", left: 0, top: 0 }}>
         {arrow && <span className={`tour-arrow ${geo!.p.side}`} style={arrow} aria-hidden="true" />}
         <h3>{w.title}</h3>
         <p>{w.body}</p>

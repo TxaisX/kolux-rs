@@ -5,7 +5,7 @@ mod activity;
 pub mod agents;
 mod app_look;
 pub mod artifacts;
-mod automations;
+pub mod automations;
 mod badge;
 mod awake;
 mod capture;
@@ -25,7 +25,7 @@ mod creatures;
 mod diag;
 mod editor_drafts;
 mod editor_search;
-mod fence;
+pub mod fence;
 mod files;
 pub mod final_save;
 mod fsops;
@@ -46,7 +46,7 @@ pub mod install;
 mod keybindings;
 mod kits;
 mod edit_menu;
-mod links;
+pub mod links;
 mod login_env;
 mod lifecycle;
 mod menu;
@@ -59,10 +59,10 @@ mod onboarding;
 pub mod orchestration;
 mod foreground;
 pub mod procs;
-mod protected;
+pub mod protected;
 #[cfg(test)]
 mod s9_fuzz_tests;
-mod protected_custom;
+pub mod protected_custom;
 mod ports;
 mod labels;
 mod tidy;
@@ -82,7 +82,7 @@ mod pr_checkout;
 pub mod pty;
 mod setup;
 pub mod routing;
-mod schedule;
+pub mod schedule;
 mod resume;
 pub mod secrets;
 mod settings_sync;
@@ -102,7 +102,7 @@ mod test_dir;
 mod tools;
 mod token_usage;
 mod tray;
-mod trust;
+pub mod trust;
 mod update;
 mod visibility;
 mod web_icon;
@@ -650,7 +650,7 @@ pub fn run() {
             setup::script_trust_grant,
             setup::setup_imports_list,
             setup::setup_import,
-            agents::agent_list,
+            agents::list_command::agent_list,
             models::agent_models,
             agents::agent_start_line,
             agents::agent_prompt_send,

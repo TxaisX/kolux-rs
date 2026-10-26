@@ -355,6 +355,19 @@ mod tests {
         assert!(wait_gone_by(&[3], Duration::from_secs(3), move |_| Some(t.elapsed() < Duration::from_millis(150))).is_empty());
     }
 
+    /// Waits for `pid` to have started a child; a loaded PC takes seconds, not 0.7 s, to run the
+    /// shell and start its program, and the close bounds below count from the close, not from here.
+    fn has_child_within_20s_of_start(pid: u32) -> bool {
+        let t = std::time::Instant::now();
+        while t.elapsed() < std::time::Duration::from_secs(20) {
+            if has_children(pid) == Some(true) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
+    }
+
     #[test]
     fn orch058_kill_tree_ends_a_shell_and_the_program_it_started() {
         use std::time::Duration;
@@ -364,8 +377,7 @@ mod tests {
             std::process::Command::new("sh").args(["-c", "sleep 60; true"]).spawn().unwrap()
         };
         let pid = child.id();
-        std::thread::sleep(Duration::from_millis(700));
-        assert_eq!(has_children(pid), Some(true), "the shell started its program");
+        assert!(has_child_within_20s_of_start(pid), "the shell started its program");
         assert_eq!(alive(pid), Some(true));
         kill_tree(pid);
         let _ = child.wait();
@@ -381,6 +393,20 @@ mod tests {
     fn listed(pid: u32) -> bool {
         let out = std::process::Command::new("tasklist").args(["/NH", "/FI", &format!("PID eq {pid}")]).output().expect("tasklist runs");
         String::from_utf8_lossy(&out.stdout).lines().any(|l| l.split_whitespace().nth(1) == Some(pid.to_string().as_str()))
+    }
+
+    /// Waits for `shell` to have started its program; a loaded PC takes seconds, not 0.7 s, to run
+    /// cmd and start ping, and the 2 s close bounds below count from the close, not from here.
+    #[cfg(windows)]
+    fn has_child_within_20s(shell: u32) -> bool {
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(20) {
+            if has_children(shell) == Some(true) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
     }
 
     /// Polls `tasklist` until `pid` is gone; how long that took, or `None` after two seconds.
@@ -415,9 +441,8 @@ mod tests {
         let mut b = spawn(&job_b);
         assert_eq!(job_a.holds_pid(a.id()), Ok(true), "job A holds shell A");
         assert_eq!(job_a.holds_pid(b.id()), Ok(false), "job A does not hold shell B");
-        std::thread::sleep(Duration::from_millis(700));
-        assert_eq!(has_children(a.id()), Some(true), "shell A started its ping");
-        assert_eq!(has_children(b.id()), Some(true), "shell B started its ping");
+        assert!(has_child_within_20s(a.id()), "shell A started its ping");
+        assert!(has_child_within_20s(b.id()), "shell B started its ping");
         assert!(listed(a.id()) && listed(b.id()), "tasklist lists both shells before the close");
 
         // A ping that escaped the job would run on for 30 s with the dead shell as its parent;
