@@ -536,4 +536,30 @@ describe("round 9", () => {
       expect(edit(b + P, "Tail", "TailX").refused).toBe(0);
     });
   });
+
+  describe("HIGH-2: a sub-list of another marker is not a sibling above", () => {
+    const outerLoose = (t: string) => (marked.lexer(t)[0] as unknown as { loose: boolean }).loose;
+    it.each(["* x", "+ x", "1. x"])("deleting n1 under a %s sibling list keeps the outer list tight", (x) => {
+      const b = `- a\n  ${x}\n  - n1\n\n  - n2\n- b\n`;
+      expect(outerLoose(b)).toBe(false);
+      const { next, refused } = edit(b + P, "    - n1\n", "");
+      if (!refused) expect(outerLoose(next)).toBe(false);
+      expect(refused).toBe(0);
+      expect(next).toBe(`- a\n  ${x}\n  - n2\n- b\n` + P);
+    });
+  });
+
+  describe("LOW-2: the edited line of a CRLF note keeps its CR", () => {
+    const crlf = (t: string) => t.replace(/\n/g, "\r\n");
+    it("Tab on item 2 of a loose 1) list", () => {
+      const { next, refused } = edit(crlf("1) one\n\n2) two\n\n3) three\n" + P), "\n2) two\n", "\n    2) two\n");
+      expect(refused).toBe(0);
+      expect(next).toBe(crlf("1) one\n\n    2) two\n\n3) three\n" + P));
+    });
+    it("Tab on item 2 of a loose 1. list", () => {
+      const { next, refused } = edit(crlf("1. one\n\n2. two\n\n3. three\n\n4. four\n" + P), "\n2. two\n", "\n    2. two\n");
+      expect(refused).toBe(0);
+      expect(next).not.toMatch(/(?<!\r)\n/);
+    });
+  });
 });

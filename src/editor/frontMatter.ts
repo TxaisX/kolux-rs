@@ -30,8 +30,11 @@ export function richChange(now: string, out: string, prev?: string, refused?: ()
   if (placed === null) return refused?.(), null;
   // The rich view drops the body's last line end; keep it.
   const next = body.endsWith("\n") && !placed.endsWith("\n") ? placed + "\n" : placed;
-  const c = changeBetween(body, next);
-  if (!c) return null;
+  const c0 = changeBetween(body, next);
+  if (!c0) return null;
+  // Round 9 (LOW-2): a span that ends between a CR and its LF (the LF is kept) in a note of CRLF line ends gives the CR back.
+  const split = c0.to > c0.from && body[c0.to] === "\n" && body[c0.to - 1] === "\r" && !c0.insert.endsWith("\r") && !/(^|[^\r])\n/.test(now);
+  const c = split ? { ...c0, insert: c0.insert + "\r" } : c0;
   const crlf = inFileEnds(now, body[c.from - 1], c.insert);
   // Code lines keep their CR in the view, so the CRLF spelling is used only where the view reads it as it read the added lines.
   const insert = crlf !== c.insert && same(body.slice(0, c.from) + crlf + body.slice(c.to), next) ? crlf : c.insert;
@@ -365,7 +368,9 @@ function noSiblingAbove(text: string, at: number): boolean {
     if (/^[ \t]*\r?\n?$/.test(line)) continue;
     const above = width(/^[ \t]*/.exec(line)![0]);
     if (above < w) return true;
-    if (above === w && ITEM.test(line)) return false;
+    const sibling = above === w ? ITEM.exec(line) : null;
+    // Round 9 (HIGH-2): an item of another marker (`*` then `-`, `1.` then `-`) starts a list of its own, so it is no sibling.
+    if (sibling) return !m || kind(sibling) !== kind(m);
   }
   return false;
 }

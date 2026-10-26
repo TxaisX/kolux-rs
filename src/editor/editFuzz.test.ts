@@ -71,6 +71,11 @@ const KINDS = [
   (i: number) => `- a ${i}\n  - n1\nlazy\n\n  - n2\n- b`,
   (i: number) => `- a ${i}\n  - n1\n  - n2\nlazy\n\n  - n3\n- b`,
   (i: number) => `- a ${i}\n    - n1\n  lazy\n\n    - n2\n- b`,
+  // Round 9: sibling sub-lists of different markers (the view merges them into one list).
+  (i: number) => `- a ${i}\n  * x\n  - n1\n\n  - n2\n- b`,
+  (i: number) => `- a ${i}\n  + x\n  - n1\n\n  - n2\n- b`,
+  (i: number) => `- a ${i}\n  1. x\n  - n1\n\n  - n2\n- b`,
+  (i: number) => `1. a ${i}\n   - x\n   * y\n\n   * z\n2. b`,
 ];
 
 const PUNCT = [" ", ".", ",", "*", "_", "-", "=", "#", ">", "`", "|", "\n", "\n\n", "1. ", "- ", " word ", "Q", "[", "]", "\\"];
@@ -292,9 +297,12 @@ function structureProblem(body: string, saved: string, prev: string, out: string
   for (let i = 1; i <= ls; i++) lpairs.push([was.lists.length - i, now.lists.length - i]);
   for (const [a, b] of lpairs) {
     const vi = a < lp ? a : a + viewOut.lists.length - view.lists.length;
-    const v = view.lists[a];
-    const vo = viewOut.lists[vi];
-    if (view.lists.length !== was.lists.length || !v || !vo || v.loose !== vo.loose) continue;
+    // Round 9: where the view merges lists the file keeps apart (`*` then `-`), its lists cannot be matched by position: they are matched by key.
+    const merged = view.lists.length !== was.lists.length;
+    const key = was.lists[a].key;
+    const v = merged ? view.lists.find((l) => l.key === key) : view.lists[a];
+    const vo = merged ? viewOut.lists.find((l) => l.key === key) : viewOut.lists[vi];
+    if (!v || !vo || v.loose !== vo.loose) continue;
     // The view spells a list loose where the file has it tight (a `1)` list): its own spelling binds nothing.
     if (v.loose && !was.lists[a].loose) continue;
     // A list that lost, gained or changed items can lose or gain its looseness with them (the gap was theirs): only an unchanged item run binds.
@@ -386,6 +394,13 @@ describe("oracle: list state and respelt items", () => {
     const body = "- _one_\n\n- _two_\n\n- _three_\n\n- _four_\n" + P;
     const { prev, out } = viewEdit(body, "one", "oneX");
     expect(structureProblem(body, "- *oneX*\n\n- *two*\n\n- *three*\n- *four*\n" + P, prev, out)).toMatch(/blank line above item 3/);
+    expect(structureProblem(body, saveOf(body, prev, out), prev, out)).toBeNull();
+  });
+  // Round 9: the view merges `* x` and `- n1` into one list, so the lists could not be matched to the file's and the check was skipped.
+  it.each(["* x", "+ x", "1. x"])("flags the round 8 bytes of HIGH-2 (%s sibling list: the outer list turned loose) and passes what is saved now", (x) => {
+    const body = `- a\n  ${x}\n  - n1\n\n  - n2\n- b\n` + P;
+    const { prev, out } = viewEdit(body, "    - n1\n", "");
+    expect(structureProblem(body, `- a\n  ${x}\n\n  - n2\n- b\n\n\nTail para here.\n`, prev, out)).toMatch(/was tight, the save made it loose/);
     expect(structureProblem(body, saveOf(body, prev, out), prev, out)).toBeNull();
   });
 });
