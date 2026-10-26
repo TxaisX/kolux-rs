@@ -9,6 +9,7 @@ import { inbandTurn } from "../status/inbandSession";
 import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
 import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import { contextText, sessionMenuActions, type Launch } from "./sessionFork";
+import { bellGate } from "./bellNote";
 import LinkActionMenu from "./LinkActionMenu";
 import { copyTextOf, destinationOf, doorOfItem, linkMenuItems, openFailed, opensMenu, planClick, type Door, type LinkItemId } from "./linkMenu";
 import type { Chip } from "../board/chip";
@@ -689,7 +690,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     term.onData((data) => {
       write(yenToBackslash(currentInput(), data)); // SET-025: a Japanese keyboard's Yen key types a backslash when asked
     });
-    term.onBell(() => bell.current?.());
+    const bellOnce = bellGate(); // T-125-b: one note per burst of bells
+    term.onBell(() => {
+      if (bellOnce()) bell.current?.();
+    });
     // TERM-082 / VIEW-109 (T-306): the enhanced keyboard protocol a program asks for (CSI > / < / = / ? u), per screen;
     // a terminal reset (ESC c) or the program ending turns it off again.
     const kitty = new KittyKeyboard();

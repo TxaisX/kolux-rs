@@ -1064,3 +1064,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · marks T-335-b (Cursor mark; name-only calls) · Cursor public brand page https://cursor.com/brand and its brand zip (CUBE_2D_LIGHT.svg, CUBE_2D_DARK.svg, unchanged; source, date, terms and SHA-256 in src/assets/vendors/NOTICE.md); brand pages of Zed, JetBrains, Kimi, Qwen, MiniMax, Cognition and Warp read for kit links, none gave an icon file; no other outside source
 > 2026-10-20 · onboarding T-321-c · spec/16 ONB-024 as given in the brief; this tree's own claude_accounts, codex_accounts, skills installer and InlineTerminal; no outside source
 > 2026-10-20 · worktrees T-110-b close · COMPAT 5.5 as given; this tree's own setup.rs and the lane's T-110-b code; no outside source
+> 2026-10-25 · fix-ui T-103-b, T-101-b · spec/05 VIEW-036 and spec/03 TERM-002, TERM-009 as given; this tree's own keys, launch and shell code; no outside source

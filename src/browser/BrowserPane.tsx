@@ -21,6 +21,7 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
+import { namesPane, type ProfileEvent, reopenPage } from "./reopen";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
@@ -183,6 +184,16 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   // waits a moment so a quick retry does not flicker.
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  // BROW-009 / T-241: close the page and open it again at the pane's spot and colour, for a page
+  // that cannot reload and for a tab whose profile changed (`profile` names the new one).
+  const reopen = (to: string, profile?: string) => {
+    const body = host.current;
+    if (!body) return setBusy(false);
+    reopenPage(invoke, id, { url: to || BLANK, spot: spot(body), background: backgroundBehind(body), shown: body.clientWidth > 0 && body.clientHeight > 0, profile }).catch((err) => {
+      setBusy(false);
+      setNote(String(err));
+    });
+  };
   const feed = (e: LoadEvent) => {
     const [h, action] = step(health.current, e);
     health.current = h;
@@ -194,6 +205,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       setCert(null);
     }
     if (action === "reload") invoke("browser_go", { id, what: "reload" }).catch(() => {});
+    if (action === "rebuild") reopen(h.url);
     if (action === "overlay") {
       setBusy(false);
       const at = h.url;
@@ -337,6 +349,12 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           if (e.payload.page !== id) return;
           if (e.payload.action === "switch") focusMe.current?.();
           if (e.payload.action === "close") closeMe.current?.();
+        }),
+      );
+      // T-241 (BROW-045): a profile change (or a deleted profile) names this pane; its page opens again in the new profile.
+      unlisteners.push(
+        await listen<ProfileEvent>("browser-profile", (e) => {
+          if (namesPane(e.payload, id)) reopen(at.current, e.payload.profile);
         }),
       );
       startBridge();

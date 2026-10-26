@@ -8,6 +8,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+// T-066-d: the session id an id-only agent prints (its own resume hint), told to the window when its pane's program exits.
+#[path = "terminal_session_id.rs"]
+pub mod session_id;
+
 pub const OUTPUT_EVENT: &str = "terminal-output";
 pub const EXIT_EVENT: &str = "terminal-exit";
 /// CLI-024: the app asks the window for a pane's visible frame; the window answers with
@@ -86,12 +90,17 @@ struct Inner {
     panes: HashMap<u32, u32>,
     /// ORCH-057: each session's output count and raw tail, for a viewer's resync.
     snaps: HashMap<u32, Snap>,
+    /// Row 211: which process each session id holds now; a new number every time an id starts (a reused id too).
+    process_gen: HashMap<u32, u64>,
+    process_count: u64,
 }
 
 impl Inner {
     /// ORCH-059: a session id about to be (re)used starts as a new incarnation: nothing an earlier
     /// session under the same handle left behind (log, screen bits, end flag, marks, snapshot) carries over.
     fn fresh_incarnation(&mut self, id: u32) {
+        self.process_count += 1;
+        self.process_gen.insert(id, self.process_count);
         self.dirs.remove(&id);
         self.marks.remove(&id);
         self.keys.remove(&id);
@@ -789,6 +798,9 @@ struct ExitPayload {
     /// ORCH-057: "exited" when the end was confirmed with an exit code, "unverifiable" when Kolux could
     /// not learn how the program ended (viewers say so instead of calling it an exit).
     outcome: &'static str,
+    /// T-066-d: the session id the agent printed in its own resume hint before it exited, when it printed one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
 }
 
 /// Terminal `id` ended, however: it exited, its pane closed, or (USAGE-011, T-067-b) the
@@ -1038,9 +1050,11 @@ impl Terminals {
                 // still listed ended by itself: Kolux's own kills take it off the list first.
                 let mut by_itself = false;
                 let mut tail = None;
+                let mut session = None;
                 if let Ok(mut inner) = registry.lock() {
                     // AUTO-014: keep the end of a followed run's output before the log goes.
                     tail = inner.logs.get(&id).map(|l| crate::automations::screen_text(&l.read(None, Some(crate::automations::RUN_OUTPUT_LINES))));
+                    session = inner.marks.get(&id).and_then(|m| m.agent).zip(tail.as_ref()).and_then(|(agent, (text, _))| session_id::hint_session(agent, text));
                     by_itself = inner.sessions.remove(&id).is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
@@ -1076,7 +1090,7 @@ impl Terminals {
                 if let Some(d) = &exit_dir {
                     crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
                 }
-                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code) });
+                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code), session });
             }),
         )
     }
@@ -1372,6 +1386,11 @@ impl Terminals {
         (inner.sessions.contains_key(&id) && !inner.ended.contains(&id)).then_some(id)
     }
 
+    /// Row 211: the process generation of session `id` (changes on every spawn, respawn or adoption of that id), None for an unknown id.
+    pub fn process_generation(&self, id: u32) -> Option<u64> {
+        self.inner.lock().ok()?.process_gen.get(&id).copied()
+    }
+
     /// Is `handle` an open terminal?
     pub fn live(&self, handle: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };
@@ -1560,8 +1579,15 @@ impl Terminals {
     }
 }
 
-/// What `terminal_spawn` answers: the session id and, for a Codex pane, the managed account it
-/// runs on (ACCT-023: the pane remembers it; none for Codex's own sign-in).
+/// T-548-b: the managed account a new pane runs under: the Codex account when there is one, else the
+/// active Claude account when the pane got that account's folder (not on the 1-year key, not on Claude's
+/// own sign-in). `claude_active` is read only for a managed Claude pane.
+pub(crate) fn spawn_account(codex: Option<String>, claude_managed: bool, claude_active: impl FnOnce() -> Option<String>) -> Option<String> {
+    codex.or_else(|| if claude_managed { claude_active() } else { None })
+}
+
+/// What `terminal_spawn` answers: the session id and, for a Codex or Claude pane, the managed account it
+/// runs on (ACCT-023: the pane remembers it; none for the agent's own sign-in).
 #[derive(serde::Serialize)]
 pub struct Spawned {
     pub id: u32,
@@ -1646,8 +1672,12 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
         let codex_home = resumed.or_else(|| crate::codex_accounts::active_home(&store));
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
-        let env: Vec<(String, String)> = crate::claude_key::pane_env(program.as_deref(), &settings, token)
-            .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
+        let by_key = crate::claude_key::pane_env(program.as_deref(), &settings, token);
+        let managed = if by_key.is_none() { crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)) } else { None };
+        // T-548-b: a Claude pane on a managed account answers which one, the way a Codex pane does.
+        let used = spawn_account(used, managed.is_some(), || crate::claude_accounts::active(&store));
+        let env: Vec<(String, String)> = by_key
+            .or(managed)
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), codex_home))
             // ACCT-008: a Grok pane gets the saved xAI key; Grok itself prefers its own sign-in.
@@ -2058,6 +2088,23 @@ mod tests {
         assert_eq!(outcome_of(None), "unverifiable", "an end Kolux could not confirm is not called an exit");
     }
 
+    /// Row 211: every process started under a session id has its own generation, so a pass minted
+    /// for the earlier one can be told from the one running now.
+    #[test]
+    fn orch067_f_a_restarted_session_id_has_a_new_process_generation() {
+        let t = Terminals::default();
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        assert_eq!(t.process_generation(9), None, "an unknown id");
+        t.fake_session(9, &dir, Some("claude"));
+        t.fake_session(10, &dir, None);
+        let (first, other) = (t.process_generation(9).unwrap(), t.process_generation(10).unwrap());
+        assert_ne!(first, other);
+        assert_eq!(t.process_generation(9), Some(first), "stable while the process runs");
+        t.fake_session(9, &dir, Some("claude"));
+        assert_ne!(t.process_generation(9), Some(first), "the reused id is a new process");
+        assert_eq!(t.process_generation(10), Some(other), "another pane is untouched");
+    }
+
     /// ORCH-059: a closed terminal is gone from every list and lookup at once, and a session opened again
     /// under the same handle starts as a new terminal with none of the old one's state.
     #[test]
@@ -2324,6 +2371,26 @@ mod tests {
         assert_eq!(every, vec![(handle_of(7), home, Some(started))]);
         assert!(t.sessions().is_empty(), "a shell with no folder is not a worktree session");
         t.inner.lock().unwrap().sessions.remove(&7).unwrap().kill();
+    }
+
+    #[test]
+    fn t548b_a_managed_claude_pane_answers_its_account_and_other_panes_do_not() {
+        let active = || Some("acct-1".to_string());
+        assert_eq!(spawn_account(None, true, active).as_deref(), Some("acct-1"), "a Claude pane on the managed account");
+        assert_eq!(spawn_account(None, false, active), None, "key mode, Claude's own sign-in or a shell");
+        assert_eq!(spawn_account(Some("cx-2".into()), false, active).as_deref(), Some("cx-2"), "a Codex pane keeps its own");
+        assert_eq!(spawn_account(None, true, || None), None, "no active account");
+        let mut read = false;
+        assert_eq!(spawn_account(Some("cx-2".into()), true, || { read = true; active() }).as_deref(), Some("cx-2"));
+        assert!(!read, "the Claude account is not read when Codex answered");
+    }
+
+    #[test]
+    fn t066d_the_exit_event_carries_a_printed_session_id_only_when_there_is_one() {
+        let with = ExitPayload { id: 3, code: Some(0), outcome: "exited", session: Some("run-2026.10.13-a1b2c3".into()) };
+        assert_eq!(serde_json::to_value(&with).unwrap()["session"], "run-2026.10.13-a1b2c3");
+        let without = ExitPayload { id: 3, code: None, outcome: "unverifiable", session: None };
+        assert!(serde_json::to_value(&without).unwrap().get("session").is_none(), "an old window sees the payload it always saw");
     }
 
     #[test]

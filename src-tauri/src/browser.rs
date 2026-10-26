@@ -1409,7 +1409,9 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     session::forget(id); // T-179: a closed tab does not come back after a restart
     preview::forget(id); // T-159
     popup::close_for(&app, id); // T-158 (BROW-015): a tab's popups close with it
-    view(&app, id)?.close().map_err(err)
+    let closed = view(&app, id).and_then(|v| v.close().map_err(err));
+    profiles::page_closed(id); // after-list 153: the profile's folder can go once its last page is closed
+    closed
 }
 
 /// T-074 (BROW-008, BROW-009): the probe the pane runs about four times a second while a page is
@@ -1770,7 +1772,10 @@ fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>,
     let _ = profiles::save(&root, &store);
     let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
-        Some(dir) => (b.data_directory(dir), spoof),
+        Some(dir) => {
+            profiles::page_opened(id, &p); // after-list 153: a deleted profile's folder waits for its last page
+            (b.data_directory(dir), spoof)
+        }
         None => (b, spoof),
     }
 }

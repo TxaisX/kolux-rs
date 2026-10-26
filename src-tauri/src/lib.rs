@@ -842,6 +842,7 @@ pub fn run() {
             editor_drafts::editor_drafts_get,
             editor_drafts::editor_drafts_drop,
             editor_drafts::editor_draft_rename,
+            editor_drafts::editor_flush_ack,
             editor_search::editor_search,
             editor_search::editor_search_cancel,
             skills::skills_scan,

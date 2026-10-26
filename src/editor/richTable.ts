@@ -4,7 +4,8 @@
 // an empty row removes it, and the context menu adds or removes rows and columns. The header row stays,
 // and removing the last column removes the table. Every change is one editor update, so one undo step.
 // A row that was not changed is written back with its original text (spacing and all), so a table the
-// user did not touch is never reformatted (EDIT-019).
+// user did not touch is never reformatted (EDIT-019); a row that was edited keeps the spelling of its
+// other cells (row 194).
 import {
   $createParagraphNode,
   $createTextNode,
@@ -61,6 +62,35 @@ const delimCell = (a: Align) => (a === "center" ? ":---:" : a === "right" ? "---
 /** The canonical line for a row of cell texts. */
 export const rowLine = (cells: string[]): string => `| ${cells.join(" | ")} |`;
 export const delimLine = (align: Align[]): string => `| ${align.map(delimCell).join(" | ")} |`;
+
+/** Row 194: a row whose cells changed, in the file's own spelling. `raw` is the line as the file had it
+ *  and `was` the cell texts it said then; a cell that did not change keeps its bytes, an edited cell keeps
+ *  its neighbours' padding (an aligned cell stays as wide as it was), and so do the outer pipes. Null when
+ *  the row's shape changed (or the line cannot be read back), and the canonical line is used. */
+export function respellRow(raw: string, was: string[], now: string[]): string | null {
+  const t = raw.trimEnd();
+  const lead = /^\s*\|?/.exec(t)![0];
+  const closed = t.length > lead.length && t.endsWith("|") && !t.endsWith("\\|");
+  const body = t.slice(lead.length, closed ? -1 : undefined);
+  const cells: string[] = [];
+  let cur = "";
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === "\\" && i + 1 < body.length) cur += body[i] + body[++i];
+    else if (body[i] === "|") (cells.push(cur), (cur = ""));
+    else cur += body[i];
+  }
+  cells.push(cur);
+  if (cells.length !== was.length || cells.length !== now.length || cells.some((c, i) => c.trim() !== was[i])) return null;
+  const spelt = cells.map((c, i) => {
+    if (now[i] === was[i]) return c;
+    if (!was[i]) return c ? ` ${now[i]} ` : now[i];
+    const pre = /^\s*/.exec(c)![0];
+    const post = c.slice(pre.length + was[i].length);
+    const padded = post.length > 1;
+    return pre + now[i] + (padded ? " ".repeat(Math.max(1, post.length - (now[i].length - was[i].length))) : post);
+  });
+  return lead + spelt.join("|") + (closed ? "|" : "") + raw.slice(t.length);
+}
 
 // ---- nodes ----
 
@@ -236,7 +266,7 @@ export const TABLE: MultilineElementTransformer = {
     node.getChildren().forEach((r, i) => {
       if (!$isTableRowNode(r)) return;
       const canon = rowLine(cellTexts(r));
-      lines.push(r.__raw && r.__canon === canon ? r.__raw : canon);
+      lines.push(r.__raw ? (r.__canon === canon ? r.__raw : (respellRow(r.__raw, splitRow(r.__canon), cellTexts(r)) ?? canon)) : canon);
       if (i === 0) {
         const dl = delimLine(node.getAlign());
         lines.push(node.__rawDelim && node.__canonDelim === dl ? node.__rawDelim : dl);

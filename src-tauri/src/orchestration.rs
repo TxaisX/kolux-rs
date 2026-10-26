@@ -672,12 +672,9 @@ pub fn pass_refusal(d: &Value, a: &Value) -> Option<String> {
 pub const PASS_GENERATION: &str = "passGeneration";
 
 /// Row 211 seam: how many processes terminal `terminal` has had in its pane (bumps on every
-/// spawn/respawn), or None while terminal.rs cannot say. Until evidence/fix-other-fix-211-terminal.rs.patch
-/// lands this is None, so no pass is turned away; the patch replaces the two body lines with
-/// `terminals.process_generation(terminal)`.
+/// spawn/respawn), or None for a terminal Kolux does not know.
 pub fn process_generation(terminals: &crate::terminal::Terminals, terminal: u32) -> Option<u64> {
-    let _ = (terminals, terminal);
-    None
+    terminals.process_generation(terminal)
 }
 
 /// Why dispatch `d`'s pass is dead: it was minted for an earlier process of the pane than the one
