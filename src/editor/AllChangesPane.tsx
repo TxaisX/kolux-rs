@@ -26,13 +26,14 @@ import { ChevronDown, Close, FileCode, List } from "../chrome/icons";
 import { baseName } from "./buffers";
 import { copiers, look } from "./EditorPane";
 import { allChangesContext, type LastFocus } from "./allChangesCopy";
+import { clashesOf, withClashes } from "./changeConflicts";
 import { withoutWhitespace } from "./DiffPane";
 import { watchStatus } from "../scm/watch";
 import { useSettings } from "../settings/useSettings";
 import { allChangesStart } from "../settings/editorPrefs";
-import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, canCommit, isCommitShortcut, type AcLayout, type CommitOutcome, type Status } from "../scm/model";
+import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, canCommit, clashWord, isCommitShortcut, type AcLayout, type CommitOutcome, type Status } from "../scm/model";
 
-export type Entry = { path: string; staged: boolean; code: string; lines: number | null; binary: boolean; stamp: string };
+export type Entry = { path: string; staged: boolean; code: string; lines: number | null; binary: boolean; stamp: string; /** git's two-letter code of an unresolved conflict; such a file is listed first and drawn without a diff (T-227-d). */ clash?: string };
 /** The base a branch is measured against and the snapshot commit the sides are read from. */
 export type Base = { against: string; since: string; note?: string };
 type BaseChanges = Base & { entries: Entry[] };
@@ -50,14 +51,14 @@ export const entryKey = (e: Entry) => `${e.staged ? "s" : "u"}|${e.path}`;
 /** The height a section reserves before it draws, so the scroll does not jump. */
 export const estimate = (e: Entry) => {
   const n = e.lines ?? 0;
-  if (IMAGE.test(e.path) || e.binary) return 48;
+  if (e.clash || IMAGE.test(e.path) || e.binary) return 48;
   if (n > WAIT_OVER) return 64;
   // An untracked file shows whole (plus the empty last line); a change shows some context around it.
   return Math.min(CEILING, e.code === "?" ? (n + 1) * LINE + 8 : (n + 8) * LINE);
 };
 /** The word on a section: which side of the index a working-tree change is on, or against the
  * base what became of the file. */
-export const tagOf = (e: Entry, base: boolean) => (base ? (e.code === "A" ? "Added" : e.code === "D" ? "Deleted" : e.code === "?" ? "Untracked" : "Changed") : e.code === "?" ? "Untracked" : e.staged ? "Staged" : "Unstaged");
+export const tagOf = (e: Entry, base: boolean) => (e.clash ? "Conflict" : base ? (e.code === "A" ? "Added" : e.code === "D" ? "Deleted" : e.code === "?" ? "Untracked" : "Changed") : e.code === "?" ? "Untracked" : e.staged ? "Staged" : "Unstaged");
 /** The call that reads the branch against its base; `known` is the base the last status named. */
 export const baseCall = (root: string, pinned: string | null, status: Status | null): [string, Record<string, unknown>] => ["scm_base_changes", { worktree: root, pinned, known: status?.base ?? null }];
 /** FIX-2: the status read as the tab opens is used only until the watcher's first status lands, so a late answer never replaces a newer one. */
@@ -92,11 +93,13 @@ export const sidesCall = (base: Base | null, root: string, e: Entry): [string, R
 type Props = { id: number; root: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onOpenDiff?: (path: string, staged: boolean) => void; pinnedBase?: string | null };
 
 export default function AllChangesPane({ id, root, hidden = false, focused = false, onFocus, onClose, onOpenDiff, pinnedBase = null }: Props) {
-  const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [raw, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<"tree" | "base">("tree");
   const [base, setBase] = useState<Base | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
+  // T-227-d: unresolved conflicts come first, one section each, marked and drawn without a diff.
+  const entries = useMemo(() => (raw ? withClashes(raw, clashesOf(status), root) : null), [raw, status, root]);
   const [message, setMessage] = useState("");
   const [outcome, setOutcome] = useState<{ text: string; bad: boolean } | null>(null);
   const { settings, save } = useSettings();
@@ -353,7 +356,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
                       <button className="ac-jump" onClick={() => jump(sectionId(i))} title={rel(e.path)}>
                         {baseName(e.path)}
                       </button>
-                      <span className="ac-code" title={tagOf(e, base !== null)}>{tagOf(e, base !== null)}</span>
+                      <span className={`ac-code${e.clash ? " ac-conflict" : ""}`} title={e.clash ? `Unresolved conflict: ${clashWord(e.clash)}` : tagOf(e, base !== null)}>{tagOf(e, base !== null)}</span>
                     </div>
                   </div>
                 );
@@ -388,7 +391,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
   const [pics, setPics] = useState<{ old: string | null; now: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Against the base an image has no "before" to show: it is named like a binary.
-  const kind = IMAGE.test(e.path) && !base ? "image" : e.binary || (IMAGE.test(e.path) && base) ? "binary" : "text";
+  const kind = e.clash ? "conflict" : IMAGE.test(e.path) && !base ? "image" : e.binary || (IMAGE.test(e.path) && base) ? "binary" : "text";
   const waits = kind === "text" && (e.lines ?? 0) > WAIT_OVER && !go;
 
   // Sections load as they come near the visible part of the list.
@@ -401,7 +404,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
   }, [near]);
 
   useEffect(() => {
-    if (!near || waits) return;
+    if (!near || waits || kind === "conflict") return;
     let alive = true;
     setError(null);
     if (kind === "binary") {
@@ -497,7 +500,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
         <span className="ac-name" title={e.path}>
           {name}
         </span>
-        <span className="preview-tag">{tagOf(e, base !== null)}</span>
+        <span className={`preview-tag${e.clash ? " ac-conflict" : ""}`} title={e.clash ? `Unresolved conflict: ${clashWord(e.clash)}` : undefined}>{tagOf(e, base !== null)}</span>
         {e.lines !== null && <span className="ac-lines">{e.lines} changed {e.lines === 1 ? "line" : "lines"}</span>}
         {onOpen && (
           <button className="ib" onClick={onOpen} title="Open as a diff tab, in the split chosen in Source Control" aria-label={`Open ${name} as a tab`}>
@@ -510,7 +513,9 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
           This file's diff did not load: {error}
         </div>
       )}
-      {folded ? null : waits ? (
+      {folded ? null : kind === "conflict" ? (
+        <div className="ac-wait ac-clash">Unresolved conflict ({clashWord(e.clash ?? "")}). Resolve it in the file; it is left out of the diff, as it is when a commit message is written.</div>
+      ) : waits ? (
         <div className="ac-wait">
           {e.lines} changed lines.
           <button className="btn" onClick={() => setGo(true)}>
