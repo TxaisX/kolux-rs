@@ -32,6 +32,8 @@ import { chipCommit } from "./preview";
 import { documentPathOf, dropVerdict, openSource, openWithSystemApp, overPane, previewAddress } from "./previewActions";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
+import { DrawCanvas } from "./DrawCanvas";
+import { capturePage, type Picture } from "./picture";
 import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
@@ -156,6 +158,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [draft, setDraft] = useState<Pick | null>(null);
   const [sendMenu, setSendMenu] = useState<SendTarget[] | null>(null);
   const draftBox = useRef<HTMLTextAreaElement>(null);
+  // T-241 (BROW-038): the page's picture while the drawing canvas covers the page.
+  const [drawing, setDrawing] = useState<Picture | null>(null);
   const focusMe = useRef(onFocus);
   focusMe.current = onFocus;
   const closeMe = useRef(onClose);
@@ -396,7 +400,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     const el = host.current!;
     const send = (theme = false) => {
       // T-074: while the recovery overlay shows, the page is hidden so the overlay can cover it.
-      const shown = !hidden && !overlay && el.clientWidth > 0 && el.clientHeight > 0;
+      const shown = !hidden && !overlay && !drawing && el.clientWidth > 0 && el.clientHeight > 0;
       const background = theme ? backgroundBehind(el) : undefined;
       invoke("browser_bounds", { id, spot: shown ? spot(el) : { x: 0, y: 0, w: 0, h: 0 }, shown, background }).catch(() => {});
     };
@@ -420,7 +424,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       themed.disconnect();
       window.removeEventListener("resize", resized);
     };
-  }, [id, open, hidden, overlay]);
+  }, [id, open, hidden, overlay, drawing]);
 
   // T-074: the probe, about four times a second while the page is on screen (BROW-008), paused
   // while the tab is hidden or the overlay covers the page. One probe in flight at a time.
@@ -498,6 +502,21 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     invoke("browser_annotate", { id, what: "start" })
       .then(() => setPicking(true))
       .catch((err) => setNote(String(err)));
+  };
+  // T-241 (BROW-038): Draw takes the page's picture (the page picker's outline would be in it, so picking
+  // ends first) and the canvas covers the page; Close brings the page back.
+  const startDraw = async () => {
+    if (drawing) return;
+    setNote(null);
+    try {
+      if (picking) {
+        setPicking(false);
+        await invoke("browser_annotate", { id, what: "stop" });
+      }
+      setDrawing(await capturePage(invoke, id));
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    }
   };
   // Enter keeps the note (Shift+Enter is a new line); Escape drops only this pick, picking stays on.
   const keepDraft = () => {
@@ -890,6 +909,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           <button className={`ib${picking ? " on" : ""}`} data-go="annotate" onClick={togglePicking} title={picking ? "Stop picking elements" : "Annotate: pick elements and write notes for an agent"} aria-label="Annotate" aria-pressed={picking}>
             <Target size={12} />
           </button>
+          {/* T-241 (BROW-038): draw boxes, arrows and text on a picture of the page and send it to an agent. */}
+          <button className="ib txt" data-go="draw" onClick={startDraw} disabled={!open || !!overlay || !!drawing} title="Draw on a picture of the page and send it to an agent" aria-label="Draw on the page">
+            Draw
+          </button>
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
@@ -1093,6 +1116,19 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         </div>
       )}
       <div ref={host} className="pane-body">
+        {drawing && (
+          <DrawCanvas
+            picture={drawing}
+            title={title ?? ""}
+            url={at.current}
+            targets={targets}
+            onSend={onSend}
+            onClose={(done) => {
+              setDrawing(null);
+              if (done) setNote(done);
+            }}
+          />
+        )}
         {overlay && <LoadOverlay overlay={overlay} diag={diag} handler={handler} trust={trustLabel(cert)} busy={busy} connecting={connecting} onRetry={retry} onTrust={trustCert} onHttps={switchHttps} onOpen={openExternally} />}
       </div>
     </section>

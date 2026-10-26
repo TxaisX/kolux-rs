@@ -71,6 +71,9 @@ pub mod permissions;
 // after-list 719 (T-272-b): notices held for a pane that is still being built.
 #[path = "browser_notices.rs"]
 pub mod notices;
+// T-241 (BROW-038), T-240 (BROW-035): the page's picture for drawing on and for grabbing an element.
+#[path = "browser_picture.rs"]
+pub mod picture;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
