@@ -133,7 +133,7 @@ Rules: a seat's title wins over any title the agent sets later; a pane whose ses
   a toast says so; the lineup is remembered only if at least one agent seat started.
 Acceptance:
   - [ ] Launch 4 seats → 4 panes in a re-tiled grid, each tab named after its seat.
-  - [ ] Make one seat fail to start → 3 panes and no blank one.
+  - [x] Make one seat fail to start → 3 panes and no blank one. (cards; evidence/cards-SESS-024.txt)
 Compat: —
 Source: D-02-024
 
