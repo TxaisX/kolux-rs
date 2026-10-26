@@ -582,20 +582,14 @@ pub fn active_dir(store: &Store) -> Option<String> {
     load(store).into_iter().find(|a| a.id == id).map(|a| a.config_dir).filter(|d| PathBuf::from(d).is_dir())
 }
 
-/// Tests only: the bytes of every `<key>.corrupt-<ms>[-n]` copy made in the last few seconds.
+/// Tests only: the bytes of every `<key>.corrupt-<ms>[-n]` copy in the store, read straight from
+/// its table. (It used to probe the last 10 s of millisecond names one query each, so a PC slow
+/// enough to take 10 s over the first call missed the copy on the second.)
 #[cfg(test)]
 pub(crate) fn test_asides(store: &Store, key: &str) -> Vec<String> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let mut out = Vec::new();
-    for ms in now.saturating_sub(10_000)..=now {
-        for n in 1..4 {
-            let k = if n == 1 { format!("{key}.corrupt-{ms}") } else { format!("{key}.corrupt-{ms}-{n}") };
-            if let Some(v) = store.get(&k).unwrap() {
-                out.push(v);
-            }
-        }
-    }
-    out
+    let conn = rusqlite::Connection::open(store.dir().join("state.db")).unwrap();
+    let mut q = conn.prepare("SELECT value FROM kv WHERE key LIKE ?1 ORDER BY key").unwrap();
+    q.query_map([format!("{key}.corrupt-%")], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
 }
 
 #[cfg(test)]

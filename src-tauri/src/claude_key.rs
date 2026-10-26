@@ -686,30 +686,34 @@ mod tests {
         c
     }
 
+    /// Load flake fix: every wait below is a ceiling a loaded PC cannot reach (PowerShell took over
+    /// 15 s to start under two parallel builds), never the thing the test measures. A key still ends
+    /// the run while the program has minutes left to sleep, so a run that waited for it times out.
     #[cfg(windows)]
     #[test]
     fn a_hidden_run_reads_the_key_and_one_that_hangs_times_out() {
-        let printed = ps(&format!("Write-Output 'This requires a Claude subscription'; Write-Output 'Open https://example.invalid/x'; Start-Sleep -Milliseconds 600; Write-Output '{KEY}'; Start-Sleep 20"));
+        const CEILING: Duration = Duration::from_secs(180);
+        let printed = ps(&format!("Write-Output 'This requires a Claude subscription'; Write-Output 'Open https://example.invalid/x'; Start-Sleep -Milliseconds 600; Write-Output '{KEY}'; Start-Sleep 600"));
         let seen = Arc::new(AtomicBool::new(false));
         let flag = seen.clone();
         let started = Instant::now();
-        let out = run_setup(printed, Duration::from_secs(15), Arc::new(AtomicBool::new(false)), move || flag.store(true, Ordering::SeqCst));
+        let out = run_setup(printed, CEILING, Arc::new(AtomicBool::new(false)), move || flag.store(true, Ordering::SeqCst));
         assert_eq!(out, Outcome::Key(KEY.into()));
         assert!(seen.load(Ordering::SeqCst), "the browser step was noticed");
-        assert!(started.elapsed() < Duration::from_secs(12), "a key ends the run without waiting for the program");
-        let out = run_setup(ps("Start-Sleep 30"), Duration::from_secs(2), Arc::new(AtomicBool::new(false)), || {});
+        assert!(started.elapsed() < Duration::from_secs(400), "a key ends the run without waiting for the program (it sleeps 600 s)");
+        let out = run_setup(ps("Start-Sleep 600"), Duration::from_secs(2), Arc::new(AtomicBool::new(false)), || {});
         assert_eq!(out, Outcome::TimedOut);
         let cancel = Arc::new(AtomicBool::new(true));
-        assert_eq!(run_setup(ps("Start-Sleep 30"), Duration::from_secs(10), cancel, || {}), Outcome::Cancelled);
+        assert_eq!(run_setup(ps("Start-Sleep 600"), CEILING, cancel, || {}), Outcome::Cancelled);
         // ACCT-015, on quit: every running flow is cancelled and its program stopped.
         assert_eq!(live_runs(), 0);
-        let running = std::thread::spawn(|| run_setup(ps("Start-Sleep 30"), Duration::from_secs(25), Arc::new(AtomicBool::new(false)), || {}));
+        let running = std::thread::spawn(|| run_setup(ps("Start-Sleep 600"), Duration::from_secs(400), Arc::new(AtomicBool::new(false)), || {}));
         while live_runs() == 0 {
             std::thread::sleep(Duration::from_millis(20));
         }
         let asked = Instant::now();
-        assert!(cancel_all(Duration::from_secs(5)), "the run stopped before the deadline");
-        assert!(asked.elapsed() < Duration::from_secs(3));
+        assert!(cancel_all(Duration::from_secs(120)), "the run stopped before the deadline");
+        assert!(asked.elapsed() < Duration::from_secs(100), "the stop did not wait for the program's 600 s sleep");
         assert_eq!(running.join().unwrap(), Outcome::Cancelled);
         assert!(cancel_all(Duration::from_millis(10)), "nothing left to stop");
     }
