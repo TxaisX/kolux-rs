@@ -24,6 +24,7 @@ const pack = {
   "inbox.bell.needs.many": "Bandeja de entrada, {count} te necesitan",
   "connect.claude": "Conectar abre una vez la página de inicio de sesión de Claude en tu navegador y guarda una clave que dura un año.",
   "connect.codex": "Conectar añade una cuenta de ChatGPT en un directorio de Codex propio de Kolux; tu carpeta de Codex no cambia.",
+  "onboarding.connect.wait": "Conecta una IA arriba para continuar, o usa el botón de la izquierda para hacerlo más tarde.",
 } satisfies Record<TextKey, string>;
 
 export default pack;
