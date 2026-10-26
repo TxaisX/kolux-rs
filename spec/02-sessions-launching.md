@@ -314,14 +314,14 @@ Rules: one program name per agent decides that it is installed and also marks it
   an agent Kolux starts is the pane's own program and is credited for its whole run; an agent
   typed into a shell is credited through its hooks when it has them, else not at all; DT-C11.)
 Acceptance:
-  - [ ] Install Antigravity, Continue and Cursor only under agy, cn and cursor-agent → all three are offered; a program called plain kiro does not make Kiro count.
-  - [ ] Launch Grok with a prompt that begins with a double dash → Grok works on it as the task instead of reading it as an option.
-  - [ ] Launch GitHub Copilot with a prompt → it works the prompt and the session stays open in the pane.
-  - [ ] Launch Gemini CLI with a prompt → the prompt is submitted at start and the session stays interactive.
-  - [ ] Launch Aider with a prompt → Aider starts bare and the prompt is typed in once, after it is ready.
-  - [ ] Launch Kiro → it opens directly on its chat screen.
-  - [ ] Launch Hermes with and without a prompt → both open its full-screen interface; with a prompt, Hermes submits it exactly once.
-  - [ ] Run Kimi so its process shows as kimi-code → the pane is still credited to Kimi.
+  - [x] Install Antigravity, Continue and Cursor only under agy, cn and cursor-agent → all three are offered; a program called plain kiro does not make Kiro count. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Grok with a prompt that begins with a double dash → Grok works on it as the task instead of reading it as an option. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch GitHub Copilot with a prompt → it works the prompt and the session stays open in the pane. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Gemini CLI with a prompt → the prompt is submitted at start and the session stays interactive. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Aider with a prompt → Aider starts bare and the prompt is typed in once, after it is ready. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Kiro → it opens directly on its chat screen. (cards; evidence/cards-SESS-051.txt)
+  - [x] Launch Hermes with and without a prompt → both open its full-screen interface; with a prompt, Hermes submits it exactly once. (cards; evidence/cards-SESS-051.txt)
+  - [x] Run Kimi so its process shows as kimi-code → the pane is still credited to Kimi. (cards; evidence/cards-SESS-051.txt)
 Compat: —
 Source: D-02-051
 

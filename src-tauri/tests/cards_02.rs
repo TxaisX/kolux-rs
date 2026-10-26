@@ -304,3 +304,92 @@ fn sess030_box3_resume_starts_in_a_project_folder_whose_path_contains_spaces() {
     assert!(text.to_lowercase().contains("my project folder]"), "started in the spaced folder: {text}");
     let _ = std::fs::remove_dir_all(root);
 }
+
+// ---- SESS-051: each catalogue agent's program, start line and opening-prompt route ----
+
+use kolux_rs_lib::agents::credited_agent;
+
+fn line_of(id: &str, prompt: &str) -> StartLine {
+    start_line(&serde_json::json!({}), id, &[], prompt, true).unwrap()
+}
+
+#[test]
+fn sess051_box1_agy_cn_and_cursor_agent_are_offered_and_a_program_called_plain_kiro_is_not_kiro() {
+    let (empty, home) = homes("s51b1");
+    let bin = scratch("s51b1-bin");
+    with_env(&empty, &home, || {
+        let base = catalogue();
+        let program_of = |id: &str| base.iter().find(|a| a.id == id).unwrap().program.clone();
+        assert_eq!((program_of("antigravity").as_str(), program_of("continue").as_str(), program_of("cursor").as_str()), ("agy", "cn", "cursor-agent"));
+        assert_eq!(program_of("kiro"), "kiro-cli");
+        for p in ["agy", "cn", "cursor-agent", "kiro"] {
+            put_program(&bin, p);
+        }
+        std::env::set_var("PATH", &bin);
+        let after = catalogue();
+        let on = |id: &str| after.iter().find(|a| a.id == id).unwrap().installed;
+        assert!(on("antigravity") && on("continue") && on("cursor"), "all three are offered");
+        let kiro_before = base.iter().find(|a| a.id == "kiro").unwrap().installed;
+        assert_eq!(on("kiro"), kiro_before, "a program called plain kiro does not make Kiro count");
+    });
+    for d in [empty, home, bin] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn sess051_box2_grok_takes_a_prompt_that_begins_with_a_double_dash_after_an_end_of_options_marker() {
+    assert_eq!(line_of("grok", "--fix the build").args, strs(&["--", "--fix the build"]));
+    let args = line_of("grok", "--help").args;
+    let marker = args.iter().position(|a| a == "--").unwrap();
+    assert_eq!(args.iter().position(|a| a == "--help").unwrap(), marker + 1, "the prompt follows the marker");
+}
+
+#[test]
+fn sess051_box3_copilot_gets_the_prompt_behind_its_interactive_switch_not_its_quitting_prompt_option() {
+    let l = line_of("copilot", "Tidy up");
+    assert_eq!(l.args, strs(&["-i", "Tidy up"]));
+    assert!(l.typed.is_none() && !l.args.iter().any(|a| a == "-p" || a == "--prompt"));
+}
+
+#[test]
+fn sess051_box4_gemini_gets_the_prompt_behind_prompt_interactive() {
+    let l = line_of("gemini", "Tidy up");
+    assert_eq!(l.args, strs(&["--yolo", "--prompt-interactive", "Tidy up"]));
+    assert!(l.typed.is_none() && !l.args.iter().any(|a| a == "-p" || a == "--prompt"));
+}
+
+#[test]
+fn sess051_box5_aider_starts_bare_and_the_prompt_is_handed_over_to_be_typed_once() {
+    let l = line_of("aider", "Add tests");
+    assert_eq!(l.args, strs(&["--yes-always"]), "bare program plus its standing switch, no prompt on the line");
+    assert_eq!(l.typed.as_deref(), Some("Add tests"));
+}
+
+#[test]
+fn sess051_box6_kiro_starts_on_its_chat_screen() {
+    for prompt in ["", "Hi"] {
+        assert_eq!(line_of("kiro", prompt).args, strs(&["chat", "--tui"]));
+    }
+}
+
+#[test]
+fn sess051_box7_hermes_opens_its_full_screen_interface_with_or_without_a_prompt_and_queries_once() {
+    let without = line_of("hermes", "").args;
+    assert_eq!(without, strs(&["--tui"]));
+    let with = line_of("hermes", "Explain").args;
+    assert_eq!(with, strs(&["chat", "--query", "Explain", "--tui"]));
+    for args in [&without, &with] {
+        assert_eq!(args.iter().filter(|a| a.as_str() == "--tui").count(), 1);
+    }
+    assert_eq!(with.iter().filter(|a| a.as_str() == "--query").count(), 1);
+    assert_eq!(line_of("hermes", "Explain").typed, None, "the prompt is not typed in a second time");
+}
+
+#[test]
+fn sess051_box8_a_process_shown_as_kimi_code_is_credited_to_kimi() {
+    for cmd in ["kimi-code", "kimi-code.exe", r"C:\tools\kimi-code.cmd --x", "KIMI-CODE"] {
+        assert_eq!(credited_agent(cmd), Some("kimi"), "{cmd}");
+    }
+    assert_eq!(credited_agent("kimi"), Some("kimi"));
+}
