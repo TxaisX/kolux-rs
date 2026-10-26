@@ -26,3 +26,16 @@ test("box 2: a usage limit shows when Claude can be used again and offers no fix
     for (const fix of ["Renew", "Check again", "Try installing again", "Open install page", "Try again", "Use a 1-year key instead"]) expect(h).not.toContain(`>${fix}<`);
   }
 });
+
+const nodeFs = (globalThis as unknown as { process: { getBuiltinModule(name: string): { readFileSync(p: URL, enc: string): string } } }).process.getBuiltinModule("node:fs");
+
+test("box 1: the card the back end sends for a refused key shows key expired with Renew, and no other fix", () => {
+  // evidence/cards-ACCT-013-key-expired.json is what cards_07.rs acct013_box1 compares the real claude_key status to.
+  const status = JSON.parse(nodeFs.readFileSync(new URL("../../../evidence/cards-ACCT-013-key-expired.json", import.meta.url), "utf8")) as KeyStatus;
+  expect(status.attention?.reason).toBe("key-expired");
+  expect(fixFor(status.attention, "claude-key")).toBe("Renew");
+  const h = renderToString(createElement(ClaudeCardView, { status, busy: false, onAction: () => {} }));
+  expect(h).toContain('data-reason="key-expired"');
+  expect(h).toContain(">Renew<");
+  for (const fix of ["Check again", "Try installing again", "Open install page", "Try again", "Use a 1-year key instead"]) expect(h).not.toContain(`>${fix}<`);
+});

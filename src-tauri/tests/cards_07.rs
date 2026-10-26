@@ -374,6 +374,31 @@ fn acct013_box2_a_claude_usage_limit_reaches_the_card_as_a_reset_time_with_no_fi
     assert_eq!(ck::usage_limit(kept, resets), None, "once the window lifts the card goes back to normal");
 }
 
+#[test]
+fn acct013_box1_a_key_refused_mid_session_turns_the_card_to_key_expired_with_the_date_still_ahead() {
+    let (_dir, store) = profile("refused");
+    let store = store.lock().unwrap();
+    ck::keep(&store, KEY, NOW).unwrap();
+    let later = NOW + 10 * DAY; // ten days into a 365-day key
+    let card = |store: &Store| ck::status_checked(&store.settings(), true, ck::is_refused(store), later);
+    let before = card(&store);
+    assert!(before.connected && !before.expired && before.attention.is_none(), "a healthy key shows nothing");
+    // The sign-in stop reaches claude_account_check { cause: "signin" } (claude_accounts.rs key_refused, run in-crate), which marks the key.
+    ck::mark_refused(&store, later);
+    let after = card(&store);
+    assert!(after.connected && after.expired && after.renew_due, "the card turns to key expired although the date is ahead");
+    let wire = serde_json::to_value(&after).unwrap();
+    assert_eq!(wire["attention"]["reason"], "key-expired");
+    assert_eq!(wire["daysLeft"], 355);
+    // Pinned to the file the window test reads (compared, never rewritten).
+    let fixture: Value = serde_json::from_str(&std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../evidence/cards-ACCT-013-key-expired.json")).unwrap()).unwrap();
+    assert_eq!(wire, fixture);
+    // Account-mode Claude (no key stored) leaves the card as it is, and a new key clears the refusal.
+    assert!(ck::status_checked(&json!({}), false, true, later).attention.is_none());
+    ck::keep(&store, KEY, later).unwrap();
+    assert!(card(&store).attention.is_none());
+}
+
 // ---------------------------------------------------------------- ACCT-009
 
 const CLEAR_XAI: &str = "xai-FAKE-NOT-A-REAL-KEY-1111111111111111";
