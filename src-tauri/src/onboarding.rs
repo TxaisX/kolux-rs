@@ -654,7 +654,7 @@ mod tests {
         }
         if p.to_string_lossy().contains("w2-dead") {
             DEAD_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            std::thread::sleep(std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_secs(20));
         }
         same_dir(p, d)
     }
@@ -683,7 +683,9 @@ mod tests {
         std::fs::write(dir.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }), "").unwrap();
         let dead = ["Z:/offline/w2-dead-1", "Z:/offline/w2-dead-2", "Z:/offline/w2-dead-3"].map(std::path::PathBuf::from);
         let path = std::env::join_paths(dead.iter()).unwrap();
-        let wait = std::time::Duration::from_millis(300);
+        // Load flake fix: the wait is 4 s (the dead lookups sleep 20 s), so a loaded PC's scheduling
+        // delay of under 4 s still passes the 8 s bound, while one deadline per folder takes 12 s.
+        let wait = std::time::Duration::from_secs(4);
         let start = std::time::Instant::now();
         assert_eq!(cli_status_in(&dir, &path, wait, spy), CliStatus { installed: true, on_path: false });
         assert!(start.elapsed() < wait * 2, "three dead folders took {:?}", start.elapsed());

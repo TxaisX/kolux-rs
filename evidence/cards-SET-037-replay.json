@@ -1,0 +1,14 @@
+{
+  "legacy": {
+    "defaultAgent": "claude",
+    "uiLook": "classic",
+    "appearanceMode": "dark"
+  },
+  "reopened": {
+    "defaultAgent": "claude",
+    "uiLook": "new",
+    "appearanceMode": "dark",
+    "firstScreen": "board",
+    "lastScreen": "board"
+  }
+}

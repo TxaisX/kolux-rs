@@ -35,7 +35,7 @@ Rules: Enter on a selected Inbox item does the same as the button; questions and
 Acceptance:
   - [ ] Inbox item for a waiting agent → click Open in Code → Code view, correct worktree, correct
         pane focused.
-  - [ ] Permission item whose terminal has exited → Answer in Code shows instead of inline buttons.
+  - [x] Permission item whose terminal has exited → Answer in Code shows instead of inline buttons. (cards; evidence/cards-EDIT-041.txt)
 Compat: keybinding id view.code.
 Source: D-12-041
 
@@ -82,9 +82,9 @@ Rules: a path that leaves the project through a symlink is refused; terminal lin
   renamed, trashed or moved; a grant lasts the run; a workspace's folder never changes in Kolux RS,
   so the mid-save refusal has nothing to guard.)
 Acceptance:
-  - [ ] Open a file through a symlink that points outside the worktree → refused.
-  - [ ] Click a terminal link to a file on another computer's share → refused, with no network
-        lookup made.
+  - [x] Open a file through a symlink that points outside the worktree → refused. (cards; evidence/cards-EDIT-045.txt)
+  - [x] Click a terminal link to a file on another computer's share → refused, with no network
+        lookup made. (cards; evidence/cards-EDIT-045.txt)
 Compat: —
 Source: D-12-045
 
@@ -102,12 +102,12 @@ Rules: launchable files are recognised by type on every platform (programs, scri
   (Kolux RS, T-062-a: the editor's refusal offers "Open this file anyway", which allows that one
   path for the run through a one-file grant; there are no browser downloads yet.)
 Acceptance:
-  - [ ] Click a terminal link to a batch file, a PowerShell script, an executable or a Windows
-        shortcut → the file manager opens with it highlighted, and nothing runs.
+  - [x] Click a terminal link to a batch file, a PowerShell script, an executable or a Windows
+        shortcut → the file manager opens with it highlighted, and nothing runs. (cards; evidence/cards-EDIT-053.txt)
   - [ ] On Linux, an extensionless file with the execute bit → revealed, not run; the same file
         without the bit → it opens in its default app.
-  - [ ] Click a link to a plain text file → it opens in the default text app.
-  - [ ] Open a link to a file on another computer → nothing happens.
+  - [x] Click a link to a plain text file → it opens in the default text app. (cards; evidence/cards-EDIT-053.txt)
+  - [x] Open a link to a file on another computer → nothing happens. (cards; evidence/cards-EDIT-053.txt)
 Compat: —
 Source: D-12-053
 
@@ -129,11 +129,11 @@ Rules: saves made by Kolux itself never raise the banner, because it remembers w
   one closes it; a tab in the background whose file changed reloads when it is next brought forward,
   not while hidden; a background tab holding unsaved edits is not touched.
 Acceptance:
-  - [ ] Edit without saving, then change the file from a terminal → the banner shows within a couple
-        of seconds.
-  - [ ] Click Reload → the buffer matches disk and a toast offers undo; undo → the edits come back.
+  - [x] Edit without saving, then change the file from a terminal → the banner shows within a couple
+        of seconds. (cards; evidence/cards-EDIT-003.txt)
+  - [x] Click Reload → the buffer matches disk and a toast offers undo; undo → the edits come back. (cards; evidence/cards-EDIT-003.txt)
   - [ ] Click Compare → disk copy on the left, buffer on the right.
-  - [ ] Save from Kolux → no banner.
+  - [x] Save from Kolux → no banner. (cards; evidence/cards-EDIT-003.txt)
 Compat: —
 Source: D-12-003
 
@@ -157,13 +157,13 @@ Rules: Mod+S saves whichever editor is active; when a floating editor panel has 
   both, changes Kolux applies itself (a reload, for example) leave both clean, and a single save
   request writes the file once, from the pane that owns it.
 Acceptance:
-  - [ ] Open a code file from the explorer and type one character → unsaved marker shows; press
-        Mod+S → marker gone and the character is on disk.
+  - [x] Open a code file from the explorer and type one character → unsaved marker shows; press
+        Mod+S → marker gone and the character is on disk. (cards; evidence/cards-EDIT-001.txt)
   - [ ] Go to the terminal view and come back → same tab in front, caret and scroll where they were.
-  - [ ] With a floating editor active and another file in the main editor, press Mod+S → only the
-        floating editor's file changes on disk.
-  - [ ] Take away read permission on a file and open it → failure message with Retry; give
-        permission back and click Retry → the text loads.
+  - [x] With a floating editor active and another file in the main editor, press Mod+S → only the
+        floating editor's file changes on disk. (cards; evidence/cards-EDIT-001.txt)
+  - [x] Take away read permission on a file and open it → failure message with Retry; give
+        permission back and click Retry → the text loads. (cards; evidence/cards-EDIT-001.txt)
 Compat: keybinding id editor.save; stored data: the open editor tabs of each worktree.
   Amended 2026-10-09 (DT-R13): until the explorer exists, a File... item in the New tab menu opens a file through the Windows Open dialog; that dialog refuses an unreadable file itself, so the read-permission check runs from the explorer (T-094); a file that is not UTF-8 text shows its reason and Retry.
 Source: D-12-001
@@ -250,7 +250,7 @@ Rules: a symlink expands only after it is confirmed to point at a folder; otherw
 Acceptance:
   - [ ] Press Mod+Shift+E → the explorer opens; Down, Right, Down, Enter → the first file of the
         second folder opens.
-  - [ ] Shift-click two rows apart → three rows are selected.
+  - [x] Shift-click two rows apart → three rows are selected. (cards; evidence/cards-EDIT-033.txt)
 Compat: keybinding id sidebar.explorer.toggle; view id explorer.
 Source: D-12-033
 
@@ -273,10 +273,10 @@ Rules: creating a file or folder never replaces something already there, and cop
   top-level items a new name, and refuses symlinks; undo is Mod+Z and redo is Mod+Shift+Z, with
   Ctrl+Y as well on Windows and Linux; Delete (and Mod+Backspace on macOS) removes the selection.
 Acceptance:
-  - [ ] Create a file whose name is already taken → refused, and the original is untouched.
-  - [ ] Delete two files → one confirmation, both in the trash; press Mod+Z → both come back.
-  - [ ] Drop a desktop folder onto a folder that already holds one with the same name → the copy
-        arrives under a new name.
+  - [x] Create a file whose name is already taken → refused, and the original is untouched. (cards; evidence/cards-EDIT-034.txt)
+  - [x] Delete two files → one confirmation, both in the trash; press Mod+Z → both come back. (cards; evidence/cards-EDIT-034.txt)
+  - [x] Drop a desktop folder onto a folder that already holds one with the same name → the copy
+        arrives under a new name. (cards; evidence/cards-EDIT-034.txt)
 Compat: the existing keybinding ids for explorer undo, redo, copy path, copy relative path and
   delete keep working.
 Source: D-12-034
@@ -297,9 +297,9 @@ Rules: hits in the file name outrank hits only in the folder path, and no more t
   covers everything; the new-tab menu's file search ranks results the same way and shows the full
   path on hover.
 Acceptance:
-  - [ ] Press Mod+P and type panel → files with panel in their name come before files that only sit
-        in a panel folder.
-  - [ ] Hover a result → the path tooltip appears and follows the pointer.
+  - [x] Press Mod+P and type panel → files with panel in their name come before files that only sit
+        in a panel folder. (cards; evidence/cards-EDIT-036.txt)
+  - [x] Hover a result → the path tooltip appears and follows the pointer. (cards; evidence/cards-EDIT-036.txt)
 Compat: the existing keybinding id for Quick Open keeps working.
 Source: D-12-036
 

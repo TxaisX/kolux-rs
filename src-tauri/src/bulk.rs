@@ -120,16 +120,6 @@ pub fn workspace_remove_many(git: State<'_, Git>, store: StoreState<'_>, termina
     Ok(Batch { items, summary })
 }
 
-/// The later delete of a branch kept at removal: only while it still points where it did.
-#[tauri::command(async)]
-pub fn workspace_kept_branch_delete(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, commit: String) -> Result<bool, String> {
-    let project = {
-        let store = store.lock().map_err(|e| e.to_string())?;
-        find_project(&store, &project_id)?
-    };
-    git.delete_branch_if_at(Path::new(&project.path), &branch, &commit)
-}
-
 // ---- PROJ-076: forget a workspace locally -----------------------------------------------------------
 
 /// Whether the workspace at \`path\` may be forgotten: never a project's root, and while its project

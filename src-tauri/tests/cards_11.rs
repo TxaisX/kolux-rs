@@ -1,6 +1,8 @@
 //! spec/11 P0 boxes GIT-001..GIT-007 (batch 1): the Source Control back end against real `git`.
-//! Every repository is a fresh `git init` under the scratch root G:\Temp\cards-v3\, every "remote" a
+//! Every repository is a fresh `git init` under the scratch root, every "remote" a
 //! local bare repository beside it; git's own config files are replaced by empty scratch files.
+
+mod scratch_root;
 
 use kolux_rs_lib::git::Git;
 use kolux_rs_lib::projects::{add_project, create_workspace, place_from, remove_check, remove_worktree, removal_refused};
@@ -9,8 +11,6 @@ use kolux_rs_lib::state::Store;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-const ROOT: &str = r"G:\Temp\cards-v3";
 
 fn norm(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_lowercase()
@@ -23,11 +23,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 fn scratch_in(sub: &str, tag: &str) -> PathBuf {
-    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
-        let v = std::env::var(var).unwrap_or_default();
-        assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
-    }
-    let base = Path::new(ROOT).join(sub);
+    let base = scratch_root::root().join(sub);
     std::fs::create_dir_all(&base).unwrap();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -50,7 +46,7 @@ fn scratch_in(sub: &str, tag: &str) -> PathBuf {
 
 /// Real git in `dir` (always a scratch repository); stdout trimmed, panics on failure.
 fn g(dir: &Path, args: &[&str]) -> String {
-    assert!(norm(dir).starts_with(&norm(Path::new(ROOT))), "git would run outside the scratch root: {dir:?}");
+    assert!(norm(dir).starts_with(&norm(scratch_root::root())), "git would run outside the scratch root: {dir:?}");
     let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).trim().to_string()
@@ -97,10 +93,15 @@ fn snapshot(st: &Status) -> Value {
 
 static STATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Writes the real statuses the TS proofs replay; callers hold the STATES lock.
+/// Checks the real statuses against the fixture the TS proofs replay (parsed, so line endings don't matter);
+/// only CARDS_REGEN=1 rewrites it, in LF. Callers hold the STATES lock.
 fn save_states(key: &str, states: Value) {
     let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../evidence/cards-GIT-states.json");
     let mut all: Value = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+    if std::env::var_os("CARDS_REGEN").is_none() {
+        assert_eq!(all.get(key), Some(&states), "fixture stale: rerun with CARDS_REGEN=1 ({key})");
+        return;
+    }
     all[key] = states;
     std::fs::write(&file, serde_json::to_string_pretty(&all).unwrap() + "\n").unwrap();
 }

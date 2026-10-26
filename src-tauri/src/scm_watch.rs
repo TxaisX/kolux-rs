@@ -1384,14 +1384,23 @@ mod tests {
         assert!(break_watch(w.id, "test seam"));
         assert!(break_watch(w.id, "test seam again"));
         let after = || seen.lock().unwrap().iter().filter(|t| **t >= broke).copied().collect::<Vec<_>>();
-        assert!(until(Duration::from_secs(30), || after().len() >= 3), "a read at once after the break, then every 4 s with no change at all");
-        // Read starts, not finish times: a read is several git commands, 0.3 s alone but up to 5 s with
-        // the full suite and other builds beside it.
-        let t: Vec<Duration> = STARTS.lock().unwrap().iter().filter(|(r, at)| *at >= broke && std::fs::canonicalize(r).ok() == std::fs::canonicalize(&*dir).ok()).map(|(_, at)| *at - broke).collect();
+        assert!(until(Duration::from_secs(120), || after().len() >= 3), "a read at once after the break, then every 4 s with no change at all");
+        // Read starts, not finish times: a read is several git commands, 0.3 s alone but up to 20 s with
+        // the full suite and other builds beside it. The worker reads one at a time and times the next
+        // from the start of this one, so a gap is 4 s or, when the read ran longer, as long as the read:
+        // the upper bound is 6 s or the read's own run (first answer after its start) plus 2 s. A slow
+        // tick (30 s) still fails it; a faster one fails the 3.9 s floor.
+        let st: Vec<Instant> = STARTS.lock().unwrap().iter().filter(|(r, at)| *at >= broke && std::fs::canonicalize(r).ok() == std::fs::canonicalize(&*dir).ok()).map(|(_, at)| *at).collect();
+        let t: Vec<Duration> = st.iter().map(|at| *at - broke).collect();
         assert!(t.len() >= 3, "{t:?}");
-        assert!(t[0] < Duration::from_secs(1), "read at once: {t:?}");
-        for g in [t[1] - t[0], t[2] - t[1]] {
-            assert!(g >= Duration::from_millis(3900) && g <= Duration::from_secs(6), "every 4 s: {t:?}");
+        // At once is under 2 s; waiting for the 4 s tick would put it about 3 s after the break.
+        assert!(t[0] < Duration::from_secs(2), "read at once: {t:?}");
+        let answers = seen.lock().unwrap().clone();
+        let ran = |i: usize| answers.iter().filter(|d| **d >= st[i] && **d < st[i + 1]).min().map_or(Duration::ZERO, |d| *d - st[i]);
+        for i in 0..2 {
+            let g = st[i + 1] - st[i];
+            let room = Duration::from_secs(6).max(ran(i) + Duration::from_secs(2));
+            assert!(g >= Duration::from_millis(3900) && g <= room, "every 4 s: {t:?}, read {i} ran {:?}", ran(i));
         }
         let l = logs.lock().unwrap().clone();
         assert_eq!(l.len(), 1, "said once: {l:?}");

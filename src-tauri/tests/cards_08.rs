@@ -621,6 +621,9 @@ fn orch012_box2_parts_two_updates_at_one_moment_never_leave_a_task_dispatched_wi
         assert_ne!(t["status"], "dispatched", "round {round}: never left dispatched with no worker");
         assert!(t["dispatchId"].is_null() || t["dispatchId"] == "dispatch-1", "never two workers");
         assert!(rc.is_ok() || rf.is_ok(), "round {round}: at least one update lands");
+        let wins = [&rc, &rf].iter().filter(|r| r.is_ok()).count();
+        assert_eq!(wins, 1, "round {round}: exactly one update wins; got completed={rc:?} failed={rf:?}");
+        assert_eq!(t["status"], d["status"], "round {round}: the task and its worker agree");
     }
 }
 
@@ -906,5 +909,41 @@ fn orch022_box2_a_stop_when_kolux_holds_no_live_terminal_for_the_worker_says_unv
     assert_eq!((d["status"].as_str(), d["process"].as_str()), (Some("stopped"), Some("unverifiable")));
     assert!(worktree.join("work.txt").exists(), "the worktree folder and its files are still on disk");
     assert_eq!(stored(&store, o::TASKS_KEY)[0]["status"], "ready", "the task can be handed on again");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn orch022_box1_stopping_a_running_worker_ends_its_agent_terminal_and_the_worktree_folder_stays_on_disk() {
+    let root = std::env::temp_dir().join(format!("kolux-rs-cards08-o22b1-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let worktree = root.join("worktree");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(worktree.join("work.txt"), "unsaved work").unwrap();
+    let wd = worktree.display().to_string();
+    let git = Git::detect().unwrap();
+    let store = Mutex::new(Store::open(&root.join("data")).unwrap());
+    let notify = |_v: Value| {};
+    let terminals = Terminals::default();
+    // 7: the worker (a custom-command agent, marked npx, as the fake session records it); 8: the setup terminal; 9: a tab the user configured.
+    for (id, program) in [(7, Some("npx")), (8, None), (9, None)] {
+        terminals.fake_session(id, &wd, program);
+    }
+    let ctx = Ctx { claude_config: root.join(".claude.json"), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+    let task = json!({ "id": "task-1", "runId": null, "spec": "do it", "status": "dispatched", "deps": [], "dispatchId": "dispatch-1" });
+    let row = json!({ "id": "dispatch-1", "runtime": std::process::id(), "runId": null, "taskId": "task-1", "status": "running", "agent": "claude", "terminalProgram": "npx", "terminal": 7, "worktree": wd, "created": 1 });
+    store.lock().unwrap().set("orchestration.tasks", &Value::Array(vec![task]).to_string()).unwrap();
+    store.lock().unwrap().set("orchestration.dispatches", &Value::Array(vec![row]).to_string()).unwrap();
+    let words: Vec<String> = "orchestration worker-stop --dispatch dispatch-1".split_whitespace().map(String::from).collect();
+    let p = parse(&words).1.unwrap().unwrap();
+    let req = Request { id: "r".into(), token: String::new(), command: p.command, cwd: wd.clone(), args: Value::Object(p.args), pane: None, cli: String::new(), arrived: None };
+    assert!(terminals.live("term-7"));
+    let r = dispatch(&ctx, &req).unwrap();
+    assert_eq!((r["process"].as_str(), r["status"].as_str(), r["worktreeKept"].as_bool()), (Some("ended"), Some("stopped"), Some(true)), "{r}");
+    assert!(!terminals.live("term-7"), "the agent terminal ended");
+    assert!(terminals.live("term-8") && terminals.live("term-9"), "the setup terminal and the user's tab remain");
+    assert!(worktree.join("work.txt").exists(), "the worktree folder is still on disk");
+    for t in [8, 9] {
+        let _ = terminals.kill(t);
+    }
     let _ = std::fs::remove_dir_all(&root);
 }

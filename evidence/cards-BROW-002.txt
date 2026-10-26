@@ -1,0 +1,4 @@
+cmd: pnpm exec vitest run src/browser/__cards__ src/browser/address.test.ts src/browser/history.test.ts --reporter=verbose (KOLUX_* unset)
+result: 6 files, 16 tests passed (tsc --noEmit clean)
+box 1: NOT TICKED (LIVE). Part proven: src/browser/__cards__/BROW-002.test.ts::hiding the tab hides the page and showing it moves it back; nothing is closed or opened again — pass (browser_bounds shown:false with a zero spot, then shown:true; one browser_open, no browser_close, no navigate or reload). That the engine keeps typed text across hide()/show() is the engine's.
+box 2: NOT TICKED (LIVE). Same test covers the pane half; App.tsx keeps other worktrees' BrowserPane mounted with hidden=true (App.tsx:3138) but that is glue in a hard-stop file.

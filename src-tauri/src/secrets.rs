@@ -517,9 +517,14 @@ mod dpapi {
 
 /// Whether a secret settings field is set (never its value).
 /// ACCT-010: the secret fields to reconnect, by name.
-#[tauri::command]
-pub fn secrets_dropped(store: tauri::State<'_, Mutex<Store>>) -> Result<Vec<String>, String> {
+pub fn secrets_dropped_on(store: &Mutex<Store>) -> Result<Vec<String>, String> {
     Ok(dropped(&*store.lock().map_err(|e| e.to_string())?))
+}
+
+/// Async so the wait for the store lock (up to 290 ms behind a background save) is not spent on the UI thread.
+#[tauri::command]
+pub async fn secrets_dropped(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || secrets_dropped_on(&tauri::Manager::state::<Mutex<Store>>(&app))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -849,5 +854,21 @@ mod tests {
         assert!(fs::read_to_string(dir.join("logs").join("kolux.log")).unwrap().contains("moved to"));
         drop(store);
         fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod secrets_dropped_async_tests {
+    use super::*;
+
+    fn is_async<F: std::future::Future>(_: fn(tauri::AppHandle) -> F) {}
+
+    #[test]
+    fn secrets_dropped_is_an_async_command_that_matches_the_sync_one() {
+        is_async(secrets_dropped);
+        let store = Mutex::new(Store::open(&crate::test_dir::temp("secrets-dropped-async")).unwrap());
+        store.lock().unwrap().set(DROPPED_KEY, "[\"moonshotApiKey\"]").unwrap();
+        assert_eq!(secrets_dropped_on(&store), Ok(vec!["moonshotApiKey".to_string()]));
+        assert_eq!(secrets_dropped_on(&store), Ok(dropped(&store.lock().unwrap())));
     }
 }

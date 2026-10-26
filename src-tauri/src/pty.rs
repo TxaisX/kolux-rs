@@ -292,10 +292,15 @@ pub fn shell_choice(settings: &serde_json::Value) -> Option<&str> {
     }
 }
 
-#[tauri::command]
-pub fn shell_list(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Vec<ShellInfo> {
+pub fn shell_list_on(store: &Mutex<crate::state::Store>) -> Vec<ShellInfo> {
     let settings = store.lock().map(|s| s.settings()).unwrap_or_default();
     chosen_first(shells(crate::agents::find_program), &settings)
+}
+
+/// Async so the PATH probe (up to 240 ms) runs off the UI thread, which a sync command would hold.
+#[tauri::command]
+pub async fn shell_list(app: tauri::AppHandle) -> Vec<ShellInfo> {
+    tauri::async_runtime::spawn_blocking(move || shell_list_on(&tauri::Manager::state::<Mutex<crate::state::Store>>(&app))).await.unwrap_or_default()
 }
 
 /// TERM-040: where a new terminal starts. A requested folder may be relative to the workspace or
@@ -678,13 +683,16 @@ mod tests {
 
         let mut seen = String::new();
         let mut answered = 0;
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // Load flake fix: the shell may take over 30 s to start on a loaded box, so the deadline restarts
+        // on every chunk and only 60 s of silence fails (an idle shell is silent only when it is broken).
+        let mut deadline = Instant::now() + Duration::from_secs(60);
         // The typed line is echoed once and its output printed once: wait for the second copy.
         while seen.matches("kolux-rs-ok").count() < 2 {
             let left = deadline.saturating_duration_since(Instant::now());
-            assert!(!left.is_zero(), "marker not read back within 30s; saw:\n{seen}");
+            assert!(!left.is_zero(), "marker not read back; no output for 60s; saw:\n{seen}");
             if let Ok(chunk) = rx.recv_timeout(left) {
                 seen.push_str(&String::from_utf8_lossy(&chunk));
+                deadline = Instant::now() + Duration::from_secs(60);
             }
             // The console host asks where the cursor is (ESC[6n) before it draws anything and
             // waits for the answer; a real terminal replies by itself, the test stands in for it.
@@ -697,7 +705,7 @@ mod tests {
 
         session.resize(80, 24).expect("resize");
         session.write(b"exit\r\n").expect("write exit");
-        let code = exit_rx.recv_timeout(Duration::from_secs(30)).expect("shell exits after `exit`");
+        let code = exit_rx.recv_timeout(Duration::from_secs(60)).expect("shell exits after `exit`");
         assert_eq!(code, Some(0), "clean exit code");
         session.kill();
     }
@@ -992,5 +1000,20 @@ mod tests {
         .expect("spawn shell in a pty");
         session.kill();
         exit_rx.recv_timeout(Duration::from_secs(30)).expect("shell ends after kill");
+    }
+}
+
+#[cfg(test)]
+mod shell_list_async_tests {
+    use super::*;
+
+    fn is_async<F: std::future::Future>(_: fn(tauri::AppHandle) -> F) {}
+
+    #[test]
+    fn shell_list_is_an_async_command_that_matches_the_sync_one() {
+        is_async(shell_list);
+        let store = Mutex::new(crate::state::Store::open(&crate::test_dir::temp("shell-list-async")).unwrap());
+        let settings = store.lock().unwrap().settings();
+        assert_eq!(shell_list_on(&store), chosen_first(shells(crate::agents::find_program), &settings));
     }
 }

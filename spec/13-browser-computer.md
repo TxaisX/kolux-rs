@@ -75,10 +75,11 @@ Rules: searches go to the chosen engine, one of Google, Duck Duck Go, Bing or Ka
   (Kolux RS, T-012-b-fix: inside the page a script of ours takes the chord and hands it to the
   app as a cancelled `kolux-chord:` navigation; the split the page sits in becomes the focused
   one as the chord arrives.)
+  (Kolux RS: a pasted file path is shown through the preview chip, BROW-039; tabs never load file: because they carry the IPC script.)
 Acceptance:
-  - [ ] Type rust ownership and press Enter → results from the configured search engine.
-  - [ ] Type example.com → the HTTPS site loads; type localhost:3000 → it loads over HTTP.
-  - [ ] Type an address with the javascript: scheme → invalid-address notice, page unchanged.
+  - [x] Type rust ownership and press Enter → results from the configured search engine. (cards; evidence/cards-BROW-003.txt)
+  - [x] Type example.com → the HTTPS site loads; type localhost:3000 → it loads over HTTP. (cards; evidence/cards-BROW-003.txt)
+  - [x] Type an address with the javascript: scheme → invalid-address notice, page unchanged. (cards; evidence/cards-BROW-003.txt)
 Compat: keyboard command for focusing the address bar, default Mod+L (command id is an allowlist
   candidate); engine choices Google, Duck Duck Go, Bing and Kagi. With the browser settings page
   cut, which engine is the fixed default and whether the Kagi link keeps a home is an owner
@@ -103,7 +104,7 @@ Rules: only the toolbar button halts a load in progress, while the shortcut and 
 Acceptance:
   - [ ] Open a slow page → Stop with a spinner; press it → loading halts; after a normal load the
         button reads Reload.
-  - [ ] In a fresh tab → back and forward are both disabled.
+  - [x] In a fresh tab → back and forward are both disabled. (cards; evidence/cards-BROW-005.txt)
 Compat: keyboard commands browser.back (Mac Mod+[, other platforms Alt+Left), browser.forward (Mac
   Mod+], other platforms Alt+Right), browser.reload (Mod+R), and hard reload (Mod+Shift+R; its
   command id is an allowlist candidate).
@@ -124,9 +125,9 @@ Rules: the endpoint responds only under a secret path, and the bare host and por
   headers, a foreign Host or no token gets 404 and an empty body, an HTTP line on the CLI port gets
   nothing back.)
 Acceptance:
-  - [ ] From a page in any browser, try to reach the endpoint → refused.
-  - [ ] Connect to the bare port → refused; connect with the address Kolux handed the agent →
-        works.
+  - [x] From a page in any browser, try to reach the endpoint → refused. (cards; evidence/cards-BROW-051.txt)
+  - [x] Connect to the bare port → refused; connect with the address Kolux handed the agent →
+        works. (cards; evidence/cards-BROW-051.txt)
 Compat: —
 Source: D-13-051
 
@@ -162,7 +163,7 @@ Rules: the number of recovery attempts is limited; a rebuild that hangs is retri
   mismatched page is turned away.
 Acceptance:
   - [ ] Kill the process behind a tab → the tab returns to its page with no action from the user.
-  - [ ] Force recovery to fail → an error shows; retry from the toolbar → the page is back.
+  - [x] Force recovery to fail → an error shows; retry from the toolbar → the page is back. (cards; evidence/cards-BROW-009.txt)
 Compat: —
 Source: D-13-009
 

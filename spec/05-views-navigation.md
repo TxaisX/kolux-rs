@@ -61,8 +61,8 @@ User sees: under each session a short line: what an approval is asking for, the 
 Rules: when several signals compete the most urgent wins: approval, then working, then done, then
   idle; with no evidence the line stays empty rather than guessing.
 Acceptance:
-  - [ ] Agent waiting on a file-edit approval → line names that approval.
-  - [ ] Agent idle 12 minutes → line says idle with the duration.
+  - [x] Agent waiting on a file-edit approval → line names that approval. (cards; evidence/cards-VIEW-016.txt)
+  - [x] Agent idle 12 minutes → line says idle with the duration. (cards; evidence/cards-VIEW-016.txt)
 Compat: —
   (Kolux RS, T-028-a: built as the chip line of the Board card, `src/board/chip.ts`; the Agents
   screen reuses it when T-050 lands.)
