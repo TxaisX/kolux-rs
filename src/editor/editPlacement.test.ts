@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keepRaw, richChange } from "./frontMatter";
+import { keepRaw, richBlocker, richChange } from "./frontMatter";
 import { roundTrip } from "./markdown";
 
 // Row 94 review (HIGH): on repetitive text a typed word must land in the paragraph the user edited,
@@ -17,8 +17,9 @@ const typed = (body: string, edited: string) => {
 
 /** The probe-style edit: the rich view gives back its own spelling (`prev`) with " NEWWORD" typed at the first space
  *  `skip` characters into paragraph `n`. Returns the file after the change (null: no space in the paragraph there). */
+const spelt = new Map<string, string>();
 const typedInRich = (body: string, n: number, skip = 10) => {
-  const prev = roundTrip(body)!;
+  const prev = (spelt.get(body) ?? spelt.set(body, roundTrip(body)!).get(body))!;
   const paras = prev.split("\n\n");
   const start = paras.slice(0, n).reduce((a, p) => a + p.length + 2, 0);
   const at = prev.indexOf(" ", start + skip);
@@ -100,11 +101,29 @@ describe("whole words and whole paragraphs", () => {
   });
 });
 
+describe("small bodies", () => {
+  it("typing into an empty note, a one-word note and a note of only markers", () => {
+    expect(typed("", "first words")).toBe("first words");
+    expect(typed("one\n", "one two")).toBe("one two\n");
+    expect(apply("* \n", richChange("* \n", "- a", "- "))).toBe("* a\n");
+  });
+});
+
 describe("fail closed", () => {
   it("a body whose words differ from the rich view's earlier text is never written into a guessed place", () => {
     // `prev` says "alpha beta"; the file says something else entirely.
     expect(keepRaw("one two\n", "alpha beta gamma", "alpha beta")).toBe("one two\n");
     expect(richChange("one two\n", "alpha beta gamma", "alpha beta")).toBeNull();
+  });
+  it("twelve identical paragraphs where the file drifted by one word: refused, not placed in a guessed copy", () => {
+    const body = twelve.join("\n\n") + "\n";
+    const prev = roundTrip(body)!;
+    const drifted = body.replace("owners named", "owners renamed");
+    const k = prev.indexOf("the week");
+    const out = prev.slice(0, k) + "the typed week" + prev.slice(k + 8);
+    let refused = 0;
+    expect(richChange(drifted, out, prev, () => refused++)).toBeNull();
+    expect(refused).toBe(1);
   });
   it("tells the caller when it refused", () => {
     let refused = 0;
@@ -132,5 +151,26 @@ describe("a ~43 KB wrapped note", () => {
     expect(apply(body, c)).toBe(edited);
     expect(c!.insert.length).toBeLessThan(40);
     expect(ms).toBeLessThan(250);
+  });
+});
+
+describe("the twin-pane re-show asks the same question as the first show", () => {
+  it("a body whose words the rich view cannot spell back is refused with the source-view banner", () => {
+    const note = "---\ntitle: x\n---\nplain words here\n";
+    expect(richBlocker(note, false)).toBeNull();
+    // A reference link line is text the rich view would drop.
+    const lossy = "---\ntitle: x\n---\nsome words\n\n[r]: http://a.b/c\n";
+    expect(richBlocker(lossy, false)?.text).toMatch(/^Showing source: the rich view cannot show this file because it has reference links/);
+    // An HTML comment is dropped on the way back.
+    const dropped = "some words <!-- hidden --> here\n";
+    expect(richBlocker(dropped, false)?.text).toContain("HTML comments");
+  });
+  it("a body past the size limit is refused unless the user chose Open anyway", () => {
+    const big = "word ".repeat(400_000);
+    expect(richBlocker(big, false)?.big).toBe(true);
+    expect(richBlocker(big, true)?.big).toBeUndefined();
+  });
+  it("front matter is not part of what is checked", () => {
+    expect(richBlocker("---\ntags: [a, <!-- x -->]\n---\nbody\n", false)).toBeNull();
   });
 });
