@@ -6,6 +6,8 @@ import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { writerArgs, type Writer } from "./generate";
 import type { ActionOutcome, CommitOutcome, Pr, Status } from "./model";
+import type { Details } from "../projects/details";
+import { workItem } from "../projects/model";
 
 export const STEPS = ["prepare", "message", "commit", "push", "text", "open"] as const;
 export type StepId = (typeof STEPS)[number];
@@ -34,13 +36,24 @@ export type Ports = {
   create: (dir: string, title: string, body: string, base: string) => Promise<Pr>;
 };
 
-export const realPorts = (writer: Writer, instructions = writer.instructions): Ports => ({
+/** GIT-024: the workspace's linked issue as the description request carries it; a pull request or free text is no issue. */
+export function linkedIssue(item: string | null, name: string | null): { number: number; title: string; body: null } | null {
+  const w = item ? workItem(item) : null;
+  const number = w ? (w.kind === "issue" ? w.number : 0) : Number(/^#(\d+)$/.exec(item?.trim() ?? "")?.[1] ?? 0);
+  return number > 0 ? { number, title: name?.trim() ?? "", body: null } : null;
+}
+
+export const realPorts =(writer: Writer, instructions = writer.instructions): Ports => ({
   status: (dir) => invoke<Status>("scm_status", { worktree: dir }),
   stage: (dir, paths) => invoke("scm_stage", { worktree: dir, paths, on: true }),
   message: (dir) => invoke<string>("scm_commit_message", { worktree: dir, command: writer.mode === "custom" ? writer.command : null, instructions, ...(writer.mode === "agent" ? writerArgs(writer) : {}) }),
   commit: (dir, message) => invoke<CommitOutcome>("scm_commit", { worktree: dir, message }),
   remote: (dir, action) => invoke<ActionOutcome>("scm_remote", { worktree: dir, action }),
-  text: (dir, base) => invoke<[string, string]>("scm_pr_text", { worktree: dir, base, command: writer.mode === "custom" ? writer.command : null, instructions, issue: null, useTemplate: true, ...(writer.mode === "agent" ? writerArgs(writer) : {}) }),
+  text: async (dir, base) => {
+    const d = await invoke<Details>("workspace_details_get", { path: dir }).catch(() => null);
+    const issue = linkedIssue(d?.item ?? null, d?.name ?? null);
+    return invoke<[string, string]>("scm_pr_text", { worktree: dir, base, command: writer.mode === "custom" ? writer.command : null, instructions, issue, useTemplate: true, ...(writer.mode === "agent" ? writerArgs(writer) : {}) });
+  },
   create: (dir, title, body, base) => invoke<Pr>("scm_pr_create", { worktree: dir, title, body, base, draft: false }),
 });
 
