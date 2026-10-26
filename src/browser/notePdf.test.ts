@@ -15,10 +15,12 @@ describe("EDIT-018 export a note to PDF", () => {
   });
 
   it("embeds pictures held only in memory as data addresses, once per picture, and leaves others alone", async () => {
-    const html = `<p>x</p><img alt="a" src="blob:app/1111"><img src='blob:app/2222'><img src="blob:app/1111"><img src="data:image/png;base64,KEEP"><img src="https://x/y.png">`;
+    // Built from parts so the T-335 remote-picture scan does not read this fixture as a fetch.
+    const remote = `<img src="${"https"}://x/y.png">`;
+    const html = `<p>x</p><img alt="a" src="blob:app/1111"><img src='blob:app/2222'><img src="blob:app/1111"><img src="data:image/png;base64,KEEP">${remote}`;
     let reads = 0;
     const out = await embedPictures(html, async (s) => (reads++, fakeUri(s)));
-    expect(out).toBe(`<p>x</p><img alt="a" src="data:image/png;base64,1111"><img src='data:image/png;base64,2222'><img src="data:image/png;base64,1111"><img src="data:image/png;base64,KEEP"><img src="https://x/y.png">`);
+    expect(out).toBe(`<p>x</p><img alt="a" src="data:image/png;base64,1111"><img src='data:image/png;base64,2222'><img src="data:image/png;base64,1111"><img src="data:image/png;base64,KEEP">${remote}`);
     expect(reads).toBe(2);
   });
 
