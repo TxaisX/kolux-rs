@@ -286,4 +286,38 @@ mod tests {
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[test]
+    fn row874_a_mail_from_a_newer_build_keeps_its_unknown_fields_through_load_and_save() {
+        use crate::orchestration::Mail;
+        let (store, dir) = fresh("newer");
+        let blob = r#"{"seq":3,"threads":[{"id":"t1","note":"x"}],"future":{"a":[1,2]}}"#;
+        store.set("orchestration.mail", blob).unwrap();
+        let mut m = Mail::load(&store);
+        assert!(!m.unread && m.seq == 3 && asides(&store, "orchestration.mail").is_empty(), "a readable newer blob is not kept aside");
+        m.seq = 4;
+        m.save(&store).unwrap();
+        let saved: Value = serde_json::from_str(&store.get("orchestration.mail").unwrap().unwrap()).unwrap();
+        let want: Value = serde_json::from_str(blob).unwrap();
+        assert_eq!(saved["threads"], want["threads"], "the unknown field survives the save");
+        assert_eq!(saved["future"], want["future"]);
+        assert_eq!(saved["seq"], 4);
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn row874_a_mail_blob_of_the_wrong_type_is_kept_aside_never_read_as_empty() {
+        use crate::orchestration::Mail;
+        for (i, blob) in ["[]", "\"x\"", "7", "[1,2]", "true"].into_iter().enumerate() {
+            let (store, dir) = fresh(&format!("wrongtype{i}"));
+            store.set("orchestration.mail", blob).unwrap();
+            let m = Mail::load(&store);
+            assert!(!m.unread && m == Mail::default(), "{blob}: the load is the fresh default");
+            assert_eq!(asides(&store, "orchestration.mail"), vec![blob.to_string()], "{blob}: a byte-identical copy is kept");
+            assert_eq!(store.get("orchestration.mail").unwrap().as_deref(), Some(serde_json::to_string(&Mail::default()).unwrap().as_str()));
+            drop(store);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }

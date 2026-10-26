@@ -66,6 +66,10 @@ pub struct Mail {
     /// and a save would wipe it. Saves refuse while this is set.
     #[serde(skip)]
     pub unread: bool,
+    /// Row 874: fields a newer build wrote that this one does not know, carried through a save.
+    /// Flatten also makes a non-object blob (`[]`) a decode failure, so it is kept aside.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 /// ORCH-030: how long a finished request's receipt is kept for a retry to find.
