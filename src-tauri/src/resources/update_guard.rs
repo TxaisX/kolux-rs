@@ -40,7 +40,7 @@ pub const SIGNATURE_LIMIT: Duration = Duration::from_secs(20);
 /// The publisher (certificate subject) pinned into a signed release build, if the release job set it.
 /// Unset today. TODO(signing): the release job sets it from the signing certificate's subject once
 /// Authenticode signing exists; until then a signed copy trusts its own signature's subject.
-pub const PINNED_PUBLISHER: Option<&str> = option_env!("KOLUX_RS_PUBLISHER");
+pub const PINNED_PUBLISHER: Option<&str> = non_blank(option_env!("KOLUX_RS_PUBLISHER"));
 /// The marker the page reads to show the security stop card (no install button).
 pub const REFUSED_MARK: &str = "update:refused|";
 
@@ -159,7 +159,22 @@ pub fn decide(running: &SignState, installer: &SignState, pinned: Option<&str>, 
 /// The certificate authority pinned into a signed release build, if the release job set it
 /// (`KOLUX_RS_PUBLISHER_ISSUER`, the issuer line of the signing certificate). Unset today: no
 /// issuer is checked. TODO(signing): set it from the real certificate once Authenticode signing exists.
-pub const PINNED_ISSUER: Option<&str> = option_env!("KOLUX_RS_PUBLISHER_ISSUER");
+pub const PINNED_ISSUER: Option<&str> = non_blank(option_env!("KOLUX_RS_PUBLISHER_ISSUER"));
+
+/// A build env var set to nothing (`KOLUX_RS_PUBLISHER=`) is "unset", not a pin: a blank or
+/// whitespace-only value reads as `None`.
+pub const fn non_blank(v: Option<&'static str>) -> Option<&'static str> {
+    let Some(s) = v else { return None };
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !b[i].is_ascii_whitespace() {
+            return v;
+        }
+        i += 1;
+    }
+    None
+}
 
 /// The publisher and certificate authority a build pins, each `None` when the build sets none.
 #[derive(Clone, Copy, Default)]
@@ -194,7 +209,9 @@ pub fn refused_reset_value(value: &str) -> Result<&'static str, String> {
 /// The installer copy being checked. Smallest fix for the check-then-use race: it is created fresh
 /// (`create_new`, so nothing planted is reused), reopened read-only with sharing that denies other
 /// writers, deleters and renamers, read back against the verified bytes, and kept open while the
-/// signature tool reads it. Dropping it removes the file.
+/// signature tool reads it. Dropping it removes the file. It guards the copy being CHECKED only: the
+/// installer that finally runs is a separate temp file the updater plugin writes and nothing here
+/// holds. One open with write access would be tighter, but Windows' signature tool then cannot read it.
 pub struct HeldCopy {
     path: std::path::PathBuf,
     file: Option<std::fs::File>,
@@ -202,6 +219,11 @@ pub struct HeldCopy {
 
 impl HeldCopy {
     pub fn create_at(path: &Path, bytes: &[u8]) -> std::io::Result<HeldCopy> {
+        Self::create_at_with_gap(path, bytes, || {})
+    }
+
+    /// `gap` runs between the write and the reopen; a swap there is caught by the read-back.
+    fn create_at_with_gap(path: &Path, bytes: &[u8], gap: impl FnOnce()) -> std::io::Result<HeldCopy> {
         use std::io::{Read, Write};
         let mut w = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
         if let Err(e) = w.write_all(bytes).and_then(|()| w.sync_all()) {
@@ -210,6 +232,7 @@ impl HeldCopy {
             return Err(e);
         }
         drop(w);
+        gap();
         let mut held = HeldCopy { path: path.to_path_buf(), file: None };
         let mut ro = std::fs::OpenOptions::new();
         ro.read(true);
@@ -613,6 +636,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // The write-then-reopen gap is safe only because of the read-back: a swap inside it is refused.
+    #[test]
+    fn a_copy_swapped_in_the_reopen_gap_is_refused_and_retried() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-m798-gap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("gap.exe");
+        let swap = f.clone();
+        let err = match HeldCopy::create_at_with_gap(&f, b"MZ verified", || std::fs::write(&swap, b"MZ evil").unwrap()) {
+            Ok(_) => panic!("a swapped copy was held"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(!f.exists(), "a refused copy is removed");
+        let running = signed("CN=Acme Tools Ltd", "AB");
+        retried(decide_pinned(&running, &SignState::Unknown(err.kind().to_string()), None, None, true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // The real Windows tool must still be able to read a copy that is held open: a copy of this
     // (unsigned) test program reads NotSigned held and plain alike, not a sharing error.
     #[cfg(windows)]
@@ -661,8 +702,14 @@ mod tests {
     }
 
     #[test]
-    fn the_pins_are_off_in_a_build_that_sets_none() {
-        assert!(PINNED_ISSUER.is_none() || option_env!("KOLUX_RS_PUBLISHER_ISSUER").is_some());
+    fn a_blank_build_pin_counts_as_unset() {
+        for blank in [Some(""), Some("   "), Some("	
+
+"), None] {
+            assert_eq!(non_blank(blank), None, "{blank:?}");
+        }
+        assert_eq!(non_blank(Some("CN=Acme Code CA")), Some("CN=Acme Code CA"));
+        assert_eq!(non_blank(Some(" CN=Acme ")), Some(" CN=Acme "));
     }
 
     // AFTER (refused-list reset): update_mark can empty the list, and nothing else about it.
