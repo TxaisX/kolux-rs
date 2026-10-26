@@ -2,7 +2,7 @@
 // same fence as a text read) and go to pdf.js as data, so nothing is fetched (pdfFiles.ts LOCKED_OPTIONS). Pages are
 // drawn on canvases only when they are near the view. A new tab first fills the width; the zoom and the place in the
 // file are kept while the tab is open and dropped when it closes (pdfFiles.ts remember / forget).
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { Close } from "../chrome/icons";
@@ -11,14 +11,18 @@ import { baseName } from "./buffers";
 import { whyNotLoaded, wheelFactor } from "./imageFiles";
 import { readPicture } from "./pictureBytes";
 import { clampZoom, fitWidthScale, forget, LOCKED_OPTIONS, pageAt, readPos, recall, remember, scrollFor, START, whyNotOpened, ZOOM_STEP, type PdfPos } from "./pdfFiles";
+import { destinationSpot, drawPageLayers, makeLinkService, spotOffset, webLink } from "./pdfPageLayers";
+import type { LinkHandler } from "./linkClicks";
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onToast?: (text: string) => void };
+type Props = { id: number; path: string; root?: string | null; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onToast?: (text: string) => void; /** A web link in the file goes here, as a note's link does (Shift: the system browser). */ onLink?: LinkHandler };
+type LinkService = ReturnType<typeof makeLinkService>;
 type Size = { w: number; h: number };
 
 const GAP = 8; // pixels between pages
 const MARGIN = 12; // pixels either side of a page when it fills the width
 
 let loading: ReturnType<typeof start> | null = null;
+const pdfLib = () => (loading ??= start());
 /** pdf.js and its worker, loaded the first time a PDF opens (the worker is a file of the app, so the window's own policy covers it). */
 function start() {
   return Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?worker")]).then(([lib, worker]) => {
@@ -28,9 +32,11 @@ function start() {
 }
 
 /** One page, drawn when it is within reach of the view and let go when it is far from it. */
-function PageCanvas({ doc, n, scale, root, size, onSize }: { doc: PDFDocumentProxy; n: number; scale: number; root: HTMLElement | null; size: Size; onSize: (n: number, s: Size) => void }) {
+function PageCanvas({ doc, n, scale, root, size, onSize, links }: { doc: PDFDocumentProxy; n: number; scale: number; root: HTMLElement | null; size: Size; onSize: (n: number, s: Size) => void; links: LinkService }) {
   const holder = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const words = useRef<HTMLDivElement>(null);
+  const notes = useRef<HTMLDivElement>(null);
   const [near, setNear] = useState(false);
   useEffect(() => {
     const el = holder.current;
@@ -45,11 +51,14 @@ function PageCanvas({ doc, n, scale, root, size, onSize }: { doc: PDFDocumentPro
     if (!near) {
       c.width = 0; // let the pixels go
       c.height = 0;
+      words.current?.replaceChildren();
+      notes.current?.replaceChildren();
       return;
     }
     let live = true;
     let task: { cancel(): void; promise: Promise<unknown> } | null = null;
-    void doc.getPage(n).then((page) => {
+    let stopLayers: (() => void) | null = null;
+    void doc.getPage(n).then(async (page) => {
       if (!live) return;
       const natural = page.getViewport({ scale: 1 });
       onSize(n, { w: natural.width, h: natural.height });
@@ -61,20 +70,27 @@ function PageCanvas({ doc, n, scale, root, size, onSize }: { doc: PDFDocumentPro
       if (!ctx) return;
       task = page.render({ canvas: c, canvasContext: ctx, viewport: view, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
       task.promise.catch(() => undefined); // a cancelled draw rejects; nothing to say
+      // EDIT-029: the words (select and copy) and the links and notes go over the picture
+      const lib = await pdfLib();
+      if (live && words.current && notes.current) stopLayers = drawPageLayers(lib, page, view, words.current, notes.current, links);
     });
     return () => {
       live = false;
       task?.cancel();
+      stopLayers?.();
     };
   }, [doc, n, scale, near]); // eslint-disable-line react-hooks/exhaustive-deps
+  const look = { width: size.w * scale, height: size.h * scale, "--total-scale-factor": scale } as CSSProperties;
   return (
-    <div ref={holder} className="pdf-page" data-page={n} style={{ width: size.w * scale, height: size.h * scale }}>
+    <div ref={holder} className="pdf-page" data-page={n} style={look}>
       <canvas ref={canvas} style={{ width: size.w * scale, height: size.h * scale }} aria-label={`Page ${n}`} />
+      <div ref={words} className="textLayer" />
+      <div ref={notes} className="annotationLayer" onAuxClick={(e) => e.preventDefault()} />
     </div>
   );
 }
 
-export default function PdfView({ id, path, hidden = false, focused = false, onFocus, onClose, onToast }: Props) {
+export default function PdfView({ id, path, root = null, hidden = false, focused = false, onFocus, onClose, onToast, onLink }: Props) {
   const name = baseName(path);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,8 +116,7 @@ export default function PdfView({ id, path, hidden = false, focused = false, onF
       const bytes = await readPicture(path, invoke).catch((e) => {
         throw Object.assign(new Error(whyNotLoaded(e, name)), { said: true });
       });
-      loading ??= start();
-      const lib = await loading;
+      const lib = await pdfLib();
       const task = lib.getDocument({ ...LOCKED_OPTIONS, data: bytes });
       opened = await task.promise;
       if (!alive) return void opened.destroy();
@@ -186,6 +201,35 @@ export default function PdfView({ id, path, hidden = false, focused = false, onF
     return () => scroller.removeEventListener("wheel", on);
   }, [scroller]);
 
+  // EDIT-029: a link in the file. A web address goes where a note's link goes; a place in the file scrolls here.
+  const jumpTo = (page: number, offset: number) => {
+    if (!scroller) return;
+    anchor.current = { page: Math.min(Math.max(1, page), Math.max(1, pages)), offset };
+    scroller.scrollTop = scrollFor(tops, heights, anchor.current);
+  };
+  const latest = useRef({ jumpTo, pages, page: pos.page, follow: (_url: string, _shift: boolean) => {}, goTo: async (_dest: unknown) => {} });
+  latest.current = {
+    jumpTo,
+    pages,
+    page: pos.page,
+    follow: (url, shift) => {
+      const web = webLink(url, path, root);
+      if (web && onLink) onLink(web, shift);
+      else onToast?.(web ? "This window cannot open links." : "Only web links in a PDF are opened.");
+    },
+    goTo: async (dest) => {
+      if (!doc) return;
+      const spot = await destinationSpot(doc, dest);
+      if (!spot) return onToast?.("That link points to a place this file does not have.");
+      const page = Math.min(spot.page, doc.numPages);
+      const h = sizes[page]?.h ?? (await doc.getPage(page)).getViewport({ scale: 1 }).height;
+      latest.current.jumpTo(page, spotOffset(spot.top, h));
+    },
+  };
+  const links = useMemo(
+    () => makeLinkService({ pages: () => latest.current.pages, current: () => latest.current.page, follow: (u, s) => latest.current.follow(u, s), goTo: (d) => latest.current.goTo(d), goToPage: (n) => latest.current.jumpTo(n, 0) }),
+    [],
+  );
   const onSize = useCallback((n: number, s: Size) => setSizes((all) => (all[n]?.w === s.w && all[n]?.h === s.h ? all : { ...all, [n]: s })), []);
   const pct = `${Math.round(scale * 100)}%`;
   return (
@@ -248,7 +292,7 @@ export default function PdfView({ id, path, hidden = false, focused = false, onF
               {!doc ? (
                 <p className="image-wait">Loading {name}</p>
               ) : (
-                Array.from({ length: pages }, (_, i) => <PageCanvas key={i} doc={doc} n={i + 1} scale={scale} root={scroller} size={sizeOf(i + 1)} onSize={onSize} />)
+                Array.from({ length: pages }, (_, i) => <PageCanvas key={i} doc={doc} n={i + 1} scale={scale} root={scroller} size={sizeOf(i + 1)} onSize={onSize} links={links} />)
               )}
             </div>
           </>
