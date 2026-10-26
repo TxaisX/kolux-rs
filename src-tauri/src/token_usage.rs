@@ -581,19 +581,33 @@ mod tests {
 
     #[test]
     fn a_second_scan_request_joins_the_running_one() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
         let flights = Flights::default();
         let calls = std::sync::atomic::AtomicU32::new(0);
+        // Load flake fix: no 50 ms / 300 ms race. The first scan runs until the second request is
+        // made (plus 2 s to take its place in line; 60 s ceiling), and the second must come back
+        // only after the first scan has ended.
+        let (started, running) = std::sync::mpsc::channel();
+        let (asked, a_ended) = (AtomicBool::new(false), AtomicBool::new(false));
         std::thread::scope(|s| {
             let a = s.spawn(|| {
                 flights.run("claude", || {
-                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    calls.fetch_add(1, SeqCst);
+                    started.send(()).unwrap();
+                    let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                    while !asked.load(SeqCst) && std::time::Instant::now() < end {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    a_ended.store(true, SeqCst);
                 })
             });
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            running.recv_timeout(std::time::Duration::from_secs(60)).expect("the first scan started");
+            asked.store(true, SeqCst);
             let b = flights.run("claude", || {
-                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                calls.fetch_add(1, SeqCst);
             });
+            assert!(a_ended.load(SeqCst), "the second request came back before the running scan ended");
             assert!(a.join().unwrap());
             assert!(!b);
         });
