@@ -1,0 +1,14 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index e99ff453..b1a55b7a 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1505,7 +1505,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // pending one before the window closes. The start screen itself is not written back.
+   const screenWriter = useRef(
+     lastWriter((s: Screen) => {
+-      setSettings((x) => ({ ...x, [LAST_SCREEN_FIELD]: s }));
++      // Row 794-d: moves the ref too, so a saveSetting before the next render keeps the last screen.
++      setSettings(applySetting(settingsRef, LAST_SCREEN_FIELD, s).next);
+       saveChanged({}, { [LAST_SCREEN_FIELD]: s }).catch((err) => setNotice(String(err)));
+     }),
+   ).current;
