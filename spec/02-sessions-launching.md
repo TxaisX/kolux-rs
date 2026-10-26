@@ -202,8 +202,8 @@ Rules: the page belongs to the new look, while the older look keeps the dialog (
   such as OpenCode.
 Acceptance:
   - [ ] Open New session → a full-page sheet fills the workspace area.
-  - [ ] With one blank seat, press Ctrl+Enter → nothing starts and the footer names that seat.
-  - [ ] Press Escape → the page closes.
+  - [x] With one blank seat, press Ctrl+Enter → nothing starts and the footer names that seat. (cards; evidence/cards-SESS-018.txt)
+  - [x] Press Escape → the page closes. (cards; evidence/cards-SESS-018.txt)
 Compat: —
 Source: D-02-018
 
