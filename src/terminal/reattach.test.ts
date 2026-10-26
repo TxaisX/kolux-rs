@@ -103,3 +103,42 @@ describe("after-list #378 (ACCT-063): a pane closed while its reattach waited", 
     expect(orphanOf(null, false)).toBeNull();
   });
 });
+
+describe("after-list #378 (ACCT-063): the local terminal a reattach hands back is ended exactly once, whichever order the close comes in", () => {
+  // The pane's two exits, as TerminalPane does them: the answer path ends an orphan, the unmount ends what the pane holds.
+  async function pane(closeWhen: "before-answer" | "after-answer", answer: Partial<Attach>) {
+    const kills: number[] = [];
+    let alive = true;
+    let held: number | null = null;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const { service } = fake(run, answer);
+    const slow = { ...service, attach: async (k: number, g: number) => (await gate, service.attach(k, g)) };
+    const unmount = () => {
+      alive = false;
+      if (held !== null) kills.push(held);
+    };
+    const started = (async () => {
+      const back = await reattach(slow, 1, null);
+      const orphan = orphanOf(back, alive);
+      if (orphan !== null) kills.push(orphan);
+      if (alive && back.kind === "attached") held = back.id;
+    })();
+    if (closeWhen === "before-answer") unmount();
+    release();
+    await started;
+    if (closeWhen === "after-answer") unmount();
+    return kills;
+  }
+
+  it("a tab closed before the answer: the answer path ends the terminal", async () => {
+    expect(await pane("before-answer", { state: "attached", id: 7 })).toEqual([7]);
+  });
+  it("a tab closed after the answer: the unmount ends the terminal it holds", async () => {
+    expect(await pane("after-answer", { state: "attached", id: 7 })).toEqual([7]);
+  });
+  it("nothing is ended when no terminal was handed back", async () => {
+    expect(await pane("before-answer", { state: "fresh" })).toEqual([]);
+    expect(await pane("after-answer", { state: "fresh" })).toEqual([]);
+  });
+});
