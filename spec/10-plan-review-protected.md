@@ -174,9 +174,9 @@ Rules: only Claude Code is guarded, through its PreToolUse hook, and the Safety 
 Acceptance:
   - [ ] Claude force-pushes main → Claude's permission prompt shows the Kolux reason; refuse →
         nothing is pushed.
-  - [ ] Claude asks for the working-tree status → no prompt.
-  - [ ] Switch the matching rule off and try again → the command runs with no prompt.
-  - [ ] Send the hook a garbled body → neutral answer, and Claude carries on.
+  - [x] Claude asks for the working-tree status → no prompt. (cards; evidence/cards-SAFE-009.txt)
+  - [x] Switch the matching rule off and try again → the command runs with no prompt. (cards; evidence/cards-SAFE-009.txt)
+  - [x] Send the hook a garbled body → neutral answer, and Claude carries on. (cards; evidence/cards-SAFE-009.txt)
   - [ ] Run Claude in its automatic permission mode, and again with permission checks skipped, then
         force-push main → record whether the ask still appears (never verified at 0.15.0).
 Compat: Claude Code's PreToolUse protocol: the reply is either an empty object, meaning no opinion,
@@ -202,10 +202,10 @@ Rules: force means any force flag, including the lease and mirror variants and s
   (Kolux RS, T-058: the force-push and discard rules of the protected-command check; a command is
   split on its plain chain operators, the rest of the chain and wrapper handling is the SAFE-014 task.)
 Acceptance:
-  - [ ] git push -f, git push origin :main, and git push --force origin main → each asks.
-  - [ ] git push -f origin @:main, and git push --force origin @ → each asks.
-  - [ ] A force-push of a feature branch, git push origin main, and git push origin @ → each runs.
-  - [ ] git reset --hard and git clean -fdx → ask; git reset --soft HEAD~1 and git clean -n → run.
+  - [x] git push -f, git push origin :main, and git push --force origin main → each asks. (cards; evidence/cards-SAFE-010.txt)
+  - [x] git push -f origin @:main, and git push --force origin @ → each asks. (cards; evidence/cards-SAFE-010.txt)
+  - [x] A force-push of a feature branch, git push origin main, and git push origin @ → each runs. (cards; evidence/cards-SAFE-010.txt)
+  - [x] git reset --hard and git clean -fdx → ask; git reset --soft HEAD~1 and git clean -n → run. (cards; evidence/cards-SAFE-010.txt)
 Compat: —
 Source: D-10-010
 
@@ -222,10 +222,10 @@ Rules: only database clients count: the Postgres, MySQL, SQLite, SQL Server and 
   (Kolux RS, T-058: the database-drop rule; a Mongo shell command that calls drop, drop-database or
   drop-collection counts as a drop.)
 Acceptance:
-  - [ ] The Postgres client given a drop-table statement on its command line → asks; a truncate
-        statement piped into the Postgres client → asks; dropdb on a production database → asks.
-  - [ ] A commit whose message mentions dropping a table → runs; a text search of the migrations
-        folder for the drop-table keyword → runs.
+  - [x] The Postgres client given a drop-table statement on its command line → asks; a truncate
+        statement piped into the Postgres client → asks; dropdb on a production database → asks. (cards; evidence/cards-SAFE-011.txt)
+  - [x] A commit whose message mentions dropping a table → runs; a text search of the migrations
+        folder for the drop-table keyword → runs. (cards; evidence/cards-SAFE-011.txt)
 Compat: —
 Source: D-10-011
 
@@ -248,11 +248,11 @@ Rules: Stripe: a live secret key or live restricted key anywhere in the command 
   (Kolux RS, T-058: the Stripe, infrastructure and production-deploy rules; a production marker is the word prod or
   production on its own, after a dash, or as the value of a flag or assignment on the command.)
 Acceptance:
-  - [ ] Cancelling a subscription with the Stripe CLI → asks; stripe listen, and listing customers →
-        run; a text search of the source folder for the live-key prefix → runs.
-  - [ ] terraform apply -auto-approve → asks; npx cdk deploy → asks; terraform plan → runs.
-  - [ ] vercel --prod → asks; a Wrangler deploy with --env production → asks; vercel deploy with no
-        production flag → runs; npm install --production → runs.
+  - [x] Cancelling a subscription with the Stripe CLI → asks; stripe listen, and listing customers →
+        run; a text search of the source folder for the live-key prefix → runs. (cards; evidence/cards-SAFE-012.txt)
+  - [x] terraform apply -auto-approve → asks; npx cdk deploy → asks; terraform plan → runs. (cards; evidence/cards-SAFE-012.txt)
+  - [x] vercel --prod → asks; a Wrangler deploy with --env production → asks; vercel deploy with no
+        production flag → runs; npm install --production → runs. (cards; evidence/cards-SAFE-012.txt)
 Compat: —
 Source: D-10-012
 
