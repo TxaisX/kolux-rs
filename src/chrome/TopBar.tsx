@@ -13,6 +13,9 @@ import { weeklyOf } from "../usage/claude";
 import { usePlan } from "../usage/plan";
 import { popAppMenu } from "./useChrome";
 import { chromeLayout } from "./titleHeader";
+import { t } from "../i18n/lookup";
+import { useSettings } from "../settings/useSettings";
+import { readStatusBar, usagePills } from "./statusItems";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
@@ -27,7 +30,7 @@ export const screens: Array<{ id: Screen; label: string }> = [
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals.
  * `sidebarWidth` (T-049-c): Classic draws a title header exactly as wide as the left sidebar card, so it follows the card. */
 /** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
-export type TopBarProps = { screen: Screen; classic?: boolean; sidebarWidth?: number; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void; fullPage?: boolean; codexAccount?: boolean; appMenu?: boolean; uiZoom?: number };
+export type TopBarProps = { screen: Screen; classic?: boolean; sidebarWidth?: number; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void; fullPage?: boolean; codexAccount?: boolean; appMenu?: boolean; uiZoom?: number; needsYou?: number };
 
 /** TERM-078: the overflow menu's View section; each item names its keybinding id. */
 export const VIEW_ITEMS = [
@@ -37,17 +40,24 @@ export const VIEW_ITEMS = [
 ] as const;
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
-export default function TopBar({ screen, classic = false, sidebarWidth, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom, fullPage = false, codexAccount = false, appMenu = false, uiZoom = 1 }: TopBarProps) {
+export default function TopBar({ screen, classic = false, sidebarWidth, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom, fullPage = false, codexAccount = false, appMenu = false, uiZoom = 1, needsYou = 0 }: TopBarProps) {
   const [maximized, setMaximized] = useState(false);
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   // USAGE-008 / VIEW-008: a pill per provider, only with a weekly figure (or Codex's refused
   // sign-in) and an installed CLI; with neither, nothing is drawn. T-550: the pill is one button
   // that opens Settings > Accounts & keys (Ctrl+, still opens Settings, app.settings).
   const plan = usePlan();
-  const claudeOn = installed.includes("claude");
-  // T-543-b: the Codex pill needs a Codex account, not only the CLI installed.
-  const codexOn = installed.includes("codex") && codexAccount;
-  const anyPill = (claudeOn && !!weeklyOf(plan.claude)) || (codexOn && !!(plan.codex?.weekly || plan.codex?.state === "sign-in-again"));
+  const { settings } = useSettings();
+  // The usage items in the status-bar list (Settings > Appearance) switch each provider off here.
+  const { claude: claudeOn, codex: codexOn, any: anyPill } = usagePills({
+    claudeInstalled: installed.includes("claude"),
+    claudeWeekly: !!weeklyOf(plan.claude),
+    // T-543-b: the Codex pill needs a Codex account, not only the CLI installed.
+    codexInstalled: installed.includes("codex"),
+    codexAccount,
+    codexFigure: !!(plan.codex?.weekly || plan.codex?.state === "sign-in-again"),
+    hidden: readStatusBar(settings ?? {}).hidden,
+  });
   useEffect(() => {
     const win = getCurrentWindow();
     let stop = () => {};
@@ -149,8 +159,9 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
           <span className="ph">Search</span>
           <Kbd id="worktree.palette" />
         </button>
-        <button className="ib bell" aria-label="Notifications" title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
+        <button className="ib bell" aria-label={needsYou > 0 ? t(needsYou === 1 ? "inbox.bell.needs.one" : "inbox.bell.needs.many", { count: needsYou }) : "Notifications"} title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
           <Bell />
+          {needsYou > 0 && <span className="bell-count" aria-hidden="true">{needsYou > 99 ? "99+" : needsYou}</span>}
         </button>
         <AccountSwitcher />
         <UsagePill hidden={!anyPill} claudeOn={claudeOn} codexOn={codexOn} />

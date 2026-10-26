@@ -7,7 +7,7 @@ import { readStatusBar, STATUS_ITEMS, toggleItem } from "./statusItems";
 test("VIEW-096: everything shows until something is hidden", () => {
   expect(readStatusBar({})).toEqual({ visible: true, hidden: [] });
   expect(readStatusBar({ statusBarVisible: false }).visible).toBe(false);
-  expect(STATUS_ITEMS.map((i) => i.id)).toEqual(["hooks", "memory", "terminals", "agents", "awake", "ports"]);
+  expect(STATUS_ITEMS.map((i) => i.id)).toEqual(["hooks", "memory", "terminals", "agents", "awake", "ports", "pill-claude", "pill-codex"]);
 });
 
 test("VIEW-096: an old saved list keeps the items it knows and drops retired or unknown ones", () => {

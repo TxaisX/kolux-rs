@@ -175,8 +175,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     // STAT-047: the tray dot lights (while the window is hidden) before any toast switch is consulted.
     void invoke("tray_ping", { kind: kind === "bell" ? "bell" : "finished" }).catch(() => {});
     // STAT-044 "Stay quiet about the worktree you are looking at": only the worktree in view is held back.
-    const focusedWorktree = panes.find((x) => inView(x.key))?.cwd ?? null;
-    if (!(inView(p.key) && winFocused) && settings[gate] !== false && show()) void raiseNotification(settings, title, body, event, focusedWorktree).catch(() => {});
+    if (!(inView(p.key) && winFocused) && settings[gate] !== false && show()) void raiseNotification(settings, title, body, event).catch(() => {});
     if (!marksUnread(p.key, known, unreadPanes, inView(p.key), winFocused)) return;
     setUnreadPanes((u) => new Set([...u, p.key]));
     if (p.cwd !== null) markDir(p.cwd, true);
@@ -189,8 +188,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   const quiet = (p: Pane, minutes: number) => {
     const title = noteTitle(tabName(p, titles), repoOf(p), `has gone quiet for ${minutes} min`);
     setToast(title);
-    const focusedWorktree = panes.find((x) => inView(x.key))?.cwd ?? null;
-    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.", { id: noteId(), worktree: p.cwd, pane: String(p.key), kind: "quiet" }, focusedWorktree).catch(() => {});
+    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.", { id: noteId(), worktree: p.cwd, pane: String(p.key), kind: "quiet" }).catch(() => {});
   };
   const quietRef = useRef(quiet);
   quietRef.current = quiet;
@@ -240,7 +238,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       }
       // STAT-046: a stop on a sign-in failure has the account checked, so the main-window notice
       // (SignInNotice) names the lapsed account without waiting for the next start.
-      if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check").catch(() => {});
+      if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check", { cause: "signin" }).catch(() => {});
       // USAGE-001: clearing the pane (a /clear, a resume, a manual compact) forgets its reading; the
       // next status report brings the new figure. A clear or a compact keeps the agent's process, so
       // a report from before it may still turn up: the forgotten stamp is the floor. A start or a

@@ -12,12 +12,13 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop, Target } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
 import { chordPlan, openerRefocus, windowHasFocus } from "./chord";
-import { type KeyEvent, keyEventInit, pageKeys } from "./keys";
+import { type KeyEvent, keyEventInit, pageKeys, startsGrab } from "./keys";
 import { type MenuEvent, menuAt, menuColours, menuContext, menuSpec } from "./menu";
 import { dropPage, livePage } from "./pages";
 import { useKeymap } from "../keys/KeymapContext";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
+import "./dragThroughInstall"; // BROW-052 / T-319-c: app drags cross the pages
 import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
@@ -785,6 +786,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     const plan = await chordPlan(id, "key");
     if (!plan.run) return;
     if (plan.focusPane) flushSync(() => focusMe.current?.());
+    // T-240 (BROW-035): Mod+C with nothing selected in the page (the page script checks) starts a grab here.
+    if (startsGrab(keymap, p)) {
+      if (open && !overlay && !drawing && !grab && !grabMode) startGrab();
+      return;
+    }
     window.dispatchEvent(new KeyboardEvent("keydown", keyEventInit(p)));
   };
 

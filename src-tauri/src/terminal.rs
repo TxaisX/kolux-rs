@@ -487,15 +487,16 @@ pub fn screen_owner(prev: u8, chunk: &[u8]) -> u8 {
             continue;
         }
         let mut j = i + 3;
-        let mut n: u32 = 0;
+        // An overflowing mode number is an unknown mode (none), never a wrapped known one.
+        let mut n: Option<u32> = Some(0);
         while j < chunk.len() && chunk[j].is_ascii_digit() {
-            n = n * 10 + u32::from(chunk[j] - b'0');
+            n = n.and_then(|n| n.checked_mul(10)?.checked_add(u32::from(chunk[j] - b'0')));
             j += 1;
         }
         if j < chunk.len() && matches!(chunk[j], b'h' | b'l') {
             let bit = match n {
-                47 | 1047 | 1049 => ALT,
-                1000..=1003 => MOUSE,
+                Some(47 | 1047 | 1049) => ALT,
+                Some(1000..=1003) => MOUSE,
                 _ => 0,
             };
             if chunk[j] == b'h' {
@@ -1425,8 +1426,8 @@ impl Terminals {
 
     /// cli FIX-7: a session over a fake writer, for tests in other modules. `program` is the mark
     /// Kolux recorded for it (none for a plain shell); it has been quiet for five seconds.
-    #[cfg(test)]
-    pub(crate) fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
+    #[cfg(any(test, feature = "test-fakes"))]
+    pub fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
         let long_ago = Instant::now() - Duration::from_secs(5);
         let mut inner = self.inner.lock().unwrap();
         inner.fresh_incarnation(id);
@@ -2248,6 +2249,15 @@ mod tests {
         assert!(history_file(&dir, 7).exists());
         assert!(dir.join("history").join("notes.log").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_832_an_overflowing_mode_number_is_an_unknown_mode() {
+        assert_eq!(screen_owner(0, b"[?99999999999h"), 0);
+        assert_eq!(screen_owner(0, b"[?4294968345h"), 0, "4294967296 + 1049 is not 1049");
+        assert_eq!(screen_owner(ALT, b"[?4294968345l"), ALT);
+        assert_eq!(screen_owner(0, b"[?4294968345h[?1049h"), ALT);
+        assert_eq!(screen_owner(0, b"[?1049h"), ALT);
     }
 
     #[test]

@@ -6,15 +6,16 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo } from "../app-info";
 import type { FeedbackFacts } from "../settings/privacy";
+import { copyCrashBundle, CRASH_BUNDLE_HINT } from "./crashBundle";
 import { addImages, clipboardNote, MAX_IMAGES, MIME, type Shot } from "./images";
 import { closed, issue, reduce, tabTarget, typedText } from "./model";
 
 const EVENT = "kolux-feedback";
 const NOTE_MS = 8000;
 
-/** Opens the message box, optionally with some text already above the block. */
-export function requestFeedback(text = "") {
-  window.dispatchEvent(new CustomEvent(EVENT, { detail: { text } }));
+/** Opens the message box, optionally with some text already above the block; `crash` marks a crash report. */
+export function requestFeedback(text = "", crash = false) {
+  window.dispatchEvent(new CustomEvent(EVENT, { detail: { text, crash } }));
 }
 
 /** The version from the app, the system from the back end; what cannot be read says so. */
@@ -48,6 +49,7 @@ export default function FeedbackDialog() {
   const box = useRef<HTMLTextAreaElement | null>(null);
   const [shots, setShots] = useState<Shot[]>([]);
   const [refused, setRefused] = useState<string[]>([]);
+  const [crash, setCrash] = useState(false);
   const previews = useMemo(() => shots.map((x) => URL.createObjectURL(new Blob([x.bytes as BlobPart], { type: MIME[x.kind] }))), [shots]);
   useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
 
@@ -55,14 +57,15 @@ export default function FeedbackDialog() {
   const pick = async (files: FileList | null) => {
     if (!files?.length) return;
     const read = await Promise.all([...files].map(async (f) => ({ name: f.name, type: f.type, bytes: new Uint8Array(await f.arrayBuffer()) })));
-    const r = addImages(shots, read);
+    const r = addImages(shots, read, crash);
     setShots(r.shots);
     setRefused(r.refused);
   };
 
   useEffect(() => {
     const on = (e: Event) => {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text ?? "";
+      const text = (e as CustomEvent<{ text?: string; crash?: boolean }>).detail?.text ?? "";
+      setCrash((e as CustomEvent<{ crash?: boolean }>).detail?.crash === true);
       void readFacts().then((facts) => dispatch({ t: "open", facts, text }));
     };
     window.addEventListener(EVENT, on);
@@ -93,10 +96,11 @@ export default function FeedbackDialog() {
       const r = issue(s.draft, s.facts, s.anonymous);
       if (!r.ok) return dispatch({ t: "fail", error: r.error });
       // the copy starts inside the click, while the page may still write to the clipboard
-      const copied = shots.length ? copyFirst(shots[0]) : Promise.resolve(false);
+      const bundle = crash ? copyCrashBundle(() => invoke<string>("diag_bundle"), (t) => navigator.clipboard.writeText(t)) : null;
+      const copied = !crash && shots.length ? copyFirst(shots[0]) : Promise.resolve(false);
       invoke("open_external", { url: r.url }).then(
         async () => {
-          const extra = clipboardNote(shots.length, await copied);
+          const extra = bundle ? await bundle : clipboardNote(shots.length, await copied);
           setShots([]);
           setRefused([]);
           dispatch({ t: "sent", trimmed: r.trimmed, extra });
@@ -152,6 +156,9 @@ export default function FeedbackDialog() {
         <label className="auto-radio">
           <input type="checkbox" checked={s.anonymous} onChange={(e) => dispatch({ t: "anon", on: e.target.checked })} /> Submit anonymously (leave my GitHub name out)
         </label>
+        {crash ? (
+          <span className="muted">{CRASH_BUNDLE_HINT}</span>
+        ) : (
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
           <label className="btn" style={{ cursor: "pointer" }}>
             Add screenshot
@@ -167,6 +174,7 @@ export default function FeedbackDialog() {
           ))}
           <span className="muted">Up to {MAX_IMAGES} images; the first is put on the clipboard for you to paste.</span>
         </div>
+        )}
         {refused.map((m) => (
           <p key={m} role="alert" className="conn-detail" style={{ margin: 0, color: "var(--danger)" }}>
             {m}

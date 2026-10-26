@@ -178,3 +178,39 @@ cookies.txt)
 7. While an import runs the Import cookies button is disabled.
 8. A cookies.txt from a real Chrome export (Txais's own run): a site signed in in Chrome opens
    signed in here; Google rows are reported as left out.
+
+2026-10-25 close-out check of BROW-035 against row 320 (lane/browser da083698; evidence/browser-fix-320.txt)
+Built by 320 on the devtools capture (Page.captureScreenshot, browser_capture): Grab button, hover outline (BROW-037 picker),
+cropped picture of the element, details sheet, Copy details, Send to agent, Esc/Close, grab ends on a pick, Esc in the page or the
+Annotate button; vitest grab.test.ts + grabFlow.test.ts. Live proof pending (batched): steps in evidence/browser-fix-320.txt.
+Acceptance boxes: "click a button -> sheet shows screenshot and text; Attach to AI puts it in the agent's input" COVERED (Send to
+agent); "Escape mid-grab -> highlight disappears" COVERED.
+NOT covered, so T-240 stays open (rules/compat of the card):
+ 1. Mod+C starts a grab only when the page is not copying selected text. browser.grabElement (src/keys/actions.ts) is unrouted:
+    src/settings/shortcutRows.ts NOT_ROUTED lists it and src/browser/keys.ts PAGE_RESERVED keeps Mod+C inside the page. Needs a
+    selection check in the page script plus a handler; keys.ts is browser lane, actions.ts/shortcutRows.ts are shared (patch).
+ 2. The sheet offers Copy details, not Copy Screenshot (the card names Copy Screenshot).
+ 3. A picture over a size budget should be left out of the grab instead of failing it; no budget exists in grabFlow.ts/picture.ts.
+
+2026-10-25 close-out of the three BROW-035 gaps (lane/browser; Sonnet 5.5)
+(1) Mod+C starts a grab only when the page is not copying selected text. browser.rs CHORD_SCRIPT: a chord marked n (keys.ts pageKeys marks the chord bound to browser.grabElement when it is an
+    editing chord) goes to the app only if copying() is false (no selection in the page, no selected range in the focused field); with a selection the page copies as usual. Until the app hands in
+    its chords Mod+C stays the page's. BrowserPane onKey: a forwarded press that keys.ts startsGrab recognises starts the grab (same startGrab as the Grab button; ignored while a grab, a drawing or an
+    overlay is up). A rebinding of Grab Page Element follows (no n when the chord is not an editing chord); dropped binding forwards nothing.
+    Tests: src/browser/chordKeys.test.ts (runs the shipped script section: nothing selected -> sent "key?k=c&c=KeyC&m=c" and cancelled; page selection, field selection -> page copies; empty field range and
+    throwing selectionStart -> grab; before __kxKeys -> page keeps it; Shift+C and held key untouched), keys.test.ts (n flag, Mac, rebinding, startsGrab), cargo needles in brow018 test.
+    Shared file: src/settings/shortcutRows.ts NOT_ROUTED drops browser.grabElement (+ shortcutRows.test.ts counts 135 -> 136) as evidence/browser-fix-T-240-shortcutRows.ts.patch (apply after the T-316-b patches).
+(2) Copy Screenshot: GrabSheet button (data-go="copy-shot", disabled with no picture) -> grabFlow.copyScreenshot writes the cropped PNG as an image/png ClipboardItem; says "Copy was refused" when the clipboard
+    refuses. Tests: grabFlow.test.ts (blob bytes start 0x89, 10 bytes; refusal; no picture; disabled markup).
+(3) Size budget: grabFlow.PICTURE_BUDGET = 2 MiB of decoded PNG; a larger crop is left out and the sheet says "The element's picture is over 2 MB, so it is left out; the details are below", the grab still
+    opens with its rows. Test: grabFlow.test.ts (over budget -> picture null + reason + rows; just under -> kept; dataUrlBytes).
+Coordinator default (Txais may overrule): budget 2 MiB.
+
+LIVE PROOF PENDING (batched)
+ a. Open a page, select a sentence, press Ctrl+C: the sentence is copied, no picker starts. Press Ctrl+C with nothing selected: elements light up under the pointer; click one: the sheet shows the picture.
+ b. Select text inside an address/text field of the page and press Ctrl+C: it copies, no grab. Esc leaves the picker.
+ c. On the sheet press Copy Screenshot, paste into an image-aware app: the element's picture appears. The line "Screenshot copied" shows.
+ d. Grab a very large, noisy element (a full-page photo): the sheet opens without a picture and says it is over 2 MB; Copy Screenshot is off; Send to agent still sends the details.
+ e. Settings > Shortcuts lists Grab Page Element (after the shortcutRows patch is applied).
+Gates (patch chain 746 -> T-316-b-lib -> T-316-b-PreviewPane -> T-240-shortcutRows applied): tsc exit 0; vitest src/browser src/settings src/keys src/editor/PreviewPane 96 files 580 passed; cargo clippy --all-targets -D warnings exit 0;
+cargo test --lib browser 221 passed 0 failed; chain reverted with git apply -R in reverse order.

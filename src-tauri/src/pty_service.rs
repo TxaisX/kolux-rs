@@ -594,6 +594,10 @@ pub enum Probe {
 
 pub fn probe(dir: &Path, wait: Duration) -> Probe {
     let Some(ep) = read_endpoint(dir) else { return Probe::None };
+    // ux card 6: a service killed with its window leaves its record; a dead loopback port takes Windows ~2 s to refuse.
+    if crate::procs::wait_gone(&[ep.pid], Duration::ZERO).is_empty() {
+        return Probe::None;
+    }
     match Client::connect(&ep, wait) {
         Ok(c) => match compatible(c.protocol()) {
             Ok(()) => Probe::Ready(ep, c),
@@ -762,7 +766,8 @@ mod tests {
         // No window attached: a flood is never held (nothing would ever acknowledge it).
         let t = Instant::now();
         hold_within(&flow, false, FLOW_HIGH * 3, Duration::from_secs(5));
-        assert!(t.elapsed() < Duration::from_millis(200), "held with no window: {:?}", t.elapsed());
+        // The wait asked for is 5 s, so 2 s still tells "not held" from "held"; 200 ms flaked under a loaded full run.
+        assert!(t.elapsed() < Duration::from_secs(2), "held with no window: {:?}", t.elapsed());
         // A window attached: past the high mark the reader waits until the window's pane acknowledges.
         let (tx, _rx) = mpsc::channel::<String>();
         service.lock().windows.insert(1, tx);
@@ -913,7 +918,8 @@ mod tests {
         }
         // The window goes away: the terminal stays.
         drop(first);
-        let until = Instant::now() + Duration::from_secs(5);
+        // The daemon notices the dropped connection on its own thread; under a loaded full run that takes seconds.
+        let until = Instant::now() + Duration::from_secs(30);
         while s.service.counts() != (1, 0) {
             assert!(Instant::now() < until, "the closed window was not detached");
             std::thread::sleep(Duration::from_millis(20));
@@ -968,6 +974,21 @@ mod tests {
         remove_endpoint_if_ours(&dir, 42);
         assert!(read_endpoint(&dir).is_none());
         assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "no temporary file left behind");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    /// ux card 6: Windows takes about 2 s to refuse a dead loopback port, and a service killed with its window leaves its
+    /// record behind; a record whose process is gone must read as "no service" at once.
+    #[test]
+    fn ux6_a_recorded_service_whose_process_is_gone_is_not_dialled() {
+        let dir = scratch("ux6gone");
+        let port = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let mut done = if cfg!(windows) { std::process::Command::new("cmd").args(["/C", "exit"]).spawn() } else { std::process::Command::new("true").spawn() }.unwrap();
+        let pid = done.id();
+        done.wait().unwrap();
+        write_endpoint(&dir, &Endpoint { port, token: "t".into(), pid, generation: 1, protocol: PROTOCOL }).unwrap();
+        let t = Instant::now();
+        assert!(matches!(probe(&dir, PROBE_WAIT), Probe::None));
+        assert!(t.elapsed() < Duration::from_millis(500), "took {:?}", t.elapsed());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

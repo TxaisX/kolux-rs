@@ -1,19 +1,14 @@
 import { expect, test } from "vitest";
-import { decide, emptyPacer, paneFor } from "./pacing";
-import { noteId } from "./pace";
+import { newPaceMemory, noteId, paced } from "./pace";
 
-const opts = { windowFocused: false, suppressFocused: false };
-
-test("T-125-b two events from one pane with the same words in one millisecond get distinct ids and both reach the click lookup", () => {
+test("T-125-b two events from one pane with the same words in one millisecond get distinct ids and both are remembered", () => {
   const a = noteId();
   const b = noteId();
   expect(a).not.toBe(b);
-  const at = 1_000;
-  let r = decide(emptyPacer(), { id: a, worktree: "C:/w/a", pane: "7", kind: "finish", at }, opts);
-  r = decide(r.state, { id: b, worktree: "C:/w/a", pane: "7", kind: "finish", at }, opts);
-  expect(r.reason).toBe("cooldown");
-  expect(paneFor(r.state, a)).toBe("7");
-  expect(paneFor(r.state, b)).toBe("7");
+  const mem = newPaceMemory();
+  expect(paced(mem, "C:/w/a", a, 1_000)).toBe(true);
+  expect(paced(mem, "C:/w/a", b, 1_000)).toBe(false);
+  expect(mem.shown.has(a) && mem.shown.has(b)).toBe(true);
 });
 
 test("T-125-b ids count up, so a later event never sorts or compares equal to an earlier one", () => {

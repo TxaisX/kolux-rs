@@ -35,8 +35,8 @@ function nativeHits(chords: string[], native: readonly NativeChord[]): NativeCho
   return native.filter((n) => chords.some((c) => same(c, n.chord)));
 }
 
-/** Commands in the keymap with no handler anywhere yet (browser Hard Reload and Grab Page Element). */
-const NOT_ROUTED = new Set(["browser.hardReload", "browser.grabElement"]);
+/** Commands in the keymap with no handler anywhere yet (browser Hard Reload). Grab Page Element is routed by the browser pane (T-240). */
+const NOT_ROUTED = new Set(["browser.hardReload"]);
 
 /** `native`: the chords the system menu owns (menu_sync reports them; none outside macOS). */
 export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): Row[] {

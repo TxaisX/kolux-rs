@@ -202,12 +202,14 @@ pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: St
     })
 }
 
-/// Remembers the dismissed version or that the reassurance tip is done.
+/// Remembers the dismissed version or that the reassurance tip is done, or empties the refused-installer list.
 #[tauri::command]
 pub fn update_mark(store: State<'_, Mutex<Store>>, key: String, value: String) -> Result<(), String> {
-    let key = match key.as_str() {
-        "dismissedVersion" => KEY_DISMISSED,
-        "tipDone" => KEY_TIP_DONE,
+    let (key, value) = match key.as_str() {
+        "dismissedVersion" => (KEY_DISMISSED, value),
+        "tipDone" => (KEY_TIP_DONE, value),
+        // The refused-installer list can be emptied here, never added to.
+        "refusedInstallers" => (guard::KEY_REFUSED, guard::refused_reset_value(&value)?.to_string()),
         _ => return Err(format!("unknown update mark: {key}")),
     };
     store.lock().map_err(|e| e.to_string())?.set(key, &value).map_err(|e| e.to_string())
@@ -223,10 +225,10 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
     let feed = this_feed()?;
     let url: tauri::Url = feed.endpoint.parse().map_err(|e| format!("bad update address: {e}"))?;
     // T-324-b (APP-032): the saved proxy; a setting that cannot be used stops the check, never goes around it.
-    let route = {
-        let store = app.state::<Mutex<Store>>();
-        let store = store.lock().map_err(|e| e.to_string())?;
-        crate::resources::app_proxy::route_from_store(&store, &url)?
+    // T-323-b (SET-040): with the HTTP/1 switch of Settings > General.
+    let (route, http1) = {
+        let plan = crate::resources::app_http::plan_for(&app, &url)?;
+        (plan.route, plan.http1)
     };
     // T-199 (APP-031): checks are numbered; a late answer from an earlier one stores nothing.
     let round = app.state::<Updates>().rounds.begin();
@@ -244,7 +246,7 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
         crate::resources::app_proxy::Route::Direct => builder.no_proxy(),
         crate::resources::app_proxy::Route::Via(p) => builder.proxy(p),
     };
-    if compat {
+    if compat || http1 {
         builder = builder.configure_client(|c| c.http1_only());
     }
     let found = match builder.build().map_err(|e| e.to_string())?.check().await {
@@ -264,7 +266,10 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
     };
     // APP-031: a release whose installer is not uploaded yet is passed over until it is.
     if let Some(u) = found.as_ref() {
-        if installer_missing(&app, &u.download_url).await {
+        // T-323-b: the public-only HEAD client has no proxy path, so with a saved proxy it is skipped
+        // rather than sent around it; the download itself reports a missing installer (404).
+        let proxied = matches!(crate::resources::app_http::plan_for(&app, &u.download_url).map(|p| p.route), Ok(crate::resources::app_proxy::Route::Via(_)));
+        if !proxied && installer_missing(&app, &u.download_url).await {
             if !app.state::<Updates>().rounds.is_current(round) {
                 return Err(care::MARK_STALE.into());
             }
@@ -305,7 +310,10 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
     if let Some((u, _)) = updates.ready.lock().map_err(|e| e.to_string())?.as_ref() {
         return Ok(info_of(u));
     }
-    let update = updates.pending.lock().map_err(|e| e.to_string())?.clone().ok_or("There is no update to download; check again.")?;
+    let mut update = updates.pending.lock().map_err(|e| e.to_string())?.clone().ok_or("There is no update to download; check again.")?;
+    // T-323-b (APP-032): the installer's own host goes through the bypass list too, not only the feed's;
+    // a setting that cannot be used stops the download.
+    (update.proxy, update.no_proxy) = crate::resources::app_http::updater_fields(&crate::resources::app_http::plan_for(&app, &update.download_url)?.route);
     let version = update.version.clone();
     let mut received = 0u64;
     let emitter = app.clone();
@@ -331,7 +339,7 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
     let (checked, version) = (bytes.clone(), update.version.clone());
     let verdict = tauri::async_runtime::spawn_blocking(move || {
         let dir = std::env::temp_dir().join("kolux-rs-update-check");
-        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::PINNED_PUBLISHER, guard::SIGNED_BUILD || guard::PINNED_PUBLISHER.is_some(), guard::check_file)
+        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::Pins { subject: guard::PINNED_PUBLISHER, issuer: guard::PINNED_ISSUER }, guard::SIGNED_BUILD || guard::PINNED_PUBLISHER.is_some() || guard::PINNED_ISSUER.is_some(), guard::check_file)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -533,8 +541,29 @@ mod tests {
         let body = &src[src.find("pub async fn update_check").unwrap()..src.find("pub async fn update_download").unwrap()];
         let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("update_check lost {needle}"));
         // the route is read (and its error returned with ?) before the client is built, and applied to it
-        assert!(at("route_from_store(&store, &url)?") < at(".build()"));
+        assert!(at("plan_for(&app, &url)?") < at(".build()"));
+        assert!(at("compat || http1") < at(".build()"), "the HTTP/1 switch reaches the client");
         assert!(at("Route::Direct => builder.no_proxy()") < at(".build()"));
         assert!(at("Route::Via(p) => builder.proxy(p)") < at(".build()"));
+    }
+
+    #[test]
+    fn t323b_the_download_routes_its_own_host_and_the_head_probe_does_not_go_around_a_saved_proxy() {
+        let src = include_str!("update.rs");
+        let body = &src[src.find("pub async fn update_download").unwrap()..src.find("pub fn update_restart").unwrap()];
+        let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("update_download lost {needle}"));
+        assert!(at("plan_for(&app, &update.download_url)?") < at(".download("), "the installer host is routed first, and a bad setting stops it");
+        let check = &src[src.find("pub async fn update_check").unwrap()..src.find("pub async fn update_download").unwrap()];
+        assert!(check.find("!proxied && installer_missing").is_some(), "no direct probe while a proxy is saved");
+    }
+
+    // AFTER (refused-list reset): update_mark can empty the refused list, and the issuer pin reaches the check.
+    #[test]
+    fn t293_the_refused_list_reset_and_the_issuer_pin_are_wired() {
+        let src = include_str!("update.rs");
+        let mark = &src[src.find("pub fn update_mark").unwrap()..src.find("pub async fn update_download").unwrap()];
+        assert!(mark.contains("\"refusedInstallers\"") && mark.contains("guard::refused_reset_value"), "update_mark lost the refused-list reset");
+        let dl = &src[src.find("pub async fn update_download").unwrap()..src.find("pub fn update_restart").unwrap()];
+        assert!(dl.contains("guard::PINNED_ISSUER"), "update_download no longer passes the issuer pin");
     }
 }

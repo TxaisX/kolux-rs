@@ -78,9 +78,11 @@ import { trustedSetup } from "../setup/TrustPrompt";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
 import { dropBand, parentDropTarget } from "./parentDrop";
 import { HEADER_ORDER_SETTING, MANUAL_ORDER_SETTING, dragStart, dropBefore, dropOutcome, edgeScroll, idsFrom, manualOrder, moveHeader, moveRows, siblingIds } from "./order";
+import { pendingWrites } from "./settingWrite";
 import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filtersFrom, filtersOn, rowShown, toggleProject } from "./filter";
 import { deletePlan, rowMenu, type MenuItem } from "./menu";
 import { commentBlocks, itemFromPaste, type Span } from "./details";
+import { onWorkspaceStatus } from "./statusRefresh";
 import { FILE_MANAGER, loadTargets, openIn } from "../editor/openIn";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -218,6 +220,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   index.current = onIndex;
   const live = useRef({ settings, onSetting }); // the settings as of the latest render, for steps that finish after an await
   live.current = { settings, onSetting };
+  // Row 794: a filter choice made before the page re-renders (Clear filters, then a tick) builds on the one before it.
+  const pend = useRef(pendingWrites());
+  pend.current.reset();
+  const setFilter = (key: string, value: unknown) => (pend.current.put(key, value), onSetting(key, value));
   const [listed, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones not hidden by hand
   // AUTO-024: the switch that leaves out worktrees made by automation runs; moving to one turns it off.
   const hideAuto = settings[HIDE_AUTOMATION_SETTING] === true;
@@ -300,6 +306,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const whereTouched = useRef(false); // likewise the "setup opens in" choice
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewAnswered, setPreviewAnswered] = useState(false); // Git has answered for the name now shown
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
@@ -485,6 +492,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const t = window.setInterval(() => document.visibilityState === "visible" && refreshWorktrees(projects, { tick: true }).catch(fail), 5000);
     return () => window.clearInterval(t);
   }, [projects, refreshWorktrees]);
+  // A Board status or nest change shows here at once, not on the next poll.
+  useEffect(() => onWorkspaceStatus(window, () => void refreshWorktrees(projects).catch(fail)), [projects, refreshWorktrees]);
 
   const reload = useCallback(async () => {
     const list = await invoke<Project[]>("project_list");
@@ -514,10 +523,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   useEffect(() => {
     if (name.trim() === "") {
       setPreview(null);
+      setPreviewAnswered(false);
       return;
     }
     let live = true;
-    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null, branch: existing ? null : branchDraft.trim() || null }).then((s) => live && setPreview(s)).catch(fail);
+    setPreviewAnswered(false);
+    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null, branch: existing ? null : branchDraft.trim() || null })
+      .then((s) => live && (setPreview(s), setPreviewAnswered(true)))
+      .catch(fail);
     return () => {
       live = false;
     };
@@ -976,7 +989,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         onKeyDown={submitKeys(p)}
       />
       <div className="preview">
-        {linked ? `linked to ${itemLabel(linked)}${linked.kind === "pull" ? ", its branch checked out" : ", on a new branch"}` : prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
+        {linked ? `linked to ${itemLabel(linked)}${linked.kind === "pull" ? ", its branch checked out" : ", on a new branch"}` : prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p, !previewAnswered)}
       </div>
       {linked && (
         <div className="btn-row">
@@ -1875,7 +1888,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     return jumpToCurrent({
       path: activeDir,
       hiddenByFilters: !!cur && hidden(cur),
-      clear: () => CLEAR_FILTERS.forEach(([k, v]) => onSetting(k, v)),
+      clear: () => CLEAR_FILTERS.forEach(([k, v]) => setFilter(k, v)),
       find: (path) => Array.from(document.querySelectorAll('.sb-list [data-path]')).find((el) => same(el.getAttribute('data-path') ?? '', path)) ?? null,
       show: (row) => row.scrollIntoView({ block: 'center' }),
     });
@@ -2253,14 +2266,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                         type="checkbox"
                         aria-label={`show ${p.name}`}
                         checked={filters.projects.length === 0 || filters.projects.includes(p.id)}
-                        onChange={() => onSetting(FILTER_PROJECTS_SETTING, toggleProject(filters, projects.map((x) => x.id), p.id))}
+                        onChange={() => setFilter(FILTER_PROJECTS_SETTING, toggleProject(filtersFrom(pend.current.latest(settings)), projects.map((x) => x.id), p.id))}
                       />
                       {p.name}
                     </label>
                   ))}
                 </div>
               )}
-              <button className="btn" aria-label="clear filters" disabled={filtersOn(filters) === 0} onClick={() => CLEAR_FILTERS.forEach(([k, v]) => onSetting(k, v))}>
+              <button className="btn" aria-label="clear filters" disabled={filtersOn(filters) === 0} onClick={() => CLEAR_FILTERS.forEach(([k, v]) => setFilter(k, v))}>
                 Clear filters{filtersOn(filters) > 0 ? ` (${filtersOn(filters)})` : ""}
               </button>
               <CardDetailsChooser settings={settings} onSetting={onSetting} />

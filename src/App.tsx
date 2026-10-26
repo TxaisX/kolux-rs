@@ -19,6 +19,7 @@
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { saveChanged } from "./settings/saveChanged";
+import { applySetting, applySettings, rebaseSettings } from "./projects/settingWrite";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -155,7 +156,7 @@ import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SU
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
-import { VOCAB, nextNeedsYou } from "./terminal/status";
+import { VOCAB, needsYouCount, nextNeedsYou } from "./terminal/status";
 import { followedTitle, IDLE, shownAgent, type Identity } from "./terminal/shellMarks";
 import type { KindKey } from "./settings/notifications";
 import { tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
@@ -182,7 +183,7 @@ import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
-import { LAYOUT_FIELD, layoutOf, marksOf, type SavedLayout } from "./terminal/layout";
+import { LAYOUT_FIELD, layoutOf, marksOf, reviveSaved, type SavedLayout } from "./terminal/layout";
 import { layoutWriter } from "./terminal/layoutSave";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
@@ -216,6 +217,7 @@ import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt 
 import { KitPromptNotices } from "./chat/KitNotice";
 import { editChatBox } from "./chat/menuEdit";
 import PlanSheet from "./terminal/PlanSheet";
+import EditMenuHost from "./editmenu/EditMenuHost";
 import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
@@ -291,7 +293,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const [dragLeft, setDragLeft] = useState<number | null>(null); // VIEW-050: the left sidebar mid-drag
   // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
-  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? []); // T-543-b: no pane until a workspace is opened
+  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes.map(reviveSaved) ?? []); // T-543-b: no pane until a workspace is opened
   useFileMoves(setPanes); // EDIT-032: editor tabs follow a renamed or moved file
   const [focused, setFocused] = useState(layout?.focused ?? 0);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -390,7 +392,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // TERM-048: the tab right-click menu, at the pointer.
   const nextKey = useRef(layout ? Math.max(1, ...layout.panes.map((p) => p.key)) + 1 : 2);
   // TERM-106: the tabs that came back from the saved layout replay their saved output first.
-  const restoredKeys = useRef(new Set((layout?.panes ?? []).map((p) => p.key)));
+  const restoredKeys = useRef(new Set((layout?.panes ?? []).filter((p) => !p.chooser).map((p) => p.key))); // a chooser has no terminal to wait for
   // ORCH-056 (row 219): open prompts read off each pane's screen mark it waiting (src/status/promptScan.ts).
   usePromptScan(ptys, restoredKeys);
   const runPanes = useRef<Record<string, number>>({});
@@ -503,10 +505,17 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   const putNote = (dir: string, n: LineNote) => saveNotes(dir, [...notesFor(dir).filter((x) => x.id !== n.id), n]);
   const dropNotes = (dir: string, ids: string[]) => saveNotes(dir, notesFor(dir).filter((x) => !ids.includes(x.id)));
+  // Row 794: built on the latest settings, so writes before the next render (Clear filters, then a tick) all land.
   const saveSetting = (key: string, value: unknown) => {
-    const next = { ...settings, [key]: value };
+    const { was, next } = applySetting(settingsRef, key, value);
     setSettings(next);
-    saveChanged(settings, next).catch((err) => setNotice(String(err)));
+    saveChanged(was, next).catch((err) => setNotice(String(err)));
+  };
+  // Row 794-b: a page hands back the whole settings it built from its last render; only what it changed lands on the latest.
+  const savePageSettings = (rendered: Record<string, unknown>, built: Record<string, unknown>) => {
+    const { was, next } = rebaseSettings(settingsRef, rendered, built);
+    setSettings(next);
+    saveChanged(was, next).catch((err) => setNotice(String(err)));
   };
   // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
   // VIEW-057 (T-146-g): a folder workspace (a project without Git) offers Attached and PR Checks instead of the git tabs.
@@ -519,10 +528,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const explorerOpen = right.open && right.tab === "explorer";
   const scmOpen = right.open && right.tab === "scm";
   const saveRight = (patch: Partial<Record<keyof typeof RIGHT_KEYS, unknown>>) => {
-    const next = { ...settings };
+    const was = settingsRef.current;
+    const next = { ...was };
     for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
+    settingsRef.current = next;
     setSettings(next);
-    saveChanged(settings, next).catch((err) => setNotice(String(err)));
+    saveChanged(was, next).catch((err) => setNotice(String(err)));
   };
   const showRight = (tab: RightTab) => {
     setScreen("terminals");
@@ -561,9 +572,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   });
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
+  // ux fix 2: one count of waiting panes feeds the bell and the window title.
+  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)));
   useEffect(() => {
-    document.title = windowTitle(info);
-  }, [info]);
+    document.title = windowTitle(info, needing);
+  }, [info, needing]);
   // BROW-001: a browser tab is named after its page.
   useEffect(() => {
     const off = listen<{ id: number; title: string }>("browser-title", (e) => setTitles((t) => ({ ...t, [e.payload.id]: e.payload.title })));
@@ -1250,9 +1263,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     delete pendingLineup.current[batch];
     void invoke<Record<string, unknown>>("get_settings")
       .then((s) => {
-        const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
+        // Row 794-c: laid over the latest settings (the disk copy lags writes in flight); disk lineups kept too.
+        const { was, next } = applySetting(settingsRef, LAST_LINEUP_KEY, { ...lineupsOf(s), ...lineupsOf(settingsRef.current), [wait.pid]: wait.lineup });
         setSettings(next);
-        return saveChanged(s, next);
+        return saveChanged(was, next);
       })
       .catch((err) => setNotice(String(err)));
   };
@@ -1493,7 +1507,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // pending one before the window closes. The start screen itself is not written back.
   const screenWriter = useRef(
     lastWriter((s: Screen) => {
-      setSettings((x) => ({ ...x, [LAST_SCREEN_FIELD]: s }));
+      // Row 794-d: moves the ref too, so a saveSetting before the next render keeps the last screen.
+      setSettings(applySetting(settingsRef, LAST_SCREEN_FIELD, s).next);
       saveChanged({}, { [LAST_SCREEN_FIELD]: s }).catch((err) => setNotice(String(err)));
     }),
   ).current;
@@ -1567,7 +1582,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     if (!read && !settingsRead) return;
     const l = layoutOf(panes, activeTab, focused, activeDir, stacked, { pinned, colors: tabColors });
     if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) === JSON.stringify(l)) return;
-    setSettings({ ...settings, [LAYOUT_FIELD]: l });
+    const next = { ...settingsRef.current, [LAYOUT_FIELD]: l };
+    settingsRef.current = next;
+    setSettings(next);
     layoutSaver.set(l);
   }, [panes, activeTab, focused, activeDir, stacked, pinned, tabColors]);
 
@@ -2526,6 +2543,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             : undefined
         }
         screen={screen}
+        needsYou={needing}
         classic={classic}
         sidebarWidth={leftWidth}
         appMenu
@@ -2727,11 +2745,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             onRemoved={removed}
             onSleep={removedAll}
             nest={settings[NESTING_KEY] !== false}
-            onNest={(on) => {
-              const next = { ...settings, [NESTING_KEY]: on };
-              setSettings(next);
-              saveChanged(settings, next).catch((err) => setNotice(String(err)));
-            }}
+            onNest={(on) => saveSetting(NESTING_KEY, on)}
             agents={agents}
             defaultId={defaultId}
             onSetDefault={setDefault}
@@ -2828,10 +2842,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               projects={projects}
               agents={agents}
               settings={settings}
-              onSettings={(next) => {
-                setSettings(next);
-                saveChanged(settings, next).catch((err) => setNotice(String(err)));
-              }}
+              onSettings={(built) => savePageSettings(settings, built)}
             />
           )}
           {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} onStart={fromItem} onResume={(dir) => cli.current.select(dir, null, true)} />}
@@ -2839,10 +2850,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             <RoutingPage
               agents={agents}
               settings={settings}
-              onSettings={(next) => {
-                setSettings(next);
-                saveChanged(settings, next).catch((err) => setNotice(String(err)));
-              }}
+              onSettings={(built) => savePageSettings(settings, built)}
             />
           )}
           {terminals && (
@@ -3300,11 +3308,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           </div>
         </div>
         <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open || fullPage} offered={offeredRight} onTab={(tab) => {
-          const next = { ...settings };
-          next[RIGHT_KEYS.tab] = tab;
-          if (wsKind.folder && activeDir !== null) next[FOLDER_TAB_KEY] = rememberTab(settings[FOLDER_TAB_KEY], activeDir, tab);
+          const patch: Record<string, unknown> = { [RIGHT_KEYS.tab]: tab };
+          if (wsKind.folder && activeDir !== null) patch[FOLDER_TAB_KEY] = rememberTab(settingsRef.current[FOLDER_TAB_KEY], activeDir, tab);
+          const { was, next } = applySettings(settingsRef, patch);
           setSettings(next);
-          saveChanged(settings, next).catch((err) => setNotice(String(err)));
+          saveChanged(was, next).catch((err) => setNotice(String(err)));
         }} onWidth={(w, done) => {
           const used = clampWidth(w, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0);
           setDragWidth(done ? null : used);
@@ -3478,6 +3486,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       />
       )}
       <FloatingLayer agents={agents} defaultId={defaultId} home={activeDir ?? undefined} onToast={(m) => setToast(m)} />
+      <EditMenuHost />
     </div>
   );
 }

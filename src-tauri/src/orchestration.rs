@@ -279,6 +279,10 @@ pub fn task_update(tasks: &mut [Value], dispatches: &mut [Value], id: &str, to: 
         }
     }
     let was = status(&tasks[i]).to_string();
+    // The first finished report wins; a task may still be sent back to pending, ready or blocked.
+    if matches!(was.as_str(), "completed" | "failed") && matches!(to, "completed" | "failed") {
+        return Err(Fail::new("task_finished", format!("{id} is already {was}; a second report cannot change it")));
+    }
     let open = tasks[i]["dispatchId"].as_str().map(str::to_string).filter(|_| was == "dispatched");
     if to == "dispatched" && open.is_none() {
         return Err(Fail::new("invalid_transition", format!("{id} is {was}; a task is dispatched only by orchestration dispatch or worker-start, so it always has one worker")));
@@ -2215,6 +2219,61 @@ mod tests {
         for t in &tasks {
             let open = d.iter().filter(|x| x["taskId"] == t["id"] && !finished(x)).count();
             assert_eq!(open, usize::from(t["status"] == "dispatched"), "{t}");
+        }
+    }
+
+    fn one_dispatched() -> (Vec<Value>, Vec<Value>) {
+        let t = json!({ "id": "task-1", "runId": null, "spec": "x", "status": "dispatched", "deps": [], "dispatchId": "dispatch-1" });
+        let d = json!({ "id": "dispatch-1", "runId": null, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": std::process::id() });
+        (vec![t], vec![d])
+    }
+
+    #[test]
+    fn orch012_b2_the_first_finished_report_wins_and_a_second_is_refused() {
+        for (first, second) in [("completed", "failed"), ("failed", "completed"), ("completed", "completed"), ("failed", "failed")] {
+            let (mut tasks, mut d) = one_dispatched();
+            task_update(&mut tasks, &mut d, "task-1", first, Some("first"), None, None, 5).unwrap();
+            let (t0, d0) = (tasks.clone(), d.clone());
+            let e = task_update(&mut tasks, &mut d, "task-1", second, Some("second"), None, None, 6).unwrap_err();
+            assert_eq!(e.code, "task_finished", "{first} then {second}");
+            assert_eq!(e.message, format!("task-1 is already {first}; a second report cannot change it"));
+            assert_eq!((&tasks, &d), (&t0, &d0), "{first} then {second}: nothing changed");
+            assert_eq!((tasks[0]["status"].as_str(), tasks[0]["result"].as_str(), d[0]["status"].as_str()), (Some(first), Some("first"), Some(first)));
+        }
+    }
+
+    #[test]
+    fn orch012_b2_a_finished_task_can_still_be_sent_back() {
+        for first in ["completed", "failed"] {
+            for back in ["pending", "ready", "blocked"] {
+                let (mut tasks, mut d) = one_dispatched();
+                task_update(&mut tasks, &mut d, "task-1", first, None, None, None, 5).unwrap();
+                assert_eq!(task_update(&mut tasks, &mut d, "task-1", back, None, None, None, 6).unwrap()["status"], back, "{first} -> {back}");
+            }
+        }
+    }
+
+    #[test]
+    fn orch012_b2_two_updates_at_one_moment_exactly_one_wins() {
+        for round in 0..8 {
+            let (tasks, d) = one_dispatched();
+            let store = std::sync::Arc::new(std::sync::Mutex::new((tasks, d)));
+            let go = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let fire = |to: &'static str| {
+                let (store, go) = (store.clone(), go.clone());
+                std::thread::spawn(move || {
+                    go.wait();
+                    let mut g = store.lock().unwrap();
+                    let (t, d) = &mut *g;
+                    task_update(t, d, "task-1", to, None, None, None, 5)
+                })
+            };
+            let (c, f) = (fire("completed"), fire("failed"));
+            let (rc, rf) = (c.join().unwrap(), f.join().unwrap());
+            let wins = [&rc, &rf].iter().filter(|r| r.is_ok()).count();
+            assert_eq!(wins, 1, "round {round}: exactly one update wins; got completed={rc:?} failed={rf:?}");
+            let g = store.lock().unwrap();
+            assert_eq!(g.0[0]["status"], g.1[0]["status"], "round {round}: the task and its worker agree");
         }
     }
 

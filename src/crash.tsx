@@ -24,12 +24,12 @@ export function crashText(error: unknown, stackLines = STACK_LINES): string {
 }
 
 /** Opens the Send Feedback box with the crash text in it. */
-export function reportCrash(error: unknown, request: (text: string) => void = requestFeedback): void {
-  request(crashText(error));
+export function reportCrash(error: unknown, request: (text: string, crash?: boolean) => void = requestFeedback): void {
+  request(crashText(error), true);
 }
 
 /** The Report button on the crash screen. */
-export function ReportButton({ error, request }: { error: unknown; request?: (text: string) => void }) {
+export function ReportButton({ error, request }: { error: unknown; request?: (text: string, crash?: boolean) => void }) {
   return (
     <button className="btn" onClick={() => reportCrash(error, request)}>
       Report

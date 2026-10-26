@@ -15,7 +15,7 @@
 // GIT-001 (T-033-b): the list refreshes after each action and whenever git state moves, a commit
 // or checkout typed in a terminal included, through the git status watcher (watch.ts). GIT-021 / GIT-023: the pull-request step looks the
 // branch's pull request up through gh once it is published, and Create pull request opens a composer.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
@@ -35,6 +35,8 @@ import { HistoryLoads, acceptHistory, historyFor, type LoadedHistory } from "./h
 import { LINES_SKIPPED_NOTE, canCommit, changeCount, cutBanner, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, filterRows, fullPath } from "./model";
 
 type Props = {
+  /** Row 838: a status to show before the first read (tests render without a back end). */
+  initialStatus?: Status;
   /** The workspace in front; null outside any workspace. */
   dir: string | null;
   draft: string;
@@ -103,7 +105,7 @@ function GraphCell({ row }: { row: GraphRow }) {
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, aiShown = true, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
+export default function SourceControlPanel({ dir, initialStatus, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, aiShown = true, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   // GIT-003: the rows waiting for a yes before their work is thrown away.
   const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
@@ -136,7 +138,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
       .catch(() => setGhRepo(null));
   }, [dir]);
   // GIT-017: Claude Code writes the message from what is staged; the run belongs to this worktree.
-  useSyncExternalStore(genSubscribe, genVersion);
+  useSyncExternalStore(genSubscribe, genVersion, genVersion);
   const gen = dir === null ? null : genState(dir);
   // GIT-019: the generate and Fix with AI controls follow the global switch and this repository's own mode.
   const { settings: appSettings } = useSettings();
@@ -180,7 +182,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
     setAsking(null);
     void runAgent(a, asking.prompt);
   };
-  const [status, setStatus] = useState<Status | null>(null);
+  const [status, setStatus] = useState<Status | null>(initialStatus ?? null);
   const statusRef = useRef<Status | null>(null);
   statusRef.current = status;
   const cut = cutBanner(status);
@@ -1117,9 +1119,9 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
             <div className="sb-list">
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}
               {status &&
-                scmGroups(groupOrder).map((g) =>
-                  g === "conflicts" ? conflictCards() : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true),
-                )}
+                scmGroups(groupOrder).map((g) => (
+                  <Fragment key={g}>{g === "conflicts" ? conflictCards() : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true)}</Fragment>
+                ))}
               {status && filter && changeCount(status) > 0 && [status.staged, status.changed, status.untracked].every((rows) => filterRows(rows, filter).length === 0) && <div className="sb-hint">No changed file matches “{filter}”.</div>}
               {status && (status.submodulesCut ?? 0) > 0 && (
                 <div className="sb-hint" data-submodules-cut>

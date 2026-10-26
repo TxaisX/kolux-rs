@@ -672,7 +672,8 @@ mod script_runs {
         let unix_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
         let mut hold: i64 = 1000;
         let mut met = None;
-        for attempt in 0..6 {
+        // A loaded full run swings the stamp's offset by seconds; twice the tries, same proof required (shared: the PC's CPU).
+        for attempt in 0..12 {
             fs::write(&spool, "").unwrap();
             // Shared with nobody: the script's append fails while this handle is open.
             let lock = fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&spool).unwrap();
