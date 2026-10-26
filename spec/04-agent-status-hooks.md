@@ -171,9 +171,9 @@ Rules: prompts that ask for approval are labelled as permissions and the rest as
   item disappears, the selection goes back to the first row; a 'Show Inbox' shortcut exists but has
   no key by default.
 Acceptance:
-  - [ ] Two agents waiting and one finished → two items under needs you and one under done today.
-  - [ ] Press Down with nothing selected → the first row is selected; Enter → it opens.
-  - [ ] A session finished 40 minutes ago → not listed under done today.
+  - [x] Two agents waiting and one finished → two items under needs you and one under done today. (cards; evidence/cards-STAT-050.txt)
+  - [x] Press Down with nothing selected → the first row is selected; Enter → it opens. (cards; evidence/cards-STAT-050.txt)
+  - [x] A session finished 40 minutes ago → not listed under done today. (cards; evidence/cards-STAT-050.txt)
 Compat: the Inbox is its own top-level view; its keybinding command id view.inbox ships with no key.
   (Kolux RS, T-026-c: built; the buttons read Open / Answer and open the terminal pane until the
   Code view exists, DT-C8; line counts, the host line and stale rows wait for their feeders.)
@@ -193,9 +193,9 @@ Rules: blocked and waiting both use the permission look; the Agents view adds st
   the vocabulary, glyphs, spinner and hover are built; the background entry lights with T-123,
   no-recent-update with the Inbox or the Agents view, the Agents view's labels with that view).
 Acceptance:
-  - [ ] Take one agent through working, waiting and done → the glyph and its hover text change each
-        time.
-  - [ ] Turn on reduced motion in the system → spinners stop moving but still read as working.
+  - [x] Take one agent through working, waiting and done → the glyph and its hover text change each
+        time. (cards; evidence/cards-STAT-052.txt)
+  - [x] Turn on reduced motion in the system → spinners stop moving but still read as working. (cards; evidence/cards-STAT-052.txt)
 Compat: —
 Source: D-04-052
 
@@ -207,8 +207,8 @@ User sees: each reasoning message as one collapsed line labelled Thought; a clic
 Rules: the row behaves as a real button, so Enter and Space toggle it; in the new look the Agents
   rail is a card about 268 px wide, otherwise a flat rail about 240 px wide.
 Acceptance:
-  - [ ] Open a session that contains reasoning → its Thought rows start collapsed; press expand-all
-        → all open.
+  - [x] Open a session that contains reasoning → its Thought rows start collapsed; press expand-all
+        → all open. (cards; evidence/cards-STAT-053.txt)
   - [ ] Move keyboard focus to a Thought row and press Space → it opens; press Enter → it closes.
 Compat: —
   (Kolux RS, T-027 deferred to T-326: the rows need the transcript reader and the Agents screen.)
@@ -230,9 +230,9 @@ Rules: rate-limit failures count as limit; authentication failures, an organisat
   have no failure hook, DT-C13. The reset time is filled by T-039-b from the status line; a
   session boundary also drops the cause. The pane header's tooltip carries the same words.)
 Acceptance:
-  - [ ] Simulate a rate-limit failure → the session shows stopped for the limit with its reset time,
-        and no task-complete notification appears.
-  - [ ] Send a new prompt that completes → the stop reason is gone.
+  - [x] Simulate a rate-limit failure → the session shows stopped for the limit with its reset time,
+        and no task-complete notification appears. (cards; evidence/cards-STAT-022.txt)
+  - [x] Send a new prompt that completes → the stop reason is gone. (cards; evidence/cards-STAT-022.txt)
 Compat: —
 Source: D-04-022
 
@@ -248,8 +248,8 @@ Rules: one notification per stop episode, however many failure reports arrive; a
   leaves the state as it was, so no second note is raised; 'Agent Task Complete' no longer
   covers a stop.)
 Acceptance:
-  - [ ] Cause two sign-in failures in the same episode → exactly one notification, naming sign-in.
-  - [ ] Let an agent finish normally → no stopped notification.
+  - [x] Cause two sign-in failures in the same episode → exactly one notification, naming sign-in. (cards; evidence/cards-STAT-023.txt)
+  - [x] Let an agent finish normally → no stopped notification. (cards; evidence/cards-STAT-023.txt)
 Compat: carry over the user's saved on or off choice; default on.
 Source: D-04-023
 
@@ -289,9 +289,9 @@ Rules: the notice names the account whose sign-in lapsed; the button starts the 
   active account is still signed in, `claude_account_check`, so the notice appears without waiting
   for the next window start.)
 Acceptance:
-  - [ ] Let a saved Claude account's sign-in expire → the notice appears; finish signing in → it
-        goes away.
-  - [ ] Two saved accounts, one expired → only the expired one is named.
+  - [x] Let a saved Claude account's sign-in expire → the notice appears; finish signing in → it
+        goes away. (cards; evidence/cards-STAT-046.txt)
+  - [x] Two saved accounts, one expired → only the expired one is named. (cards; evidence/cards-STAT-046.txt)
 Compat: —
 Source: D-04-046
 

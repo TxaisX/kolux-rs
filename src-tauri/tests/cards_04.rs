@@ -7,6 +7,8 @@ use kolux_rs_lib::hooks::{answer, claude_change, codex_change, install_claude_ho
 use kolux_rs_lib::status::{quiet_check, report, Agent, Session};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use kolux_rs_lib::status::LIMIT_RESETS_AT;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 fn ev(j: &str) -> Value {
@@ -231,4 +233,69 @@ fn stat041_the_status_a_codex_stop_sends_carries_its_reply_and_no_boundary() {
     let sent = serde_json::to_value(&done).unwrap();
     assert_eq!((sent["state"].as_str(), sent["boundary"].as_bool(), sent["interrupted"].as_bool()), (Some("done"), Some(false), Some(false)));
     assert!(sent["reply"].as_str().is_some_and(|r| r.contains("All 14 tests pass.") && r.contains("Shipped the fix to the parser.")));
+}
+
+// ---- STAT-022 / STAT-023 ----
+
+fn status(pane: u32, j: &str) -> Option<Value> {
+    report(pane, None, Agent::Claude, &ev(j)).map(|s| serde_json::to_value(s).unwrap())
+}
+
+const STOP_LIMIT: &str = r#"{"hook_event_name":"StopFailure","error":"rate_limit","error_details":"5-hour limit"}"#;
+const STOP_SIGNIN: &str = r#"{"hook_event_name":"StopFailure","error":"authentication_failed"}"#;
+const FINISH: &str = r#"{"hook_event_name":"Stop"}"#;
+
+#[test]
+fn stat022_box1_a_rate_limit_failure_is_a_blocked_status_with_cause_limit_and_the_reset_time() {
+    let ahead = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 + 3_600_000;
+    LIMIT_RESETS_AT.store(ahead, Ordering::Relaxed);
+    status(90221, PROMPT).unwrap();
+    let blocked = status(90221, STOP_LIMIT).unwrap();
+    LIMIT_RESETS_AT.store(0, Ordering::Relaxed);
+    // The status the window gets: blocked (never done), the cause, the agent's words, the reset time.
+    assert_eq!(blocked["state"], "blocked");
+    assert_eq!(blocked["stop"], json!({"cause": "limit", "detail": "5-hour limit", "resetsAt": ahead}));
+    // A sign-in or provider failure carries its own cause and no reset time.
+    status(90222, PROMPT).unwrap();
+    assert_eq!(status(90222, STOP_SIGNIN).unwrap()["stop"], json!({"cause": "signin"}));
+    status(90223, PROMPT).unwrap();
+    assert_eq!(status(90223, r#"{"hook_event_name":"StopFailure","error":"server_error"}"#).unwrap()["stop"], json!({"cause": "error"}));
+    // A failure report with no error attached is not a stop at all.
+    status(90224, PROMPT).unwrap();
+    assert!(status(90224, r#"{"hook_event_name":"StopFailure"}"#).is_none());
+}
+
+#[test]
+fn stat022_box2_a_later_prompt_that_completes_drops_the_stop() {
+    status(90225, PROMPT).unwrap();
+    assert_eq!(status(90225, STOP_SIGNIN).unwrap()["stop"]["cause"], "signin");
+    let again = status(90225, r#"{"hook_event_name":"UserPromptSubmit","prompt":"try again"}"#).unwrap();
+    assert_eq!(again["state"], "working");
+    assert_eq!(again["stop"]["cause"], "signin", "still attached until the turn finishes");
+    let done = status(90225, FINISH).unwrap();
+    assert_eq!(done["state"], "done");
+    assert!(done.get("stop").is_none(), "the stop reason is gone once the turn completes");
+}
+
+#[test]
+fn stat023_box1_a_second_failure_in_the_episode_changes_nothing_so_no_second_stop_is_raised() {
+    let mut s = Session::default();
+    assert_eq!(feed(&mut s, Agent::Claude, PROMPT), "working");
+    assert_eq!(feed(&mut s, Agent::Claude, STOP_SIGNIN), "blocked");
+    let first = s.stop.clone();
+    assert_eq!(first.as_ref().map(|t| t.cause), Some("signin"));
+    // The second report leaves the state and the stop as they were; the window sees blocked -> blocked.
+    assert_eq!(feed(&mut s, Agent::Claude, STOP_SIGNIN), "blocked");
+    assert_eq!(s.stop, first);
+    assert_eq!(s.history.iter().filter(|e| e.state == "blocked").count(), 1, "one episode, one history line");
+}
+
+#[test]
+fn stat023_box2_a_normal_finish_is_done_with_no_stop_attached() {
+    let mut s = Session::default();
+    feed(&mut s, Agent::Claude, PROMPT);
+    assert_eq!(feed(&mut s, Agent::Claude, FINISH), "done");
+    assert!(s.stop.is_none());
+    assert!(status(90226, PROMPT).is_some());
+    assert!(status(90226, FINISH).unwrap().get("stop").is_none());
 }
