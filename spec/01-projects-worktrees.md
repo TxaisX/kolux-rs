@@ -200,8 +200,8 @@ User sees: blocked or waiting workspaces come first, then finished ones, then wo
 Rules: an old Recent setting is moved over to Smart once; an agent that was interrupted counts as
   interrupted, not as done.
 Acceptance:
-  - [ ] One workspace blocked and one done → blocked is above done, whichever changed last.
-  - [ ] Interrupt an agent → its workspace is not sorted among the done ones.
+  - [x] One workspace blocked and one done → blocked is above done, whichever changed last. (cards; evidence/cards-PROJ-050.txt)
+  - [x] Interrupt an agent → its workspace is not sorted among the done ones. (cards; evidence/cards-PROJ-050.txt)
 Compat: —
 Source: D-01-050
 
