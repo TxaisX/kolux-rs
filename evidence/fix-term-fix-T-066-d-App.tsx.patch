@@ -1,0 +1,17 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ba49fd09..419d84a5 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1712,9 +1712,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       if (typedInRunTab(runTabs.current, focusedNow.current, inside)) runTabs.current = touchRunTab(runTabs.current, focusedNow.current);
+     };
+     document.addEventListener("keydown", typed, true);
+-    const off = listen<{ id: number; code?: number | null }>("terminal-exit", (e) => {
++    const off = listen<{ id: number; code?: number | null; session?: string }>("terminal-exit", (e) => {
+       const key = paneOfTerminal(ptys.current, e.payload.id);
+       if (key === null) return;
++      const printed = e.payload.session; // T-066-d: the id an id-only agent printed in its own resume hint; a hook's id is never replaced
++      if (printed) setPanes((ps) => ps.map((p) => (p.key === key && !p.session ? { ...p, session: printed } : p)));
+       setupExits.current[key]?.(e.payload.code ?? null);
+       const ended = runTabEnded(runTabs.current, key, pinnedNow.current.has(key));
+       runTabs.current = ended.tabs;

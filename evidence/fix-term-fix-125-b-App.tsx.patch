@@ -1,0 +1,21 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ba49fd09..e84adcf6 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -113,6 +113,7 @@ import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
+ import { useCloseGuard } from "./editor/CloseDialog";
+ import { trashUnusedNotes } from "./editor/trashUnused";
+ import AgentsPanel from "./sessions/AgentsPanel";
++import { BELL_NOTE } from "./terminal/bellNote";
+ import { FOLDER_TAB_KEY, offeredTabs, rememberTab, tabFor } from "./sessions/folderTabs";
+ import { useWorkspaceKind } from "./sessions/useWorkspaceKind";
+ import { AttachedWorktreesTab, FolderChecksTab } from "./projects/AttachedTabs.tsx"; // the extension: attachedTabs.ts (logic) differs only in case
+@@ -3211,7 +3212,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     crew={crew[p.key]}
+                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                     onIdentity={(l) => setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }))}
+-                    onBell={() => noticed(p, "rang the bell")}
++                    onBell={() => noticed(p, BELL_NOTE.what, "", BELL_NOTE.gate)}
+                     unread={unreadPanes.has(p.key)}
+                     onPty={(id, account) => {
+                       ptys.current[p.key] = id;
