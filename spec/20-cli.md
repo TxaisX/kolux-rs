@@ -249,8 +249,8 @@ Rules: worker-list covers the run attached to the calling terminal unless `--run
   terminal commands refuse such a worker's handle, while worker-read with `--source` set to
   transcript always works; help states this limit without naming kinds of worker.
 Acceptance:
-  - [ ] From a coordinator terminal, worker-list shows only that run's workers.
-  - [ ] worker-read on a released worker says that it is reading an archive.
+  - [x] From a coordinator terminal, worker-list shows only that run's workers. (cards; evidence/cards-CLI-036.txt)
+  - [x] worker-read on a released worker says that it is reading an archive. (cards; evidence/cards-CLI-036.txt)
 Compat: orchestration worker-list, worker-show, worker-read, worker-stop, worker-abandon,
   worker-release and worker-retain; `--dispatch`, `--source`, `--cursor`, `--limit`, `--run`,
   `--terminal-state` and `--retry-request`.
@@ -266,7 +266,7 @@ Rules: the window is brought forward even when the app was already answering; wh
   clear reason when the server cannot safely become the desktop app; if the app never answers, the
   command gives up with an error after a time limit.
 Acceptance:
-  - [ ] App closed → `kolux open` launches it and exits 0 once it is ready.
+  - [x] App closed → `kolux open` launches it and exits 0 once it is ready. (cards; evidence/cards-CLI-011.txt)
   - [ ] App minimised → `kolux open` brings it to the front.
 Compat: the command word open.
 Source: D-20-011
