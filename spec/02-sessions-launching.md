@@ -84,8 +84,8 @@ Rules: an AI cannot start until a model is picked explicitly, and the model row 
   users; the verification on record predates the empty-pick rule, so the rebuild verifies that
   rule afresh.
 Acceptance:
-  - [ ] Open a chooser pane and pick Claude Code with no model → Start is disabled; pick a model → Start becomes enabled.
-  - [ ] Pick Terminal → Start is enabled at once.
+  - [x] Open a chooser pane and pick Claude Code with no model → Start is disabled; pick a model → Start becomes enabled. (cards; evidence/cards-SESS-007.txt)
+  - [x] Pick Terminal → Start is enabled at once. (cards; evidence/cards-SESS-007.txt)
   - [ ] Leave a chooser as the grid's only pane → it has no close button.
 Compat: —
 Source: D-02-007
