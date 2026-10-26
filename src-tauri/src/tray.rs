@@ -14,6 +14,7 @@
 
 
 use crate::menu::Os;
+#[cfg(any(debug_assertions, test))]
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -129,6 +130,7 @@ pub fn click_opens(os: Os, left: bool, released: bool) -> bool {
 }
 
 /// APP-008: the branch a Git HEAD file names; a detached HEAD shows the short commit.
+#[cfg(any(debug_assertions, test))]
 pub fn branch_from_head(head: &str) -> Option<String> {
     let head = head.trim();
     if head.is_empty() {
@@ -142,6 +144,7 @@ pub fn branch_from_head(head: &str) -> Option<String> {
 
 /// Where a checkout keeps its HEAD: inside `.git` when that is a folder, or inside the folder a
 /// `.git` file names (a worktree), read relative to the checkout.
+#[cfg(any(debug_assertions, test))]
 pub fn git_head_file(checkout: &Path) -> Option<PathBuf> {
     let dot_git = checkout.join(".git");
     let dir = if dot_git.is_dir() {
