@@ -1002,7 +1002,6 @@ fn s9_mask_diag_random_text_idempotent() {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 831"]
 fn s9_mask_diag_asia_session_key_hidden() {
     let mut r = Rng::new(0xA51A);
     let mut bad = vec![];
@@ -1018,13 +1017,11 @@ fn s9_mask_diag_asia_session_key_hidden() {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 830"]
 fn s9_mask_claude_key_hidden_and_idempotent() {
     finish(&secrets_campaign("mask_claude_key", 0x5EED_0015, crate::secrets::mask, &[1], true));
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 830"]
 fn s9_mask_claude_key_random_text_idempotent() {
     finish(&plain_campaign("mask_claude_key_plain", 0x5EED_0016, crate::secrets::mask));
 }
@@ -1126,7 +1123,6 @@ fn assert_time(out: &[String]) {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 833"]
 fn s9_mask_protected_label_run_scaling() {
     install_hook();
     let mut worst = 0.0f64;
@@ -1146,7 +1142,6 @@ fn s9_mask_protected_label_run_scaling() {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 833"]
 fn s9_mask_protected_hostile_size_time() {
     assert_time(&time_test("time_protected_mask", crate::protected::mask));
 }

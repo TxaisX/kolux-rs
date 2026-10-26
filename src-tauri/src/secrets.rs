@@ -272,12 +272,15 @@ pub fn dismiss_dropped(store: &Store) {
 /// becomes `sk-ant-[masked]`.
 pub fn mask(line: &str) -> String {
     const KEY: &str = "sk-ant-";
+    const DONE: &str = "[masked]";
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(i) = rest.find(KEY) {
         out.push_str(&rest[..i]);
         out.push_str("sk-ant-[masked]");
-        rest = rest[i + KEY.len()..].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        // The mask itself starts with the key prefix: swallow an existing mask so mask(mask(x)) == mask(x).
+        let after = &rest[i + KEY.len()..];
+        rest = after.strip_prefix(DONE).unwrap_or(after).trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     }
     out.push_str(rest);
     out
@@ -772,6 +775,24 @@ mod tests {
         assert!(sealing_pass(&store, &dir).skipped);
         drop(store);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn masking_a_claude_key_twice_gives_the_same_text_and_still_hides_every_key() {
+        for text in [
+            "key sk-ant-api03-SECRET123 end",
+            "sk-ant-a sk-ant-b",
+            "sk-ant-[masked]",
+            "sk-ant-[masked]SECRETTAIL and sk-ant-oat01-ZZZ",
+            "sk-ant-sk-ant-SECRET",
+            "x sk-ant-SECRET[masked] y",
+        ] {
+            let once = mask(text);
+            assert_eq!(mask(&once), once, "mask changed an already masked text: {text:?}");
+            assert!(!once.contains("SECRET") && !once.contains("ZZZ"), "{once}");
+        }
+        assert_eq!(mask("sk-ant-api03-SECRET123"), "sk-ant-[masked]");
+        assert_eq!(mask("sk-ant-[masked]"), "sk-ant-[masked]");
     }
 
     #[test]
