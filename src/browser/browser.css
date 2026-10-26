@@ -79,3 +79,28 @@
 .pane.browser .downloads .state { color: var(--fg-muted); white-space: nowrap; }
 .pane.browser .downloads li.failed .state { color: var(--danger, #e5484d); }
 .pane.browser .downloads progress { width: 120px; height: 6px; }
+
+/* T-241 (BROW-038): the drawing canvas covers the pane body while the page is hidden. */
+.pane.browser .pane-head .ib.txt { width: auto; padding: 0 6px; font-size: 11px; }
+.pane.browser .draw-canvas { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--surface); color: var(--fg); font-size: 12px; z-index: 2; }
+.pane.browser .draw-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line-subtle); }
+.pane.browser .draw-bar .btn.on { color: var(--accent, #ff5a00); border-color: var(--accent, #ff5a00); }
+.pane.browser .draw-gap { flex: 1; min-width: 4px; }
+.pane.browser .draw-note { margin: 0; padding: 3px 8px; color: var(--fg-muted); border-bottom: 1px solid var(--line-subtle); }
+.pane.browser .draw-note[role="alert"] { color: var(--danger, #e5484d); }
+.pane.browser .draw-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; outline: none; background: var(--chip-bg); }
+.pane.browser .draw-sheet { position: relative; box-shadow: 0 0 0 1px var(--line); }
+.pane.browser .draw-sheet canvas { display: block; cursor: crosshair; touch-action: none; }
+.pane.browser .draw-text { position: absolute; min-width: 140px; font: inherit; color: #ff5a00; background: #1a1a1a; border: 1px solid #ff5a00; padding: 1px 4px; }
+.pane.browser .send-wrap { position: relative; display: inline-block; }
+.pane.browser .send-wrap .send-menu { position: absolute; right: 0; top: 100%; z-index: 3; list-style: none; margin: 2px 0 0; padding: 2px 0; min-width: 160px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+.pane.browser .send-wrap .send-menu button { width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 3px 6px; cursor: pointer; }
+.pane.browser .send-wrap .send-menu button:hover { background: var(--chip-bg); }
+.pane.browser .send-wrap .send-menu small, .pane.browser .send-none { color: var(--fg-muted); margin-left: 6px; }
+.pane.browser .grab-sheet { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--surface); color: var(--fg); font-size: 12px; z-index: 2; outline: none; }
+.pane.browser .grab-body { flex: 1; min-height: 0; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.pane.browser .grab-picture { align-self: flex-start; max-width: 100%; max-height: 50%; object-fit: contain; box-shadow: 0 0 0 1px var(--line); background: var(--chip-bg); }
+.pane.browser .grab-rows { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.pane.browser .grab-row { display: grid; grid-template-columns: 8em minmax(0, 1fr); gap: 8px; }
+.pane.browser .grab-row dt { color: var(--fg-muted); }
+.pane.browser .grab-row dd { margin: 0; overflow-wrap: anywhere; user-select: text; font-family: var(--mono, ui-monospace, monospace); }

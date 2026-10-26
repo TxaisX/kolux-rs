@@ -13,7 +13,7 @@
 // the file's diff tab in the split chosen in Source Control. T-033-g: the tab reads the status once
 // when it opens (so Commit is ready at once), passes the base it already knows so a refresh runs no
 // second status, and labels a base with no shared history instead of comparing silently.
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
@@ -24,14 +24,16 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { MergeView, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, FileCode, List } from "../chrome/icons";
 import { baseName } from "./buffers";
-import { look } from "./EditorPane";
+import { copiers, look } from "./EditorPane";
+import { allChangesContext, type LastFocus } from "./allChangesCopy";
+import { clashesOf, withClashes } from "./changeConflicts";
 import { withoutWhitespace } from "./DiffPane";
 import { watchStatus } from "../scm/watch";
 import { useSettings } from "../settings/useSettings";
 import { allChangesStart } from "../settings/editorPrefs";
-import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, canCommit, isCommitShortcut, type AcLayout, type CommitOutcome, type Status } from "../scm/model";
+import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, canCommit, clashWord, isCommitShortcut, type AcLayout, type CommitOutcome, type Status } from "../scm/model";
 
-export type Entry = { path: string; staged: boolean; code: string; lines: number | null; binary: boolean; stamp: string };
+export type Entry = { path: string; staged: boolean; code: string; lines: number | null; binary: boolean; stamp: string; /** git's two-letter code of an unresolved conflict; such a file is listed first and drawn without a diff (T-227-d). */ clash?: string };
 /** The base a branch is measured against and the snapshot commit the sides are read from. */
 export type Base = { against: string; since: string; note?: string };
 type BaseChanges = Base & { entries: Entry[] };
@@ -49,14 +51,14 @@ export const entryKey = (e: Entry) => `${e.staged ? "s" : "u"}|${e.path}`;
 /** The height a section reserves before it draws, so the scroll does not jump. */
 export const estimate = (e: Entry) => {
   const n = e.lines ?? 0;
-  if (IMAGE.test(e.path) || e.binary) return 48;
+  if (e.clash || IMAGE.test(e.path) || e.binary) return 48;
   if (n > WAIT_OVER) return 64;
   // An untracked file shows whole (plus the empty last line); a change shows some context around it.
   return Math.min(CEILING, e.code === "?" ? (n + 1) * LINE + 8 : (n + 8) * LINE);
 };
 /** The word on a section: which side of the index a working-tree change is on, or against the
  * base what became of the file. */
-export const tagOf = (e: Entry, base: boolean) => (base ? (e.code === "A" ? "Added" : e.code === "D" ? "Deleted" : e.code === "?" ? "Untracked" : "Changed") : e.code === "?" ? "Untracked" : e.staged ? "Staged" : "Unstaged");
+export const tagOf = (e: Entry, base: boolean) => (e.clash ? "Conflict" : base ? (e.code === "A" ? "Added" : e.code === "D" ? "Deleted" : e.code === "?" ? "Untracked" : "Changed") : e.code === "?" ? "Untracked" : e.staged ? "Staged" : "Unstaged");
 /** The call that reads the branch against its base; `known` is the base the last status named. */
 export const baseCall = (root: string, pinned: string | null, status: Status | null): [string, Record<string, unknown>] => ["scm_base_changes", { worktree: root, pinned, known: status?.base ?? null }];
 /** FIX-2: the status read as the tab opens is used only until the watcher's first status lands, so a late answer never replaces a newer one. */
@@ -91,11 +93,13 @@ export const sidesCall = (base: Base | null, root: string, e: Entry): [string, R
 type Props = { id: number; root: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onOpenDiff?: (path: string, staged: boolean) => void; pinnedBase?: string | null };
 
 export default function AllChangesPane({ id, root, hidden = false, focused = false, onFocus, onClose, onOpenDiff, pinnedBase = null }: Props) {
-  const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [raw, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<"tree" | "base">("tree");
   const [base, setBase] = useState<Base | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
+  // T-227-d: unresolved conflicts come first, one section each, marked and drawn without a diff.
+  const entries = useMemo(() => (raw ? withClashes(raw, clashesOf(status), root) : null), [raw, status, root]);
   const [message, setMessage] = useState("");
   const [outcome, setOutcome] = useState<{ text: string; bad: boolean } | null>(null);
   const { settings, save } = useSettings();
@@ -111,6 +115,9 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   const top = useRef(0);
   const front = useRef(!hidden);
   const latest = useRef<Status | null>(null); // the last status, read by refreshes without re-running the effect
+  const last = useRef<LastFocus | null>(null); // the diff view the cursor was last in, for Copy Context
+  const [said, setSaid] = useState<string | null>(null);
+  const saidTimer = useRef(0);
   front.current = !hidden;
 
   const missed = useRef<(() => void) | null>(null);
@@ -230,6 +237,32 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
       (e) => setOutcome({ text: String(e), bad: true }),
     );
   };
+  const say = (text: string) => {
+    setSaid(text);
+    window.clearTimeout(saidTimer.current);
+    saidTimer.current = window.setTimeout(() => setSaid(null), 4000);
+  };
+  // EDIT-007: the chord (through App's copiers) and the header button copy the last-focused view's selection.
+  const copyContext = (): boolean => {
+    const text = allChangesContext(last.current, root);
+    if (text === null) return false;
+    navigator.clipboard.writeText(text).then(
+      () => say("Copied with path and lines"),
+      (err) => say(`Nothing was copied: ${String(err)}`),
+    );
+    return true;
+  };
+  useEffect(() => {
+    copiers.set(id, copyContext);
+    return () => {
+      copiers.delete(id);
+      window.clearTimeout(saidTimer.current);
+    };
+  }, [id, root]);
+  const focusedView = useCallback((f: LastFocus) => void (last.current = f), []);
+  const goneView = useCallback((v: object) => {
+    if (last.current?.view === v) last.current = null;
+  }, []);
   const foldAll = (on: boolean) => setFold(Object.fromEntries((entries ?? []).map((e) => [entryKey(e), on])));
   const allFolded = (entries?.length ?? 0) > 0 && (entries ?? []).every((e) => fold[entryKey(e)]);
   const toggle = (k: keyof Draw | "tree") => setOver((o) => ({ ...o, [k]: !layout[k] }));
@@ -267,6 +300,14 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
           </label>
           <button className="link" onClick={() => void save({ [AC_SPLIT_KEY]: layout.split, [AC_WRAP_KEY]: layout.wrap, [AC_WHITESPACE_KEY]: layout.spaces, [AC_TREE_KEY]: layout.tree })} title="New All Changes tabs start with this layout">
             Make default
+          </button>
+          {said && (
+            <span className="note" role="status">
+              {said}
+            </span>
+          )}
+          <button className="btn" onClick={() => copyContext() || say("Click in a file's diff and select some lines first")} title="Copy the selection with its path and line numbers">
+            Copy context
           </button>
           <button className="link" onClick={() => foldAll(!allFolded)} disabled={!count} aria-label={allFolded ? "Expand all" : "Collapse all"}>
             {allFolded ? "Expand all" : "Collapse all"}
@@ -315,7 +356,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
                       <button className="ac-jump" onClick={() => jump(sectionId(i))} title={rel(e.path)}>
                         {baseName(e.path)}
                       </button>
-                      <span className="ac-code" title={tagOf(e, base !== null)}>{tagOf(e, base !== null)}</span>
+                      <span className={`ac-code${e.clash ? " ac-conflict" : ""}`} title={e.clash ? `Unresolved conflict: ${clashWord(e.clash)}` : tagOf(e, base !== null)}>{tagOf(e, base !== null)}</span>
                     </div>
                   </div>
                 );
@@ -330,7 +371,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
           {base?.note && <div className="menu-hint ac-note">{base.note}</div>}
           {entries && !entries.length && <div className="menu-hint">{base ? `This branch has no changes against ${base.against}.` : "This worktree has no changes."}</div>}
           {(entries ?? []).map((e, i) => (
-            <Section key={entryKey(e)} anchor={sectionId(i)} e={e} name={rel(e.path)} root={root} base={base} draw={draw} cache={cache.current} scroller={list} onReady={onReady} viewed={isViewed(e)} canView={ready[entryKey(e)] === e.stamp} onViewed={() => toggleViewed(e)} folded={!!fold[entryKey(e)]} onFold={() => setFold((f) => ({ ...f, [entryKey(e)]: !f[entryKey(e)] }))} onOpen={onOpenDiff && base === null ? () => onOpenDiff(e.path, e.staged) : undefined} />
+            <Section key={entryKey(e)} anchor={sectionId(i)} e={e} name={rel(e.path)} root={root} base={base} draw={draw} cache={cache.current} scroller={list} onReady={onReady} onFocusView={focusedView} onGoneView={goneView} viewed={isViewed(e)} canView={ready[entryKey(e)] === e.stamp} onViewed={() => toggleViewed(e)} folded={!!fold[entryKey(e)]} onFold={() => setFold((f) => ({ ...f, [entryKey(e)]: !f[entryKey(e)] }))} onOpen={onOpenDiff && base === null ? () => onOpenDiff(e.path, e.staged) : undefined} />
           ))}
         </div>
       </div>
@@ -338,9 +379,9 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   );
 }
 
-type SectionProps = { anchor: string; e: Entry; name: string; root: string; base: Base | null; draw: Draw; cache: Cache; scroller: React.RefObject<HTMLDivElement | null>; onReady: (key: string, stamp: string | null) => void; viewed: boolean; canView: boolean; onViewed: () => void; folded: boolean; onFold: () => void; onOpen?: () => void };
+type SectionProps = { anchor: string; e: Entry; name: string; root: string; base: Base | null; draw: Draw; cache: Cache; scroller: React.RefObject<HTMLDivElement | null>; onReady: (key: string, stamp: string | null) => void; onFocusView: (f: LastFocus) => void; onGoneView: (v: object) => void; viewed: boolean; canView: boolean; onViewed: () => void; folded: boolean; onFold: () => void; onOpen?: () => void };
 
-const Section = memo(function Section({ anchor, e, name, root, base, draw, cache, scroller, onReady, viewed, canView, onViewed, folded, onFold, onOpen }: SectionProps) {
+const Section = memo(function Section({ anchor, e, name, root, base, draw, cache, scroller, onReady, onFocusView, onGoneView, viewed, canView, onViewed, folded, onFold, onOpen }: SectionProps) {
   const key = entryKey(e);
   const box = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -350,7 +391,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
   const [pics, setPics] = useState<{ old: string | null; now: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Against the base an image has no "before" to show: it is named like a binary.
-  const kind = IMAGE.test(e.path) && !base ? "image" : e.binary || (IMAGE.test(e.path) && base) ? "binary" : "text";
+  const kind = e.clash ? "conflict" : IMAGE.test(e.path) && !base ? "image" : e.binary || (IMAGE.test(e.path) && base) ? "binary" : "text";
   const waits = kind === "text" && (e.lines ?? 0) > WAIT_OVER && !go;
 
   // Sections load as they come near the visible part of the list.
@@ -363,7 +404,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
   }, [near]);
 
   useEffect(() => {
-    if (!near || waits) return;
+    if (!near || waits || kind === "conflict") return;
     let alive = true;
     setError(null);
     if (kind === "binary") {
@@ -411,16 +452,30 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
   useEffect(() => {
     if (!sides || !host.current || folded) return;
     const lang = new Compartment();
-    const common: Extension[] = [basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorState.readOnly.of(true), EditorView.editable.of(false), draw.wrap ? EditorView.lineWrapping : []];
+    const common = (old: boolean): Extension[] => [
+      basicSetup,
+      look,
+      syntaxHighlighting(oneDarkHighlightStyle),
+      lang.of([]),
+      EditorState.readOnly.of(true),
+      EditorView.editable.of(false),
+      draw.wrap ? EditorView.lineWrapping : [],
+      EditorView.domEventHandlers({
+        focus: (_e, view) => {
+          onFocusView({ path: e.path, old, view });
+          return false;
+        },
+      }),
+    ];
     const diffConfig = draw.spaces ? undefined : { override: withoutWhitespace };
     const collapseUnchanged = { margin: 3, minSize: 6 };
     let views: EditorView[];
     let merge: MergeView | null = null;
     if (draw.split) {
-      merge = new MergeView({ a: { doc: sides.original, extensions: common }, b: { doc: sides.modified, extensions: common }, parent: host.current, gutter: true, collapseUnchanged, diffConfig });
+      merge = new MergeView({ a: { doc: sides.original, extensions: common(true) }, b: { doc: sides.modified, extensions: common(false) }, parent: host.current, gutter: true, collapseUnchanged, diffConfig });
       views = [merge.a, merge.b];
     } else {
-      views = [new EditorView({ doc: sides.modified, parent: host.current, extensions: [...common, unifiedMergeView({ original: sides.original, mergeControls: false, gutter: true, collapseUnchanged, diffConfig })] })];
+      views = [new EditorView({ doc: sides.modified, parent: host.current, extensions: [...common(false), unifiedMergeView({ original: sides.original, mergeControls: false, gutter: true, collapseUnchanged, diffConfig })] })];
     }
     languageFor(baseName(e.path))
       ?.load()
@@ -428,6 +483,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
       .catch(() => undefined);
     onReady(key, e.stamp);
     return () => {
+      views.forEach(onGoneView);
       if (merge) merge.destroy();
       else views.forEach((v) => v.destroy());
     };
@@ -444,7 +500,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
         <span className="ac-name" title={e.path}>
           {name}
         </span>
-        <span className="preview-tag">{tagOf(e, base !== null)}</span>
+        <span className={`preview-tag${e.clash ? " ac-conflict" : ""}`} title={e.clash ? `Unresolved conflict: ${clashWord(e.clash)}` : undefined}>{tagOf(e, base !== null)}</span>
         {e.lines !== null && <span className="ac-lines">{e.lines} changed {e.lines === 1 ? "line" : "lines"}</span>}
         {onOpen && (
           <button className="ib" onClick={onOpen} title="Open as a diff tab, in the split chosen in Source Control" aria-label={`Open ${name} as a tab`}>
@@ -457,7 +513,9 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
           This file's diff did not load: {error}
         </div>
       )}
-      {folded ? null : waits ? (
+      {folded ? null : kind === "conflict" ? (
+        <div className="ac-wait ac-clash">Unresolved conflict ({clashWord(e.clash ?? "")}). Resolve it in the file; it is left out of the diff, as it is when a commit message is written.</div>
+      ) : waits ? (
         <div className="ac-wait">
           {e.lines} changed lines.
           <button className="btn" onClick={() => setGo(true)}>

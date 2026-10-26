@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { anchorIndex, placeRail, railItems, railNotes } from "./rail";
+import { anchorIndex, placeRail, railEdit, railItems, railNotes } from "./rail";
 import type { Note } from "./notes";
 
 const note = (path: string, line: number, time: number, quote = "q"): Note => ({ path, line, time, quote, note: "n" });
@@ -33,4 +33,17 @@ test("EDIT-020 (T-132-b): a quote is found by its first line, or its first three
   expect(anchorIndex(texts, "Some words here and then more")).toBe(1);
   expect(anchorIndex(texts, "absent text")).toBe(-1);
   expect(anchorIndex(texts, "   ")).toBe(-1);
+});
+
+test("EDIT-020 (row 137): a card as tall as its text pushes the next one down by its own height", () => {
+  const items = railItems([note("p", 1, 1), note("p", 2, 2)], [100, 110], [140, 58]);
+  expect(items.map((i) => i.height)).toEqual([140, 58]);
+  expect(placeRail(items)).toEqual({ "1:0": 100, "2:1": 246 });
+  expect(railItems([note("p", 1, 1)], [0], 58)[0].height).toBe(58); // one height for every card still works
+});
+
+test("EDIT-020 (row 137): leaving a card's edit saves trimmed text, ignores no change and refuses an empty note", () => {
+  expect(railEdit("  fix this  \n", "old")).toEqual({ save: "fix this" });
+  expect(railEdit("old ", "old")).toEqual({ same: true });
+  expect(railEdit("   \n", "old")).toEqual({ refused: true });
 });

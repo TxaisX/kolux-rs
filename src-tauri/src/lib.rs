@@ -733,6 +733,9 @@ pub fn run() {
             browser::browser_go,
             browser::history::browser_suggest,
             browser::browser_close,
+            browser::notices::browser_pane_ready,
+            browser::picture::browser_capture, // after-list 151 (BROW-038), 320 (BROW-035)
+            browser::picture::browser_save_picture,
             browser::browser_viewport,
             browser::browser_cookies_import,
             browser::cookies::browser_import_sources, // T-319-b (BROW-030)

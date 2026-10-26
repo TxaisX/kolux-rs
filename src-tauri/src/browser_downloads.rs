@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 pub const EVENT: &str = "browser-download";
 /// A name the file takes when the page gives none or an unusable one.
@@ -211,10 +211,17 @@ pub fn requested(app: &AppHandle, id: u32, url: &str, dir: &Path, suggested: &st
         all.retain(|x| x.state == State::Running || x.id != id);
         all.push(d.clone());
     }
-    let _ = app.emit(EVENT, &d);
+    tell(app, &d);
     ask_total(app.clone(), key, url.to_string());
     start_poller(app.clone());
     Ok(path)
+}
+
+/// A tab's download changed: told to its pane, or held for it while the pane is being built (after-list 719).
+fn tell(app: &AppHandle, d: &Download) {
+    if let Ok(v) = serde_json::to_value(d) {
+        crate::browser::notices::send(app, d.id, EVENT, v, Some(format!("d{}", d.key)));
+    }
 }
 
 /// A download the registry could not place (no free name, no Downloads folder): the pane shows
@@ -225,7 +232,7 @@ pub fn refused(app: &AppHandle, id: u32, url: &str, suggested: &str, why: &str) 
     if let Ok(mut all) = DOWNLOADS.lock() {
         all.push(d.clone());
     }
-    let _ = app.emit(EVENT, &d);
+    tell(app, &d);
 }
 
 /// The size a HEAD answer gives a download: a success's non-zero Content-Length only (a redirect
@@ -248,7 +255,7 @@ fn ask_total(app: AppHandle, key: u64, url: String) {
                 Some(d.clone())
             });
             if let Some(d) = changed {
-                let _ = app.emit(EVENT, &d);
+                tell(&app, &d);
             }
         }
     });
@@ -281,7 +288,7 @@ fn start_poller(app: AppHandle) {
             })
             .unwrap_or_default();
         for d in changed {
-            let _ = app.emit(EVENT, &d);
+            tell(&app, &d);
         }
     });
 }
@@ -300,7 +307,7 @@ pub fn finished(app: &AppHandle, id: u32, url: &str, path: Option<&Path>, succes
         Some(d.clone())
     });
     if let Some(d) = done {
-        let _ = app.emit(EVENT, &d);
+        tell(app, &d);
     }
 }
 
@@ -319,7 +326,7 @@ pub fn cancel_tab(app: &AppHandle, id: u32) {
         })
         .unwrap_or_default();
     for d in cancelled {
-        let _ = app.emit(EVENT, &d);
+        tell(app, &d);
     }
     if let Ok(mut all) = DOWNLOADS.lock() {
         all.retain(|x| x.id != id);
