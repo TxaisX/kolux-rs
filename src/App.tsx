@@ -216,6 +216,7 @@ import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt 
 import { KitPromptNotices } from "./chat/KitNotice";
 import { editChatBox } from "./chat/menuEdit";
 import PlanSheet from "./terminal/PlanSheet";
+import EditMenuHost from "./editmenu/EditMenuHost";
 import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
@@ -3478,6 +3479,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       />
       )}
       <FloatingLayer agents={agents} defaultId={defaultId} home={activeDir ?? undefined} onToast={(m) => setToast(m)} />
+      <EditMenuHost />
     </div>
   );
 }
