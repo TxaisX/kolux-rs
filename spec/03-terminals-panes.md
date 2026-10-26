@@ -36,9 +36,9 @@ Rules: pane count is clamped to 1..12; growing adds empty (unstarted) panes; it 
   active tab, and closing a group's last tab removes the group and moves focus to a neighbouring
   group.
 Acceptance:
-  - [ ] Going from 4 to 6 panes adds 2 empty panes and leaves the 4 running sessions untouched.
-  - [ ] Going from 6 to 4 with 2 unstarted panes removes those 2 without any prompt.
-  - [ ] Asking for 13 panes yields 12.
+  - [x] Going from 4 to 6 panes adds 2 empty panes and leaves the 4 running sessions untouched. (cards; evidence/cards-TERM-001.txt)
+  - [x] Going from 6 to 4 with 2 unstarted panes removes those 2 without any prompt. (cards; evidence/cards-TERM-001.txt)
+  - [x] Asking for 13 panes yields 12. (cards; evidence/cards-TERM-001.txt)
 Compat: —
 Source: D-03-001
 
@@ -53,7 +53,7 @@ Rules: every existing pane survives a re-arrangement, in its original order; row
 Acceptance:
   - [ ] Applying the 4-pane preset to 4 running sessions keeps the same 4 sessions with the same
       output.
-  - [ ] After any re-arrangement every pane is still present, in its original order.
+  - [x] After any re-arrangement every pane is still present, in its original order. (cards; evidence/cards-TERM-004.txt)
 Compat: —
 Source: D-03-004
 
@@ -67,7 +67,7 @@ Rules: split right: macOS uses Cmd+D, while Windows and Linux use Ctrl+Shift+D; 
   it was split from; the header split button splits side by side.
 Acceptance:
   - [ ] Splitting a pane in folder X opens a shell whose working folder is X.
-  - [ ] Pressing Ctrl+D in a Linux shell pane sends end-of-input rather than splitting.
+  - [x] Pressing Ctrl+D in a Linux shell pane sends end-of-input rather than splitting. (cards; evidence/cards-TERM-006.txt)
 Compat: keybinding commands for split right and split down (exact ids held back until allowlisted).
 Source: D-03-006
 
@@ -79,8 +79,8 @@ Rules: close applies to the focused pane only, not its siblings; a pane running 
   (see running-process confirmation); the layout stays consistent after closing (no gaps or ghost
   panes); closing a pane ends its program, forcing it if it does not exit.
 Acceptance:
-  - [ ] Closing the middle of three panes leaves two panes filling the area.
-  - [ ] Closing the only pane in a tab closes that tab.
+  - [x] Closing the middle of three panes leaves two panes filling the area. (cards; evidence/cards-TERM-014.txt)
+  - [x] Closing the only pane in a tab closes that tab. (cards; evidence/cards-TERM-014.txt)
 Compat: keybinding command for closing the focused pane (exact id held back until allowlisted).
 Source: D-03-014
 
@@ -95,7 +95,7 @@ Rules: new terminal: Cmd/Ctrl+T; new browser: Cmd/Ctrl+Shift+B; new markdown: Cm
   an existing folder outside the workspace is kept.
 Acceptance:
   - [ ] Cmd/Ctrl+T opens a shell in the workspace folder with the cursor ready.
-  - [ ] Asking for a start folder that does not exist opens the terminal in the workspace folder.
+  - [x] Asking for a start folder that does not exist opens the terminal in the workspace folder. (cards; evidence/cards-TERM-040.txt)
 Compat: keybinding commands for new terminal, new browser, new markdown and open markdown tabs
   (exact ids held back until allowlisted).
 Source: D-03-040
@@ -108,8 +108,8 @@ Rules: new default agent: Cmd+Alt+T on macOS; each installed agent also gets its
   unbound by default.
 Acceptance:
   - [ ] Choosing Claude from the menu opens a tab whose header shows Claude starting.
-  - [ ] Each installed agent has its own command for a new tab, with no key until the user assigns
-      one.
+  - [x] Each installed agent has its own command for a new tab, with no key until the user assigns
+      one. (cards; evidence/cards-TERM-041.txt)
 Compat: keybinding command for a new tab with the default agent, plus one command per installed
   agent formed from that command and the agent's own id (exact ids held back until allowlisted).
 Source: D-03-041
