@@ -179,9 +179,9 @@ Rules: remote changes come in by merge, never by rebase, and a conflict stops ev
   commits are made); options cover skipping the release, merging a named branch, a dry run, and
   choosing the model that writes the message.
 Acceptance:
-  - [ ] Ship a change to main → a commit lands on main, is pushed, and the location of the release
-        job's log is printed.
-  - [ ] Ship while the remote holds a conflicting change → the command stops and the remote is untouched.
+  - [x] Ship a change to main → a commit lands on main, is pushed, and the location of the release
+        job's log is printed. (cards; evidence/cards-APP-058.txt)
+  - [x] Ship while the remote holds a conflicting change → the command stops and the remote is untouched. (cards; evidence/cards-APP-058.txt)
 Compat: at 0.15.0 the command runs from the project's own package scripts and takes `--main`,
   `--no-release`, `--merge` with a branch name, `--dry-run`, `--model` with a model id, and
   `--message` with text.
@@ -208,7 +208,7 @@ Rules: the release is built in a separate checkout kept only for releases, never
 Acceptance:
   - [ ] Ship to main → a release one patch higher appears with the three files and notes listing the
         shipped commits.
-  - [ ] Ship twice in quick succession → exactly two builds run, one after the other, never side by side.
+  - [x] Ship twice in quick succession → exactly two builds run, one after the other, never side by side. (cards; evidence/cards-APP-059.txt)
 Compat: `kolux --version` prints the release version; an environment variable can point the release
   job at a different build checkout; the release job takes `--dry-run` and `--no-publish`.
   Amended 2026-10-09 (DT-R07, DT-R09): a release carries the Windows installer, its signature file and the update manifest, the signature taking the block map's place; the version is set only in the release checkout and never committed.
@@ -223,7 +223,7 @@ Rules: a release built through CI will not publish unless CI passed for that exa
   job summary; CI can also be started for a branch that is pushed but not yet merged to main.
 Acceptance:
   - [ ] Push a commit → four shards run and the result is green only when all four pass.
-  - [ ] Attempt a CI release for a commit with a failed CI run → it is refused and the reason is shown.
+  - [x] Attempt a CI release for a commit with a failed CI run → it is refused and the reason is shown. (cards; evidence/cards-APP-060.txt)
 Compat: —
 Source: D-19-060
 
@@ -242,7 +242,7 @@ Rules: saves are atomic (written to a fresh file, then swapped in) and happen aw
   on the terminal grid, a fresh install gets the new default, an explicit choice is never
   overridden, and a saved file that cannot be read counts as an existing install.
 Acceptance:
-  - [ ] Change a setting and kill the process two seconds later → the setting is there on relaunch.
+  - [x] Change a setting and kill the process two seconds later → the setting is there on relaunch. (cards; evidence/cards-APP-048.txt)
   - [ ] Upgrade from the previous release → layout and sessions are identical.
 Compat: the layout, projects, sessions and settings saved in a 0.15.0 profile must carry over into
   the rebuild.
@@ -258,7 +258,7 @@ Rules: the final save works as a single barrier: any save in flight finishes fir
   live agents before the final write; leftover temporary files are cleared before the final write;
   if the profile drive rejects writes, quitting carries on instead of failing.
 Acceptance:
-  - [ ] Change the layout and quit at once → the change is back on relaunch.
+  - [x] Change the layout and quit at once → the change is back on relaunch. (cards; evidence/cards-APP-050.txt)
   - [ ] Simulate a stalled profile drive → the app still exits within the quit deadline.
 Compat: —
 Source: D-19-050
