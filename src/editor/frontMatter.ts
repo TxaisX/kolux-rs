@@ -294,11 +294,30 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
     used.add(j);
     const cut = blankAbove(next, ns[j]);
     if (cut < 0) return null;
+    if (noSiblingAbove(next, ns[j])) continue;
     kept.push({ at: ns[j] - cut, raw: g.raw, item: j, cut });
   }
   kept.sort((a, b) => a.at - b.at);
   const restored = restore(next, kept);
   return looseReadsAlike(tight.text, next, kept) ? restored : null;
+}
+
+/** Round 8 (NEW-HIGH-1): whether the nested item line at `at` has no sibling above it any more (the edit deleted them), so it now sits
+ *  right under its parent's text; a gap kept there would loosen the parent's list. */
+function noSiblingAbove(text: string, at: number): boolean {
+  const m = ITEM.exec(text.slice(at, at + 40));
+  const w = m ? width(m[1]) : 0;
+  if (!w) return false;
+  for (let end = at; end > 0; ) {
+    const start = text.lastIndexOf("\n", end - 2) + 1;
+    const line = text.slice(start, end);
+    end = start;
+    if (/^[ \t]*\r?\n?$/.test(line)) continue;
+    const above = width(/^[ \t]*/.exec(line)![0]);
+    if (above < w) return true;
+    if (above === w && ITEM.test(line)) return false;
+  }
+  return false;
 }
 
 /** Whether the items around the edit read the same loose as tight: a table or HTML line after an item can start a block

@@ -424,3 +424,30 @@ describe("round 7", () => {
     });
   });
 });
+
+// Round 8 (row 94): NEW-HIGH-1 deleting the first sub-item must not loosen the untouched outer list.
+describe("round 8", () => {
+  const P = "\n\nTail para here.\n";
+  const edit = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    expect(prev).toContain(from);
+    const out = roundTrip(prev.replace(from, to))!;
+    let refused = 0;
+    const next = apply(body, richChange(body, out, prev, () => refused++));
+    if (refused) expect(next).toBe(body);
+    else expect(roundTrip(next)).toBe(out);
+    return { next, refused };
+  };
+  describe("NEW-HIGH-1: a gap never lands between a parent's text and its first sub-item", () => {
+    const shapes: [string, string, string, string][] = [
+      ["two sub-items", "- a\n  - n1\n\n  - n2\n- b\n- c\n", "  - n1\n", "- a\n  - n2\n- b\n- c\n"],
+      ["three sub-items", "- a\n  - n1\n\n  - n2\n  - n3\n- b\n- c\n", "  - n1\n", "- a\n  - n2\n  - n3\n- b\n- c\n"],
+      ["ordered", "1. a\n   1. n1\n\n   2. n2\n2. b\n3. c\n", "    1. n1\n","1. a\n   1. n2\n2. b\n3. c\n"],
+    ];
+    it.each(shapes)("%s: deleting the first sub-item saves a tight outer list", (_, b, from, want) => {
+      const { next, refused } = edit(b + P, from, "");
+      expect(refused).toBe(0);
+      expect(next).toBe(want + P);
+    });
+  });
+});
