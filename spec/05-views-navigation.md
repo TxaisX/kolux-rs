@@ -260,9 +260,9 @@ Rules: plain shell terminals are never listed; on first open the first agent wit
   launcher gave the session, else its folder's name; the task-text and raw-prompt fallbacks for an
   orchestrator session without a title come with T-050-b.)
 Acceptance:
-  - [ ] One saved agent with two sessions plus one unmatched Codex session → two groups; the
-        unmatched one sits under Other sessions.
-  - [ ] Select a session, switch screens and back → same session selected.
+  - [x] One saved agent with two sessions plus one unmatched Codex session → two groups; the
+        unmatched one sits under Other sessions. (cards; evidence/cards-VIEW-015.txt)
+  - [x] Select a session, switch screens and back → same session selected. (cards; evidence/cards-VIEW-015.txt)
 Compat: —
 Source: D-05-015
 
@@ -282,9 +282,9 @@ Rules: chat shows for supported agents even when the global chat experiment is o
   thread, the composer and the Show terminal switch wait for the transcript and chat tasks, T-050-b,
   so every session shows its terminal until then.)
 Acceptance:
-  - [ ] Select a Claude session → chat body; flip Show terminal → raw terminal.
-  - [ ] Select a plain shell → terminal body, no switch.
-  - [ ] Send a line from the composer → it appears as the agent's next input.
+  - [x] Select a Claude session → chat body; flip Show terminal → raw terminal. (cards; evidence/cards-VIEW-019.txt)
+  - [x] Select a plain shell → terminal body, no switch. (cards; evidence/cards-VIEW-019.txt)
+  - [x] Send a line from the composer → it appears as the agent's next input. (cards; evidence/cards-VIEW-019.txt)
 Compat: —
 Source: D-05-019
 
@@ -297,8 +297,8 @@ Rules: the preset waits for the user to pick and start it.
   (Kolux RS, T-050: + adds a chooser pane with that agent already in its seat; the user picks the
   model and presses Start; the empty state's button opens Settings > Agents.)
 Acceptance:
-  - [ ] Click + under an agent → a not-started row appears and is selected.
-  - [ ] Fresh profile with no saved agents → an empty state shows instead of a blank rail.
+  - [x] Click + under an agent → a not-started row appears and is selected. (cards; evidence/cards-VIEW-021.txt)
+  - [x] Fresh profile with no saved agents → an empty state shows instead of a blank rail. (cards; evidence/cards-VIEW-021.txt)
 Compat: —
 Source: D-05-021
 
@@ -312,8 +312,8 @@ Rules: editor and browser tabs never become cards; a background tab's pane is no
   (Kolux RS, T-050: the Board's lanes and empty state count terminal panes only; pane headers, on
   the Board and in the grid, show the saved agent's name in place of the program word.)
 Acceptance:
-  - [ ] Two tabs, one split into two panes → three cards in tab order.
-  - [ ] Open an editor tab and a browser tab → neither gets a card.
+  - [x] Two tabs, one split into two panes → three cards in tab order. (cards; evidence/cards-VIEW-024.txt)
+  - [x] Open an editor tab and a browser tab → neither gets a card. (cards; evidence/cards-VIEW-024.txt)
 Compat: —
 Source: D-05-024
 
@@ -326,7 +326,7 @@ Rules: saved widths are clamped into range; invalid saved widths fall back to th
   never overlaps the back button.
 Acceptance:
   - [ ] Close with Mod+B → first tab still fully visible.
-  - [ ] Drag past the maximum → width stops at the limit.
+  - [x] Drag past the maximum → width stops at the limit. (cards; evidence/cards-VIEW-050.txt)
 Compat: keybinding id sidebar.left.toggle; the focus-the-list command is a keybinding command whose
   exact id is held back pending the allowlist.
 Source: D-05-050
