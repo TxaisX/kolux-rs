@@ -24,6 +24,16 @@
 .note-find .btn { font-size: 11.5px; padding: 2px 8px; }
 ::highlight(kx-find) { background-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 ::highlight(kx-find-current) { background-color: color-mix(in srgb, var(--warn) 65%, transparent); }
+/* Row 494: word colours in a rich-view code block (richCodeColour.ts), all from theme tokens. */
+::highlight(kx-hl-comment) { color: var(--fg-faint); }
+::highlight(kx-hl-keyword) { color: var(--link); }
+::highlight(kx-hl-string) { color: var(--done); }
+::highlight(kx-hl-number) { color: var(--warn); }
+::highlight(kx-hl-title) { color: var(--working); }
+::highlight(kx-hl-type) { color: var(--danger); }
+::highlight(kx-hl-meta) { color: var(--gauge-text); }
+::highlight(kx-hl-add) { color: var(--done); }
+::highlight(kx-hl-del) { color: var(--meter-danger); }
 /* EDIT-016: the contents panel beside a note. */
 .pane.editor { position: relative; }
 .pane.editor.toc-open .md-rich, .pane.editor.toc-open .md-preview { padding-right: 252px; }

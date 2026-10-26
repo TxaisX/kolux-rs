@@ -1,7 +1,7 @@
 // EDIT-010 (T-234-b): the language label of a code block in the rich view. A block shows its language and
 // a small choice list changes it; a language the list does not know is shown as typed with a plain-text
-// choice next to it, and plain text writes the fence with no label. Colouring of the words is not done
-// here (the rich view has no tokenizer); the label is what the note's fence carries.
+// choice next to it, and plain text writes the fence with no label. The words are coloured in
+// richCodeColour.ts; the label is what the note's fence carries.
 import { $getNodeByKey, $getRoot, $isElementNode, type LexicalEditor, type LexicalNode } from "lexical";
 import { $isCodeNode } from "@lexical/code";
 
