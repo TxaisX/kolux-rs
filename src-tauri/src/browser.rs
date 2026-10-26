@@ -2882,16 +2882,24 @@ mod t074_tests {
     #[test]
     fn brow008_a_closed_local_port_is_refused_and_local_and_an_open_one_is_reached() {
         // Real sockets on this machine: a port nothing listens on, then one that does.
-        let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = gone.local_addr().unwrap().port();
-        drop(gone);
-        let url = parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         // APP-070: the check is a HEAD through the approved near client, not a socket of its own.
         let clients = icon_clients(None, system_lookup).unwrap();
-        assert!(!lookup(&url).is_empty());
-        let f = tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)).unwrap_err();
-        let (tcp, tls) = failed_parts(false, &f);
-        assert_eq!(failure_kind(true, tcp, tls.as_deref()), "refused", "{f:?}");
+        // A released ephemeral port can be taken by another process before the HEAD: try a fresh one.
+        let mut tries = Vec::new();
+        let url = loop {
+            let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = gone.local_addr().unwrap().port();
+            drop(gone);
+            let url = parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+            assert!(!lookup(&url).is_empty());
+            let f = tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)).unwrap_err();
+            let (tcp, tls) = failed_parts(false, &f);
+            if failure_kind(true, tcp, tls.as_deref()) == "refused" {
+                break url;
+            }
+            tries.push(f);
+            assert!(tries.len() < 5, "no closed port was refused: {tries:?}");
+        };
         assert!(local_host(&url));
         assert_eq!(https_twin(&url), None);
         // A server that answers: the HEAD gets its status and length, and the kind stays unknown.
