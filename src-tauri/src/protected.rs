@@ -16,6 +16,7 @@
 //! folder); a pane variable naming the worktree would tell a cd before launch apart from it.
 
 use serde_json::Value;
+use std::cell::OnceCell;
 
 pub const ASK_FIELD: &str = "protectedAsk";
 pub const OFF_FIELD: &str = "protectedOff";
@@ -878,6 +879,7 @@ fn provider_keys(t: &str) -> String {
 
 /// `Bearer <token>` and `Basic <encoded>` as an Authorization header carries them.
 fn auth_headers(t: &str) -> String {
+    let context = HeaderContext::new(t);
     scan(t, |t, i| {
         if !word_start(t, i) {
             return None;
@@ -892,7 +894,7 @@ fn auth_headers(t: &str) -> String {
                 // or, where a header carries it, mixes upper and lower case the way encoded text does.
                 let body = &tail[..n];
                 let mixed = body.bytes().any(|b| b.is_ascii_uppercase()) && body.bytes().any(|b| b.is_ascii_lowercase());
-                if n >= 8 && (body.bytes().any(|b| !b.is_ascii_alphabetic()) || (mixed && header_context(t, i))) {
+                if n >= 8 && (body.bytes().any(|b| !b.is_ascii_alphabetic()) || (mixed && context.holds(i))) {
                     return Some((i + word.len() + n, format!("{head}{HIDDEN}")));
                 }
             }
@@ -901,14 +903,94 @@ fn auth_headers(t: &str) -> String {
     })
 }
 
-/// Whether the text before `i` says a header is being written: `Authorization` or `--header` on
-/// its line, or curl's `-H` in the command that `i` belongs to.
-fn header_context(t: &str, i: usize) -> bool {
-    let line = t[..i].rfind('\n').map_or(0, |p| p + 1);
-    let head = t[line..i].to_ascii_lowercase();
-    head.contains("authorization") || head.contains("--header") || {
-        let words = words_before(t, i);
+/// Whether the text before `i` says a header is being written (`holds`): `Authorization` or
+/// `--header` on its line, or curl's `-H` in the command that `i` belongs to. One text is asked about
+/// at many offsets, so what each answer needs is looked up in an index built once (S9 row 833: a
+/// scan of everything before `i` per label was quadratic).
+struct HeaderContext<'a> {
+    t: &'a str,
+    index: OnceCell<HeaderIndex>,
+}
+
+/// Where the things `HeaderContext::holds` looks for sit in the text.
+struct HeaderIndex {
+    newlines: Vec<usize>,
+    /// `)` and backtick: the only bytes that can move a command's start back before its line.
+    closers: Vec<usize>,
+    labels: Marks,
+    dash_h: Marks,
+    programs: Marks,
+}
+
+impl<'a> HeaderContext<'a> {
+    fn new(t: &'a str) -> Self {
+        Self { t, index: OnceCell::new() }
+    }
+
+    fn holds(&self, i: usize) -> bool {
+        let ix = self.index.get_or_init(|| HeaderIndex::new(self.t));
+        let line = ix.newlines.partition_point(|&n| n < i).checked_sub(1).map_or(0, |k| ix.newlines[k] + 1);
+        if ix.labels.within(line, i) {
+            return true;
+        }
+        // The command `i` belongs to starts at or after its line (`segment_start`: a line break is a
+        // hard start) unless a `)` or backtick closed on this line; its words then lie inside the line,
+        // so with no `-H` or no HTTP program there they cannot say yes.
+        let k = ix.closers.partition_point(|&c| c < line);
+        let closed = ix.closers.get(k).is_some_and(|&c| c < i);
+        if !closed && !(ix.dash_h.within(line, i) && ix.programs.within(line, i)) {
+            return false;
+        }
+        let words = words_before(self.t, i);
         words.iter().any(|w| w.name == "-h") && runs(&words, |w| matches!(w, "curl" | "wget" | "http" | "https" | "xh"))
+    }
+}
+
+impl HeaderIndex {
+    fn new(t: &str) -> Self {
+        let b = t.as_bytes();
+        let positions = |want: &[u8]| b.iter().enumerate().filter(|(_, c)| want.contains(c)).map(|(p, _)| p).collect();
+        Self {
+            newlines: positions(b"\n"),
+            closers: positions(b")`"),
+            labels: Marks::find(b, &["authorization", "--header"]),
+            dash_h: Marks::find(b, &["-h"]),
+            programs: Marks::find(b, &["curl", "wget", "http", "xh"]),
+        }
+    }
+}
+
+/// Where words occur in a text, ignoring ASCII case: `(start, end)` by start.
+struct Marks {
+    spans: Vec<(usize, usize)>,
+    /// `min_end[k]`: the smallest end among `spans[k..]`.
+    min_end: Vec<usize>,
+}
+
+impl Marks {
+    fn find(b: &[u8], words: &[&str]) -> Self {
+        let mut spans = Vec::new();
+        for (p, c) in b.iter().enumerate() {
+            for w in words {
+                let w = w.as_bytes();
+                if c.eq_ignore_ascii_case(&w[0]) && b.len() - p >= w.len() && b[p..p + w.len()].eq_ignore_ascii_case(w) {
+                    spans.push((p, p + w.len()));
+                }
+            }
+        }
+        let mut min_end = vec![usize::MAX; spans.len()];
+        let mut low = usize::MAX;
+        for (k, s) in spans.iter().enumerate().rev() {
+            low = low.min(s.1);
+            min_end[k] = low;
+        }
+        Self { spans, min_end }
+    }
+
+    /// Whether one of the words lies wholly inside `from..to`.
+    fn within(&self, from: usize, to: usize) -> bool {
+        let k = self.spans.partition_point(|s| s.0 < from);
+        self.min_end.get(k).is_some_and(|&e| e <= to)
     }
 }
 
@@ -1716,6 +1798,7 @@ fn reads_stdin_password(words: &[Word]) -> bool {
 /// one word, so a sentence such as `"token: rotate the keys"` stays. For `Authorization` the scheme
 /// word stays (`token`, `Bearer`).
 fn header_values(t: &str) -> String {
+    let context = HeaderContext::new(t);
     scan(t, |t, i| {
         let prev = if i == 0 { b' ' } else { t.as_bytes()[i - 1] };
         if key_char(prev) {
@@ -1730,7 +1813,7 @@ fn header_values(t: &str) -> String {
             return None;
         }
         let after = rest[n..].strip_prefix(':')?;
-        let header_like = name.contains('-') || matches!(lower.as_str(), "authorization" | "cookie" | "apikey") || header_context(t, i);
+        let header_like = name.contains('-') || matches!(lower.as_str(), "authorization" | "cookie" | "apikey") || context.holds(i);
         if !header_like && !begins_line_or_quote(t, i) {
             return None;
         }
@@ -1751,8 +1834,9 @@ fn header_values(t: &str) -> String {
 
 /// Whether `i` is the first thing on its line (indentation aside) or right after an opening quote.
 fn begins_line_or_quote(t: &str, i: usize) -> bool {
-    let line = t[..i].rfind('\n').map_or(0, |p| p + 1);
-    t[line..i].trim().is_empty() || matches!(t.as_bytes()[i - 1], b'"' | b'\'')
+    // Walks back over the white space just before `i` only, not over the whole line.
+    let blank = t[..i].chars().rev().find(|c| !c.is_whitespace() || *c == '\n').is_none_or(|c| c == '\n');
+    blank || matches!(t.as_bytes()[i - 1], b'"' | b'\'')
 }
 
 /// The offset of the quote `q` (`"` or `\"`) that ends a JSON string whose text starts `value`: one
@@ -2729,19 +2813,303 @@ mod tests {
         }
     }
 
+    const FUZZ_PARTS: &[&str] = &[
+        " ", " ", "  ", "\n", "\t", "=", ":", ";", "|", "||", "&", "&&", ">", "2>&1", "<", "<<", "<<<", "(", ")", "{", "}", "[", "]", "'", "'", "\"", "\"", "`", "\\", "$", "$(", "${", "#", ",", "-", "--", "/", "@", "!", "*", ".", "....",
+        "echo", "printf", "cat", "sudo", "-S", "ssh", "host", "bash", "-c", "pwsh", "env", "export", "set", "curl", "-u", "-H", "--header", "-d", "--data", "mysql", "-p", "-ppw", "psql", "docker", "login", "--password", "--password-stdin", "--token", "--with-token", "--api-key", "--secret", "-k", "gh", "auth",
+        "password", "PASSWORD", "pass", "pw", "token", "TOKEN", "secret", "api_key", "API_KEY", "apiKey", "AWS_SECRET_ACCESS_KEY", "client_secret", "Authorization", "Bearer", "Basic", "X-Api-Key", "Cookie", "ConvertTo-SecureString", "-AsPlainText", "-Force",
+        "sk_live_51HabcdEFGH1234567890WXYZ", "sk_test_", "whsec_8f3a9c1d2e4b5a6c7d8e9f0a", "sk_live_....WXYZ", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github_pat_11ABCDEFG0123456789_abcdefghij", "xoxb-1234-5678-abcdefgh", "AKIAIOSFODNN7EXAMPLE", "sk-ant-api03-abcdefghijklmnop", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc",
+        "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----", "https://", "http://u:p@h", "user:pa55@", "example.com", "[hidden]", "[hidden]'", "\"[hidden]\"",
+        "hunter2", "s3cr3t", "x", "abc", "1234", "EOF", "a.txt", "C:\\x", "~/.ssh/id_rsa", "\u{e9}", "\u{1f511}", "{\"password\":", "\"token\": \"", "\"}", "key=", "PW=", "--password=", "-p=", "Bearer abcdefghijklmnopqrstuvwxyz012345",
+    ];
+
+    /// The equivalence net of S9 row 833 (`mask` made linear): what `mask` answered for each input,
+    /// written down from the code before the change. Labels near words, keys of every kind, Unicode,
+    /// quoting, command wrappers and separators; small, so the old code ran them in no time.
+    const EQUIV_CASES: &[(&str, &str)] = &[
+        ("", ""),
+        (" ", " "),
+        ("\n", "\n"),
+        ("token: ", "token: "),
+        ("token: x", "token: [hidden]"),
+        ("token: token: token: ", "token: token: token: "),
+        ("token:x token: y", "token:x token: y"),
+        ("  token: abcdef", "  token: [hidden]"),
+        ("\ttoken: abcdef", "\ttoken: [hidden]"),
+        ("token: abc def", "token: abc def"),
+        ("my token: abc", "my token: abc"),
+        ("x token: abc\ntoken: def\n  token: ghi", "x token: abc\ntoken: [hidden]\n  token: [hidden]"),
+        ("\"token\": \"abc123\"", "\"token\": \"[hidden]\""),
+        ("{\"token\":\"abc\",\"password\":\"x y\"}", "{\"token\":\"[hidden]\",\"password\":\"[hidden]\"}"),
+        ("'token: abc'", "'token: [hidden]'"),
+        ("\"token: abc\"", "\"token: [hidden]\""),
+        ("say \"token: abc\" now", "say \"token: [hidden]\" now"),
+        ("password=hunter2", "password=[hidden]"),
+        ("password = hunter2", "password = hunter2"),
+        ("$password = 'pw' ; $x = 1", "$password = [hidden] ; $x = 1"),
+        ("password=hunter2&user=bob;", "password=[hidden]&user=bob;"),
+        ("PASSWORD=secretvalue", "PASSWORD=[hidden]"),
+        ("api_key=abcdef0123456789 and API_KEY=zzz", "api_key=[hidden] and API_KEY=[hidden]"),
+        ("export API_KEY=abcdef0123456789\nHOME=/home/me\nSECRET_TOKEN=\"quoted value\"", "export API_KEY=[hidden]\nHOME=[hidden]\nSECRET_TOKEN=[hidden]"),
+        ("NAME=value\nTOKEN=x", "NAME=[hidden]\nTOKEN=[hidden]"),
+        ("Authorization: Bearer abcDEF123456", "Authorization: Bearer [hidden]"),
+        ("authorization: basic dXNlcjpwYXNz", "authorization: basic [hidden]"),
+        ("Proxy-Authorization: Basic dXNlcjpwYXNz", "Proxy-Authorization: Basic [hidden]"),
+        ("curl -H 'Authorization: Bearer abcDEF123456' https://x.test", "curl -H 'Authorization: Bearer [hidden]' https://x.test"),
+        ("curl -H \"token: abc\" https://x.test", "curl -H \"token: [hidden]\" https://x.test"),
+        ("curl -H token: abc https://x.test", "curl -H token: [hidden]"),
+        ("curl -H x token: abc token: def", "curl -H x token: [hidden]"),
+        ("curl --header token:abc https://x.test", "curl --header token:[hidden]"),
+        ("curl -H x; token: abc", "curl -H x; token: abc"),
+        ("curl -H x\ntoken: abc", "curl -H x\ntoken: [hidden]"),
+        ("wget --header=\"token: abc\" https://x.test", "wget --header=\"token: [hidden]\" https://x.test"),
+        ("http -H token:abc", "http -H token:[hidden]"),
+        ("echo -H token: abc", "echo -H token: abc"),
+        ("ls -h token: abc", "ls -h token: abc"),
+        ("/usr/bin/curl -H token: abc", "/usr/bin/curl -H token: [hidden]"),
+        ("C:\\tools\\curl.exe -H token: abc", "C:\\tools\\curl.exe -H token: [hidden]"),
+        ("/var/curl -H token: abc", "/var/curl -H token: [hidden]"),
+        ("sudo -u root curl -H token: abc", "sudo -u root curl -H token: [hidden]"),
+        ("ssh host curl -H token: abc", "ssh host curl -H token: [hidden]"),
+        ("bash -c \"curl -H token: abc\"", "bash -c \"curl -H token: [hidden]\""),
+        ("bash -c \"cd x; curl -H token: abc\"", "bash -c \"cd x; curl -H token: [hidden]\""),
+        ("bash -c 'curl -H token: abc'", "bash -c 'curl -H token: [hidden]'"),
+        ("$(which curl) -H token: abc", "$(which curl) -H token: [hidden]"),
+        ("`which curl` -H token: abc", "`which curl` -H token: [hidden]"),
+        ("x $(curl -H a) token: abc", "x $(curl -H a) token: [hidden]"),
+        ("(curl -H a) token: abc", "(curl -H a) token: [hidden]"),
+        ("echo 'it''s' \"it's token: abc\"", "echo 'it''s' \"it's token: abc\""),
+        ("\"it's token: abc", "\"it's token: abc"),
+        ("\"it's token: abc'", "\"it's token: abc'"),
+        ("'say \"hi; there\"' token: abc", "'say \"hi; there\"' token: abc"),
+        ("\"a 'b; c' d\" curl -H token: abc", "\"a 'b; c' d\" curl -H token: [hidden]"),
+        ("\\\"curl -H token: abc\\\"", "\\\"curl -H token: [hidden]\\\""),
+        ("curl -H \"Accept: x\" -H token: abc -H \"Cookie: a=b\"", "curl -H \"Accept: x\" -H token: [hidden] \"Cookie: [hidden]\""),
+        ("Cookie: a=b; c=d", "Cookie: [hidden]"),
+        ("Set-Cookie: sid=abc; Path=/", "Set-Cookie: [hidden]"),
+        ("X-Api-Key: abcdef", "X-Api-Key: [hidden]"),
+        ("X-Auth-Token:  abcdef ghi", "X-Auth-Token:  [hidden]"),
+        ("apikey: abcdef", "apikey: [hidden]"),
+        ("Bearer abcdefghijkl", "Bearer abcdefghijkl"),
+        ("Bearer abcdEFGHIJKL", "Bearer abcdEFGHIJKL"),
+        ("bearer abcdEFGH1234 and basic words here", "bearer [hidden] and basic words here"),
+        ("basic authentication is basic", "basic authentication is basic"),
+        ("Authorization header Bearer abcdEFGHijkl", "Authorization header Bearer [hidden]"),
+        ("mysql -u root -pSecret123 db", "mysql -u root -p[hidden] db"),
+        ("mysql -u root -p'my pass' db", "mysql -u root -p[hidden] db"),
+        ("mysql --password=abc db", "mysql --password=[hidden] db"),
+        ("mariadb -pXYZ", "mariadb -p[hidden]"),
+        ("psql postgres://user:pw@host/db", "psql postgres://[hidden]@host/db"),
+        ("https://user:pass@example.com/path", "https://[hidden]@example.com/path"),
+        ("http://u:p@h http://u:p@h", "http://[hidden]@h http://[hidden]@h"),
+        ("curl -u user:pass https://x.test", "curl -u [hidden] https://x.test"),
+        ("curl --user user:pass https://x.test", "curl --user [hidden] https://x.test"),
+        ("sshpass -p hunter2 ssh host", "sshpass -p [hidden] ssh host"),
+        ("docker login -u me -p hunter2", "docker login -u me -p hunter2"),
+        ("docker login --password-stdin", "docker login --password-stdin"),
+        ("echo hunter2 | docker login -u me --password-stdin", "echo [hidden] | docker login -u me --password-stdin"),
+        ("printf '%s' hunter2 | sudo -S ls", "printf [hidden] | sudo -S ls"),
+        ("echo secret | sudo -S ls", "echo [hidden] | sudo -S ls"),
+        ("cat <<EOF | sudo -S ls\nhunter2\nEOF", "cat <<EOF | sudo -S ls\n[hidden]\nEOF"),
+        ("7z a -pSecret out.7z in", "7z a -p[hidden] out.7z in"),
+        ("gcc -pthread x.c", "gcc -pthread x.c"),
+        ("find . -print", "find . -print"),
+        ("--token abc123", "--token [hidden]"),
+        ("--token=abc123", "--token=[hidden]"),
+        ("--token abc --max-tokens 100", "--token [hidden] --max-tokens 100"),
+        ("--password abc --password-stdin", "--password [hidden] --password-stdin"),
+        ("-p secret", "-p secret"),
+        ("ConvertTo-SecureString 'pw' -AsPlainText -Force", "ConvertTo-SecureString [hidden] -AsPlainText -Force"),
+        ("ConvertTo-SecureString -String pw -AsPlainText", "ConvertTo-SecureString -String [hidden] -AsPlainText"),
+        ("sk_live_51HabcdEFGH1234567890WXYZ", "sk_live_....WXYZ"),
+        ("curl -u sk_live_51HabcdEFGH1234567890WXYZ: https://api.stripe.com", "curl -u sk_live_....WXYZ: https://api.stripe.com"),
+        ("sk_test_4eC39HqLyjWDarjtT1zdp7dc", "sk_test_....p7dc"),
+        ("whsec_8f3a9c1d2e4b5a6c7d8e9f0a", "whsec_....9f0a"),
+        ("ghp_abcdefghijklmnopqrstuvwxyz0123456789", "[hidden]"),
+        ("github_pat_11ABCDEFG0123456789_abcdefghij", "[hidden]"),
+        ("xoxb-1234-5678-abcdefgh", "[hidden]"),
+        ("AKIAIOSFODNN7EXAMPLE", "[hidden]"),
+        ("sk-abcdefghijklmnopqrstuvwxyz", "[hidden]"),
+        ("sk-sk-sk-sk-", "sk-sk-sk-sk-"),
+        ("-----BEGIN PRIVATE KEY-----\nQUJDREVG\n-----END PRIVATE KEY-----", "[hidden]"),
+        ("-----BEGIN RSA PRIVATE KEY-----\nQUJD", "[hidden]"),
+        ("a -----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY----- b", "a [hidden] b"),
+        ("[hidden]sk-aaaaaaaaaaaaaaaaaaaaaa", "[hidden][hidden]"),
+        ("[hidden] token: [hidden]", "[hidden] token: [hidden]"),
+        ("token: [hidden]", "token: [hidden]"),
+        ("password=[hidden]", "password=[hidden]"),
+        ("k=é中🔑 token: é中", "k=é中🔑 token: é中"),
+        ("😀token: abc😀", "😀token: abc😀"),
+        ("\u{202e}password=\u{301}x", "\u{202e}password=[hidden]"),
+        ("café password=résumé done", "café password=[hidden] done"),
+        ("ordinary command: ls -la /tmp && echo done", "ordinary command: ls -la /tmp && echo done"),
+        ("plain prose with no secrets at all, just words.", "plain prose with no secrets at all, just words."),
+        ("tokenizer: fast, tokens: 5, token_count: 7", "tokenizer: fast, tokens: 5, token_count: 7"),
+        ("the token: is a word in prose", "the token: is a word in prose"),
+        ("# comment\ntoken: abc\n# more", "# comment\ntoken: [hidden]\n# more"),
+        ("line1\r\ntoken: abc\r\nline3\r\n", "line1\r\ntoken: [hidden]\r\nline3\r\n"),
+        ("token:\tabc", "token:\t[hidden]"),
+        ("TOKEN: ABC\nSecret: xyz\nPassword: p", "TOKEN: [hidden]\nSecret: [hidden]\nPassword: [hidden]"),
+        ("secret: s\nsecret: t", "secret: [hidden]\nsecret: [hidden]"),
+        ("client_secret: abc", "client_secret: [hidden]"),
+        ("Authorization:Bearer abcDEF123456", "Authorization:Bearer [hidden]"),
+        ("x-token: a", "x-token: [hidden]"),
+        ("-H 'x-token: a' curl", "-H 'x-token: [hidden]' curl"),
+        ("\"x\" token: a", "\"x\" token: a"),
+        ("'x' token: a", "'x' token: a"),
+        ("x=\"token: a\"", "x=\"token: [hidden]\""),
+        ("a;b|c&d(e) token: f", "a;b|c&d(e) token: f"),
+        ("a && b || c ; token: d", "a && b || c ; token: d"),
+        ("echo a > f; curl -H a; token: b", "echo a > f; curl -H a; token: b"),
+        ("curl -H a | grep x\ntoken: b", "curl -H a | grep x\ntoken: [hidden]"),
+        ("2>&1 curl -H a token: b", "2>&1 curl -H a token: [hidden]"),
+        ("curl -H a &> out token: b", "curl -H a &> out token: [hidden]"),
+        ("{ curl -H a; } token: b", "{ curl -H a; } token: b"),
+        ("echo $(echo `curl -H a` token: b)", "echo $(echo `curl -H a` token: [hidden]"),
+        ("curl -H a \\ntoken: b", "curl -H a \\ntoken: [hidden]"),
+        ("http -H x https -H y xh -H z token: a", "http -H x https -H y xh -H z token: [hidden]"),
+        ("CURL -h TOKEN: a", "CURL -h TOKEN: [hidden]"),
+        ("Curl.EXE -H Token: a", "Curl.EXE -H Token: [hidden]"),
+        ("curl. -H token: a", "curl. -H token: a"),
+        ("curl.exe -H token: a", "curl.exe -H token: [hidden]"),
+        ("sudo curl -H token: a", "sudo curl -H token: [hidden]"),
+        ("timeout 5 curl -H token: a", "timeout 5 curl -H token: [hidden]"),
+        ("env A=b curl -H token: a", "env A=b curl -H token: [hidden]"),
+        ("xargs -n 1 curl -H token: a", "xargs -n 1 curl -H token: [hidden]"),
+        ("cmd /c curl -H token: a", "cmd /c curl -H token: [hidden]"),
+        ("docker run curl -H token: a", "docker run curl -H token: [hidden]"),
+        ("grep curl -H token: a notes.txt", "grep curl -H token: [hidden]"),
+        ("find /var/lib/curl -H token: a", "find /var/lib/curl -H token: a"),
+        ("\"C:\\Program Files\\curl\\curl.exe\" -H token: a", "\"C:\\Program Files\\curl\\curl.exe\" -H token: [hidden]"),
+        ("'/opt/my tools/curl' -H token: a", "'/opt/my tools/curl' -H token: [hidden]"),
+    ];
+    /// FNV-1a over `mask`'s answers to generated inputs of the idempotence fuzz's fragments.
+    fn equiv_digest(seed: u64, count: usize, max_parts: u64) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut seed = seed;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..count {
+            let len = 1 + (next() % max_parts) as usize;
+            let input: String = (0..len).map(|_| FUZZ_PARTS[(next() % FUZZ_PARTS.len() as u64) as usize]).collect();
+            for b in mask(&input).bytes().chain([0xff]) {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn mask_answers_the_written_down_cases_exactly() {
+        for (input, want) in EQUIV_CASES {
+            assert_eq!(mask(input), *want, "mask changed its answer for {input:?}");
+        }
+    }
+
+    #[test]
+    fn mask_answers_generated_inputs_exactly_as_before() {
+        assert_eq!(equiv_digest(0xD1B5_4A32_D192_ED03, 12_000, 40), DIGEST_SHORT, "mask changed an answer on short generated input");
+        assert_eq!(equiv_digest(0x2545_F491_4F6C_DD1D, 1_500, 160), DIGEST_LONG, "mask changed an answer on long generated input");
+    }
+
+    const DIGEST_SHORT: u64 = 0x67da_a2eb_be3e_94d0;
+    const DIGEST_LONG: u64 = 0x4d49_acd6_e507_2541;
+
+    /// Reference for `HeaderContext::holds`: the straight reading of "what is before `i`", which the
+    /// index answers without re-reading it per offset.
+    fn header_context_reference(t: &str, i: usize) -> bool {
+        let line = t[..i].rfind('\n').map_or(0, |p| p + 1);
+        let head = t[line..i].to_ascii_lowercase();
+        head.contains("authorization") || head.contains("--header") || {
+            let words = words_before(t, i);
+            words.iter().any(|w| w.name == "-h") && runs(&words, |w| matches!(w, "curl" | "wget" | "http" | "https" | "xh"))
+        }
+    }
+
+    #[test]
+    fn header_context_index_agrees_with_the_straight_reading_at_every_offset() {
+        let mut seed: u64 = 0x1234_5678_9ABC_DEF1;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let (mut asked, mut yes) = (0, 0);
+        for _ in 0..1_500 {
+            let len = 1 + (next() % 60) as usize;
+            let input: String = (0..len).map(|_| FUZZ_PARTS[(next() % FUZZ_PARTS.len() as u64) as usize]).collect();
+            let context = HeaderContext::new(&input);
+            for i in (0..=input.len()).filter(|i| input.is_char_boundary(*i)) {
+                let want = header_context_reference(&input, i);
+                assert_eq!(context.holds(i), want, "offset {i} of {input:?}");
+                asked += 1;
+                yes += usize::from(want);
+            }
+        }
+        assert!(yes > 500 && yes < asked, "the generated input must hold both answers ({yes} of {asked})");
+    }
+
+    /// S9 row 833: hostile pieces for the time bar. One piece repeats a fragment the passes look for.
+    fn hostile_pieces(total: usize) -> Vec<(&'static str, String)> {
+        vec![
+            ("plain", "lorem ipsum dolor sit amet ".repeat(total / 27)),
+            ("bearer_run", "Bearer ".repeat(total / 7) + &"A1".repeat(10)),
+            ("sk_run", "sk-".repeat(total / 3)),
+            ("sk_one_long_token", format!("sk-{}", "a".repeat(total))),
+            ("password_eq", "password=".repeat(total / 9)),
+            ("pem_open_no_end", format!("-----BEGIN PRIVATE KEY-----\n{}", "QUJD".repeat(total / 4))),
+            ("pem_many_begin", "-----BEGIN PRIVATE KEY-----\n".repeat(total / 28)),
+            ("url_scheme_run", "http://a:b@".repeat(total / 11)),
+            ("at_signs", "://".to_string() + &"@".repeat(total)),
+            ("hidden_glue", "[hidden]sk-aaaaaaaaaaaaaaaaaaaaaa".repeat(total / 32)),
+            ("env_lines", "API_KEY=abcdef0123456789\n".repeat(total / 25)),
+            ("json_keys", "\"password\":\"x\",".repeat(total / 15)),
+            ("one_line_no_space", "x".repeat(total)),
+            ("quotes", "\"'".repeat(total / 2)),
+            ("unicode", "\u{1F600}\u{e9}\u{4e2d}\u{202e}\u{0301}".repeat(total / 14)),
+            ("newlines", "\n".repeat(total)),
+            ("flags", "--token ".repeat(total / 8)),
+            ("labels", "token: ".repeat(total / 7)),
+            ("labels_after_curl_h", "curl -H x ".to_string() + &"token: ".repeat(total / 7)),
+        ]
+    }
+
+    /// Debug builds run 30 times slower than release, so the bar scales: 1 s per MiB in release, 2 s
+    /// for 64 KB in debug. The quadratic code took 12 s at 32 KB of labels.
+    #[test]
+    fn mask_time_stays_linear_on_hostile_pieces() {
+        let (total, bar_ms) = if cfg!(debug_assertions) { (64 << 10, 2000.0) } else { (1 << 20, 1000.0) };
+        let mut slow = Vec::new();
+        for (label, text) in hostile_pieces(total) {
+            let t0 = std::time::Instant::now();
+            let _ = mask(&text);
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            println!("TIME mask {label} bytes={} ms={ms:.0}", text.len());
+            if ms > bar_ms {
+                slow.push(format!("{label}: {ms:.0} ms for {} bytes", text.len()));
+            }
+        }
+        assert!(slow.is_empty(), "over {bar_ms} ms: {slow:#?}");
+    }
+
+    #[test]
+    fn mask_of_32_kb_of_labels_takes_under_a_second() {
+        let text = "token: ".repeat(32 * 1024 / 7);
+        let t0 = std::time::Instant::now();
+        let _ = mask(&text);
+        let ms = t0.elapsed().as_millis();
+        assert!(ms < 1000, "mask of a 32 KB run of {:?} took {ms} ms", "token: ");
+    }
+
     /// fix-hooks AFTER (masking fuzz, kolux-rs-after.md): on any input, garbage included, a second
     /// mask over mask's own answer changes nothing. The inputs are generated from shell, header,
     /// key and quoting fragments by a fixed-seed xorshift, so a failure names its input and repeats.
     #[test]
     fn safe019_mask_is_idempotent_on_generated_input() {
-        const PARTS: &[&str] = &[
-            " ", " ", "  ", "\n", "\t", "=", ":", ";", "|", "||", "&", "&&", ">", "2>&1", "<", "<<", "<<<", "(", ")", "{", "}", "[", "]", "'", "'", "\"", "\"", "`", "\\", "$", "$(", "${", "#", ",", "-", "--", "/", "@", "!", "*", ".", "....",
-            "echo", "printf", "cat", "sudo", "-S", "ssh", "host", "bash", "-c", "pwsh", "env", "export", "set", "curl", "-u", "-H", "--header", "-d", "--data", "mysql", "-p", "-ppw", "psql", "docker", "login", "--password", "--password-stdin", "--token", "--with-token", "--api-key", "--secret", "-k", "gh", "auth",
-            "password", "PASSWORD", "pass", "pw", "token", "TOKEN", "secret", "api_key", "API_KEY", "apiKey", "AWS_SECRET_ACCESS_KEY", "client_secret", "Authorization", "Bearer", "Basic", "X-Api-Key", "Cookie", "ConvertTo-SecureString", "-AsPlainText", "-Force",
-            "sk_live_51HabcdEFGH1234567890WXYZ", "sk_test_", "whsec_8f3a9c1d2e4b5a6c7d8e9f0a", "sk_live_....WXYZ", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github_pat_11ABCDEFG0123456789_abcdefghij", "xoxb-1234-5678-abcdefgh", "AKIAIOSFODNN7EXAMPLE", "sk-ant-api03-abcdefghijklmnop", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc",
-            "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----", "https://", "http://u:p@h", "user:pa55@", "example.com", "[hidden]", "[hidden]'", "\"[hidden]\"",
-            "hunter2", "s3cr3t", "x", "abc", "1234", "EOF", "a.txt", "C:\\x", "~/.ssh/id_rsa", "\u{e9}", "\u{1f511}", "{\"password\":", "\"token\": \"", "\"}", "key=", "PW=", "--password=", "-p=", "Bearer abcdefghijklmnopqrstuvwxyz012345",
-        ];
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut next = move || {
             seed ^= seed << 13;
@@ -2752,7 +3120,7 @@ mod tests {
         let mut broken = Vec::new();
         for _ in 0..20_000 {
             let len = 1 + (next() % 24) as usize;
-            let input: String = (0..len).map(|_| PARTS[(next() % PARTS.len() as u64) as usize]).collect();
+            let input: String = (0..len).map(|_| FUZZ_PARTS[(next() % FUZZ_PARTS.len() as u64) as usize]).collect();
             let once = mask(&input);
             let twice = mask(&once);
             if twice != once {
@@ -2764,4 +3132,5 @@ mod tests {
         }
         assert!(broken.is_empty(), "{} of 20000 generated inputs changed on a second mask", broken.len());
     }
+
 }
