@@ -1263,9 +1263,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     delete pendingLineup.current[batch];
     void invoke<Record<string, unknown>>("get_settings")
       .then((s) => {
-        const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
+        // Row 794-c: laid over the latest settings (the disk copy lags writes in flight); disk lineups kept too.
+        const { was, next } = applySetting(settingsRef, LAST_LINEUP_KEY, { ...lineupsOf(s), ...lineupsOf(settingsRef.current), [wait.pid]: wait.lineup });
         setSettings(next);
-        return saveChanged(s, next);
+        return saveChanged(was, next);
       })
       .catch((err) => setNotice(String(err)));
   };
@@ -1506,7 +1507,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // pending one before the window closes. The start screen itself is not written back.
   const screenWriter = useRef(
     lastWriter((s: Screen) => {
-      setSettings((x) => ({ ...x, [LAST_SCREEN_FIELD]: s }));
+      // Row 794-d: moves the ref too, so a saveSetting before the next render keeps the last screen.
+      setSettings(applySetting(settingsRef, LAST_SCREEN_FIELD, s).next);
       saveChanged({}, { [LAST_SCREEN_FIELD]: s }).catch((err) => setNotice(String(err)));
     }),
   ).current;
