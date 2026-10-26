@@ -393,15 +393,15 @@ Rules: a host path is any share written with a leading double backslash or doubl
   roots are the projects and the workspaces folder; terminal and note links are not built yet and
   will call the same functions; no grant flow exists yet, so the exact-file grant rule is T-062's.)
 Acceptance:
-  - [ ] Ctrl-click a terminal link to a double-slash share path, or to a file URL naming another
-        host → nothing opens and no connection to that host is tried.
-  - [ ] A long-path local-drive form that climbs up into a UNC path on a host → treated as a host
-        path and refused.
-  - [ ] A link to a WSL path → opens; a share path inside a registered repository → still checked as
-        usual.
-  - [ ] Grant access to a folder → no file under it is granted.
-  - [ ] A folder in a repository that is a symbolic link to the home folder → granting it never
-        exposes anything beneath it, such as the SSH key folder.
+  - [x] Ctrl-click a terminal link to a double-slash share path, or to a file URL naming another
+        host → nothing opens and no connection to that host is tried. (cards; evidence/cards-SAFE-021.txt)
+  - [x] A long-path local-drive form that climbs up into a UNC path on a host → treated as a host
+        path and refused. (cards; evidence/cards-SAFE-021.txt)
+  - [x] A link to a WSL path → opens; a share path inside a registered repository → still checked as
+        usual. (cards; evidence/cards-SAFE-021.txt)
+  - [x] Grant access to a folder → no file under it is granted. (cards; evidence/cards-SAFE-021.txt)
+  - [x] A folder in a repository that is a symbolic link to the home folder → granting it never
+        exposes anything beneath it, such as the SSH key folder. (cards; evidence/cards-SAFE-021.txt)
 Compat: —
 Source: D-10-021
 
@@ -421,11 +421,11 @@ Rules: around a hundred program and script-like file types count, including unus
   shape is a stem of up to eight characters holding a tilde followed by a digit with an extension
   of up to three; on Linux the reveal opens the folder without selecting the file.)
 Acceptance:
-  - [ ] Shift-click open on a link to a batch file, a JavaScript file, a Windows program or a
-        shortcut → its folder is revealed and nothing runs.
-  - [ ] A name that ends with a program type followed by a stream suffix, or by a trailing dot →
-        still treated as a program.
-  - [ ] A link to a plain text file → opens normally.
+  - [x] Shift-click open on a link to a batch file, a JavaScript file, a Windows program or a
+        shortcut → its folder is revealed and nothing runs. (cards; evidence/cards-SAFE-022.txt)
+  - [x] A name that ends with a program type followed by a stream suffix, or by a trailing dot →
+        still treated as a program. (cards; evidence/cards-SAFE-022.txt)
+  - [x] A link to a plain text file → opens normally. (cards; evidence/cards-SAFE-022.txt)
 Compat: —
 Source: D-10-022
 
