@@ -27,8 +27,8 @@ export class Checks {
     this.list = [];
     this.notes = [];
   }
-  add(name, threshold, measured, pass) {
-    this.list.push({ name, threshold, measured: String(measured), pass: !!pass });
+  add(name, threshold, measured, pass, inconclusive = false) {
+    this.list.push({ name, threshold, measured: String(measured), pass: !!pass || !!inconclusive, inconclusive: !pass && !!inconclusive });
     return !!pass;
   }
   note(text) {

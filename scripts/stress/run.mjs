@@ -1,4 +1,4 @@
-// Stress runner: node scripts/stress/run.mjs <S1..S5|all> [--port 1440 --cdp 9260 --temp G:/Temp/stress]
+// Stress runner: node scripts/stress/run.mjs <S1..S7|all> [--port 1440 --cdp 9260 --temp G:/Temp/stress]
 // Each scenario launches the app from this checkout (scripts/evidence/app-launch.mjs: scratch homes, hidden off-screen window,
 // own identifier), measures, closes it, clears its scratch folder, prints PASS / FAIL and writes
 // evidence/stress-<scenario>-<short sha>.txt with every threshold beside what was measured.
@@ -18,13 +18,13 @@ const opt = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback;
 };
-const want = (args.find((a) => /^(S[1-5]|all)$/i.test(a)) ?? "").toUpperCase();
+const want = (args.find((a) => /^(S[1-7]|all)$/i.test(a)) ?? "").toUpperCase();
 const opts = { root, port: Number(opt("port", "1440")), cdp: Number(opt("cdp", "9260")), temp: opt("temp", "G:/Temp/stress").replace(/\\/g, "/") };
 
-const modules = { S1: "./s1-pane-churn.mjs", S2: "./s2-output-flood.mjs", S3: "./s3-many-projects.mjs", S4: "./s4-corrupt-state.mjs", S5: "./s5-hard-kill.mjs" };
+const modules = { S1: "./s1-pane-churn.mjs", S2: "./s2-output-flood.mjs", S3: "./s3-many-projects.mjs", S4: "./s4-corrupt-state.mjs", S5: "./s5-hard-kill.mjs", S6: "./s6-unicode-ansi.mjs", S7: "./s7-editor-big-files.mjs" };
 const list = want === "ALL" ? Object.keys(modules) : modules[want] ? [want] : null;
 if (!list) {
-  console.error("usage: node scripts/stress/run.mjs <S1|S2|S3|S4|S5|all> [--port 1440] [--cdp 9260] [--temp G:/Temp/stress]");
+  console.error("usage: node scripts/stress/run.mjs <S1|S2|S3|S4|S5|S6|S7|all> [--port 1440] [--cdp 9260] [--temp G:/Temp/stress]");
   process.exit(2);
 }
 
@@ -77,7 +77,7 @@ for (const id of list) {
     `stress ${id} (${mod.title}) at ${new Date().toISOString()} on ${sha} (${root})`,
     `args: ${args.join(" ")}; ran ${((Date.now() - started) / 1000).toFixed(0)} s`,
     "",
-    ...checks.list.map((c) => `${c.pass ? "PASS" : "FAIL"}  ${c.name}\n      bar: ${c.threshold}\n      measured: ${c.measured}`),
+    ...checks.list.map((c) => `${c.inconclusive ? "INCONCLUSIVE" : c.pass ? "PASS" : "FAIL"}  ${c.name}\n      bar: ${c.threshold}\n      measured: ${c.measured}`),
     ...(checks.notes.length ? ["", "notes:", ...checks.notes.map((n) => `  - ${n}`)] : []),
     "",
     `${id}: ${status}`,
