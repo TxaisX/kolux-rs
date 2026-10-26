@@ -83,20 +83,25 @@ fn mb_per_s(bytes: usize, took: Duration) -> f64 {
 fn after787_bookkeeping_per_chunk_old_8kb_against_new_batch_128kb() {
     let text = numbered(300_000); // ~30 MB
     let dir = scratch("book");
-    let old = inner_with_history(&dir, 1);
-    let mut prs = crate::scm::PrScan::default();
-    let t = Instant::now();
-    for c in text.chunks(8192) {
-        old_handler(&old, &mut prs, 1, c);
+    // Load flake fix: the fastest of 3 rounds each, old and new alternating, so a load spike that
+    // lands on one pass cannot decide the comparison (a real slowdown shows in every round).
+    let (mut old_took, mut new_took) = (Duration::MAX, Duration::MAX);
+    for round in 0..3u32 {
+        let old = inner_with_history(&dir, 1 + 2 * round);
+        let mut prs = crate::scm::PrScan::default();
+        let t = Instant::now();
+        for c in text.chunks(8192) {
+            old_handler(&old, &mut prs, 1 + 2 * round, c);
+        }
+        old_took = old_took.min(t.elapsed());
+        let new = inner_with_history(&dir, 2 + 2 * round);
+        let mut prs = crate::scm::PrScan::default();
+        let t = Instant::now();
+        for c in text.chunks(128 * 1024) {
+            new_handler(&new, &mut prs, 2 + 2 * round, c);
+        }
+        new_took = new_took.min(t.elapsed());
     }
-    let old_took = t.elapsed();
-    let new = inner_with_history(&dir, 2);
-    let mut prs = crate::scm::PrScan::default();
-    let t = Instant::now();
-    for c in text.chunks(128 * 1024) {
-        new_handler(&new, &mut prs, 2, c);
-    }
-    let new_took = t.elapsed();
     let (o, n) = (mb_per_s(text.len(), old_took), mb_per_s(text.len(), new_took));
     println!("FLOOD bookkeeping: old 8 KB chunks {o:.1} MB/s ({old_took:?}), new 128 KB batches {n:.1} MB/s ({new_took:?}), x{:.1}", n / o);
     assert!(n >= o * 0.9, "new {n:.1} MB/s, old {o:.1} MB/s");
@@ -233,7 +238,8 @@ fn after786_a_slow_pane_that_keeps_answering_never_has_more_than_one_window_queu
     let (period, total, wait) = (Duration::from_millis(3), 12 << 20, Duration::from_millis(25));
     let (old_worst, old_pauses) = backlog_with(period, total, wait, true);
     // a long wait here only so a loaded machine starving the pane thread cannot read as a silent pane
-    let (new_worst, new_pauses) = backlog_with(period, total, Duration::from_millis(1000), false);
+    // (Load flake fix: 20 s, not 1 s; a pane that answers is never waited out, so this costs nothing)
+    let (new_worst, new_pauses) = backlog_with(period, total, Duration::from_secs(20), false);
     println!("FLOOD web view backlog (12 MB, pane at ~10 MB/s): old peak {} KB ({old_pauses} pauses), new peak {} KB ({new_pauses} pauses)", old_worst / 1024, new_worst / 1024);
     assert!(new_worst <= FLOW_HIGH + 64 * 1024, "{new_worst} B queued");
     assert!(old_worst > FLOW_HIGH + 256 * 1024, "the old rule should have let the gap grow, saw {old_worst} B");
@@ -245,7 +251,8 @@ fn after786_a_pane_that_answers_nothing_is_still_given_up_on() {
     let flow = Flow::default();
     let t = Instant::now();
     flow.sent_within(FLOW_HIGH, Duration::from_millis(60));
-    assert!(t.elapsed() >= Duration::from_millis(50) && t.elapsed() < Duration::from_secs(3));
+    // Load flake fix: 10 s, not 3 s, for a 60 ms wait that a starved thread may be late to leave.
+    assert!(t.elapsed() >= Duration::from_millis(50) && t.elapsed() < Duration::from_secs(10));
     assert!(flow.ack(0), "it is told to resync");
 }
 

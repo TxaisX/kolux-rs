@@ -256,8 +256,13 @@ fn t167b_sleeping_takes_the_rows_at_or_below_each_sleeping_folder_only() {
     assert!(saved::sleeping(&mut rows, &[String::new()]).is_empty(), "an empty path sleeps nothing");
 }
 
+// Load flake fix: saved.rs keeps the restored rows in process-wide statics, so these two tests'
+// startup() calls wiped each other's rows when they overlapped; they take turns.
+static SAVED_ROWS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn t167b_sleep_records_the_workspace_agents_before_clearing_their_rows_and_quit_keeps_them() {
+    let _turn = SAVED_ROWS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("kolux-t167b-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
@@ -288,6 +293,7 @@ fn kid(id: &str) -> saved::SavedChild {
 
 #[test]
 fn t167b_a_restored_row_is_unconfirmed_until_its_pane_reports_and_holds_nothing_to_approve() {
+    let _turn = SAVED_ROWS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("kolux-t167b-unconfirmed-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
