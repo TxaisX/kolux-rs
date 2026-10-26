@@ -889,9 +889,12 @@ pub const START_MARK: &str = "kolux-rs: config:";
 pub const SELF_END: &str = "kolux ended itself:";
 /// The final save's report line (lib.rs): the quit was under way.
 pub const QUIT_BEGAN: &str = "final save:";
+/// T-324-b-rest: written first thing when Windows ends the session (sign-out, shutdown, restart),
+/// before the final save that the system may cut short.
+pub const SESSION_END: &str = "windows session ended:";
 /// A run that logged one of these ended on purpose: a clean exit, a start that gave up, a quit
-/// that was under way, or Kolux ending itself.
-const CLEAN_ENDS: [&str; 4] = ["app exit", "could not start:", SELF_END, QUIT_BEGAN];
+/// that was under way, Kolux ending itself, or Windows ending the session.
+const CLEAN_ENDS: [&str; 5] = ["app exit", "could not start:", SELF_END, QUIT_BEGAN, SESSION_END];
 /// APP-040: only the newest five reports are kept.
 pub const KEEP: usize = 5;
 /// Reports this close together (seconds) come from one crash: they merge into one report.
@@ -1243,7 +1246,7 @@ pub fn quit_spans(log: &str) -> Vec<(u64, u64)> {
         }
         if let Some(o) = open.as_mut() {
             o.1 = t;
-        } else if line.contains(QUIT_BEGAN) || line.contains(SELF_END) || line.contains("app exit") {
+        } else if line.contains(QUIT_BEGAN) || line.contains(SELF_END) || line.contains(SESSION_END) || line.contains("app exit") {
             open = Some((t, t));
         }
     }
@@ -2001,6 +2004,26 @@ mod tests {
         assert!(in_quit(&spans, 140) && !in_quit(&spans, 120) && !in_quit(&spans, 450));
         let open = "100 kolux-rs: config: a\n150 kolux ended itself: restart to update\n";
         assert_eq!(quit_spans(open), vec![(135, 180)]);
+    }
+
+    // T-324-b-rest: a Windows sign-out, shutdown or restart is a clean end
+
+    #[test]
+    fn t324b_a_windows_session_end_is_no_crash_but_a_run_that_just_stops_still_is() {
+        let session = "1 kolux-rs: config: a\n2 terminal 1 started\n3 windows session ended: sign-out, shutdown or restart\n4 kolux-rs: config: a\n";
+        assert_eq!(previous_run_crash(session), None, "the session end the user chose is not a crash");
+        let clean = "1 kolux-rs: config: a\n2 app exit\n3 kolux-rs: config: a\n";
+        assert_eq!(previous_run_crash(clean), None, "a normal quit stays clean");
+        let killed = "1 kolux-rs: config: a\n2 terminal 1 started\n3 kolux-rs: config: a\n";
+        assert_eq!(previous_run_crash(killed).as_deref(), Some(NO_CLEAN_EXIT), "a real crash is still reported");
+        let first_run = "1 kolux-rs: config: a\n2 terminal 1 started\n";
+        assert_eq!(previous_run_crash(first_run), None, "the first run has no previous run");
+        // only the run just before this start counts: a session end two runs ago excuses nothing
+        let crash_after = "1 kolux-rs: config: a\n2 windows session ended: x\n3 kolux-rs: config: a\n4 terminal 1 started\n5 kolux-rs: config: a\n";
+        assert_eq!(previous_run_crash(crash_after).as_deref(), Some(NO_CLEAN_EXIT));
+        // a crash dump written in the shutdown minutes is a quit-time exit too
+        let spans = quit_spans("100 kolux-rs: config: a\n150 windows session ended: x\n400 kolux-rs: config: a\n");
+        assert_eq!(spans, vec![(135, 400)]);
     }
 
     // T-286-b (APP-017)

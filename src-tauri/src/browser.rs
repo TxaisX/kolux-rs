@@ -74,6 +74,12 @@ pub mod notices;
 // T-241 (BROW-038), T-240 (BROW-035): the page's picture for drawing on and for grabbing an element.
 #[path = "browser_picture.rs"]
 pub mod picture;
+// after-list 746 (T-319-c, BROW-052): app drags pass across the pages.
+#[path = "browser_drag.rs"]
+pub mod drag;
+// T-316-b (EDIT-018): a markdown note printed to a PDF by a hidden page.
+#[path = "browser_pdf.rs"]
+pub mod pdf;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -179,9 +185,17 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
     if (k === "Space") return e.code === "Space" || e.key === " ";
     return e.code === k || e.key === k;
   };
+  // T-240 (BROW-035): a chord marked `n` (Mod+C, bound to grabbing an element) is the app's only
+  // when no text is selected, in the page or in a field; with a selection the page copies as usual.
+  const copying = () => {
+    const a = document.activeElement;
+    try { if (a && typeof a.selectionStart === "number" && a.selectionStart !== a.selectionEnd) return true; } catch (_) {}
+    const s = getSelection();
+    return !!s && !s.isCollapsed && String(s).length > 0;
+  };
   addEventListener("keydown", (e) => {
     if (e.defaultPrevented || !(e.ctrlKey || e.metaKey || e.altKey)) return;
-    if (!keys.some((d) => keyHit(d, e))) return;
+    if (!keys.some((d) => keyHit(d, e) && !(d.n && copying()))) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     if (e.repeat) return;
@@ -1213,6 +1227,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         // SAFETY: ParentWindow only writes the controller's parent window handle into `container`.
         if unsafe { pw.controller().ParentWindow(&mut container) }.is_ok() {
             holder::record(id, container.0 as isize);
+            drag::settle(container.0 as isize); // after-list 746: a page made mid-drag lets it through
         }
         // T-283 (BROW-043): the engine's browser process behind this page is recorded for clean-up.
         // SAFETY: CoreWebView2 hands back the page's engine; BrowserProcessId only writes the id.
@@ -2122,7 +2137,7 @@ mod tests {
         assert!(matches!(navigation(&url, None, &tabs, false, Instant::now()), Nav::Load(false)));
         assert_eq!(keys_script("[]"), r#"window.__kxKeys && window.__kxKeys(JSON.parse("[]"))"#);
         // The page takes a held key once, honours the app's list, and mirrors the app's key matching.
-        for needle in ["__kxKeys", "if (e.repeat) return;", "AltGraph", "\"Key\" + k", "\"Digit\" + k", "k === \"Plus\""] {
+        for needle in ["__kxKeys", "if (e.repeat) return;", "AltGraph", "\"Key\" + k", "\"Digit\" + k", "k === \"Plus\"", "d.n && copying()", "a.selectionStart !== a.selectionEnd", "s.isCollapsed"] {
             assert!(CHORD_SCRIPT.contains(needle), "{needle}");
         }
     }
@@ -2875,16 +2890,24 @@ mod t074_tests {
     #[test]
     fn brow008_a_closed_local_port_is_refused_and_local_and_an_open_one_is_reached() {
         // Real sockets on this machine: a port nothing listens on, then one that does.
-        let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = gone.local_addr().unwrap().port();
-        drop(gone);
-        let url = parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         // APP-070: the check is a HEAD through the approved near client, not a socket of its own.
         let clients = icon_clients(None, system_lookup).unwrap();
-        assert!(!lookup(&url).is_empty());
-        let f = tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)).unwrap_err();
-        let (tcp, tls) = failed_parts(false, &f);
-        assert_eq!(failure_kind(true, tcp, tls.as_deref()), "refused", "{f:?}");
+        // A released ephemeral port can be taken by another process before the HEAD: try a fresh one.
+        let mut tries = Vec::new();
+        let url = loop {
+            let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = gone.local_addr().unwrap().port();
+            drop(gone);
+            let url = parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+            assert!(!lookup(&url).is_empty());
+            let f = tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)).unwrap_err();
+            let (tcp, tls) = failed_parts(false, &f);
+            if failure_kind(true, tcp, tls.as_deref()) == "refused" {
+                break url;
+            }
+            tries.push(f);
+            assert!(tries.len() < 5, "no closed port was refused: {tries:?}");
+        };
         assert!(local_host(&url));
         assert_eq!(https_twin(&url), None);
         // A server that answers: the HEAD gets its status and length, and the kind stays unknown.

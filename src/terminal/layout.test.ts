@@ -2,7 +2,7 @@
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
 import { sessionOrder } from "../sessions/restoreOrder";
-import { layoutOf, marksOf, restoreAsks, restoreLayout, stillThere } from "./layout";
+import { layoutOf, marksOf, restoreAsks, restoreLayout, reviveSaved, stillThere } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
 
@@ -10,15 +10,16 @@ test("proj067: what is written down is each started tab, stripped to what a rest
   const panes = [
     shell(1, null),
     { ...shell(2, "C:\\w\\a"), agent: "claude" as const, agentId: "claude", program: "claude", args: ["--prompt", "do the thing"], env: [["X", "1"]], typed: "do", task: "t", account: "acct-1", title: "Claude", group: 2 },
-    shell(3, "C:\\w\\a", { seats: [{}] }), // a chooser never started: not a tab yet
+    shell(3, "C:\\w\\a", { seats: [{}] }), // a chooser never started
     shell(4, "C:\\w\\b", { kind: "editor", path: "C:\\w\\b\\README.md", group: 4 }),
     shell(5, "C:\\w\\b", { kind: "browser" }),
   ];
   const l = layoutOf(panes, { 1: 1, 2: 2, 4: 4, 9: 3 }, 2, "C:\\w\\a", { "C:\\w\\b": true });
-  expect(l.panes.map((p) => p.key)).toEqual([1, 2, 4, 5]);
+  expect(l.panes.map((p) => p.key)).toEqual([1, 2, 3, 4, 5]);
+  expect(l.panes[2]).toEqual({ key: 3, cwd: "C:\\w\\a", branch: null, agent: "shell", program: null, args: [], chooser: true }); // an unstarted chooser keeps its place as an empty chooser
   expect(l.panes[1]).toEqual({ key: 2, cwd: "C:\\w\\a", branch: null, agent: "claude", agentId: "claude", program: "claude", args: [], account: "acct-1", title: "Claude", group: 2 });
-  expect(l.panes[2]).toEqual({ key: 4, cwd: "C:\\w\\b", branch: null, agent: "shell", program: null, args: [], group: 4, kind: "editor", path: "C:\\w\\b\\README.md" });
-  expect(l.activeTab).toEqual({ 1: 1, 2: 2, 4: 4 }); // the chooser's cell entry went with it
+  expect(l.panes[3]).toEqual({ key: 4, cwd: "C:\\w\\b", branch: null, agent: "shell", program: null, args: [], group: 4, kind: "editor", path: "C:\\w\\b\\README.md" });
+  expect(l.activeTab).toEqual({ 1: 1, 2: 2, 4: 4, 9: 3 });
   expect(l.focused).toBe(2);
   expect(l.activeDir).toBe("C:\\w\\a");
   expect(l.stacked).toEqual({ "C:\\w\\b": true });
@@ -131,4 +132,20 @@ test("after100: pinned tabs and tab colours are saved with the layout and come b
   expect(layoutOf(panes, {}, 1, "C:/w/a", {}).panes[0]).not.toHaveProperty("pinned");
   const old = restoreLayout({ panes: [shell(1, "C:/w/a", { color: "mauve", pinned: "yes" }), shell(2, "C:/w/a", { pinned: false, color: 4 })] })!;
   expect(old.panes.map((p) => [p.pinned, p.color])).toEqual([[undefined, undefined], [undefined, undefined]]);
+});
+
+test("ux-fix-1: nine panes, four running shells and five empty choosers, come back as nine after a relaunch", () => {
+  const panes = [
+    ...[1, 2, 3, 4].map((k) => shell(k, "C:\w\a")),
+    ...[5, 6, 7, 8].map((k) => shell(k, "C:\w\a", { seats: [{ agent: null, model: null }] })),
+    shell(9, "C:\w\a", { agentId: "codex", seats: [{ agent: "codex", model: null }] }),
+  ];
+  const saved = layoutOf(panes, {}, 1, "C:\w\a", {});
+  expect(saved.panes.map((p) => p.key)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const back = restoreLayout(JSON.parse(JSON.stringify(saved)))!;
+  expect(back).toEqual(saved); // the next save writes the same layout
+  expect(back.panes.map((p) => reviveSaved(p).seats !== undefined)).toEqual([false, false, false, false, true, true, true, true, true]);
+  expect(reviveSaved(back.panes[4]).seats).toEqual([{ agent: null, model: null }]);
+  expect(reviveSaved(back.panes[8]).seats).toEqual([{ agent: "codex", model: null }]);
+  expect(restoreAsks(back.panes[8])).toBe(false); // a chooser asks for no start line
 });

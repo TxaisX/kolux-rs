@@ -51,3 +51,45 @@ LIVE PROOF PENDING (batched)
 4. A notebook with a 5000-line cell: opens at once, shows the start and "Show all 5000 lines".
 STILL OPEN IN T-316-b: EDIT-018 export a note to PDF (waits on a PDF-writing library on main; the app cannot open a print
   dialog) and the EDIT-024 Python run with its trust prompt (needs an interpreter launch).
+
+T-316-b piece 3 (2026-10-25, lane/browser): EDIT-018 export a note to PDF, the browser side.
+BUILT
+- src-tauri/src/browser_pdf.rs (registered as browser::pdf in browser.rs): browser_export_pdf(html, title, path, overwrite)
+  wraps the caller's rendered HTML in a page whose policy is default-src 'none', img-src data:, font-src data:, inline style
+  only (no script, no network, no remote picture), writes it to a temp file under the app temp dir, opens a hidden page on
+  that file (a WebviewWindow: invisible, offscreen at -32000, no taskbar entry, only that one address may be navigated to,
+  every new window refused), waits for the load, prints it with the engine's PrintToPdf (engine::print_pdf, the one the
+  kolux pdf command uses) to a temp PDF, checks it starts with %PDF, and only then writes the chosen path.
+  The path must be absolute, without .., end in .pdf, in a folder that exists, not a folder, and not an existing file unless
+  overwrite is true; without overwrite the file is created new, so a file that appeared since the check is never replaced.
+  The hidden page is closed by a drop guard (success, load timeout, print error, refused print, bad file, open failure after
+  the window exists) and the temp html and pdf are removed by another. A note over 48 MB of html is refused.
+- browser_pick_pdf_path(title, folder): the system save dialog (tauri-plugin-dialog from Rust: the app had no save dialog
+  before, only open pickers, and the JS side has only dialog:allow-open), offers <title>.pdf, Untitled.pdf without a title.
+- src/browser/notePdf.ts: noteTitle, embedPictures (every blob: picture in the html becomes a data: address; one that
+  cannot be read loses its address), bytesToDataUri, exportNotePdf (pick path, embed, print with overwrite true because the
+  system dialog has already asked about replacing).
+- The engine code has no request blocker for this (its only WebResourceRequested filter edits client hints), so the block is
+  the page's own policy plus the navigation guard; no new dependency.
+- Patches: evidence/browser-fix-T-316-b-lib.rs.patch (registers both commands; apply after 719, 151, 746) and
+  evidence/browser-fix-T-316-b-PreviewPane.tsx.patch (src/editor/PreviewPane.tsx, the editor lane's file: a Note actions
+  menu with Export to PDF..., the on-disk pictures read in as data addresses, a status line saying where it was saved).
+TESTS (made-up notes only)
+- cargo test browser: 215 passed, including 8 browser::pdf tests: edit018_a_note_with_no_title_is_named_untitled,
+  edit018_the_target_must_be_absolute_pdf_in_a_real_folder, edit018_an_existing_file_is_kept_unless_the_caller_says_so,
+  edit018_the_printed_page_may_load_nothing_from_outside, edit018_export_writes_the_pdf_closes_the_page_and_cleans_up,
+  edit018_the_hidden_page_is_closed_on_every_error_path (load, print error, refused, not a PDF, no file, success: opened once,
+  closed once, no temp files, no PDF left behind), edit018_a_page_that_will_not_open_leaves_nothing_and_a_bad_target_opens_nothing,
+  edit018_overwrite_replaces_when_the_caller_says_so. The engine is faked behind the Host/Page traits.
+- vitest src/browser: 27 files 181 tests passed, including notePdf.test.ts (7). tsc --noEmit 0 with the PreviewPane patch applied.
+LIVE PROOF PENDING (batched; apply the 719, 151, 746 and T-316-b lib patches and the PreviewPane patch first)
+1. Open a markdown file with a heading, a list and a local picture (and paste one more picture below the fold) in a
+   preview tab. Note actions (the dots) > Export to PDF...: the system save dialog opens at the note's folder offering
+   <name>.pdf. Choose a new name: the line "Saved <path>" shows; no window flashes or appears on the taskbar; the PDF
+   shows the text and both pictures, the one below the fold included.
+2. Export again to the same name and agree to replace in the dialog: the file is replaced. Cancel the dialog: nothing happens.
+3. A preview of an unsaved/untitled note (no title): the dialog offers Untitled.pdf.
+4. A note with <img src="https://example.com/x.png"> prints with no picture and no request leaves the PC.
+5. If the PDF is empty or the export times out, the hidden window may need to be shown (WebView2 can skip painting a
+   hidden window): in browser_pdf.rs AppHost::open change .visible(false) to .visible(true) (it stays offscreen at -32000).
+STILL OPEN IN T-316-b: the EDIT-024 Python run with its trust prompt (needs an interpreter launch).

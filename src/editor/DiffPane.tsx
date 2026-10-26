@@ -49,7 +49,9 @@ type Sides = { original: string; modified: string };
 
 const squash = (s: string) => s.replace(/\s+/g, "");
 /** The diff with whitespace-only changes left out, which is how a diff tab starts. */
-export const withoutWhitespace = (a: string, b: string) => diff(a, b).filter((c) => squash(a.slice(c.fromA, c.toA)) !== squash(b.slice(c.fromB, c.toB)));
+// Row 804: the override skips the merge package's own default scan limit, so it needs the same bound plus a timeout.
+export const DIFF_BOUND = { scanLimit: 500, timeout: 1000 };
+export const withoutWhitespace = (a: string, b: string) => diff(a, b, DIFF_BOUND).filter((c) => squash(a.slice(c.fromA, c.toA)) !== squash(b.slice(c.fromB, c.toB)));
 
 // GIT-040: the note cards are block widgets under their line, so their height is part of the
 // document's layout and the lines below never jump when a card draws.

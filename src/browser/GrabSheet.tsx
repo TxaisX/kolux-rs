@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { SendTarget } from "../editor/notes";
-import { copyDetails, type Grab, leavesGrab, sendGrab } from "./grabFlow";
+import { copyDetails, copyScreenshot, type Grab, leavesGrab, sendGrab } from "./grabFlow";
 import { SendButton } from "./SendButton";
 
 type Props = {
@@ -25,6 +25,7 @@ export function GrabSheet({ grab, title, url, targets, onSend, onClose }: Props)
   }, []);
 
   const copy = async () => setLine(await copyDetails((t) => navigator.clipboard.writeText(t), grab.pick));
+  const copyShot = async () => setLine(await copyScreenshot((items) => navigator.clipboard.write(items), grab.picture));
   const send = async (key: number) => {
     setBusy(true);
     setLine(null);
@@ -54,6 +55,9 @@ export function GrabSheet({ grab, title, url, targets, onSend, onClose }: Props)
         <span className="draw-gap" />
         <button type="button" className="btn" data-go="copy" onClick={copy}>
           Copy details
+        </button>
+        <button type="button" className="btn" data-go="copy-shot" disabled={!grab.picture} onClick={copyShot} title={grab.picture ? "Put the picture on the clipboard" : "There is no picture"}>
+          Copy Screenshot
         </button>
         <SendButton targets={targets} busy={busy} onPick={send} />
         <button type="button" className="btn" data-go="close" onClick={() => onClose()} title="Back to the page (Esc)">

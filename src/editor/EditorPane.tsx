@@ -913,6 +913,6 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
 
 // EDIT-029 (T-235-b): a PNG, JPEG or similar file opens in the image viewer instead of the text editor (it would be refused as binary); everything else is the text editor.
 export default function EditorPane(props: Props) {
-  if (isPdf(props.path)) return <PdfView id={props.id} path={props.path} hidden={props.hidden} focused={props.focused} onFocus={props.onFocus} onClose={props.onClose} onToast={props.onToast} />;
+  if (isPdf(props.path)) return <PdfView id={props.id} path={props.path} root={props.root} onLink={props.onLink} hidden={props.hidden} focused={props.focused} onFocus={props.onFocus} onClose={props.onClose} onToast={props.onToast} />;
   return isPicture(props.path) ? <ImageView id={props.id} path={props.path} hidden={props.hidden} focused={props.focused} onFocus={props.onFocus} onClose={props.onClose} onToast={props.onToast} /> : <TextEditorPane {...props} />;
 }

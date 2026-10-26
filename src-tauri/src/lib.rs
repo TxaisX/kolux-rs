@@ -2,7 +2,7 @@ mod folder_projects;
 mod floating_trust;
 mod repo_scan;
 mod activity;
-mod agents;
+pub mod agents;
 mod app_look;
 mod artifacts;
 mod automations;
@@ -45,6 +45,7 @@ mod grok_status;
 mod install;
 mod keybindings;
 mod kits;
+mod edit_menu;
 mod links;
 mod login_env;
 mod lifecycle;
@@ -55,9 +56,9 @@ mod names;
 mod newproject;
 mod notifications;
 mod onboarding;
-mod orchestration;
+pub mod orchestration;
 mod foreground;
-mod procs;
+pub mod procs;
 mod protected;
 mod protected_custom;
 mod ports;
@@ -67,7 +68,7 @@ mod resources;
 pub mod projects;
 mod prompt_answer;
 mod prompt_scan;
-mod scm;
+pub mod scm;
 mod scm_open;
 mod scm_recipe;
 mod scm_stack;
@@ -76,7 +77,7 @@ mod skills;
 mod star;
 mod pasted_image;
 mod pr_checkout;
-mod pty;
+pub mod pty;
 mod setup;
 mod routing;
 mod schedule;
@@ -278,6 +279,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             dev_inject()?;
             let store = Store::open(&prep.open_dir)?;
+            store.stamp_look(); // row 785: the look and mode are written now, not left to a page read that may time out
             // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
             // lock or a lock that cannot be opened is logged; the latter still recovers).
             skill_delete::startup_recover(&dir);
@@ -323,6 +325,8 @@ pub fn run() {
             if let Some(w) = app.get_webview_window("main") {
                 browser::engine::watch_app_failures(&w, dir.clone());
             }
+            // APP-014: spelling suggestions for the text-field menu (Windows).
+            edit_menu::install(app.handle());
             if let Some(w) = app.get_webview_window("main") {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -513,6 +517,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            edit_menu::edit_menu_ready,
             get_settings,
             settings_fallback_notice,
             settings_patch,
@@ -748,6 +753,9 @@ pub fn run() {
             browser::notices::browser_pane_ready,
             browser::picture::browser_capture, // after-list 151 (BROW-038), 320 (BROW-035)
             browser::picture::browser_save_picture,
+            browser::drag::browser_drag_through, // after-list 746 (T-319-c, BROW-052)
+            browser::pdf::browser_export_pdf, // T-316-b (EDIT-018)
+            browser::pdf::browser_pick_pdf_path,
             browser::browser_viewport,
             browser::browser_cookies_import,
             browser::cookies::browser_import_sources, // T-319-b (BROW-030)
@@ -938,6 +946,8 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
                 use std::sync::atomic::Ordering::SeqCst;
+                // T-324-b-rest: an exit reached without this was Windows ending the session.
+                lifecycle::EXIT_ASKED.store(true, SeqCst);
                 // T-182-e (APP-006): "a quit under way" is any exit the app asked for (quit, restart, the
                 // unanswered-close fallback); remembered, so windows closing on the way out never hold it open.
                 if code.is_some() {
@@ -955,6 +965,8 @@ pub fn run() {
                 tools::reopen_main(app);
             }
             if let tauri::RunEvent::Exit = event {
+                // T-324-b-rest: a sign-out, shutdown or restart is logged before anything that may be cut short.
+                lifecycle::note_session_end(app);
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
                 // batched savers, each step runs on its own thread and is waited for only as long as
                 // the deadline leaves, so a stalled profile drive caps the wait and never freezes the

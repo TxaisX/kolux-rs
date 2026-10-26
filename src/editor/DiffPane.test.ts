@@ -20,6 +20,17 @@ describe("diff tab whitespace (EDIT-027)", () => {
   });
 });
 
+describe("diff of a whole-file rewrite stays bounded (row 804)", () => {
+  const gen = (seed: string, n: number) => Array.from({ length: n }, (_, i) => `${seed} line ${i} ${(i * 7919).toString(36)} lorem ipsum dolor sit amet ${(i * 104729).toString(16)}`).join("\n");
+  // The unbounded diff took seconds at 1,500 lines and minutes at 19,000; bounded it is milliseconds.
+  it.each([1500, 19000])("a %i-line rewrite is diffed in well under 2 s with the default override", (n) => {
+    const t = Date.now();
+    const found = chunks(gen("alpha", n), gen("betabeta", n), withoutWhitespace);
+    expect(Date.now() - t).toBeLessThan(2000);
+    expect(found.length).toBeGreaterThan(0);
+  }, 30000);
+});
+
 describe("review notes on both sides of a side-by-side diff (GIT-040, T-034-b)", () => {
   const act: NoteActions = { add: () => {}, edit: () => {}, remove: () => {} };
   const note = (id: string, line: number, side?: "old"): LineNote => ({ id, path: "a.ts", line, text: id, staged: false, side });

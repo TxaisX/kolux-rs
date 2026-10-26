@@ -53,13 +53,18 @@ export const sessionActions = (p: SessionPane): SessionAction[] =>
       ]
     : [];
 
-export type SessionHandlers = { launch?: (l: Launch, fork: boolean) => void; copy: () => void };
+export type SessionHandlers = {
+  launch?: (l: Launch, fork: boolean) => void;
+  /** Fork Agent Session asks for a name first (the fork dialog); without it the fork starts at once. */
+  askFork?: (l: Launch) => void;
+  copy: () => void;
+};
 
 /** after-list #117: the menu items with what they do; Continue and Fork need the window's launch, Copy Context does not. */
 export function sessionMenuActions(p: SessionPane, h: SessionHandlers): { id: SessionAction["id"]; name: string; title: string; run: () => void }[] {
   const out: { id: SessionAction["id"]; name: string; title: string; run: () => void }[] = [];
   for (const a of sessionActions(p)) {
-    const go = (l: Launch | null, fork: boolean) => (h.launch && l ? () => h.launch?.(l, fork) : null);
+    const go = (l: Launch | null, fork: boolean) => (h.launch && l ? () => (fork && h.askFork ? h.askFork(l) : h.launch?.(l, fork)) : null);
     const run = a.id === "copyContext" ? h.copy : a.id === "forkSession" ? go(forkLaunch(p), true) : go(continueLaunch(p), false);
     if (run) out.push({ ...a, run });
   }
@@ -73,6 +78,8 @@ export function beginFork(d: ForkDraft): { draft: ForkDraft; go: boolean } {
   return d.busy ? { draft: d, go: false } : { draft: { ...d, busy: true }, go: true };
 }
 export const endFork = (d: ForkDraft): ForkDraft => ({ ...d, busy: false });
+/** The pane title a fork gets: the typed name without stray spaces, or none (the pane keeps its own title). */
+export const forkTitle = (name: string): string | undefined => name.replace(/\s+/g, " ").trim().slice(0, 80) || undefined;
 
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 const MAX_LINES = 40;

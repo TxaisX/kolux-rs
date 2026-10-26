@@ -1,0 +1,4 @@
+box 1: not ticked (REAL-AGENT): the same conversation carrying on needs a real Claude Code session. Pieces proven separately: agents.rs sess030_* (resume form --resume <id> after the standing line), src/terminal/layout.test.ts "sess030: an agent tab with a known session comes back resumed".
+box 2: not ticked (REAL-AGENT): a kill during a real session; same pieces as box 1.
+box 3: src-tauri/tests/cards_02.rs::sess030_box3_resume_starts_in_a_project_folder_whose_path_contains_spaces (Windows) — cargo test --manifest-path src-tauri/Cargo.toml --test cards_02 sess030 — test ... ok; test result: ok. 1 passed; 0 failed
+  What it runs: start_line_as(claude, Restore(Some(uuid))) -> program_command on a claude.cmd shim in "<scratch>\agent bin" with cwd "<scratch>\my project folder" -> a real pty (PtySession::spawn); asserts the shim got "--permission-mode auto --resume <uuid>" and ran in the spaced folder.

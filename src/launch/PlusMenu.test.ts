@@ -121,3 +121,26 @@ test("SESS-039: from a pane with a worktree, each installed editor gets an 'Open
   // a folder but no editor installed: no heading either
   expect(render({ dir, editors: [] })).not.toContain("This folder");
 });
+
+const shells = [
+  { id: "pwsh", name: "PowerShell 7", program: "C:/Program Files/PowerShell/7/pwsh.exe", args: [] },
+  { id: "cmd", name: "Command Prompt", program: "C:/Windows/System32/cmd.exe", args: [] },
+  { id: "wsl", name: "WSL", program: "wsl.exe", args: [] },
+];
+
+test("after776 TERM-043: a local Windows client gets a Terminal row that opens the shell choice, anything else does not", () => {
+  const shown = items(render({ shells, onShell: () => {}, windows: true }));
+  expect(shown.find((r) => r.includes("Terminal…"))).toContain('aria-haspopup="menu"');
+  expect(items(render({ shells, onShell: () => {}, windows: false })).some((r) => r.includes("Terminal…"))).toBe(false);
+  expect(items(render({ shells, onShell: () => {}, windows: true, local: false })).some((r) => r.includes("Terminal…"))).toBe(false);
+  expect(items(render({ shells, windows: true })).some((r) => r.includes("Terminal…"))).toBe(false);
+  // one shell left after the WSL entry is dropped: the Blank terminal row already covers it
+  expect(items(render({ shells: [shells[0], shells[2]], onShell: () => {}, windows: true })).some((r) => r.includes("Terminal…"))).toBe(false);
+});
+
+test("after776 TERM-042: the entry box is in the menu only when the window can run what it finds", () => {
+  const html = render({ entry: { tabs: [{ key: 1, name: "api" }], onRun: () => {} } });
+  expect(html).toContain('placeholder="Type a URL or path"');
+  expect(html).toContain('role="combobox"');
+  expect(render({})).not.toContain("Type a URL or path");
+});

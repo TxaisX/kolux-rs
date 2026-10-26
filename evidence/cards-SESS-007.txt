@@ -1,0 +1,5 @@
+box 1: src/launch/ChooserPane.test.ts::"SESS-007: Claude without a model keeps Start disabled, a model enables it, Terminal is enabled at once" + src/launch/seats.test.ts::"SESS-007: an AI needs an explicit model, a terminal is ready at once, Start waits for every seat" — pnpm exec vitest run src/launch/ChooserPane.test.ts src/launch/seats.test.ts src/launch/__cards__ --reporter=verbose (scratch env G:\Temp\cards-v3) — Test Files 4 passed (4) / Tests 41 passed (41)
+  (rendered chooser: claude with model null -> the Start button carries disabled and the page says "Pick a model"; claude with model opus -> Start has no disabled)
+box 2: same ChooserPane test and seats.test — same command — same pass line
+  (terminal seat: Start not disabled, no "Pick a model" row; seatReady(terminal) true)
+box 3: not ticked. src/launch/ChooserPane.test.ts::"the grid's only pane has no close button; otherwise it does" passes (closable=false hides "Close this chooser"), but App.tsx:2480 passes closable as a constant true to every chooser, so nothing in the window ever gives the component closable=false; see ledger LIVE/possible bug.
