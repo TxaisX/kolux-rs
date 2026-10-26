@@ -159,18 +159,19 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   };
   // STAT-044 / T-125: what was notified, so repeats for one worktree merge and an event never shows twice.
   const paceRef = useRef(newPaceMemory());
-  const noticed = (p: Pane, what: string, body = "", gate: KindKey = "notifyOnFinish", at = Date.now()) => {
+  const noticed = (p: Pane, what: string, body = "", gate: KindKey = "notifyOnFinish") => {
+    const id = noteId();
     const known = new Set(panes.map((x) => x.key));
     if (!known.has(p.key)) return;
     const title = noteTitle(tabName(p, titles), repoOf(p), what);
-    const show = () => paced(paceRef.current, p.cwd, noteId(p.key, what, at), Date.now(), { focused: winFocused, quietWhenFocused: suppressFocused(settings) });
+    const show = () => paced(paceRef.current, p.cwd, id, Date.now(), { focused: winFocused, quietWhenFocused: suppressFocused(settings) });
     // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
     // notification unless 'Agent Task Complete' is off (a stop goes by 'Agent Stopped', STAT-023);
     // the unread mark and the toast keep T-024's one-mark-until-viewed rule.
     // STAT-044 (lane/tray): the event's identity and pane go to the backend (notify_event), so a click
     // can focus this pane; main's pacer above stays the one that merges repeats.
     const kind = gate === "notifyOnStopped" ? ("stop" as const) : gate === "notifyBell" ? ("bell" as const) : ("finish" as const);
-    const event = { id: noteId(p.key, what, at), worktree: p.cwd, pane: String(p.key), kind };
+    const event = { id, worktree: p.cwd, pane: String(p.key), kind };
     // STAT-047: the tray dot lights (while the window is hidden) before any toast switch is consulted.
     void invoke("tray_ping", { kind: kind === "bell" ? "bell" : "finished" }).catch(() => {});
     // STAT-044 "Stay quiet about the worktree you are looking at": only the worktree in view is held back.
@@ -189,7 +190,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     const title = noteTitle(tabName(p, titles), repoOf(p), `has gone quiet for ${minutes} min`);
     setToast(title);
     const focusedWorktree = panes.find((x) => inView(x.key))?.cwd ?? null;
-    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.", { id: noteId(p.key, `quiet ${minutes}`, Date.now()), worktree: p.cwd, pane: String(p.key), kind: "quiet" }, focusedWorktree).catch(() => {});
+    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.", { id: noteId(), worktree: p.cwd, pane: String(p.key), kind: "quiet" }, focusedWorktree).catch(() => {});
   };
   const quietRef = useRef(quiet);
   quietRef.current = quiet;
