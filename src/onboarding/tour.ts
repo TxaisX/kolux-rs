@@ -177,18 +177,23 @@ export function autoStarts(o: { id: TourId; auto: boolean | null; seen: readonly
 export const FIRST_TARGET_TRIES = 20;
 
 export type Rect = { left: number; top: number; width: number; height: number };
-export type Placed = { left: number; top: number; side: Side | null };
+export type Placed = { left: number; top: number; side: Side | null; width?: number };
 const GAP = 10;
+/** The narrowest a callout is squeezed to so as to stay off a pane. */
+const MIN_WIDTH = 240;
+const meets = (l: number, t: number, w: number, h: number, o: Rect) => l < o.left + o.width && l + w > o.left && t < o.top + o.height && t + h > o.top;
 
 /** ONB-031: the panel on the step's side of the target when it fits, else the opposite side, else
  *  any side that fits; with no room anywhere it stays inside `b`, covering the target. A null
- *  side means no arrow. */
-export function place(t: Rect, p: { width: number; height: number }, b: Rect, want: Side): Placed {
+ *  side means no arrow. `avoid` (panes the target is not in) is a preference: the first side whose
+ *  panel, narrowed if need be, stays clear of every one wins; if none does, the plain choice stands. */
+export function place(t: Rect, p: { width: number; height: number }, b: Rect, want: Side, avoid: readonly Rect[] = []): Placed {
   const opposite: Record<Side, Side> = { top: "bottom", bottom: "top", left: "right", right: "left" };
   const order: Side[] = [want, opposite[want], ...(["bottom", "top", "right", "left"] as Side[]).filter((s) => s !== want && s !== opposite[want])];
   const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
   const cx = t.left + t.width / 2 - p.width / 2;
   const cy = t.top + t.height / 2 - p.height / 2;
+  let plain: Placed | null = null;
   for (const s of order) {
     const at =
       s === "bottom"
@@ -199,8 +204,20 @@ export function place(t: Rect, p: { width: number; height: number }, b: Rect, wa
             ? { left: t.left + t.width + GAP, top: cy }
             : { left: t.left - GAP - p.width, top: cy };
     const fits = s === "bottom" || s === "top" ? at.top >= b.top && at.top + p.height <= b.top + b.height : at.left >= b.left && at.left + p.width <= b.left + b.width;
-    if (fits) return { side: s, left: clamp(at.left, b.left, b.left + b.width - p.width), top: clamp(at.top, b.top, b.top + b.height - p.height) };
+    if (!fits) continue;
+    const got: Placed = { side: s, left: clamp(at.left, b.left, b.left + b.width - p.width), top: clamp(at.top, b.top, b.top + b.height - p.height) };
+    const hit = avoid.filter((o) => meets(got.left, got.top, p.width, p.height, o));
+    if (!hit.length) return got;
+    plain ??= got;
+    // Above or below the target the callout can shrink to the free band beside the panes.
+    if (s === "top" || s === "bottom") {
+      const lo = Math.max(b.left, ...hit.map((o) => o.left + o.width));
+      const w = Math.min(p.width, b.left + b.width - lo);
+      const left = clamp(at.left, lo, b.left + b.width - w);
+      if (w >= MIN_WIDTH && !avoid.some((o) => meets(left, got.top, w, p.height, o))) return { ...got, left, ...(w < p.width ? { width: w } : {}) };
+    }
   }
+  if (plain) return plain;
   return { side: null, left: clamp(cx, b.left, b.left + b.width - p.width), top: clamp(cy, b.top, b.top + b.height - p.height) };
 }
 
