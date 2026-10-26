@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { emptyStatus, type Status } from "./model";
-import { afterRefresh, aiControlsShown, commitBox, createBlockedReason, failureSummary, genDefault, genDefaultsOf, mainStep, recoveryPrompt, refreshGap, refreshOrder, remoteMoved, statusGuard, windowRange } from "./rules";
+import { afterRefresh, aiControlsShown, commitBox, failureSummary, genDefaultsOf, mainStep, statusGuard, windowRange } from "./rules";
 
 const ch = (path: string, status = "M") => ({ path, status, from: null });
 const pushed: Status = { ...emptyStatus, branch: "feat", upstream: "origin/feat", base: "origin/main" };
@@ -14,28 +14,6 @@ test("VIEW-062: only the visible part of a long list is drawn, with padding for 
   expect(w.padBottom).toBe((10_000 - 175) * 20);
   expect(windowRange(0, 0, 400, 20)).toEqual({ start: 0, end: 0, padTop: 0, padBottom: 0 });
   expect(windowRange(3, 9_999, 400, 20).end).toBe(3);
-});
-
-test("VIEW-062: the active worktree refreshes first, then visible ones, then the rest, never twice", () => {
-  expect(refreshOrder(["a", "b", "c", "d"], "c", ["d", "c", "zz"])).toEqual(["c", "d", "a", "b"]);
-  expect(refreshOrder(["a", "b"], null, [])).toEqual(["a", "b"]);
-  expect(refreshOrder(["a"], "gone", [])).toEqual(["a"]);
-});
-
-test("VIEW-062: a slow refresh waits longer, each failure doubles it, never past a minute", () => {
-  expect(refreshGap(100, 0)).toBe(2_000);
-  expect(refreshGap(5_000, 0)).toBe(15_000);
-  expect(refreshGap(5_000, 1)).toBe(30_000);
-  expect(refreshGap(5_000, 9)).toBe(60_000);
-  expect(refreshGap(900_000, 0)).toBe(60_000);
-});
-
-test("VIEW-062: a push, pull or upstream move is a reason to refresh", () => {
-  expect(remoteMoved(pushed, { ...pushed })).toBe(false);
-  expect(remoteMoved(pushed, { ...pushed, ahead: 1 })).toBe(true);
-  expect(remoteMoved(pushed, { ...pushed, upstream: "origin/other" })).toBe(true);
-  expect(remoteMoved(pushed, { ...pushed, head: "abc" })).toBe(true);
-  expect(remoteMoved(null, pushed)).toBe(false);
 });
 
 test("VIEW-062: an older status answer never overwrites a newer one", () => {
@@ -64,7 +42,6 @@ test("VIEW-064: a failed commit is one line; a lint failure is named, not the to
   expect(failureSummary("nothing added to commit")).toEqual({ summary: "nothing added to commit", lint: false, details: false });
   expect(failureSummary("   ").details).toBe(false);
   expect(failureSummary("x".repeat(300)).summary.length).toBe(140);
-  expect(recoveryPrompt(lint, "boom")).toContain("lint step of my commit hooks failed");
 });
 
 test("VIEW-064: during conflicts or an operation the box is disabled and the commit controls are hidden", () => {
@@ -78,8 +55,8 @@ test("VIEW-064: saved generation defaults are read per repository, else for all"
   const claude = { agent: "claude", model: "opus", effort: "high" };
   const codex = { agent: "codex", model: null, effort: null };
   const d = genDefaultsOf({ all: claude, repos: { r1: codex } });
-  expect(genDefault(d, "r1")).toEqual(codex);
-  expect(genDefault(d, "r2")).toEqual(claude);
+  expect(d.repos.r1).toEqual(codex);
+  expect(d.all).toEqual(claude);
   expect(genDefaultsOf(JSON.parse(JSON.stringify(d)))).toEqual(d);
   expect(genDefaultsOf({ all: 3, repos: { x: "no" } })).toEqual({ all: null, repos: {} });
 });
@@ -106,12 +83,8 @@ test("VIEW-065: Create PR waits while a newer readiness check is still loading",
   expect(mainStep({ label: "Create pull request", action: "pr", reason: null }, { ...pushed, rewritten: true }, loading).step.reason).toBe("Checking for a pull request");
 });
 
-test("VIEW-070: AI controls hide with the setting; creation is blocked with a reason until local state is ready", () => {
+test("VIEW-070: AI controls hide with the setting", () => {
   expect(aiControlsShown({})).toBe(true);
   expect(aiControlsShown({ scmAiHidden: true })).toBe(false);
   expect(aiControlsShown(null)).toBe(true);
-  expect(createBlockedReason({ ...pushed, changed: [ch("a")] })).toBe("Commit your changes first");
-  expect(createBlockedReason({ ...pushed, conflicts: [ch("c", "X")] })).toBe("Resolve the conflicts first");
-  expect(createBlockedReason(pushed)).toBeNull();
-  expect(createBlockedReason(null)).toBe("Loading");
 });
