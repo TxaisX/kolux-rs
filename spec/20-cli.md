@@ -56,9 +56,9 @@ Rules: the four states are running, not running, stale and graph not ready; the 
   answers cleanly, while the app is closed; with `--json` the same state comes back in
   machine-readable form.
 Acceptance:
-  - [ ] App closed → reports not running.
-  - [ ] Kill the app hard so its startup files stay behind → reports stale.
-  - [ ] App up → reports running.
+  - [x] App closed → reports not running. (cards; evidence/cards-CLI-012.txt)
+  - [x] Kill the app hard so its startup files stay behind → reports stale. (cards; evidence/cards-CLI-012.txt)
+  - [x] App up → reports running. (cards; evidence/cards-CLI-012.txt)
 Compat: the command word status; scripts read the state from its JSON output, so the four state
   names stay stable.
 Source: D-20-012
