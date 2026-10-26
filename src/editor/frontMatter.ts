@@ -70,6 +70,139 @@ export const placeStats = { fast: 0, block: 0, refused: 0, whole: 0 };
  *  blocks of their own, so only the touched item is retyped and checked; the whole list or section is used when the
  *  edit adds or removes a fence or section line, or the item-level placement fails. */
 export function mapEdit(body: string, out: string, prev: string): string | null {
+  // Round 5 (HIGH-1): the view drops a loose list's blank lines, so it is placed as the tight list the view reads and the gaps go back.
+  if (prev === out) return body;
+  const tight = collapseGaps(body);
+  if (!tight) return mapTight(body, out, prev);
+  const next = mapTight(tight.text, out, prev);
+  const kept = next === null ? null : regap(tight, next, prev, out);
+  if (next !== null && kept === null) placeStats.refused++;
+  return kept;
+}
+
+type Gap = { at: number; raw: string };
+
+const ITEM = /^([ \t]*)([-*+]|\d+[.)])[ \t]/;
+const FENCE = /^[ \t]*(`{3,}|~{3,})/;
+const width = (s: string) => s.replace(/\t/g, "    ").length;
+const kind = (m: RegExpExecArray) => (/\d/.test(m[2]) ? m[2].slice(-1) : m[2]);
+
+/** `body` with the blank lines between sibling list items taken out (the list as the view reads it), and where each went.
+ *  Null when there are none. Only blank lines straight before an item that continues the item list above it count;
+ *  a blank line inside an item, before a paragraph or in code stays. */
+export function collapseGaps(body: string): { text: string; gaps: Gap[] } | null {
+  if (!BLANK.test(body)) return null;
+  const gaps: Gap[] = [];
+  const stack: { w: number; k: string }[] = [];
+  let text = "";
+  let fence = "";
+  let blank = -1; // where the blank lines before this line start in `body`, or -1
+  let copied = 0;
+  let pos = 0;
+  for (const line of body.split("\n")) {
+    const start = pos;
+    pos += line.length + 1;
+    if (/^[ \t]*\r?$/.test(line)) {
+      if (blank < 0) blank = start;
+      continue;
+    }
+    const f = FENCE.exec(line)?.[1];
+    if (fence) {
+      if (f && f[0] === fence[0] && f.length >= fence.length && /^[ \t]*[`~]+[ \t]*\r?$/.test(line)) fence = "";
+      blank = -1;
+      continue;
+    }
+    if (f) fence = f;
+    const m = ITEM.exec(line);
+    if (m) {
+      const w = width(m[1]);
+      while (stack.length && stack[stack.length - 1].w > w) stack.pop();
+      const top = stack[stack.length - 1];
+      if (blank >= 0 && top && top.w === w && top.k === kind(m)) {
+        text += body.slice(copied, blank);
+        gaps.push({ at: text.length, raw: body.slice(blank, start) });
+        copied = start;
+      }
+      if (top && top.w === w) stack.pop();
+      stack.push({ w, k: kind(m) });
+    } else {
+      const w = width(/^[ \t]*/.exec(line)![0]);
+      if (blank >= 0 && w === 0) stack.length = 0;
+      else while (stack.length && stack[stack.length - 1].w >= w && w > 0) stack.pop();
+    }
+    blank = -1;
+  }
+  if (!gaps.length) return null;
+  return { text: text + body.slice(copied), gaps };
+}
+
+/** `next` (the edited tight text) with the blank lines put back at the item boundaries they were at, found by word number
+ *  (the edit changes `prev` into `out`). A boundary the edit itself covers is dropped; one it does not cover that cannot be
+ *  found again makes the whole placement null, never a list tightened behind the user's back. */
+function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string, out: string): string | null {
+  const e = changeBetween(prev, out);
+  if (!e) return restore(next, tight.gaps);
+  const tw = wordSpans(tight.text);
+  const pw = wordSpans(prev);
+  const nw = wordSpans(next);
+  if (tw.length !== pw.length) return null;
+  const dw = nw.length - tw.length;
+  const kept: Gap[] = [];
+  let k = 0;
+  for (const g of tight.gaps) {
+    while (k < tw.length && tw[k].e <= g.at) k++;
+    if (k === 0 || k >= tw.length) return null;
+    // The boundary in the view's text is its last line break between the two words; an edit that covers it drops the gap.
+    const cut = pw[k - 1].e + prev.slice(pw[k - 1].e, pw[k].s).lastIndexOf(String.fromCharCode(10));
+    if (cut < pw[k - 1].e) return null;
+    const before = e.to <= cut;
+    if (!before && e.from <= cut) continue;
+    const j = before ? k + dw : k;
+    if (j < 1 || j >= nw.length) return null;
+    const t = next.slice(nw[j - 1].e, nw[j].s);
+    const nl = t.lastIndexOf("\n");
+    if (nl < 0 || !/^[ \t]*([-*+][ \t]*)?$/.test(t.slice(nl + 1))) return null;
+    kept.push({ at: nw[j - 1].e + nl + 1, raw: g.raw });
+  }
+  return looseReadsAlike(tight.text, next, kept) ? restore(next, kept) : null;
+}
+
+/** Whether the items around the edit read the same loose as tight: a table or HTML line after an item can start a block
+ *  only in a loose item, and the view (which reads the tight list) would not see it. */
+function looseReadsAlike(before: string, next: string, gaps: Gap[]): boolean {
+  let cs = 0;
+  const m = Math.min(before.length, next.length);
+  while (cs < m && before.charCodeAt(cs) === next.charCodeAt(cs)) cs++;
+  let ce = next.length;
+  for (let k = before.length; ce > cs && k > cs && before.charCodeAt(k - 1) === next.charCodeAt(ce - 1); ) ce--, k--;
+  let a = 0;
+  let b = next.length;
+  for (const r of next.matchAll(/\n[ \t]*\r?\n/g)) {
+    if (r.index < cs) a = r.index + r[0].length;
+    else if (r.index >= ce) { b = r.index; break; }
+  }
+  const i = gaps.findIndex((g) => g.at > cs);
+  const lo = (i < 0 ? gaps.length : i) - 2;
+  const hi = gaps.findIndex((g) => g.at >= ce);
+  a = Math.max(a, gaps[lo]?.at ?? 0);
+  b = Math.min(b, hi < 0 ? b : (gaps[hi + 1]?.at ?? b));
+  const near = gaps.filter((g) => g.at > a && g.at < b).map((g) => ({ at: g.at - a, raw: g.raw }));
+  if (!near.length) return true;
+  const tightWin = next.slice(a, b);
+  return roundTrip(restore(tightWin, near)) === roundTrip(tightWin);
+}
+
+function restore(text: string, gaps: Gap[]): string {
+  let out = "";
+  let at = 0;
+  for (const g of gaps) {
+    out += text.slice(at, g.at) + g.raw;
+    at = g.at;
+  }
+  return out + text.slice(at);
+}
+
+function mapTight(body: string, out: string, prev: string): string | null {
   const e = changeBetween(prev, out);
   if (!e) return body;
   const bw = wordSpans(body);

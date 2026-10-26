@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { blockSpans, placeStats, richChange, splitFront } from "./frontMatter";
+import { blockSpans, collapseGaps, placeStats, richChange, splitFront } from "./frontMatter";
 import { changeBetween, roundTrip, unsupported } from "./markdown";
 
 // Row 94 review rounds 3-4: random everyday edits in the rich view, chained (each saved note is the next edit's input).
 // After every edit the saved note reads back as the rich view's text, keeps every block away from the edit, and can
 // still be shown in the rich view; or it is byte for byte the note before the edit (refused, source view). Nothing else.
-const SEED = Number((globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.FUZZ_SEED ?? 20261026);
+const ENV = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
+// FUZZ_SEED=<n> runs one seed; FUZZ_RANGE=<a>-<b> runs every seed from a to b.
+const [LO, HI] = ENV.FUZZ_RANGE ? ENV.FUZZ_RANGE.split("-").map(Number) : [Number(ENV.FUZZ_SEED ?? 20261026)];
+const SEEDS = Array.from({ length: (HI ?? LO) - LO + 1 }, (_, i) => LO + i);
 
 function rng(seed: number) {
   let s = seed >>> 0;
@@ -34,6 +37,9 @@ const KINDS = [
   (i: number) => `+ plus ${i}\n+ plus __two__`,
   (i: number) => `1) paren ${i}\n2) two _x_`,
   (i: number) => `- a ${i}\n\n  indented para\n- b`,
+  // Round 5: loose lists, where the view's text has no blank lines between items and the file does.
+  (i: number) => `- loose ${i} _a_\n\n- two __b__\n  wrapped _w_\n\n- three\n\n- four __d__\n\n- five _e_`,
+  (i: number) => `1. ord ${i} _a_\n\n2. two __b__\n   wrapped _w_\n\n3. three\n\n4. four __d__\n\n5. five _e_`,
   // Wraps that one deleted word away leave an underline, a rule or a reference definition.
   (i: number) => `Total score ${i}\n== 10 points`,
   (i: number) => `a dash run ${i}\n--- then more`,
@@ -104,7 +110,8 @@ const LIST = /^ {0,3}([-*+]|\d+[.)])[ \t]/;
 /** What a placement must keep byte for byte: `body` through the last word before the blocks (items and section
  *  children unless `whole`, and then the whole list) that the edit `prev` -> `out` touches, in the rich view's blocks or the file's, whichever
  *  reach further, with one block of slack; and from the first word after them. `body` and `prev` hold the same words. */
-function keptEnds(body: string, prev: string, out: string, whole: boolean): [string, string] {
+function keptEnds(loose: string, prev: string, out: string, whole: boolean): [string, string] {
+  const body = collapseGaps(loose)?.text ?? loose; // the gaps are checked on their own, below
   const e = changeBetween(prev, out)!;
   const bw = [...body.matchAll(WORD)];
   const pw = [...prev.matchAll(WORD)];
@@ -137,9 +144,22 @@ function keptEnds(body: string, prev: string, out: string, whole: boolean): [str
   return [body.slice(0, upTo(w0)), w1 ? body.slice(from(bw.length - w1)) : ""];
 }
 
+/** How many blank-line gaps between list items of `body` lie two or more gaps away from the edit `prev` -> `out`. */
+function farGaps(body: string, prev: string, out: string): number {
+  const t = collapseGaps(body);
+  if (!t) return 0;
+  const e = changeBetween(prev, out)!;
+  const tw = [...t.text.matchAll(WORD)];
+  const pw = [...prev.matchAll(WORD)];
+  const ks = t.gaps.map((g) => tw.filter((w) => w.index + w[0].length <= g.at).length);
+  const i0 = pw.filter((w) => w.index + w[0].length <= e.from).length;
+  const i1 = pw.filter((w) => w.index < e.to).length;
+  const far = t.gaps.filter((_, k) => (ks[k] <= i0 && ks.filter((x, j) => j > k && x <= i0).length >= 2) || (ks[k] >= i1 && ks.filter((x, j) => j < k && x >= i1).length >= 2));
+  return far.length;
+}
+
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
-  it(`400 chained edits (seed ${SEED})`, () => {
-    const seed = SEED;
+  it.each(SEEDS)("400 chained edits (seed %i)", (seed) => {
     const r = rng(seed);
     Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0 });
     const N = 400;
@@ -174,7 +194,10 @@ describe("fuzz: chained everyday rich-view edits save a note that reads back as 
         expect(roundTrip(nb), why).toBe(out);
         // (2) Every block away from the edit keeps its bytes (the whole list or section when it was placed whole).
         const [head, tail] = keptEnds(body, prev, out, placeStats.whole !== whole);
-        expect(nb.startsWith(head) && nb.endsWith(tail), why).toBe(true);
+        const tight = collapseGaps(nb)?.text ?? nb;
+        expect(tight.startsWith(head) && tight.endsWith(tail), why).toBe(true);
+        // (4) Round 5: the blank lines between list items away from the edit survive (a retyped list keeps them as a count).
+        expect(collapseGaps(nb)?.gaps.length ?? 0, why).toBeGreaterThanOrEqual(farGaps(body, prev, out));
         // (3) A note the view could show stays one it can show, unless the view's own text cannot be shown.
         if (unsupported(out) === null) expect(unsupported(nb), why).toBeNull();
         now = next;

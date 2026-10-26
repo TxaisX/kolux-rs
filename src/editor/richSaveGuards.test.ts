@@ -122,6 +122,54 @@ describe("M4: the fallback rewrites only the item or section child it touched", 
   });
 });
 
+// Round 5 (HIGH-1): the rich view drops a list's looseness, so a loose list must come back loose with every untouched
+// item spelt as the file had it, or the edit is refused (the note stays as it was, in source view).
+describe("HIGH-1: a loose bullet list stays loose", () => {
+  const three = "- First item has _notes_\n\n- Second item\n\n- Third item has __bold__\n";
+  const two = "- First item has _notes_\n\n- Second item\n";
+  const wrapped = "- one _a_\n\n- two __b__\n\n- three __c__ has _x_\n  wrapped 3\n\n- four __d__\n\n- five _e_\n";
+  /** Runs one rich edit (`ed` on the view's text) and returns the saved note; a refusal leaves it untouched. */
+  const save = (body: string, ed: (prev: string) => string) => {
+    const prev = roundTrip(body)!;
+    const out = roundTrip(ed(prev))!;
+    let refused = 0;
+    const next = apply(body, richChange(body, out, prev, () => refused++));
+    if (refused) expect(next).toBe(body);
+    else expect(roundTrip(next)).toBe(out);
+    return { next, refused };
+  };
+  const blanks = (t: string) => (t.match(/\n\n/g) ?? []).length;
+  it("unbolding a word in item 3 keeps the blank lines and items 1 and 2 as they were", () => {
+    const { next, refused } = save(three, (p) => p.replace("**bold**", "bold"));
+    if (!refused) expect(next).toBe("- First item has _notes_\n\n- Second item\n\n- Third item has bold\n");
+  });
+  it("typing after the italic word keeps its item on one line and the list loose", () => {
+    const { next, refused } = save(three, (p) => p.replace("*notes*", "*notes* ok"));
+    if (!refused) expect(next).toBe("- First item has _notes_ ok\n\n- Second item\n\n- Third item has __bold__\n");
+  });
+  it("deleting the italic word of a two-item list keeps the gap", () => {
+    const { next, refused } = save(two, (p) => p.replace("*notes*", ""));
+    if (!refused) expect(blanks(next)).toBe(1);
+  });
+  it("a Backspace at a wrap keeps every blank line and every untouched item's marks", () => {
+    const { next, refused } = save(wrapped, (p) => p.replace("*x* wrapped", "*x*wrapped"));
+    if (!refused) {
+      expect(blanks(next)).toBe(4);
+      expect(next).toContain("- one _a_\n\n- two __b__\n\n");
+      expect(next).toContain("\n\n- four __d__\n\n- five _e_\n");
+    }
+  });
+  it("a refusal is rare: the four everyday edits above are placed, not refused", () => {
+    const refusals = [
+      save(three, (p) => p.replace("**bold**", "bold")),
+      save(three, (p) => p.replace("*notes*", "*notes* ok")),
+      save(two, (p) => p.replace("*notes*", "")),
+      save(wrapped, (p) => p.replace("*x* wrapped", "*x*wrapped")),
+    ].filter((x) => x.refused).length;
+    expect(refusals).toBe(0);
+  });
+});
+
 describe("a block quote with a blank > line opens in source view", () => {
   it("is refused with a reason", () => {
     const body = "> q __one__\n>\n> q _two_\n> wrap";
