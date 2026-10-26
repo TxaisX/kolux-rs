@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use super::list::{find_session, Roots};
+use super::list::{find_session_exact, Roots};
 
 /// A session's transcript and what travels with it, inside `root`.
 #[derive(Debug, PartialEq)]
@@ -48,7 +48,7 @@ pub fn locate(roots: &Roots, agent: &str, id: &str) -> Result<Located, String> {
     if !crate::agents::safe_session(id) {
         return Err("That session's name cannot be used to find its files.".into());
     }
-    let (file, _) = find_session(roots, agent, id).ok_or("That session is no longer on this computer.")?;
+    let (file, _) = find_session_exact(roots, agent, id)?;
     let root = session_dirs(roots, agent).into_iter().find(|d| file.starts_with(d)).ok_or("That session is not in a folder Kolux manages.")?;
     let file = confined(&root, &file)?;
     let extra = (agent != "codex").then(|| file.with_file_name(id)).filter(|d| d.is_dir()).map(|d| confined(&root, &d)).transpose()?;
@@ -56,18 +56,36 @@ pub fn locate(roots: &Roots, agent: &str, id: &str) -> Result<Located, String> {
 }
 
 /// Removes exactly these paths. Every path is checked before the first is touched, so a refused one
-/// leaves the rest in place. Answers how many were removed.
+/// leaves the rest in place; each is checked again right before its own removal, in case the disk
+/// changed in between. Answers how many were removed; an error names what was already gone.
 pub fn delete_all(root: &Path, paths: &[PathBuf]) -> Result<usize, String> {
     let real: Vec<PathBuf> = paths.iter().map(|p| confined(root, p)).collect::<Result<_, _>>()?;
+    let mut removed: Vec<String> = Vec::new();
     for p in &real {
-        let gone = if p.is_dir() { fs::remove_dir_all(p) } else { fs::remove_file(p) };
-        gone.map_err(|e| format!("could not delete {}: {e}", p.display()))?;
+        let step = confined(root, p).and_then(|now| {
+            let gone = if now.is_dir() { fs::remove_dir_all(&now) } else { fs::remove_file(&now) };
+            gone.map_err(|e| format!("could not delete {}: {e}", now.display()))
+        });
+        if let Err(e) = step {
+            let done = if removed.is_empty() { "nothing was removed".to_string() } else { format!("already removed: {}", removed.join(", ")) };
+            return Err(format!("{e} ({done})"));
+        }
+        removed.push(p.display().to_string());
     }
     Ok(real.len())
 }
 
+/// Stricter than resume's name check, because a name here becomes a folder to delete: letters,
+/// digits, `_`, `.`, `-` only (no `:` that names a stream or drive), and no trailing dot.
+fn safe_delete_id(id: &str) -> bool {
+    crate::agents::safe_session(id) && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')) && !id.ends_with('.')
+}
+
 /// Deletes session `id` of `agent`: its transcript and, for Claude, the folder of the same name.
 pub fn delete(roots: &Roots, agent: &str, id: &str) -> Result<usize, String> {
+    if !safe_delete_id(id) {
+        return Err("That session's name cannot be used to delete its files.".into());
+    }
     let at = locate(roots, agent, id)?;
     let all: Vec<PathBuf> = at.extra.into_iter().chain([at.file]).collect();
     delete_all(&at.root, &all)
@@ -223,6 +241,76 @@ mod tests {
         assert_eq!(got.file, f.canonicalize().unwrap());
         assert_eq!(got.extra, None);
         assert!(locate(&claude_roots(&root), "gemini", "zzz").is_err(), "an agent whose sessions Kolux does not read");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    fn codex_roots(home: &Path) -> Roots {
+        Roots { claude: vec![], codex: vec![home.to_path_buf()] }
+    }
+
+    #[test]
+    fn view089_deleting_b01_leaves_the_session_whose_id_only_ends_the_same_way() {
+        let home = tmp("tail");
+        let day = home.join("sessions").join("2026").join("10").join("20");
+        let (long, short) = (day.join("rollout-2026-10-20T09-00-00-ab01.jsonl"), day.join("rollout-2026-10-20T10-00-00-b01.jsonl"));
+        for f in [&long, &short] {
+            put(f, "{}
+");
+        }
+        let roots = codex_roots(&home);
+        assert!(delete(&roots, "codex", "01").unwrap_err().contains("no longer"), "a tail of an id finds nothing");
+        assert!(long.exists() && short.exists());
+        assert_eq!(delete(&roots, "codex", "b01"), Ok(1));
+        assert!(long.exists() && !short.exists(), "only the exact id went");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn view089_two_files_with_one_id_delete_nothing() {
+        let home = tmp("dup");
+        let live = home.join("sessions").join("2026").join("10").join("20").join("rollout-2026-10-20T09-00-00-same1.jsonl");
+        let old = home.join("archived_sessions").join("rollout-2026-09-01T09-00-00-same1.jsonl");
+        for f in [&live, &old] {
+            put(f, "{}
+");
+        }
+        let err = delete(&codex_roots(&home), "codex", "same1").unwrap_err();
+        assert!(err.contains("More than one"), "{err}");
+        assert!(live.exists() && old.exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn view089_a_name_with_a_colon_or_a_trailing_dot_is_never_deleted() {
+        let root = tmp("strict");
+        let dir = root.join("projects").join("p");
+        let keep = [dir.join("a.jsonl"), dir.join("abc.jsonl"), dir.join("a").join("t.txt")];
+        for f in &keep {
+            put(f, USER);
+        }
+        let roots = claude_roots(&root);
+        for bad in ["a:b", "C:x", "abc.", "a:", "a b", "a*"] {
+            let err = delete(&roots, "claude", bad).unwrap_err();
+            assert!(err.contains("cannot be used"), "{bad:?}: {err}");
+        }
+        assert!(keep.iter().all(|f| f.exists()), "nothing was touched");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn view089_a_path_gone_before_its_turn_stops_the_delete_and_names_what_was_removed() {
+        let root = tmp("race");
+        let sessions = root.join("projects");
+        let (folder, inner, other) = (sessions.join("p").join("one"), sessions.join("p").join("one").join("t.txt"), sessions.join("p").join("three.jsonl"));
+        put(&inner, "x");
+        put(&other, USER);
+        // `inner` passes the up-front check, then the folder holding it is removed first.
+        let err = delete_all(&sessions, &[folder.clone(), inner, other.clone()]).unwrap_err();
+        assert!(err.contains("already removed") && err.contains("one"), "{err}");
+        assert!(!folder.exists(), "the folder had already gone");
+        assert!(other.exists(), "the delete stopped at the bad path");
+        assert!(delete_all(&sessions, std::slice::from_ref(&other)).is_ok());
         let _ = fs::remove_dir_all(&root);
     }
 }
