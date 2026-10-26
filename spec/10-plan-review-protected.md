@@ -44,7 +44,7 @@ Rules: before launch, Kolux records the folder as trusted in each agent's own co
 Acceptance:
   - [ ] Create a worktree and launch Claude Code with a prompt → no trust menu, and the prompt
         reaches the agent.
-  - [ ] Launch again in the same folder → the agent's trust configuration does not change at all.
+  - [x] Launch again in the same folder → the agent's trust configuration does not change at all. (cards; evidence/cards-SAFE-023.txt)
 Compat: the agents' own configuration is their public interface and the rebuild writes the same
   places: Cursor's per-project trust marker, Copilot's trusted-folder list, Codex's project trust
   entry in its configuration, Claude's per-project trust flag in its user configuration.
@@ -67,7 +67,7 @@ Rules: before any agent process starts, Kolux works out every worktree folder th
 Acceptance:
   - [ ] Start six Claude agents in new worktrees at once → a single configuration write covers all
         six folders, and every agent starts without a trust menu.
-  - [ ] Ask to pre-trust 13 names → refused before any folder path is worked out.
+  - [x] Ask to pre-trust 13 names → refused before any folder path is worked out. (cards; evidence/cards-SAFE-024.txt)
 Compat: —
 Source: D-10-024
 
@@ -85,9 +85,9 @@ Rules: the button appears only while the pane's live status holds a plan-approva
   PreToolUse and its PermissionRequest events, each with the whole plan, and either event on its own
   is enough to show the button.
 Acceptance:
-  - [ ] Claude asks to leave plan mode → the review button appears; approve in the terminal instead
-        → the button goes away.
-  - [ ] Claude asks permission for a shell command → no review button.
+  - [x] Claude asks to leave plan mode → the review button appears; approve in the terminal instead
+        → the button goes away. (cards; evidence/cards-SAFE-001.txt)
+  - [x] Claude asks permission for a shell command → no review button. (cards; evidence/cards-SAFE-001.txt)
 Compat: Claude Code sends the plan text inside the tool input of its exit-plan tool, on both the
   PreToolUse and the PermissionRequest event.
 Source: D-10-001
@@ -104,9 +104,9 @@ Rules: a blank line starts a new section, except where the empty line falls with
   section; each section knows its first and last line numbers, counted from 1, and comments are
   labelled with that range; a plan that is empty or only whitespace has no sections.
 Acceptance:
-  - [ ] Three paragraphs, one of them containing a fenced block that has an empty line inside →
-        exactly three sections, with the fenced block kept whole.
-  - [ ] Comment on the second section → the comment shows under it and can be deleted.
+  - [x] Three paragraphs, one of them containing a fenced block that has an empty line inside →
+        exactly three sections, with the fenced block kept whole. (cards; evidence/cards-SAFE-002.txt)
+  - [x] Comment on the second section → the comment shows under it and can be deleted. (cards; evidence/cards-SAFE-002.txt)
 Compat: —
 Source: D-10-002
 
@@ -143,7 +143,7 @@ Rules: the button stays disabled until there is at least one comment or a note t
   quote, the comment itself), then the overall note with outer whitespace removed; sending wipes the
   saved draft.
 Acceptance:
-  - [ ] No comments and an empty note → Request changes is disabled.
+  - [x] No comments and an empty note → Request changes is disabled. (cards; evidence/cards-SAFE-004.txt)
   - [ ] Two comments, then Request changes → Claude gets a single message naming both line ranges
         and comes back with a revised plan.
   - [ ] A pane whose status never updates → the feedback still arrives after about 3 seconds.
