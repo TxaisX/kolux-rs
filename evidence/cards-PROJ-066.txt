@@ -1,0 +1,5 @@
+box 1: OPEN (LIVE) — src/projects/__cards__/PROJ-066.test.ts::"switching A to B and back shows A's very same terminals and tabs..." passes (the pane records, order and kinds of A are untouched by a switch), but "terminals as they were" is a live pty kept mounted but hidden (App.tsx hidden={...}); not provable without a window
+  pnpm exec vitest run src/projects/__cards__/PROJ-066.test.ts src/projects/__cards__/PROJ-007.test.ts src/projects/model.test.ts   (same scratch env)
+  ✓ src/projects/__cards__/PROJ-066.test.ts > switching A to B and back shows A's very same terminals and tabs, in the same order, and B's too
+box 2: src/projects/__cards__/PROJ-066.test.ts::"deleting a workspace removes its terminals, agent, editor, diff and browser tabs from the panes, the layout and the saved copy" — pnpm exec vitest run src/projects/__cards__/PROJ-066.test.ts src/projects/__cards__/PROJ-007.test.ts src/projects/model.test.ts   (same scratch env) — ✓ ... deleting a workspace removes its terminals, agent, editor, diff and browser tabs from the panes, the layout and the saved copy
+  Test Files  3 passed (3) / Tests  29 passed (29)
