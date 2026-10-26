@@ -374,6 +374,24 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     reveal_command(path).spawn().map(|_| ()).map_err(|e| format!("could not reveal {}: {e}", path.display()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenChoice {
+    Reveal,
+    Open,
+}
+
+/// The pure part of `open_path`: only a full path to an existing file is handed over.
+pub fn open_choice(path: &str) -> Result<OpenChoice, String> {
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err(format!("{path} is not a full path"));
+    }
+    if !p.is_file() {
+        return Err(format!("{path} is not a file"));
+    }
+    Ok(if launchable(p) { OpenChoice::Reveal } else { OpenChoice::Open })
+}
+
 /// SAFE-022: hands a file to the system. A program-like file is revealed in its folder, anything
 /// else is opened in its own app; a path on another machine or a relative one is refused.
 /// Answers "revealed" or "opened".
@@ -381,19 +399,9 @@ pub fn reveal(path: &Path) -> Result<(), String> {
 pub async fn open_path(store: tauri::State<'_, Mutex<crate::state::Store>>, path: String) -> Result<&'static str, String> {
     refuse_host(&path, &roots(&store))?;
     // A slow file association never freezes the window; only an existing file is handed over.
-    tauri::async_runtime::spawn_blocking(move || {
-        let p = Path::new(&path);
-        if !p.is_absolute() {
-            return Err(format!("{path} is not a full path"));
-        }
-        if !p.is_file() {
-            return Err(format!("{path} is not a file"));
-        }
-        if launchable(p) {
-            reveal(p).map(|_| "revealed")
-        } else {
-            crate::artifacts::system_open(&path).map(|_| "opened")
-        }
+    tauri::async_runtime::spawn_blocking(move || match open_choice(&path)? {
+        OpenChoice::Reveal => reveal(Path::new(&path)).map(|_| "revealed"),
+        OpenChoice::Open => crate::artifacts::system_open(&path).map(|_| "opened"),
     })
     .await
     .map_err(|e| e.to_string())?

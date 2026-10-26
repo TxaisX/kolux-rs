@@ -102,11 +102,11 @@ Rules: launchable files are recognised by type on every platform (programs, scri
   (Kolux RS, T-062-a: the editor's refusal offers "Open this file anyway", which allows that one
   path for the run through a one-file grant; there are no browser downloads yet.)
 Acceptance:
-  - [ ] Click a terminal link to a batch file, a PowerShell script, an executable or a Windows
-        shortcut → the file manager opens with it highlighted, and nothing runs.
+  - [x] Click a terminal link to a batch file, a PowerShell script, an executable or a Windows
+        shortcut → the file manager opens with it highlighted, and nothing runs. (cards; evidence/cards-EDIT-053.txt)
   - [ ] On Linux, an extensionless file with the execute bit → revealed, not run; the same file
         without the bit → it opens in its default app.
-  - [ ] Click a link to a plain text file → it opens in the default text app.
+  - [x] Click a link to a plain text file → it opens in the default text app. (cards; evidence/cards-EDIT-053.txt)
   - [x] Open a link to a file on another computer → nothing happens. (cards; evidence/cards-EDIT-053.txt)
 Compat: —
 Source: D-12-053

@@ -245,3 +245,43 @@ fn edit053_box4_a_link_to_a_file_on_another_computer_is_refused_before_anything_
     // and a local link of the same kind is not refused
     assert!(links::refuse_host(&d.join("a.txt").to_string_lossy(), &roots).is_ok());
 }
+
+#[test]
+fn edit053_box1_a_program_like_file_is_revealed_never_opened() {
+    let d = scratch_c("choice-program");
+    for base in ["run.bat", "script.ps1", "tool.exe", "link.lnk"] {
+        for name in [base.to_string(), base.to_uppercase(), format!("{base}.")] {
+            // Windows strips trailing dots when it creates a file; the dotted spelling then names the plain file.
+            std::fs::write(d.join(&name), "echo hi").unwrap();
+            let path = d.join(&name).to_string_lossy().into_owned();
+            assert_eq!(links::open_choice(&path), Ok(links::OpenChoice::Reveal), "{name}");
+        }
+    }
+}
+
+#[test]
+fn edit053_box1_trailing_dots_and_spaces_still_count_as_programs() {
+    let d = scratch_c("choice-trailing");
+    for name in ["run.bat ", "run.bat . .", "script.ps1.", "tool.exe ", "link.lnk .", "RUN.BAT."] {
+        // A trailing space cannot be told apart on disk, so the spelling itself is judged.
+        assert!(links::launchable(&d.join(name)), "{name:?} must be revealed, not run");
+    }
+}
+
+#[test]
+fn edit053_box3_a_plain_text_file_is_opened_in_its_app() {
+    let d = scratch_c("choice-text");
+    let f = d.join("notes.txt");
+    std::fs::write(&f, "text").unwrap();
+    assert_eq!(links::open_choice(&f.to_string_lossy()), Ok(links::OpenChoice::Open));
+}
+
+#[test]
+fn edit053_open_choice_refuses_a_relative_path_and_a_non_file() {
+    let d = scratch_c("choice-refuse");
+    assert_eq!(links::open_choice("run.bat"), Err("run.bat is not a full path".to_string()));
+    let missing = d.join("missing.bat").to_string_lossy().into_owned();
+    assert_eq!(links::open_choice(&missing), Err(format!("{missing} is not a file")));
+    let dir = d.to_string_lossy().into_owned();
+    assert_eq!(links::open_choice(&dir), Err(format!("{dir} is not a file")));
+}
