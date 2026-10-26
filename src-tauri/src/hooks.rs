@@ -312,6 +312,13 @@ pub fn identity(header: &str) -> Option<(u32, Option<u32>)> {
     Some((pane, v.get("terminal").and_then(Value::as_u64).map(|t| t as u32)))
 }
 
+/// The hook version an identity header was written with (T-167-b); none for an older header without one.
+pub fn identity_version(header: &str) -> Option<u32> {
+    let raw = base64::engine::general_purpose::STANDARD.decode(header.trim()).ok()?;
+    let v: Value = serde_json::from_slice(&raw).ok()?;
+    v.get("hookVersion")?.as_u64().map(|v| v as u32)
+}
+
 /// Answers one hook: `(status code, the status to raise)`.
 /// BROW-051: the local endpoint answers only Kolux's own tools. A request from a web page (one
 /// carrying an Origin, Referer or Sec-Fetch header, which every browser adds and no tool does),
@@ -443,8 +450,28 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
 /// USAGE-021: a report counts only when it comes from the folder the active account runs under;
 /// none on both sides is the computer's default sign-in. Case and slash direction do not matter.
 pub fn same_folder(active: Option<&str>, reported: Option<&str>) -> bool {
-    let norm = |p: &str| p.trim().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
-    active.map(norm) == reported.map(norm)
+    active.map(norm_folder) == reported.map(norm_folder)
+}
+
+fn norm_folder(p: &str) -> String {
+    p.trim().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// T-548-b: the store key one config folder's windows live under; the default sign-in keeps the
+/// original key, so what was stored before accounts stays readable.
+pub fn limits_key(dir: Option<&str>) -> String {
+    match dir.map(norm_folder).filter(|d| !d.is_empty()) {
+        Some(d) => format!("{LIMITS_KEY}:{d}"),
+        None => LIMITS_KEY.to_string(),
+    }
+}
+
+/// T-548-b: folds a report's windows into its own folder's stored windows and returns the result.
+pub fn keep_limits(store: &crate::state::Store, dir: Option<&str>, new: &[Limit]) -> Vec<Limit> {
+    let key = limits_key(dir);
+    let merged = merge_limits(limits_of(store, dir), new);
+    let _ = store.set(&key, &json!(merged).to_string());
+    merged
 }
 
 /// USAGE-021: an update that carries one window leaves the other as it was.
@@ -514,9 +541,7 @@ fn record_usage(app: &AppHandle, u: &Usage) {
     if !u.limits.is_empty() {
         if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
             if let Ok(store) = store.lock() {
-                let old = store.get(LIMITS_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-                u.limits = merge_limits(old, &u.limits);
-                let _ = store.set(LIMITS_KEY, &json!(u.limits).to_string());
+                u.limits = keep_limits(&store, u.config_dir.as_deref(), &u.limits);
                 if let Some(at) = exhausted(&u.limits) {
                     let _ = store.set(crate::claude_key::LIMIT_KEY, &at.to_string());
                 }
@@ -533,6 +558,18 @@ fn record_usage(app: &AppHandle, u: &Usage) {
     let _ = app.emit(USAGE_EVENT, payload);
 }
 
+/// T-548-b: a report from a folder other than the active account's keeps its windows in that folder's store.
+fn keep_other_account(app: &AppHandle, u: &Usage) {
+    if u.limits.is_empty() {
+        return;
+    }
+    if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
+        if let Ok(store) = store.lock() {
+            keep_limits(&store, u.config_dir.as_deref(), &u.limits);
+        }
+    }
+}
+
 /// The config folder the active Claude account runs under; none for the default sign-in.
 fn active_config_dir(app: &AppHandle) -> Option<String> {
     let store = app.try_state::<Mutex<crate::state::Store>>()?;
@@ -540,11 +577,24 @@ fn active_config_dir(app: &AppHandle) -> Option<String> {
     crate::claude_accounts::active_dir(&store)
 }
 
-/// The rate-limit windows the last status-line report carried, for the usage pill at start.
+/// The rate-limit windows the active account's last status-line reports carried, for the usage pill at start.
 #[tauri::command]
 pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Result<Vec<Limit>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(store.get(LIMITS_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default())
+    Ok(limits_of(&store, crate::claude_accounts::active_dir(&store).as_deref()))
+}
+
+/// T-548-b: the windows one config folder's reports carried, for a pane on another account.
+// Unregistered until lib.rs lists it (evidence/fix-hooks-fix-T-548-b-lib.rs.patch).
+#[allow(dead_code)]
+#[tauri::command]
+pub fn claude_usage_of(store: tauri::State<'_, Mutex<crate::state::Store>>, config_dir: Option<String>) -> Result<Vec<Limit>, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(limits_of(&store, config_dir.as_deref()))
+}
+
+fn limits_of(store: &crate::state::Store, dir: Option<&str>) -> Vec<Limit> {
+    store.get(&limits_key(dir)).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
 fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
@@ -559,14 +609,18 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 record_usage(app, &u);
                 200
             }
-            Ok(_) => 200,
+            // T-548-b: kept under its own folder for that account's figures, never raised as the active one's.
+            Ok(u) => {
+                keep_other_account(app, &u);
+                200
+            }
             Err(code) => code,
         },
         Some(req) => {
             let (code, status) = answer(&req, token);
             if let Some(status) = status {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
-                agent_hooks::saved::note(app, &req.path, &req.body, &status);
+                agent_hooks::saved::note(app, &req.path, &req.body, &status, req.headers.get(IDENTITY_HEADER).and_then(|h| identity_version(h)));
                 // AUTO-012: an automation run in this pane completes on its agent's real finish.
                 crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), status.change.session.as_deref(), crate::automations::now_ms()));
                 // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
@@ -1116,14 +1170,16 @@ pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Va
 /// Installs Kolux's hooks into `home/hooks.json` (after the user's own entries) and marks them
 /// trusted in `home/config.toml` with Codex's own fingerprints (STAT-008). An unreadable or
 /// unparsable file is left alone. When trust cannot be set, `hooks.json` goes back exactly as it
-/// was (or away, when Kolux created it). True when something was written.
-pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
-    install_codex_with(home, command, codex_listing)
+/// was (or away, when Kolux created it). True when something was written. This form passes
+/// Codex's own listing in, so a test can make it fail without starting Codex (hooks FIX-4).
+#[cfg(test)]
+pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
+    install_codex_mirroring(home, command, None, listing)
 }
 
-/// `install_codex` with Codex's own listing passed in, so a test can make it fail without
-/// starting Codex (hooks FIX-4).
-pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
+/// `install_codex_with` that also copies the user's own Codex hooks and approvals from `user` into
+/// the home (T-025-e), Kolux's entry first. The user's home is only read.
+pub(crate) fn install_codex_mirroring(home: &Path, command: &str, user: Option<&Path>, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
     let _one = CODEX_INSTALL.lock().map_err(|e| e.to_string())?;
     let file = home.join("hooks.json");
     let config = home.join("config.toml");
@@ -1135,7 +1191,25 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
     let text = read(&file)?;
     let mut hooks: Value = serde_json::from_str(text.as_deref().unwrap_or("{}")).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
     let mut doc: toml_edit::DocumentMut = read(&config)?.unwrap_or_default().parse().map_err(|e| format!("{} is not valid TOML ({e}); left alone", config.display()))?;
-    let changed = write_codex_groups(&file, text.as_deref(), &mut hooks, command)?;
+    let config_before = doc.to_string();
+    let hooks_before = hooks.clone();
+    let mut changed = false;
+    if let Some(user) = user {
+        // The file may not exist yet: its real path is the real folder plus its name.
+        let real_home = crate::trust::real_path(home)?;
+        let file_path = Path::new(&real_home).join("hooks.json").to_string_lossy().into_owned();
+        // A user file Kolux cannot read leaves the copy as it was.
+        match agent_hooks::codex_mirror::mirror(user, &mut hooks, &mut doc, &file_path, command) {
+            Ok(_) if hooks != hooks_before => {
+                agent_hooks::back_up(&file, &agent_hooks::codex_record(&file))?;
+                write_json(&file, &hooks, text.as_deref())?;
+                changed = true;
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("kolux-rs: codex hooks: {e}"),
+        }
+    }
+    changed |= write_codex_groups(&file, text.as_deref(), &mut hooks, command)?;
     let real = crate::trust::real_path(&file)?;
     // Several launches write trust once: an unchanged file whose entries are all in the table is done.
     let state = doc.get("hooks").and_then(|h| h.get("state")).and_then(toml_edit::Item::as_table);
@@ -1145,6 +1219,11 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
         state?.get(&format!("{real}:{}:{index}:0", snake(event)))?.get("trusted_hash")
     };
     if !changed && CODEX_EVENTS.iter().all(|e| trusted(e).is_some()) {
+        // Only the copied approvals moved: no listing is needed.
+        if doc.to_string() != config_before {
+            crate::trust::write_whole(&config, &doc.to_string())?;
+            return Ok(true);
+        }
         return Ok(false);
     }
     // hooks FIX-3: a file Kolux had just created goes with its `created` record, so no stray
@@ -1210,7 +1289,9 @@ pub fn install_codex_home(home: &Path) {
         Ok(path) => {
             // Codex runs the command through cmd.exe; the native separators are what was verified.
             let command = format!("\"{}\"", if cfg!(windows) { path.replace('/', "\\") } else { path });
-            if let Err(e) = install_codex(home, &command) {
+            // T-025-e: the user's own Codex home (never the managed home itself) is copied from.
+            let user = crate::trust::codex_config_file().parent().map(Path::to_path_buf).filter(|u| !same_path(&u.to_string_lossy(), &home.to_string_lossy()));
+            if let Err(e) = install_codex_mirroring(home, &command, user.as_deref(), codex_listing) {
                 eprintln!("kolux-rs: codex hooks: {e}");
             }
         }
@@ -1665,6 +1746,30 @@ mod tests {
         let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).unwrap();
         assert_eq!((get("KOLUX_AGENT_HOOK_PORT"), get("KOLUX_PANE_KEY"), get("KOLUX_TERMINAL_HANDLE")), ("5", "9", "4"));
         assert_eq!(identity(get("KOLUX_HOOK_IDENTITY")), Some((9, Some(4))));
+    }
+
+    #[test]
+    fn row_548_b_each_config_folder_keeps_its_own_status_line_windows() {
+        use crate::state::Store;
+        let base = std::env::temp_dir().join(format!("kolux-rs-hooks-r548b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let store = Store::open(&base).unwrap();
+        let win = |kind: &str, used: f64| Limit { kind: kind.into(), used_percent: used, resets_at: Some(9) };
+        let (a, b) = ("C:\\u\\.kolux-rs\\claude-accounts\\a\\", "c:/u/.kolux-rs/claude-accounts/b");
+        keep_limits(&store, None, &[win("five_hour", 10.0), win("seven_day", 20.0)]);
+        keep_limits(&store, Some(a), &[win("five_hour", 70.0)]);
+        keep_limits(&store, Some(b), &[win("five_hour", 5.0)]);
+        // Another account's report no longer lands in (or merges with) the default sign-in's windows.
+        assert_eq!(limits_of(&store, None), vec![win("five_hour", 10.0), win("seven_day", 20.0)]);
+        assert_eq!(limits_of(&store, Some(a)), vec![win("five_hour", 70.0)]);
+        assert_eq!(limits_of(&store, Some("c:/u/.kolux-rs/claude-accounts/a")), limits_of(&store, Some(a)), "case and slash direction do not matter");
+        assert_eq!(limits_of(&store, Some(b)), vec![win("five_hour", 5.0)]);
+        // A one-window update keeps the folder's other window; a folder never heard from has none.
+        assert_eq!(keep_limits(&store, None, &[win("seven_day", 30.0)]), vec![win("five_hour", 10.0), win("seven_day", 30.0)]);
+        assert!(limits_of(&store, Some("C:/u/other")).is_empty());
+        assert_eq!(limits_key(None), LIMITS_KEY, "the default sign-in keeps the original key");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

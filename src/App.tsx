@@ -191,6 +191,7 @@ import { heldByTerminal } from "./keys/terminalPolicy";
 import { installTapReset } from "./shell/inputExtras";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { usePromptScan } from "./status/promptScan";
+import { useRestoredStatus } from "./status/useRestoredStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
 import { creditedLive, launchedAgent, launchedName } from "./status/credit";
@@ -2440,6 +2441,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   report.current = reportLayout;
   useEffect(() => report.current());
   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+  useRestoredStatus({ panes, hookRef, setHook, setStale, setCrew, setTurn });
   useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
   // STAT-044: a clicked notification focuses the pane that raised it (notification_clicked emits the pane).
   useEffect(() => {
