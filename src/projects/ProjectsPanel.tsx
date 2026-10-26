@@ -81,6 +81,7 @@ import { HEADER_ORDER_SETTING, MANUAL_ORDER_SETTING, dragStart, dropBefore, drop
 import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filtersFrom, filtersOn, rowShown, toggleProject } from "./filter";
 import { deletePlan, rowMenu, type MenuItem } from "./menu";
 import { commentBlocks, itemFromPaste, type Span } from "./details";
+import { onWorkspaceStatus } from "./statusRefresh";
 import { FILE_MANAGER, loadTargets, openIn } from "../editor/openIn";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -485,6 +486,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const t = window.setInterval(() => document.visibilityState === "visible" && refreshWorktrees(projects, { tick: true }).catch(fail), 5000);
     return () => window.clearInterval(t);
   }, [projects, refreshWorktrees]);
+  // A Board status or nest change shows here at once, not on the next poll.
+  useEffect(() => onWorkspaceStatus(window, () => void refreshWorktrees(projects).catch(fail)), [projects, refreshWorktrees]);
 
   const reload = useCallback(async () => {
     const list = await invoke<Project[]>("project_list");
