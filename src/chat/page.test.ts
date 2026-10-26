@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FIRST_PAGE, hiddenCount, keepPosition, loadLabel, pageIsCurrent, pagesToStart, shownCount, visibleRows } from "./page";
+import { FIRST_LINES, FIRST_PAGE, OLDER_LINES, hiddenCount, keepPosition, loadLabel, pageIsCurrent, pagesToStart, prependOlder, shownCount, visibleRows } from "./page";
 
 const rows = Array.from({ length: 1000 }, (_, i) => i);
 
@@ -38,5 +38,25 @@ describe("CHAT-008 paged loading", () => {
   it("a page from an earlier reading is dropped", () => {
     expect(pageIsCurrent(3, 3)).toBe(true);
     expect(pageIsCurrent(3, 4)).toBe(false);
+  });
+});
+
+describe("CHAT-008 older pages from the backend (after-list row 392)", () => {
+  it("with every read row shown, a transcript that has older lines still offers the control; at the top it does not", () => {
+    expect(loadLabel(300, 0, 4096)).toBe("Load earlier messages");
+    expect(loadLabel(300, 0, 0)).toBeNull();
+    expect(loadLabel(300, 0)).toBeNull();
+    // Rows already read are shown first, with their count, whatever the backend still holds.
+    expect(loadLabel(1000, 0, 4096)).toBe("Load earlier messages (200 more)");
+  });
+  it("an older page goes before the rows held, keeping the held version of a row the boundary cut", () => {
+    const held = [{ id: "c", v: "new" }, { id: "d", v: "new" }];
+    const page = [{ id: "a", v: "old" }, { id: "b", v: "old" }, { id: "c", v: "old" }];
+    expect(prependOlder(held, page)).toEqual([{ id: "a", v: "old" }, { id: "b", v: "old" }, { id: "c", v: "new" }, { id: "d", v: "new" }]);
+    expect(prependOlder(held, [])).toEqual(held);
+  });
+  it("the first read and each older page are a few hundred rows, never the whole transcript", () => {
+    expect(FIRST_LINES).toBeGreaterThanOrEqual(FIRST_PAGE);
+    expect(OLDER_LINES).toBeGreaterThan(0);
   });
 });

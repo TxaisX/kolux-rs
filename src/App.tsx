@@ -1681,10 +1681,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     if (ready.length === 0) return;
     setCliFiles((q) => q.filter((f) => !ready.includes(f)));
     for (const f of ready) {
-      if (f.kind === "file-open") openFile(f.path);
-      else openDiff(f.path, f.staged);
-      // T-250-c: tell the command line the tab is open (a file that never gets here is listed as skipped).
-      if (f.ack !== undefined) void invoke("cli_file_result", { id: f.ack, failed: null }).catch(() => undefined);
+      void (async () => {
+        let failed: string | null = null;
+        try {
+          // Row 65: a file that vanished since the command looked is refused with a reason, not reported opened.
+          if (f.kind === "file-open" && (await missingFileToast(f.path, (ps) => invoke<unknown[]>("file_stamps", { paths: ps })))) failed = "the file is not there (or is outside this project)";
+          else if (f.kind === "file-open") openFile(f.path);
+          else openDiff(f.path, f.staged);
+        } catch (err) {
+          failed = String(err);
+        }
+        // T-250-c: tell the command line what became of the tab (a file that never gets here is unconfirmed).
+        if (f.ack !== undefined) void invoke("cli_file_result", { id: f.ack, failed }).catch(() => undefined);
+      })();
     }
   }, [cliFiles, activeDir]);
   // T-250-c: while this window runs, the command line waits for its answers about the files it asked to open.

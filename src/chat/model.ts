@@ -30,6 +30,10 @@ export type ChatRead = {
   open: boolean;
   error?: string;
   retryMs: number;
+  /** CHAT-008: the byte cursor of the lines before the first one read (on a reset read); absent at the top of the transcript. */
+  older?: number;
+  /** CHAT-008: `items` are an older page, to go before what the view holds; `older` is the next cursor. */
+  earlier?: boolean;
 };
 
 /** CHAT-002: the agents whose sessions can be shown as chat (Grok waits for a public description of its session files, T-325-b). */
