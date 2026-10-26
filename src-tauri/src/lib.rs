@@ -631,7 +631,7 @@ pub fn run() {
             setup::script_trust_grant,
             setup::setup_imports_list,
             setup::setup_import,
-            agents::agent_list,
+            agents::list_command::agent_list,
             agents::agent_start_line,
             agents::agent_prompt_send,
             agents::open_install_page,

@@ -18,6 +18,9 @@ use crate::orchestration::sendonce as so;
 // ORCH-060: the session tab inventory (T-262).
 #[path = "inventory.rs"]
 pub mod inventory;
+// ux card 11: the window's `agent_list` command runs off the UI thread; Rust callers keep the plain `agent_list` below.
+#[path = "agent_list_command.rs"]
+pub mod list_command;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -290,7 +293,6 @@ pub fn newest_version_dir(parent: &Path) -> Option<PathBuf> {
         .map(|(_, p)| p)
 }
 
-#[tauri::command]
 pub fn agent_list() -> Vec<AgentInfo> {
     catalogue()
 }
@@ -1391,5 +1393,14 @@ mod tests {
         // Nothing written yet reads as "wrote just now", so the paste waits for the first output to settle.
         assert_eq!(opening_last_output(None, 5_000), Some(5_000));
         assert_eq!(opening_last_output(Some(std::time::Duration::from_millis(300)), 5_000), Some(4_700));
+    }
+
+    /// ux card 11: a sync command runs on the UI thread, and each `agent_list` call (about 0.5 s of disk and PATH probing,
+    /// three at start) held every other call, the pane's event listeners included, until it finished.
+    #[test]
+    fn agent_list_is_registered_as_an_async_command_that_matches_the_catalogue() {
+        let ids = |v: Vec<AgentInfo>| v.into_iter().map(|a| a.id).collect::<Vec<_>>();
+        assert_eq!(ids(tauri::async_runtime::block_on(list_command::agent_list())), ids(catalogue()));
+        assert!(include_str!("lib.rs").contains("agents::list_command::agent_list,"), "the window must call the off-thread command");
     }
 }
