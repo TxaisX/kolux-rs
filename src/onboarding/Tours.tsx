@@ -69,7 +69,9 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
       const b = host ?? { left: 8, top: 8, width: window.innerWidth - 16, height: window.innerHeight - 16 };
       // Panes the target is not in stay uncovered where there is room.
       const panes = [...document.querySelectorAll(".pane")].filter((n) => !n.contains(el) && !n.closest("[role=dialog]")).map((n) => n.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0);
-      const p = place(t, { width: Math.min(320, window.innerWidth - 32), height: box.current?.offsetHeight ?? 140 }, b, step.side, panes);
+      const sb = document.querySelector('aside.sidebar[aria-label="Sidebar"]')?.getBoundingClientRect();
+      const sidebar = sb && sb.width > 0 && sb.height > 0 ? { left: sb.left, top: sb.top, width: sb.width, height: sb.height } : null;
+      const p = place(t, { width: Math.min(320, window.innerWidth - 32), height: box.current?.offsetHeight ?? 140 }, b, step.side, panes, sidebar);
       const k = [t.left, t.top, t.width, t.height, p.left, p.top, p.side].map(String).join();
       if (k !== key) {
         key = k;
