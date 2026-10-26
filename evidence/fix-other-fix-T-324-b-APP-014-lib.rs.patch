@@ -1,14 +1,16 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index d0174e6f..582b982c 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -45,6 +45,7 @@
+@@ -45,6 +45,7 @@ mod grok_status;
  mod install;
  mod keybindings;
  mod kits;
 +mod edit_menu;
  mod links;
+ mod login_env;
  mod lifecycle;
- mod menu;
-@@ -316,6 +317,8 @@
+@@ -323,6 +324,8 @@ pub fn run() {
              if let Some(w) = app.get_webview_window("main") {
                  browser::engine::watch_app_failures(&w, dir.clone());
              }
@@ -17,7 +19,7 @@
              if let Some(w) = app.get_webview_window("main") {
                  std::thread::spawn(move || {
                      std::thread::sleep(std::time::Duration::from_secs(5));
-@@ -505,6 +508,7 @@
+@@ -513,6 +516,7 @@ pub fn run() {
          })
          .invoke_handler(tauri::generate_handler![
              app_info,
