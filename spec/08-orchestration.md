@@ -155,7 +155,7 @@ Rules: the states are pending, ready, dispatched, completed, failed and blocked;
   never leave a task dispatched with no worker, or with two; a worker that claims to be finished
   after its process has already died is turned away, and its kept terminal is reconciled instead.
 Acceptance:
-  - [ ] Mark a dispatched task completed → the task is completed and its worker shows as settled.
+  - [x] Mark a dispatched task completed → the task is completed and its worker shows as settled. (cards; evidence/cards-ORCH-012.txt)
   - [ ] Two updates to one task at the same moment → exactly one wins and the state stays valid.
 Compat: `kolux orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked [--result <text>] [--json]`.
 Source: D-08-012
@@ -302,10 +302,10 @@ Rules: dependencies are written as a JSON list naming the tasks waited on; a bad
   subtask; a task text too big to store safely (several megabytes) is turned away before any task,
   dispatch or terminal is touched.
 Acceptance:
-  - [ ] Create task A, then `kolux orchestration task-create --spec b --deps '["<id of A>"]'` → A is
-      ready and B pending; complete A → B turns ready.
-  - [ ] `kolux orchestration task-create --spec x --deps '["missing"]'` → turned away; no task is
-      made.
+  - [x] Create task A, then `kolux orchestration task-create --spec b --deps '["<id of A>"]'` → A is
+      ready and B pending; complete A → B turns ready. (cards; evidence/cards-ORCH-010.txt)
+  - [x] `kolux orchestration task-create --spec x --deps '["missing"]'` → turned away; no task is
+      made. (cards; evidence/cards-ORCH-010.txt)
 Compat: `kolux orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json array>] [--parent <id>] [--run <run>] [--json]`.
 Source: D-08-010
 
@@ -321,10 +321,10 @@ Rules: the compact form folds whitespace and cuts each task text at about 160 ch
   a shortened task text; a task a worker currently holds shows which worker terminal and dispatch
   have it; finished dispatches are not listed against the task.
 Acceptance:
-  - [ ] Compact listing of a task whose text is 2,000 characters long → one line of about 160
-      characters.
-  - [ ] A task held by a running worker → the listing names that worker's terminal and dispatch;
-      once the worker has finished, it no longer does.
+  - [x] Compact listing of a task whose text is 2,000 characters long → one line of about 160
+      characters. (cards; evidence/cards-ORCH-011.txt)
+  - [x] A task held by a running worker → the listing names that worker's terminal and dispatch;
+      once the worker has finished, it no longer does. (cards; evidence/cards-ORCH-011.txt)
 Compat: `kolux orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]`.
 Source: D-08-011
 
@@ -348,7 +348,7 @@ Acceptance:
   - [ ] Dispatch a task with inject to an idle Claude pane → the pane receives the brief and starts
       work.
   - [ ] Dispatch to the coordinator's own pane → turned away with a reason.
-  - [ ] Dispatch with dry-run → the plan is printed and the task is still ready.
+  - [x] Dispatch with dry-run → the plan is printed and the task is still ready. (cards; evidence/cards-ORCH-013.txt)
 Compat: `kolux orchestration dispatch --task <id> --to <handle> [--inject] [--dry-run] [--return-preamble] [--json]`.
 Source: D-08-013
 
@@ -367,10 +367,10 @@ Rules: the commands in the brief are tied to the worker's own terminal, and each
   sub-workers appears only while nesting budget remains; the report, heartbeat and question commands
   include the worker's dispatch pass (see ORCH-067)
 Acceptance:
-  - [ ] `kolux orchestration dispatch-show --task <id> --preamble` → contains a done-report command
-      with this dispatch's id and ends with the task text.
-  - [ ] Start a worker on a worktree two commits behind its base → the brief has the base-drift
-      section.
+  - [x] `kolux orchestration dispatch-show --task <id> --preamble` → contains a done-report command
+      with this dispatch's id and ends with the task text. (cards; evidence/cards-ORCH-014.txt)
+  - [x] Start a worker on a worktree two commits behind its base → the brief has the base-drift
+      section. (cards; evidence/cards-ORCH-014.txt)
 Compat: `kolux orchestration dispatch-show --task <id> [--preamble] [--json]`.
 Source: D-08-014
 

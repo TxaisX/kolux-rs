@@ -486,3 +486,235 @@ fn orch007_box3_over_the_wire_a_waiting_check_returns_the_message_the_moment_it_
     assert!(env["result"]["timedOut"].is_null());
     assert_eq!(env["result"]["messages"][0]["subject"], "arrived");
 }
+
+// ---------------------------------------------------------------- ORCH-010 .. ORCH-014
+
+fn make_task(tasks: &mut Vec<Value>, line: &str, now: u64) -> Result<Value, Fail> {
+    let (_, args) = typed(line);
+    o::task_create(tasks, &args, None, now)
+}
+
+fn store_with(tag: &str, tasks: &[Value], dispatches: &[Value]) -> Mutex<Store> {
+    let store = Store::open(&scratch(tag)).unwrap();
+    store.set(o::TASKS_KEY, &Value::Array(tasks.to_vec()).to_string()).unwrap();
+    store.set(o::DISPATCHES_KEY, &Value::Array(dispatches.to_vec()).to_string()).unwrap();
+    Mutex::new(store)
+}
+
+fn stored(store: &Mutex<Store>, key: &str) -> Vec<Value> {
+    let raw = store.lock().unwrap().get(key).unwrap().unwrap_or_else(|| "[]".into());
+    serde_json::from_str::<Vec<Value>>(&raw).unwrap()
+}
+
+fn status_of(list: &Value, id: &str) -> String {
+    list["tasks"].as_array().unwrap().iter().find(|t| t["id"] == id).map(|t| t["status"].as_str().unwrap().to_string()).unwrap_or_default()
+}
+
+#[test]
+fn orch010_box1_a_task_without_deps_is_ready_one_with_deps_is_pending_and_turns_ready_when_its_dependency_completes() {
+    let mut tasks = Vec::new();
+    let a = make_task(&mut tasks, "orchestration task-create --spec a", 1).unwrap();
+    let a_id = a["id"].as_str().unwrap().to_string();
+    assert_eq!(a["status"], "ready", "no dependencies: ready at once");
+    let b = make_task(&mut tasks, &format!("orchestration task-create --spec b --deps [\"{a_id}\"]"), 2).unwrap();
+    let b_id = b["id"].as_str().unwrap().to_string();
+    assert_eq!(b["status"], "pending", "waits on A");
+    assert_eq!(b["deps"], json!([a_id]));
+    // The same two tasks through the real task-list / task-update commands: A completes, B turns ready.
+    let store = store_with("o10b1", &tasks, &[]);
+    let before = run_line(&store, "orchestration task-list", None).unwrap();
+    assert_eq!((status_of(&before, &a_id), status_of(&before, &b_id)), ("ready".into(), "pending".into()));
+    let done = run_line(&store, &format!("orchestration task-update --id {a_id} --status completed"), None).unwrap();
+    assert_eq!(done["status"], "completed");
+    let after = run_line(&store, "orchestration task-list", None).unwrap();
+    assert_eq!((status_of(&after, &a_id), status_of(&after, &b_id)), ("completed".into(), "ready".into()));
+}
+
+#[test]
+fn orch010_box2_a_dependency_that_names_no_task_is_turned_away_and_no_task_is_made() {
+    let mut tasks = Vec::new();
+    let e = make_task(&mut tasks, "orchestration task-create --spec x --deps [\"missing\"]", 1).unwrap_err();
+    assert_eq!(e.code, "not_found");
+    assert!(e.message.contains("missing"), "{}", e.message);
+    assert!(tasks.is_empty(), "nothing made");
+    // Also with one real task present, and for a badly formed list.
+    make_task(&mut tasks, "orchestration task-create --spec real", 2).unwrap();
+    assert!(make_task(&mut tasks, "orchestration task-create --spec x --deps [\"task-1\",\"missing\"]", 3).is_err());
+    assert!(make_task(&mut tasks, "orchestration task-create --spec x --deps notjson{", 4).is_err());
+    assert_eq!(tasks.len(), 1, "still only the real task");
+}
+
+#[test]
+fn orch011_box1_compact_listing_of_a_2000_character_task_is_one_line_of_about_160_characters() {
+    let spec = format!("line one\n\n   {}\n\twith   gaps", "word ".repeat(400));
+    assert!(spec.chars().count() > 2000);
+    let task = json!({ "id": "task-1", "runId": null, "spec": spec, "status": "ready", "deps": [] });
+    let store = store_with("o11b1", &[task], &[]);
+    let brief = run_line(&store, "orchestration task-list --brief", None).unwrap();
+    let shown = brief["tasks"][0]["spec"].as_str().unwrap();
+    assert_eq!(shown.chars().count(), 160, "cut at 160 characters: {shown}");
+    assert!(!shown.contains('\n') && !shown.contains('\t') && !shown.contains("  "), "one line, whitespace folded");
+    assert!(shown.starts_with("line one word word"));
+    let full = run_line(&store, "orchestration task-list", None).unwrap();
+    assert!(full["tasks"][0]["spec"].as_str().unwrap().chars().count() > 2000, "without --brief the whole text shows");
+}
+
+fn running_worker(runtime: u32, status: &str) -> Value {
+    json!({ "id": "dispatch-1", "runtime": runtime, "runId": null, "taskId": "task-1", "status": status, "terminal": 2 })
+}
+
+#[test]
+fn orch011_box2_a_task_held_by_a_running_worker_names_its_terminal_and_dispatch_until_the_worker_finishes() {
+    let task = json!({ "id": "task-1", "runId": null, "spec": "do it", "status": "dispatched", "deps": [], "dispatchId": "dispatch-1" });
+    let live = |h: &str| h == "term-2";
+    let me = std::process::id();
+    let list = |d: Value, up: &dyn Fn(&str) -> bool| o::task_list(std::slice::from_ref(&task), &[d], None, &json!({}), up).unwrap();
+    let held = list(running_worker(me, "running"), &live);
+    assert_eq!(held["tasks"][0]["worker"], json!({ "dispatchId": "dispatch-1", "terminal": "term-2" }));
+    // Finished dispatches are not listed against the task, whatever the terminal does.
+    for done in ["completed", "failed", "abandoned"] {
+        let gone = list(running_worker(me, done), &live);
+        assert_eq!(gone["tasks"][0]["worker"], Value::Null, "{done}");
+    }
+    // A worker whose terminal has closed, or one stamped by an earlier start of the app, holds nothing.
+    assert_eq!(list(running_worker(me, "running"), &|_| false)["tasks"][0]["worker"], Value::Null);
+    assert_eq!(list(running_worker(me.wrapping_add(1), "running"), &live)["tasks"][0]["worker"], Value::Null);
+}
+
+fn dispatched_pair(runtime: u32) -> (Vec<Value>, Vec<Value>) {
+    let task = json!({ "id": "task-1", "runId": null, "spec": "do it", "status": "dispatched", "deps": [], "dispatchId": "dispatch-1" });
+    (vec![task], vec![running_worker(runtime, "running")])
+}
+
+#[test]
+fn orch012_box1_marking_a_dispatched_task_completed_settles_its_worker() {
+    let (tasks, dispatches) = dispatched_pair(std::process::id());
+    let store = store_with("o12b1", &tasks, &dispatches);
+    let reply = run_line(&store, "orchestration task-update --id task-1 --status completed --result shipped", None).unwrap();
+    assert_eq!((&reply["status"], &reply["previous"], &reply["dispatchStatus"]), (&json!("completed"), &json!("dispatched"), &json!("completed")));
+    let (t, d) = (&stored(&store, o::TASKS_KEY)[0], &stored(&store, o::DISPATCHES_KEY)[0]);
+    assert_eq!((&t["status"], &t["result"]), (&json!("completed"), &json!("shipped")));
+    assert_eq!(d["status"], "completed", "the worker shows as settled");
+    assert!(d["settledAt"].as_u64().is_some());
+    let list = run_line(&store, "orchestration task-list", None).unwrap();
+    assert_eq!(list["tasks"][0]["worker"], Value::Null, "the worker slot is free");
+}
+
+#[test]
+fn orch012_box2_parts_two_updates_at_one_moment_never_leave_a_task_dispatched_without_a_worker() {
+    for round in 0..8 {
+        let (tasks, dispatches) = dispatched_pair(std::process::id());
+        let store = Arc::new(store_with(&format!("o12b2-{round}"), &tasks, &dispatches));
+        let go = Arc::new(std::sync::Barrier::new(2));
+        let fire = |to: &'static str| {
+            let (store, go) = (store.clone(), go.clone());
+            std::thread::spawn(move || {
+                go.wait();
+                run_line(&store, &format!("orchestration task-update --id task-1 --status {to}"), None)
+            })
+        };
+        let (c, f) = (fire("completed"), fire("failed"));
+        let (rc, rf) = (c.join().unwrap(), f.join().unwrap());
+        let (t, d) = (stored(&store, o::TASKS_KEY).remove(0), stored(&store, o::DISPATCHES_KEY).remove(0));
+        let settled_as = d["status"].as_str().unwrap();
+        assert!(["completed", "failed"].contains(&settled_as), "round {round}: the worker settled exactly once: {d}");
+        assert_ne!(t["status"], "dispatched", "round {round}: never left dispatched with no worker");
+        assert!(t["dispatchId"].is_null() || t["dispatchId"] == "dispatch-1", "never two workers");
+        assert!(rc.is_ok() || rf.is_ok(), "round {round}: at least one update lands");
+    }
+}
+
+#[test]
+fn orch013_box3_dispatch_with_dry_run_prints_the_plan_and_the_task_is_still_ready() {
+    let task = json!({ "id": "task-1", "runId": null, "spec": "write the parser", "status": "ready", "deps": [] });
+    let store = store_with("o13b3", &[task], &[]);
+    let plan = run_line(&store, "orchestration dispatch --task task-1 --dry-run", None).unwrap();
+    assert_eq!((&plan["dryRun"], &plan["taskId"], &plan["taskStatus"]), (&json!(true), &json!("task-1"), &json!("ready")));
+    assert!(plan["preamble"].as_str().unwrap().ends_with("write the parser"), "the plan carries the brief");
+    assert!(stored(&store, o::DISPATCHES_KEY).is_empty(), "no dispatch recorded");
+    assert_eq!(stored(&store, o::TASKS_KEY)[0]["status"], "ready");
+    let list = run_line(&store, "orchestration task-list --ready", None).unwrap();
+    assert_eq!(status_of(&list, "task-1"), "ready");
+}
+
+fn dispatch_to(to: &str, caller: Option<&str>, own_ok: bool) -> Result<(usize, String), Fail> {
+    let task = json!({ "id": "task-1", "runId": null, "spec": "x", "status": "ready", "deps": [] });
+    o::dispatch_check(&[task], &[], "task-1", to, caller, None, own_ok, &|_| Some("claude".to_string()))
+}
+
+#[test]
+fn orch013_box2_parts_dispatch_to_the_coordinators_own_pane_with_inject_or_without_budget_is_turned_away() {
+    // cli.rs `orchestration.dispatch` passes own_ok = (no --inject && nesting budget remains).
+    let nested = o::nest(Some("term-1"), &[], None, None);
+    assert!(nested.is_ok(), "a coordinator with no dispatch of its own has budget at the default cap");
+    let inject = dispatch_to("term-1", Some("term-1"), false).unwrap_err();
+    assert_eq!(inject.code, "own_pane");
+    assert_eq!(inject.message, "a coordinator cannot hand a task to its own pane");
+    // Another coordinator's pane is not "own".
+    assert!(dispatch_to("term-2", Some("term-1"), false).is_ok());
+    // The spec rule allows a context-only dispatch to the caller itself inside the budget.
+    assert!(dispatch_to("term-1", Some("term-1"), true).is_ok(), "context-only inside the budget is allowed (the card's own exception)");
+}
+
+fn behind_brief(n: Option<(u32, String)>) -> String {
+    let task = json!({ "id": "task-3", "runId": null, "spec": "Refactor the cache.\nKeep the API.", "status": "ready", "deps": [] });
+    o::brief(&task, &o::Brief { dispatch: "dispatch-9", run: Some("run-1"), coordinator: Some("term-1"), behind: n, levels_left: 0 })
+}
+
+#[test]
+fn orch014_box1_dispatch_show_preamble_has_the_done_command_for_this_dispatch_and_ends_with_the_task_text() {
+    let spec = "Refactor the cache.\nKeep the API.";
+    let task = json!({ "id": "task-1", "runId": null, "spec": spec, "status": "ready", "deps": [] });
+    let store = store_with("o14b1", &[task], &[]);
+    // The brief dispatch builds (shown by its dry run), recorded the way dispatch records it.
+    let plan = run_line(&store, "orchestration dispatch --task task-1 --dry-run", None).unwrap();
+    let (id, brief) = (plan["dispatchId"].as_str().unwrap().to_string(), plan["preamble"].as_str().unwrap().to_string());
+    let row = json!({ "id": id, "runtime": std::process::id(), "runId": null, "taskId": "task-1", "status": "running", "terminal": 2, "brief": brief });
+    store.lock().unwrap().set(o::DISPATCHES_KEY, &Value::Array(vec![row]).to_string()).unwrap();
+    let shown = run_line(&store, "orchestration dispatch-show --task task-1 --preamble", None).unwrap();
+    let p = shown["preamble"].as_str().unwrap();
+    let done = "orchestration send --type worker_done --outcome succeeded --subject \"task-1 done\" --body \"what you did\"";
+    let done_line = p.lines().find(|l| l.contains(done)).expect("a done-report command");
+    assert!(done_line.contains(&format!("--task-id task-1 --dispatch-id {id}")), "{done_line}");
+    assert!(p.ends_with(spec), "the task text is the last thing the worker reads");
+    assert!(p.find(o::DIVIDER).unwrap() < p.find(spec).unwrap());
+    // The other instructions the card names, each one line, ahead of the divider.
+    let head = p.split(o::DIVIDER).next().unwrap();
+    assert!(head.contains("About every five minutes") && head.contains("--type heartbeat"));
+    assert!(head.contains("not your own question tool") && head.contains("--type question") && head.contains("orchestration check --wait"));
+    assert!(head.contains("orchestration check\n"));
+    assert!(head.lines().filter(|l| l.contains("orchestration send")).all(|l| l.starts_with("  ") && !l.contains('\r')));
+    // Without --preamble the brief is not shown.
+    let plain = run_line(&store, "orchestration dispatch-show --task task-1", None).unwrap();
+    assert!(plain.get("preamble").is_none());
+}
+
+fn git_ok(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]).args(args).current_dir(dir).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn orch014_box2_a_worktree_two_commits_behind_its_base_gets_the_base_drift_section() {
+    let root = scratch("o14b2");
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_ok(&repo, &["init", "-q", "-b", "main"]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+    let wt = root.join("wt");
+    git_ok(&repo, &["worktree", "add", "-q", "-b", "worker", wt.to_str().unwrap()]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "c2"]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "c3"]);
+    let git = Git::detect().unwrap();
+    let n = git.behind(&wt, "main");
+    assert_eq!(n, Some(2), "two commits behind main");
+    let drifted = behind_brief(n.map(|n| (n, "main".to_string())));
+    assert!(drifted.contains("Base drift: this worktree is 2 commits behind main."), "{drifted}");
+    assert!(drifted.find("Base drift").unwrap() < drifted.find(o::DIVIDER).unwrap(), "ahead of the task text");
+    assert!(drifted.ends_with("Keep the API."));
+    // A worktree level with its base gets no such section.
+    git_ok(&wt, &["merge", "-q", "main"]);
+    assert_eq!(git.behind(&wt, "main"), Some(0));
+    assert!(!behind_brief(Some((0, "main".into()))).contains("Base drift"));
+    assert!(!behind_brief(None).contains("Base drift"));
+}
