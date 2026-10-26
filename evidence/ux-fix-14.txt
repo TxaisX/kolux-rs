@@ -47,3 +47,7 @@ launch -> Ready, same runs (ms): before 4024 (CPU 2->81), 2077 (20->47); after 1
 
 5. STILL SYNC, unchanged: prompt_scan_restored and prompt_scan_pruned (each a few microseconds; they write the scan memory and must stay ordered with the
    page's awaited calls, so keeping them on the UI thread keeps that order trivially).
+
+REVERTED prompt_scan (kolux-f2 2026-10-26)
+   Reason: it measured 1 ms before and 1 ms after, and the async version adds a prune-vs-scan race (a prompt_scan_pruned landing mid-scan lets the scan re-write a memo entry after the prune), which is not justified. prompt_scan is the sync command again, byte-identical to a747b9e1; agent_can_install stays async.
+   Redo only if 165 ms spikes show at normal load, and then with a generation check on the memo write (prune bumps the generation; a scan writes only if it is unchanged).
