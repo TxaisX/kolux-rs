@@ -2207,6 +2207,11 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": keep && w.branch.is_some(), "stopped": stopped.ended, "stuck": stopped.stuck, "warnings": warnings }))
         }
         "app.open" => {
+            // T-324-b (APP-019): markdown files a second launch was handed wait for the page to take them.
+            let files: Vec<String> = req.args["files"].as_array().map(|a| a.iter().filter_map(|f| f.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            if crate::lifecycle::queue_open(&files) > 0 {
+                (ctx.notify)(json!({ "emit": "open-files", "payload": Value::Null }));
+            }
             (ctx.front)()?;
             Ok(json!({ "ready": true, "started": false, "pid": std::process::id() }))
         }
@@ -8307,6 +8312,30 @@ mod tests {
         let again = dispatch(&ctx, &req("orchestration.task-reset", json!({ "id": "task-1" }))).unwrap();
         assert_eq!(text_of("orchestration.task-reset", &again), "task-1 had no counted failures; it is ready");
         assert_eq!(dispatch(&ctx, &req("orchestration.task-reset", json!({ "id": "task-9" }))).unwrap_err().code, "not_found");
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app019_a_second_launch_hands_its_markdown_files_to_the_running_copy() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-app019-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let told = Mutex::new(Vec::<Value>::new());
+        let notify = |v: Value| told.lock().unwrap().push(v);
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |args: Value| Request { id: "r".into(), token: String::new(), command: "app.open".into(), cwd: dir.display().to_string(), args, pane: None, cli: VERSION.into(), arrived: None };
+        let md = if cfg!(windows) { "C:\\notes\\a b.md" } else { "/notes/a b.md" };
+        // a plain `open` and an open with only other kinds of file queue nothing and tell the page nothing
+        assert_eq!(dispatch(&ctx, &req(json!({}))).unwrap()["ready"], true);
+        dispatch(&ctx, &req(json!({ "files": ["x.txt"] }))).unwrap();
+        assert!(told.lock().unwrap().is_empty());
+        dispatch(&ctx, &req(json!({ "files": [md, "x.txt"] }))).unwrap();
+        assert_eq!(told.lock().unwrap().as_slice(), &[json!({ "emit": "open-files", "payload": null })]);
+        assert_eq!(crate::lifecycle::take_open(), vec![md.to_string()], "only the markdown file was queued");
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

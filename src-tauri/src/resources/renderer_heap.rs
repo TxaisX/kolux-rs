@@ -3,7 +3,6 @@
 // recovery::launch_browser_args puts the result into the WebView2 browser arguments.
 
 pub const ENV: &str = "KOLUX_RENDERER_HEAP_MB";
-const MIB: u64 = 1 << 20;
 const GIB: u64 = 1 << 30;
 /// "8 GB or more": a machine sold as 8 GB reports a little under 8 GiB to the OS.
 pub const MIN_RAM: u64 = 7 * GIB + GIB / 2;
@@ -102,6 +101,7 @@ mod tests {
     use super::*;
 
     const GB: u64 = 1 << 30;
+    const MIB: u64 = 1 << 20;
 
     #[test]
     fn app022_a_positive_number_sets_the_ceiling_whatever_the_ram() {

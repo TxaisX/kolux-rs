@@ -1,0 +1,21 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ef00c52d..cd87ff59 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1170,6 +1170,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     setFocused(key);
+   };
+ 
++  // APP-019: markdown files the system handed to the app open as previews, at start and on each later ask.
++  const openFiles = useRef(openPreview);
++  openFiles.current = openPreview;
++  useEffect(() => {
++    const drain = () => void invoke<string[]>("open_files_take").then((fs) => fs.forEach((f) => openFiles.current(f))).catch(() => undefined);
++    const off = listen("open-files", drain);
++    drain();
++    return () => void off.then((f) => f()).catch(() => undefined);
++  }, []);
++
+   // TERM-001: the layout strip sets how many cells the workspace in front holds. Growing adds
+   // empty chooser panes (nothing starts on its own); shrinking drops unstarted cells newest
+   // first and leaves started sessions alone: the ask before removing a started session is
