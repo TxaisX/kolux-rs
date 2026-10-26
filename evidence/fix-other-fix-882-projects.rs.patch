@@ -1,0 +1,44 @@
+diff --git a/src-tauri/src/projects.rs b/src-tauri/src/projects.rs
+index 2ae26797..cef141d0 100644
+--- a/src-tauri/src/projects.rs
++++ b/src-tauri/src/projects.rs
+@@ -119,6 +119,10 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
+     let mut projects = load_projects(store);
+     let gone: Vec<String> = projects.iter().filter(|p| ids.contains(&p.id)).map(|p| p.path.clone()).collect();
+     projects.retain(|p| !ids.contains(&p.id));
++    // Empty runs of the two cleanups below read everything they will touch, so a refused read stops
++    // here with the project still listed instead of leaving its flag and setup state orphaned.
++    crate::folder_projects::unflag(store, &[])?;
++    crate::setup::prune_setup(store, &[], &[])?;
+     save_projects(store, &projects)?;
+     // PROJ-019: a forgotten project's icon choice goes with it.
+     let mut icons = project_icons(store);
+@@ -5364,6 +5368,28 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
+         assert_eq!(details_of(&store, w).name, None, "an over-long comment writes nothing");
+         drop(store);
+     }
++
++    /// after-list row 882: a refused read of the folder flags or the saved setup must not leave the
++    /// project removed with its flag and setup state orphaned; nothing changes and a retry finishes.
++    #[test]
++    fn row882_a_refused_flag_or_setup_read_leaves_the_project_listed() {
++        let profile = temp("row882");
++        let store = Store::open(&profile).unwrap();
++        let project = project_at("p882", &profile);
++        save_projects(&store, std::slice::from_ref(&project)).unwrap();
++        store.set("folderProjects", "[1,2").unwrap(); // does not read, so it must be kept aside first
++        crate::orchestration::kept::refuse_copies(&profile); // and the store refuses that copy
++        assert!(forget_projects(&store, std::slice::from_ref(&project.id)).is_err());
++        assert_eq!(load_projects(&store).len(), 1, "the project is still listed");
++        assert_eq!(store.get("folderProjects").unwrap().as_deref(), Some("[1,2"), "the flags are untouched");
++        let conn = rusqlite::Connection::open(profile.join("state.db")).unwrap();
++        conn.execute_batch("DROP TRIGGER no_copies;").unwrap();
++        forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
++        assert!(load_projects(&store).is_empty(), "a retry finishes the job");
++        drop(conn);
++        drop(store);
++        let _ = fs::remove_dir_all(profile);
++    }
+ }
+ 
+ #[cfg(test)]
