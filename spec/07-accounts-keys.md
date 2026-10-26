@@ -188,10 +188,10 @@ Rules: the Claude 1-year key and the xAI key are stored in the settings file, se
   instead of protecting, sealing still happens and a single log line is written when that situation
   starts, changes or ends, never a dialog.
 Acceptance:
-  - [ ] Connect Claude by 1-year key, quit, look inside the settings file → the key text is not
-        there; reopen → still connected.
-  - [ ] Start from a profile whose credentials were stored in the clear → after the first launch
-        they are sealed and still work.
+  - [x] Connect Claude by 1-year key, quit, look inside the settings file → the key text is not
+        there; reopen → still connected. (cards; evidence/cards-ACCT-009.txt)
+  - [x] Start from a profile whose credentials were stored in the clear → after the first launch
+        they are sealed and still work. (cards; evidence/cards-ACCT-009.txt)
 Compat: An older profile may hold sealed or clear secrets and both must load; whether the one-off
   sealing pass already ran carries over.
 Source: D-07-009
@@ -208,10 +208,10 @@ Rules: the cards run Claude, then Codex, then Grok, each with a one-line plain t
   early that an agent is missing; agent traffic flows directly between each agent tool and its
   provider; Kolux neither relays nor records it.
 Acceptance:
-  - [ ] Open the page on a machine where only Claude is installed → three cards; Claude shows its
-        actual state; Codex and Grok each offer to install.
-  - [ ] Slow status detection down → the cards stay on a loading placeholder, never an install
-        offer, until detection answers.
+  - [x] Open the page on a machine where only Claude is installed → three cards; Claude shows its
+        actual state; Codex and Grok each offer to install. (cards; evidence/cards-ACCT-001.txt)
+  - [x] Slow status detection down → the cards stay on a loading placeholder, never an install
+        offer, until detection answers. (cards; evidence/cards-ACCT-001.txt)
 Compat: —
 Source: D-07-001
 
@@ -231,10 +231,10 @@ Rules: not connected offers a main "Connect" button and an "Other ways to connec
   a leftover needs-attention state; each connect choice is greyed out while its request is pending
   and comes back after 30 seconds if no answer arrives, so the card can never hang.
 Acceptance:
-  - [ ] Click Connect on Codex → the card goes to connecting with Cancel; complete the browser
-        sign-in → connected with the account label.
-  - [ ] Click Cancel while connecting → the sign-in stops, the card returns to not connected and no
-        partial account is kept.
+  - [x] Click Connect on Codex → the card goes to connecting with Cancel; complete the browser
+        sign-in → connected with the account label. (cards; evidence/cards-ACCT-002.txt)
+  - [x] Click Cancel while connecting → the sign-in stops, the card returns to not connected and no
+        partial account is kept. (cards; evidence/cards-ACCT-002.txt)
 Compat: Seven ways to connect must exist: Claude by 1-year key, Claude by account, Codex by ChatGPT
   sign-in, Codex by device code, Grok by CLI login, Grok by device code, Grok by API key.
 Source: D-07-002
@@ -252,10 +252,10 @@ Rules: on Windows the install goes through the system package manager, and progr
   installed, blocked by SmartScreen, or not available; starting another install for the same agent
   ends the earlier one.
 Acceptance:
-  - [ ] Click Install on a missing Codex → progress moves, then the card shows not connected and
-        Connect works with no restart.
-  - [ ] Make an install hang → after 15 minutes the card shows a failure with "Try installing
-        again".
+  - [x] Click Install on a missing Codex → progress moves, then the card shows not connected and
+        Connect works with no restart. (cards; evidence/cards-ACCT-003.txt)
+  - [x] Make an install hang → after 15 minutes the card shows a failure with "Try installing
+        again". (cards; evidence/cards-ACCT-003.txt)
 Compat: —
 Source: D-07-003
 
@@ -272,9 +272,9 @@ Rules: the key route is labelled advanced and pay-per-use, unlike the subscripti
   and a saved xAI key exist, the card reports the sign-in; a sign-in the user had already made shows
   as connected with nothing to do.
 Acceptance:
-  - [ ] Open the key dialog → Connect is disabled; type a key → it enables; submit → the card is
-        connected and the key text appears nowhere on the page.
-  - [ ] Type a key, press Cancel, reopen → the field is blank.
+  - [x] Open the key dialog → Connect is disabled; type a key → it enables; submit → the card is
+        connected and the key text appears nowhere on the page. (cards; evidence/cards-ACCT-008.txt)
+  - [x] Type a key, press Cancel, reopen → the field is blank. (cards; evidence/cards-ACCT-008.txt)
 Compat: A saved xAI key carries over from an older profile.
 Source: D-07-008
 
@@ -289,10 +289,10 @@ Rules: providers that are not installed still appear, each carrying a mark that 
   Sonnet at medium for Build, Haiku for Light; Codex has a separate default ladder of models and
   efforts; reset puts back the defaults of that one provider.
 Acceptance:
-  - [ ] Set Claude's Build tier to Opus at high, then reset Claude → Build goes back to Sonnet at
-        medium and Codex is unchanged.
-  - [ ] On a machine without Codex → the Codex tab can still be selected and shows a not-detected
-        mark.
+  - [x] Set Claude's Build tier to Opus at high, then reset Claude → Build goes back to Sonnet at
+        medium and Codex is unchanged. (cards; evidence/cards-ACCT-034.txt)
+  - [x] On a machine without Codex → the Codex tab can still be selected and shows a not-detected
+        mark. (cards; evidence/cards-ACCT-034.txt)
 Compat: Each provider's table of tier to model and effort, for all four tiers, carries over.
 Source: D-07-034
 
