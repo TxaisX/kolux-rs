@@ -69,7 +69,7 @@ Rules: unstaged edits with nothing staged lead to stage all; staged work plus a 
 Acceptance:
   - [x] Take a new branch through edit, stage, commit, publish and create PR → the label matches
         each step. (cards; evidence/cards-GIT-006.txt)
-  - [x] Rebase a pushed branch onto its base → force push with lease is offered, not pull. (cards; evidence/cards-GIT-006.txt)
+  - [x] Rebase a pushed branch onto its base → force push with lease is offered in the commit area, not pull. (cards; evidence/cards-GIT-006.txt)
 Compat: —
 Source: D-11-006
 
