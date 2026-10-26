@@ -1,0 +1,43 @@
+diff --git a/src-tauri/src/artifacts.rs b/src-tauri/src/artifacts.rs
+index c64963a3..62049ef0 100644
+--- a/src-tauri/src/artifacts.rs
++++ b/src-tauri/src/artifacts.rs
+@@ -242,12 +242,14 @@ fn vendor_scripts(html: &str, tmp: &Path, fetch: &dyn Fn(&str) -> Option<Vec<u8>
+ }
+ 
+ /// Fetches one CDN script for an entry, within the size cap; None on any failure.
+-pub fn fetch_script(url: &str) -> Option<Vec<u8>> {
++pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
+     if !CDNS.iter().any(|c| url.starts_with(c)) {
+         return None;
+     }
++    // T-323-b (APP-032): through the saved proxy; a setting that cannot be used fetches nothing.
++    let builder = crate::resources::app_http::with_plan(app, url, reqwest::Client::builder()).ok()?;
+     tauri::async_runtime::block_on(async {
+-        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().ok()?;
++        let client = builder.timeout(std::time::Duration::from_secs(20)).build().ok()?;
+         let r = client.get(url).send().await.ok()?;
+         if !r.status().is_success() || r.content_length().is_some_and(|n| n > MAX_SCRIPT as u64) {
+             return None;
+@@ -434,7 +436,7 @@ pub fn artifacts_list(lib: tauri::State<'_, Library>) -> Vec<Listed> {
+ #[tauri::command]
+ pub async fn artifact_add(app: tauri::AppHandle, path: String) -> Result<Entry, String> {
+     use tauri::Manager;
+-    tauri::async_runtime::spawn_blocking(move || app.state::<Library>().add(Path::new(&path), Origin::hand(Path::new(&path)), &fetch_script)).await.map_err(|e| e.to_string())?
++    tauri::async_runtime::spawn_blocking(move || app.state::<Library>().add(Path::new(&path), Origin::hand(Path::new(&path)), &|u| fetch_script(&app, u))).await.map_err(|e| e.to_string())?
+ }
+ 
+ #[tauri::command]
+diff --git a/src-tauri/src/capture.rs b/src-tauri/src/capture.rs
+index b5f3f3e5..5074f18f 100644
+--- a/src-tauri/src/capture.rs
++++ b/src-tauri/src/capture.rs
+@@ -175,7 +175,7 @@ fn keep(app: &tauri::AppHandle, p: Publish, started: u64) {
+     }
+     let project = p.cwd.as_deref().and_then(|c| Path::new(c).file_name()).map(|n| n.to_string_lossy().into_owned());
+     let from = Origin { origin: p.url, source: "claude", project, session: p.session, at };
+-    match app.state::<Library>().add(Path::new(&p.path), from, &artifacts::fetch_script) {
++    match app.state::<Library>().add(Path::new(&p.path), from, &|u| artifacts::fetch_script(app, u)) {
+         Ok(_) => {
+             let _ = app.emit(EVENT, ());
+         }

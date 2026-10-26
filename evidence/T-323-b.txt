@@ -57,3 +57,38 @@ LIVE PROOF PENDING (batched)
 1. Right-click a file in the Explorer: the menu ends with Open in Visual Studio Code (and any app added in Settings > General). Click it: the file opens there.
 2. Right-click a folder: no Open in rows at the end (the toolbar button handles folders).
 STILL OPEN IN T-323-b: keybindings file Open in (settings lane), worktree menu (T-304), proxy settings (Rust), Warp and Ghostty folder scan.
+
+PIECE 4 (lane/editor-t323b from 92541644, 2026-10-26): the proxy in Rust, and the Warp/Ghostty folder scan.
+
+AUDIT
+(b) Warp themes folder and Ghostty config folder scan: ALREADY-OK (T-307, evidence/T-307.txt).
+  src-tauri/src/term_import.rs:208 ghostty_dirs, :228 warp_dirs_from, :248 term_import_ghostty, :258 term_import_ghostty_theme, :269 term_import_warp
+  (a read under the user home, folder names per vendor docs, symlink containment, 400-file / 3 s scan budget), registered in lib.rs:547-549,
+  called from src/settings/terminalImportRead.ts, shown by src/settings/TerminalImport.tsx (mounted in TerminalPage.tsx:189).
+  Tests: cargo test --lib term_import -> 15 passed (term_099_*, term_100_*); src/settings/terminalImport*.test.ts and importSchemes.test.ts.
+(a) the sealed proxy on the app's own HTTP clients: PARTIAL. Clients found (grep reqwest::, ClientBuilder, ureq, tauri_plugin_updater):
+  | client | before | now |
+  | update check, update.rs update_check | proxy + bypass (T-324-b, resources/app_proxy.rs); HTTP/1 only for the update compat switch, httpProxyHttp1 ignored | httpProxyHttp1 also forces HTTP/1 |
+  | update download, update.rs update_download | inherited the check's route, so the bypass list was judged on the feed host, not the installer host | routes the installer host itself; a bad setting stops it |
+  | installer HEAD probe, update.rs installer_missing -> browser::head | the public-only icon client, no_proxy: went direct around a saved proxy | skipped while a proxy is saved (the download reports a missing installer) |
+  | artifact CDN script fetch, artifacts.rs fetch_script (library add, capture) | plain reqwest::Client, saved proxy ignored | saved proxy, bypass and HTTP/1 applied; a bad setting fetches nothing |
+  | icon clients, browser.rs icon_client_for | no_proxy on purpose (public-only name lookup cannot see past a proxy) | unchanged, browser lane; see T-323-c |
+  | the browser pane's pages | engine proxy from the sealed httpProxy (browser.rs:1036, BROW-033) | unchanged |
+  No ureq or other HTTP crate is in Cargo.toml.
+BUILT
+  new src-tauri/src/resources/app_http.rs: Plan {route, http1}, plan_from_store, plan_for(app,url), apply(plan, ClientBuilder), with_plan(app,url,builder), updater_fields; it builds no client itself (artifacts.rs keeps its one builder); six tests
+  (set_040_*, app_032_*), including app_032_no_command_returns_the_proxy_address (no #[tauri::command] in app_proxy.rs or app_http.rs; the stored
+  setting holds neither the password nor the host in the settings value or on disk).
+  The address is read only through secrets::read_setting in Rust; settings reach the page sealed, secret_status returns a bool.
+PATCHES (apply in this order, from the repo root; they touch other lanes' files and need the committed app_http.rs):
+  evidence/editor-T-323-b-1-resources-mod.patch      src-tauri/src/resources.rs (pub mod app_http;)
+  evidence/editor-T-323-b-2-update.patch             src-tauri/src/update.rs (check, download, HEAD probe, its two source tests)
+  evidence/editor-T-323-b-3-artifact-scripts.patch   src-tauri/src/artifacts.rs + capture.rs (fetch_script takes the app handle)
+  evidence/editor-T-323-b-4-privacy-audit.patch      scripts/privacy-audit.test.mjs (app_http.rs allowed for reqwest paths and pinned to build zero clients; without it app070 gains a finding)
+  No lib.rs change is needed (no new command).
+VERIFY (committed tree with the patch chain applied, then reverted)
+  cargo clippy --all-targets -- -D warnings: clean
+  cargo test: 2154 passed, 1 failed (s9_hook_hostile_size_time, a timing flake under load; the first full run also failed pty after696_an_update_stops_the_service; both pass alone)
+  pnpm tsc --noEmit: exit 0; pnpm vitest run: 570 files passed, 2 failed = app070 (known red, same 4 findings as before; mine cleared by patch 4) and outputFlood (flake, passes alone)
+LIVE PROOF (batched): set a proxy that logs requests, check for updates, then open an artifact from a page that loads a CDN script; both requests
+  reach the proxy; add the CDN host to the bypass list and the script fetch goes direct; clear the proxy and both go direct again.
