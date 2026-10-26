@@ -38,6 +38,11 @@ pub fn record(id: u32, container: isize) {
     }
 }
 
+/// Every recorded page container, as plain window numbers (after-list 746).
+pub fn containers() -> Vec<isize> {
+    CONTAINERS.lock().map(|c| c.values().copied().collect()).unwrap_or_default()
+}
+
 pub fn forget(id: u32) {
     if let Ok(mut c) = CONTAINERS.lock() {
         c.remove(&id);

@@ -74,6 +74,9 @@ pub mod notices;
 // T-241 (BROW-038), T-240 (BROW-035): the page's picture for drawing on and for grabbing an element.
 #[path = "browser_picture.rs"]
 pub mod picture;
+// after-list 746 (T-319-c, BROW-052): app drags pass across the pages.
+#[path = "browser_drag.rs"]
+pub mod drag;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -1213,6 +1216,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         // SAFETY: ParentWindow only writes the controller's parent window handle into `container`.
         if unsafe { pw.controller().ParentWindow(&mut container) }.is_ok() {
             holder::record(id, container.0 as isize);
+            drag::settle(container.0 as isize); // after-list 746: a page made mid-drag lets it through
         }
         // T-283 (BROW-043): the engine's browser process behind this page is recorded for clean-up.
         // SAFETY: CoreWebView2 hands back the page's engine; BrowserProcessId only writes the id.

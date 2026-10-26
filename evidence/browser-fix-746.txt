@@ -1,0 +1,52 @@
+after-list row 746 · T-319-c · BROW-052 Drags pass across browser pages
+lane/browser, Sonnet 5.5 builder. Status: FIXED (live proof pending).
+
+Cause
+  Each browser page is a child web view in its own container window (window class WRY_WEBVIEW, made
+  by wry). The container sits above the app's own view, so the system's "what is under the pointer"
+  test (also used for drag-and-drop targets) lands on the page, and a drag that began in the app
+  (tab, pane splitter, sidebar file) stops at the page's edge.
+
+Approach (smallest that works with public APIs; no new dependency)
+  While an app drag is under way every page container is DISABLED (EnableWindow FALSE). The system
+  skips a disabled window when it looks for the window under the pointer ("WindowFromPoint does not
+  retrieve a handle to a hidden or disabled window"), so the app's own view gets the drag. Unlike
+  hide(), the page stays painted: it looks unchanged. A drag ending any way re-enables the pages.
+  Option 1 (hide) was rejected as the primary because the page would vanish mid-drag; option 2
+  (overlay in the main view) needs the app's view to be above the pages, which it is not.
+  FALLBACK if the live proof shows a disabled container still takes the drag: in
+  browser_drag.rs::apply call each page's hide()/show() instead of set_enabled (one-line change).
+
+Files
+  src/browser/dragThrough.ts          state machine (gate) + window event wiring
+  src/browser/dragThroughInstall.ts   installs it once, imported by BrowserPane.tsx
+  src-tauri/src/browser_drag.rs       browser_drag_through command, dead-man timer, settle(), set_enabled
+  src-tauri/src/browser_holder.rs     containers() accessor
+  src-tauri/src/browser.rs            mod drag; drag::settle in browser_open's web view callback
+  evidence/browser-fix-746-lib.rs.patch   registers browser_drag_through (apply after the 719 and 151 patches)
+
+What counts as a drag, and every way it ends
+  starts: dragstart (tab, file, session rows: all HTML5 drags); a pointer press that moves 6 px
+          with the primary button down (pane splitters, panel moves, explorer pointer drags).
+  ends:   dragend, drop, pointerup, pointercancel (only ends the pointer kind), lostpointercapture,
+          Esc, window blur (not in the first 250 ms), window hidden, any mouse move with no button
+          down (a lost dragend), stopping the watcher, and app start-up (heals a reload).
+  Back end: the front end renews every 20 s while a drag lasts; the back end gives the pages back by
+          itself 60 s after the last call (dead-man), so a dead front end cannot leave a page dead.
+  A page made in the middle of a drag (browser_open) is disabled as it appears (settle).
+  Never touched: any window whose class is not WRY_WEBVIEW (the app's own window is safe).
+
+Tests
+  vitest src/browser/dragThrough.test.ts (gate edges, every ending, grace, renewals, wiring).
+  cargo test browser::drag (Through state, dead-man outdated by renewal, class guard).
+
+LIVE PROOF PENDING (resolver, dev app on scratch homes, never a real agent session)
+  1. Open two terminal panes and a browser pane on https://example.com in a split.
+  2. Drag a terminal tab over the browser pane's page area: the split drop target shows over the
+     page and the drop makes the split. Page still shows (not blank) during the drag.
+  3. Drag a file from the explorer across the browser page onto a terminal: the drop lands there.
+  4. Drag the splitter between panes across the page: it follows the pointer to the far side.
+  5. Start a tab drag, press Esc over the page; then click inside the page: the page takes the click
+     (not stuck disabled). Repeat releasing outside the window, and with alt-tab mid-drag.
+  6. Open a new browser tab while holding a drag (script/CLI): it also lets the drag through.
+  If step 2 shows the page still swallows the drag: use the FALLBACK above.
