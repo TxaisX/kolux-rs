@@ -49,3 +49,11 @@ describe("reportCrash / ReportButton", () => {
     expect(renderToStaticMarkup(createElement(ReportButton, { error: new Error("x"), request: () => {} }))).toBe('<button class="btn">Report</button>');
   });
 });
+
+describe("APP-038: a crash report is marked as one so the box copies the diagnostic bundle", () => {
+  it("passes crash = true to the request", () => {
+    const got: boolean[] = [];
+    reportCrash(new Error("bad"), (_t, crash) => got.push(crash === true));
+    expect(got).toEqual([true]);
+  });
+});
