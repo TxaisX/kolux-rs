@@ -115,6 +115,7 @@ import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
 import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
 import AgentsPanel from "./sessions/AgentsPanel";
+import { BELL_NOTE } from "./terminal/bellNote";
 import { FOLDER_TAB_KEY, offeredTabs, rememberTab, tabFor } from "./sessions/folderTabs";
 import { useWorkspaceKind } from "./sessions/useWorkspaceKind";
 import { AttachedWorktreesTab, FolderChecksTab } from "./projects/AttachedTabs.tsx"; // the extension: attachedTabs.ts (logic) differs only in case
@@ -1705,9 +1706,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (typedInRunTab(runTabs.current, focusedNow.current, inside)) runTabs.current = touchRunTab(runTabs.current, focusedNow.current);
     };
     document.addEventListener("keydown", typed, true);
-    const off = listen<{ id: number; code?: number | null }>("terminal-exit", (e) => {
+    const off = listen<{ id: number; code?: number | null; session?: string }>("terminal-exit", (e) => {
       const key = paneOfTerminal(ptys.current, e.payload.id);
       if (key === null) return;
+      const printed = e.payload.session; // T-066-d: the id an id-only agent printed in its own resume hint; a hook's id is never replaced
+      if (printed) setPanes((ps) => ps.map((p) => (p.key === key && !p.session ? { ...p, session: printed } : p)));
       setupExits.current[key]?.(e.payload.code ?? null);
       const ended = runTabEnded(runTabs.current, key, pinnedNow.current.has(key));
       runTabs.current = ended.tabs;
@@ -3204,7 +3207,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onIdentity={(l) => setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }))}
-                    onBell={() => noticed(p, "rang the bell")}
+                    onBell={() => noticed(p, BELL_NOTE.what, "", BELL_NOTE.gate)}
                     unread={unreadPanes.has(p.key)}
                     onPty={(id, account) => {
                       ptys.current[p.key] = id;
