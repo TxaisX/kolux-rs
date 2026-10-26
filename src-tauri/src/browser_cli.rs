@@ -1340,7 +1340,7 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
             .map_err(|m| Fail::new("not_found", m))?;
             profiles::save(&root, &s).map_err(fail)?;
             tell(PROFILE_EVENT, json!({ "page": id, "profile": p.id })).map_err(fail)?;
-            json!({ "page": id, "profile": p, "summary": format!("page {id} uses profile {} from its next open (the pane was told)", p.id) })
+            json!({ "page": id, "profile": p, "summary": format!("page {id} uses profile {}; the pane reopens its page there", p.id) })
         }
         "browser.profiles-list" => {
             let (_, s) = store()?;
@@ -1355,9 +1355,17 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
         }
         "browser.profiles-delete" => {
             let (root, mut s) = store()?;
-            let p = profiles::delete(&mut s, &text("profile").unwrap_or_default()).map_err(|m| if m.contains("default") { args(m) } else { Fail::new("not_found", m) })?;
+            let id = text("profile").unwrap_or_default();
+            let users: Vec<&String> = s.tabs.iter().filter(|(_, v)| **v == id).map(|(k, _)| k).collect();
+            let users: Vec<u32> = users.into_iter().filter_map(|k| k.parse().ok()).collect();
+            let p = profiles::delete(&mut s, &id).map_err(|m| if m.contains("default") { args(m) } else { Fail::new("not_found", m) })?;
             profiles::save(&root, &s).map_err(fail)?;
-            json!({ "profile": p, "destructive": true, "summary": format!("profile {} deleted; its tabs fall back to the default from their next open", p.id) })
+            // after-list 153: its tabs reopen on the default now; the data folder goes once none of them is open in it.
+            for page in users {
+                tell(PROFILE_EVENT, json!({ "page": page, "profile": profiles::DEFAULT })).map_err(fail)?;
+            }
+            profiles::forget_data(&p.id);
+            json!({ "profile": p, "destructive": true, "summary": format!("profile {} deleted; its tabs reopen on the default and its data folder is removed once none is open in it", p.id) })
         }
         _ => return Ok(None),
     };
