@@ -291,7 +291,7 @@ Rules: the notice names the account whose sign-in lapsed; the button starts the 
 Acceptance:
   - [x] Let a saved Claude account's sign-in expire → the notice appears; finish signing in → it
         goes away. (cards; evidence/cards-STAT-046.txt)
-  - [x] Two saved accounts, one expired → only the expired one is named. (cards; evidence/cards-STAT-046.txt)
+  - [ ] Two saved accounts, one expired → only the expired one is named.
 Compat: —
 Source: D-04-046
 
