@@ -156,7 +156,7 @@ Rules: the states are pending, ready, dispatched, completed, failed and blocked;
   after its process has already died is turned away, and its kept terminal is reconciled instead.
 Acceptance:
   - [x] Mark a dispatched task completed → the task is completed and its worker shows as settled. (cards; evidence/cards-ORCH-012.txt)
-  - [ ] Two updates to one task at the same moment → exactly one wins and the state stays valid.
+  - [x] Two updates to one task at the same moment → exactly one wins and the state stays valid. (cards; evidence/cards-ORCH-012.txt)
 Compat: `kolux orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked [--result <text>] [--json]`.
 Source: D-08-012
 
@@ -170,7 +170,7 @@ Rules: stopping never deletes the worktree and never closes the setup terminal o
   rather than exited; if the process ends during its own stop, the worker settles once and cleanly;
   a terminal the user has typed into is left open (see ORCH-036)
 Acceptance:
-  - [ ] Stop a running worker → its agent terminal ends and the worktree folder is still on disk.
+  - [x] Stop a running worker → its agent terminal ends and the worktree folder is still on disk. (cards; evidence/cards-ORCH-022.txt)
   - [x] Cut the daemon connection, then stop the worker → the receipt says unverifiable, not
       stopped. (cards; evidence/cards-ORCH-022.txt)
 Compat: `kolux orchestration worker-stop --dispatch <id> [--json]`.

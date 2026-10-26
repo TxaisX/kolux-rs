@@ -195,7 +195,7 @@ Rules: only the weekly window ever appears here, never the 5-hour one; a provide
 Acceptance:
   - [x] Claude and Codex both signed in → both listed with percent left; Claude at 85% used shows
         15% left in yellow. (T-041-a, Claude by a posted report, Codex by unit test)
-  - [ ] Switch off the Codex usage item → Codex drops out of the pill. (the item list is T-148)
+  - [x] Switch off the Codex usage item → Codex drops out of the pill. (the item list is T-148) (cards; evidence/cards-USAGE-008.txt)
   - [x] Hover → the weekly limit and a countdown to its reset. (T-041-a)
 Compat: —
 Source: D-06-008
@@ -644,8 +644,8 @@ Rules: taken out when usage moved to the top pill and the pane headers; the part
   are still gathered.
 Acceptance:
   - [ ] Default build → the status bar carries no per-provider usage segments or account menus.
-  - [ ] Turn a provider's usage item off → it only drops out of the top pill (USAGE-008); nothing
-        else changes.
+  - [x] Turn a provider's usage item off → it only drops out of the top pill (USAGE-008); nothing
+        else changes. (cards; evidence/cards-USAGE-029.txt)
 Compat: —
 Decision: H: default skip
 Source: D-06-029
