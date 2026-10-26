@@ -46,9 +46,11 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod login_env;
 mod lifecycle;
 mod menu;
 mod bulk;
+mod models;
 mod names;
 mod newproject;
 mod notifications;
@@ -234,6 +236,8 @@ pub fn run() {
             let job_ok = procs::app_job_start();
             let dir = app.path().app_data_dir()?;
             diag::set_dir(&dir);
+            // T-182 (APP-020, macOS and Linux): the login shell's environment, read in the background.
+            login_env::start();
             // T-283 (BROW-043): an earlier run's leftover browser helpers are closed, on a thread of
             // its own so a hanging listing never holds up start-up.
             browser::helpers::sweep_at_start(&dir);
@@ -639,6 +643,7 @@ pub fn run() {
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
+            models::agent_models,
             agents::agent_start_line,
             agents::agent_prompt_send,
             agents::open_install_page,
@@ -930,9 +935,23 @@ pub fn run() {
         .build(context)
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
-            // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                browser::crash::quitting();
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                use std::sync::atomic::Ordering::SeqCst;
+                // T-182-e (APP-006): "a quit under way" is any exit the app asked for (quit, restart, the
+                // unanswered-close fallback); remembered, so windows closing on the way out never hold it open.
+                if code.is_some() {
+                    lifecycle::QUIT_UNDER_WAY.store(true, SeqCst);
+                }
+                if lifecycle::keeps_running(cfg!(target_os = "macos"), *code, lifecycle::QUIT_UNDER_WAY.load(SeqCst)) {
+                    api.prevent_exit();
+                } else {
+                    // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
+                    browser::crash::quitting();
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = &event {
+                tools::reopen_main(app);
             }
             if let tauri::RunEvent::Exit = event {
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
