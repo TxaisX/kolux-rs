@@ -167,7 +167,7 @@ Rules: the age reads just now in the first minute, then minutes ago; it refreshe
   glow clears once the pane is focused; the glow is static (no animation) to avoid constant
   repaints; age uses the same finish time as the Board and sidebar.
 Acceptance:
-  - [x] A pane that finished 3 minutes ago, unseen, shows Done with 3m and a glow. (cards; evidence/cards-TERM-023.txt)
+  - [ ] A pane that finished 3 minutes ago, unseen, shows Done with 3m and a glow.
   - [x] Clicking into it removes the glow. (cards; evidence/cards-TERM-023.txt)
 Compat: —
 Source: D-03-023
