@@ -60,6 +60,8 @@ pub mod orchestration;
 mod foreground;
 pub mod procs;
 mod protected;
+#[cfg(test)]
+mod s9_fuzz_tests;
 mod protected_custom;
 mod ports;
 mod labels;
