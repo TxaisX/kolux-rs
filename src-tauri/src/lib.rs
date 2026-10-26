@@ -26,7 +26,7 @@ mod diag;
 mod editor_drafts;
 mod editor_search;
 pub mod fence;
-mod files;
+pub mod files;
 pub mod final_save;
 mod fsops;
 mod fonts;
