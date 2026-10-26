@@ -50,21 +50,13 @@ fn set_aside<T: Serialize>(store: &Store, key: &str, text: &str, fresh: &T) -> R
 }
 
 #[cfg(test)]
-/// Test aid: every value kept aside for `key` in the last few seconds.
+/// Test aid: every value kept aside for `key`, read straight from the store's table. (It used to
+/// probe the last 5 s of millisecond names one query each, so a PC slow enough to take 5 s over
+/// the first call missed the copy on the second.)
 pub(crate) fn asides(store: &Store, key: &str) -> Vec<String> {
-    let base = |ms: u128| format!("{key}.corrupt-{ms}");
-    // The aside name carries the time it was made; look back over the last few seconds.
-    let now = now_ms();
-    let mut out = Vec::new();
-    for ms in now.saturating_sub(5_000)..=now {
-        for n in 1..4 {
-            let k = if n == 1 { base(ms) } else { format!("{}-{n}", base(ms)) };
-            if let Some(v) = store.get(&k).unwrap() {
-                out.push(v);
-            }
-        }
-    }
-    out
+    let conn = rusqlite::Connection::open(store.dir().join("state.db")).unwrap();
+    let mut q = conn.prepare("SELECT value FROM kv WHERE key LIKE ?1 ORDER BY key").unwrap();
+    q.query_map([format!("{key}.corrupt-%")], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
 }
 
 #[cfg(test)]
