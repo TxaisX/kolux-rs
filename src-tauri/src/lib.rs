@@ -279,6 +279,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             dev_inject()?;
             let store = Store::open(&prep.open_dir)?;
+            store.stamp_look(); // row 785: the look and mode are written now, not left to a page read that may time out
             // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
             // lock or a lock that cannot be opened is logged; the latter still recovers).
             skill_delete::startup_recover(&dir);

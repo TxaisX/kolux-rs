@@ -29,6 +29,28 @@ impl Store {
         Ok(Store { conn, settings_path: dir.join("settings.json"), read_failed: AtomicBool::new(false), fallback_notice: std::sync::Mutex::new(None), fallback_told: AtomicBool::new(false) })
     }
 
+    /// Row 785: a settings file that lacks the look or the mode gets them, once, as the page
+    /// would (SET-037, T-418: Classic for a profile that had settings, New for an empty one, Dark).
+    /// Called once at startup, before the window, so it never waits on the page's first read, which a
+    /// slow start abandons and leaves for the next launch. A file that has both is not written; no file or an unreadable one is left alone.
+    pub fn stamp_look(&self) {
+        let Ok(Read::File(_, now)) = self.read_file() else { return };
+        let Some(obj) = now.as_object() else { return };
+        let has = |key: &str, ok: &[&str]| obj.get(key).and_then(|v| v.as_str()).is_some_and(|v| ok.contains(&v));
+        let mut set = serde_json::Map::new();
+        if !has("uiLook", &["classic", "new"]) {
+            set.insert("uiLook".into(), (if obj.is_empty() { "new" } else { "classic" }).into());
+        }
+        if !has("appearanceMode", &["light", "dark", "system"]) {
+            set.insert("appearanceMode".into(), "dark".into());
+        }
+        if !set.is_empty() {
+            if let Err(e) = self.save_settings(&patched(now, &set, &[])) {
+                eprintln!("kolux: could not write the look and mode into settings.json: {e}");
+            }
+        }
+    }
+
     /// The profile folder the store lives in.
     pub fn dir(&self) -> PathBuf {
         self.settings_path.parent().map(Path::to_path_buf).unwrap_or_default()
@@ -439,5 +461,73 @@ mod tests {
         drop(s);
         drop(store);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A settings.json in a fresh profile folder, and the store opened over it.
+    fn open_over(name: &str, file: &[u8]) -> (PathBuf, Store) {
+        let dir = temp_dir(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("settings.json"), file).unwrap();
+        let s = Store::open(&dir).unwrap();
+        s.stamp_look();
+        (dir, s)
+    }
+
+    fn done(dir: PathBuf, s: Store) {
+        drop(s);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn row785_a_file_the_app_saved_with_look_and_mode_is_not_touched_at_startup() {
+        let dir = temp_dir("r785-same");
+        let s = Store::open(&dir).unwrap();
+        s.save_settings(&serde_json::json!({ "uiLook": "classic", "appearanceMode": "light", "theme": "x" })).unwrap();
+        let saved = fs::read(dir.join("settings.json")).unwrap();
+        let baks = fs::read_dir(&dir).unwrap().count();
+        drop(s);
+        let s = Store::open(&dir).unwrap();
+        s.stamp_look();
+        assert_eq!(fs::read(dir.join("settings.json")).unwrap(), saved, "same bytes");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), baks, "no new file beside it");
+        done(dir, s);
+    }
+
+    #[test]
+    fn row785_an_old_file_without_look_and_mode_gets_them_once_at_startup_and_then_stays_put() {
+        let (dir, s) = open_over("r785-old", br#"{"confirmCloseRunning": false, "agentStatusHooks": true}"#);
+        let now = s.settings();
+        assert_eq!((now["uiLook"].as_str(), now["appearanceMode"].as_str(), now["confirmCloseRunning"].as_bool()), (Some("classic"), Some("dark"), Some(false)));
+        let first = fs::read(dir.join("settings.json")).unwrap();
+        drop(s);
+        let s = Store::open(&dir).unwrap();
+        s.stamp_look();
+        assert_eq!(fs::read(dir.join("settings.json")).unwrap(), first, "the next start rewrites nothing");
+        done(dir, s);
+    }
+
+    #[test]
+    fn row785_an_empty_file_starts_new_and_a_chosen_look_is_kept() {
+        let (dir, s) = open_over("r785-empty", b"{}");
+        let now = s.settings();
+        assert_eq!((now["uiLook"].as_str(), now["appearanceMode"].as_str()), (Some("new"), Some("dark")));
+        done(dir, s);
+        let (dir, s) = open_over("r785-kept", br#"{"uiLook": "new", "other": 1}"#);
+        let now = s.settings();
+        assert_eq!((now["uiLook"].as_str(), now["appearanceMode"].as_str(), now["other"].as_i64()), (Some("new"), Some("dark"), Some(1)));
+        done(dir, s);
+    }
+
+    #[test]
+    fn row785_no_file_and_a_corrupt_file_are_left_alone() {
+        let dir = temp_dir("r785-none");
+        let s = Store::open(&dir).unwrap();
+        s.stamp_look();
+        assert!(!dir.join("settings.json").exists(), "a fresh profile gets no file at startup");
+        done(dir, s);
+        let (dir, s) = open_over("r785-corrupt", b"{ half a file");
+        assert_eq!(fs::read(dir.join("settings.json")).unwrap(), b"{ half a file", "never overwritten");
+        assert!(!dir.join("settings.json.bak").exists());
+        done(dir, s);
     }
 }

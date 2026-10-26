@@ -19,6 +19,7 @@
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { saveChanged } from "./settings/saveChanged";
+import { applySetting } from "./projects/settingWrite";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -504,10 +505,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   const putNote = (dir: string, n: LineNote) => saveNotes(dir, [...notesFor(dir).filter((x) => x.id !== n.id), n]);
   const dropNotes = (dir: string, ids: string[]) => saveNotes(dir, notesFor(dir).filter((x) => !ids.includes(x.id)));
+  // Row 794: built on the latest settings, so writes before the next render (Clear filters, then a tick) all land.
   const saveSetting = (key: string, value: unknown) => {
-    const next = { ...settings, [key]: value };
+    const { was, next } = applySetting(settingsRef, key, value);
     setSettings(next);
-    saveChanged(settings, next).catch((err) => setNotice(String(err)));
+    saveChanged(was, next).catch((err) => setNotice(String(err)));
   };
   // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
   // VIEW-057 (T-146-g): a folder workspace (a project without Git) offers Attached and PR Checks instead of the git tabs.
@@ -520,10 +522,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const explorerOpen = right.open && right.tab === "explorer";
   const scmOpen = right.open && right.tab === "scm";
   const saveRight = (patch: Partial<Record<keyof typeof RIGHT_KEYS, unknown>>) => {
-    const next = { ...settings };
+    const was = settingsRef.current;
+    const next = { ...was };
     for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
+    settingsRef.current = next;
     setSettings(next);
-    saveChanged(settings, next).catch((err) => setNotice(String(err)));
+    saveChanged(was, next).catch((err) => setNotice(String(err)));
   };
   const showRight = (tab: RightTab) => {
     setScreen("terminals");
@@ -1568,7 +1572,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     if (!read && !settingsRead) return;
     const l = layoutOf(panes, activeTab, focused, activeDir, stacked, { pinned, colors: tabColors });
     if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) === JSON.stringify(l)) return;
-    setSettings({ ...settings, [LAYOUT_FIELD]: l });
+    const next = { ...settingsRef.current, [LAYOUT_FIELD]: l };
+    settingsRef.current = next;
+    setSettings(next);
     layoutSaver.set(l);
   }, [panes, activeTab, focused, activeDir, stacked, pinned, tabColors]);
 
