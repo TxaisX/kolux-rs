@@ -8,6 +8,8 @@ export const STATUS_ITEMS = [
   { id: "agents", label: "Agents running" },
   { id: "awake", label: "Keep awake" },
   { id: "ports", label: "Ports" },
+  { id: "pill-claude", label: "Claude usage in the top pill" },
+  { id: "pill-codex", label: "Codex usage in the top pill" },
 ] as const;
 export type StatusItem = (typeof STATUS_ITEMS)[number]["id"];
 export const FIELDS = { visible: "statusBarVisible", hidden: "statusBarHidden" } as const;
@@ -21,3 +23,11 @@ export function readStatusBar(s: Record<string, unknown>): { visible: boolean; h
 }
 
 export const toggleItem = (hidden: string[], id: string) => (hidden.includes(id) ? hidden.filter((h) => h !== id) : [...hidden, id]);
+
+/** USAGE-008 / USAGE-029: which providers the top usage pill draws. A usage item switched off only
+ * drops that provider from the pill; the rest of the status bar is untouched. */
+export function usagePills(i: { claudeInstalled: boolean; claudeWeekly: boolean; codexInstalled: boolean; codexAccount: boolean; codexFigure: boolean; hidden: string[] }) {
+  const claude = i.claudeInstalled && !i.hidden.includes("pill-claude");
+  const codex = i.codexInstalled && i.codexAccount && !i.hidden.includes("pill-codex");
+  return { claude, codex, any: (claude && i.claudeWeekly) || (codex && i.codexFigure) };
+}
