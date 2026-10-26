@@ -77,6 +77,9 @@ pub mod picture;
 // after-list 746 (T-319-c, BROW-052): app drags pass across the pages.
 #[path = "browser_drag.rs"]
 pub mod drag;
+// T-316-b (EDIT-018): a markdown note printed to a PDF by a hidden page.
+#[path = "browser_pdf.rs"]
+pub mod pdf;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
