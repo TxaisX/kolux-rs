@@ -38,7 +38,7 @@ export const seed = (app, settings) => async () => {
   await app.run("python", ["-I", "-c", code, join(app.paths.profile, "state.db"), json]);
 };
 
-const COUNTS = `({ proj: document.querySelectorAll("aside.sidebar .proj").length, sess: document.querySelectorAll("aside.sidebar .sess").length, now: Math.round(performance.now()) })`;
+const COUNTS = `({ proj: document.querySelectorAll("aside.sidebar .proj").length, sess: document.querySelectorAll("aside.sidebar .sess").length, main: document.querySelectorAll("aside.sidebar button.branch").length, now: Math.round(performance.now()) })`;
 
 // In the page: per-step cost of scrolling .sb-list top to bottom in `steps` steps (scroll + forced layout, and the rAF gap when
 // frames are delivered at all), and the same for hiding / showing projects through the filter checkboxes.
@@ -60,6 +60,43 @@ const SCROLL_JS = (steps) => `(async () => {
     last = t;
   }
   return { max, scrollHeight: list.scrollHeight, sync: sync.map((x) => Math.round(x * 10) / 10), gaps: gaps.map((x) => Math.round(x * 10) / 10), rafWorks: gaps.length > 0 };
+})()`;
+
+// In the page: open the "Group and sort the list" panel, then for each project name tick its "show <name>" box (the filter
+// narrows the list) and clear the filters again; per change: ms until the .proj count moved, and the longest rAF gap meanwhile.
+const FILTER_JS = (names) => `(async () => {
+  const count = () => document.querySelectorAll("aside.sidebar .proj").length;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const open = document.querySelector('aside.sidebar button[title="Group and sort the list"]');
+  if (!open) return { error: "no filter button" };
+  if (open.getAttribute("aria-pressed") !== "true") open.click();
+  await sleep(300);
+  const settle = async (action, want) => {
+    const before = count();
+    let worst = 0, last = performance.now(), frames = 0, stop = false;
+    const tick = () => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; frames++; if (!stop) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    const t0 = performance.now();
+    action();
+    let ms = -1;
+    while (performance.now() - t0 < 5000) {
+      if (want(count(), before)) { ms = performance.now() - t0; break; }
+      await sleep(5);
+    }
+    await sleep(150);
+    stop = true;
+    return { before, after: count(), ms: Math.round(ms * 10) / 10, worstGap: Math.round(worst * 10) / 10, frames };
+  };
+  const out = [];
+  for (const name of ${JSON.stringify(names)}) {
+    const box = document.querySelector('input[aria-label="show ' + name + '"]');
+    if (!box) { out.push({ name, error: "no checkbox" }); continue; }
+    const narrow = await settle(() => box.click(), (n, b) => n !== b);
+    const clear = document.querySelector('button[aria-label="clear filters"]');
+    const wide = clear && !clear.disabled ? await settle(() => clear.click(), (n, b) => n > b) : { error: "clear filters is disabled" };
+    out.push({ name, narrow, wide });
+  }
+  return { rows: out, boxes: document.querySelectorAll("[data-filter-projects] input[type=checkbox]").length };
 })()`;
 
 export async function run({ launch, checks }) {
@@ -88,12 +125,21 @@ export async function run({ launch, checks }) {
   }
   const full = got ? await app.evalJs(COUNTS) : await app.evalJs(COUNTS).catch(() => ({}));
   checks.add(`sidebar shows all ${PROJECTS} projects after a page load`, `${PROJECTS} .proj rows within ${SIDEBAR_BAR_MS} ms of navigation start`, got ? `${got.now} ms since navigation start (${got.proj} projects, ${got.sess} worktree rows at that moment; polled ${polls}x, cadence ~150 ms)` : `NEVER (counts ${JSON.stringify(full)})`, !!got && got.now <= SIDEBAR_BAR_MS);
+  // The panel scans projects one after another (two calls each) and shows no worktree row until the last is done.
+  // Same two calls per project the panel makes, started in the page and polled; the panel re-scans every 5 s and drops a scan another one overtook.
+  await app.evalJs(`(() => { window.__scan = null; const ids = ${JSON.stringify(Array.from({ length: PROJECTS }, (_, k) => `p-${pad(k + 1)}`))}; const t0 = performance.now(); (async () => { for (const id of ids) { await window.__TAURI_INTERNALS__.invoke("workspace_list", { projectId: id }); await window.__TAURI_INTERNALS__.invoke("workspace_unseen", { projectId: id }); } window.__scan = Math.round(performance.now() - t0); })(); return 1; })()`);
+  const peek = async () => { const r = await app.evalJs("window.__scan"); return r && typeof r === "object" && r.result ? r.result.value : r; };
+  await app.waitFor("the scan", async () => (await peek()) || null, 240000, 1000).catch(() => null);
+  const scanMs = await peek();
+  checks.add("one full worktree scan of 150 projects (workspace_list + workspace_unseen each, one after another)", "finishes inside the panel's 5000 ms refresh interval, else its result is dropped when the next scan starts", typeof scanMs === "number" ? `${scanMs} ms (${(scanMs / PROJECTS).toFixed(0)} ms per project)` : `not finished in 240 s (page said ${JSON.stringify(scanMs)})`, typeof scanMs === "number" && scanMs < 5000);
   const settled = await app.waitFor("the worktree rows", async () => {
     const c = await app.evalJs(COUNTS);
-    return c.sess >= PROJECTS * 2 ? c : null;
-  }, 60000, 500).catch(() => null);
+    return c.main >= PROJECTS && c.sess >= PROJECTS ? c : null;
+  }, 120000, 1000).catch(() => null);
   const counts = await app.evalJs(COUNTS);
-  checks.add("every worktree is listed (main checkout + one extra per project)", `${PROJECTS * 2} .sess rows`, `${counts.sess} rows, ${counts.proj} projects${settled ? `; reached ${settled.now} ms after navigation start` : ""}`, counts.sess >= PROJECTS * 2);
+  const sample = await app.invoke("workspace_list", { projectId: "p-001" }).catch((e) => `ERR ${e.message}`);
+  checks.note(`workspace_list p-001 returned: ${JSON.stringify(sample).slice(0, 500)}`);
+  checks.add("every worktree is listed (a main-checkout row and one extra worktree row per project)", `${PROJECTS} button.branch rows + ${PROJECTS} .sess rows`, `${counts.main} main rows + ${counts.sess} worktree rows, ${counts.proj} projects${settled ? `; reached ${settled.now} ms after navigation start` : " (not reached within 120 s)"}`, counts.main >= PROJECTS && counts.sess >= PROJECTS);
   const scroll = await app.evalJs(SCROLL_JS(60));
   if (scroll.error) checks.add("sidebar list scrolls", "scrolls", scroll.error, false);
   else {
@@ -101,6 +147,18 @@ export async function run({ launch, checks }) {
     const g = stats(scroll.gaps);
     checks.add("scrolling the sidebar: scroll + layout cost per step (60 steps top to bottom)", `p95 < ${FRAME_BAR_MS} ms, max < ${FRAME_BAR_MS * 2} ms`, `p50 ${fmt(s.p50, 1)}, p95 ${fmt(s.p95, 1)}, max ${fmt(s.max, 1)} ms; scrollHeight ${scroll.scrollHeight}`, s.p95 < FRAME_BAR_MS && s.max < FRAME_BAR_MS * 2);
     checks.add("scrolling the sidebar: frame gap (requestAnimationFrame to the next)", `p95 < ${FRAME_BAR_MS} ms`, scroll.rafWorks ? `p50 ${fmt(g.p50, 1)}, p95 ${fmt(g.p95, 1)}, max ${fmt(g.max, 1)} ms over ${g.n} frames` : "no frames delivered (window occluded off-screen); the per-step cost above is the reading", !scroll.rafWorks || g.p95 < FRAME_BAR_MS);
+  }
+  const filt = await app.evalJs(FILTER_JS(["proj-001", "proj-075", "proj-150"])).catch((e) => ({ error: e.message }));
+  if (filt.error) checks.add("project filter", "opens and narrows the list", filt.error, false);
+  else {
+    checks.note(`filter panel lists ${filt.boxes} project checkboxes; rows ${JSON.stringify(filt.rows).slice(0, 700)}`);
+    const steps = filt.rows.flatMap((r) => (r.error ? [] : [r.narrow, r.wide])).filter((x) => x && !x.error);
+    const apply = steps.map((x) => x.ms).filter((x) => x >= 0);
+    const gaps = steps.map((x) => x.worstGap);
+    const fa = stats(apply), fg = stats(gaps);
+    checks.add("filtering: every change moved the list (3 narrow + 3 clear)", "6 of 6 changed the .proj count", `${apply.length} of ${filt.rows.length * 2}${steps.some((x) => x.ms < 0) ? " (some did not move within 5 s)" : ""}; counts ${steps.map((x) => `${x.before}->${x.after}`).join(" ")}`, apply.length === filt.rows.length * 2);
+    checks.add("filtering: time until the list changes", `max < 500 ms (my bar; the plan names only per-frame cost)`, apply.length ? `p50 ${fmt(fa.p50, 1)}, max ${fmt(fa.max, 1)} ms over ${fa.n} changes` : "no change observed", apply.length > 0 && fa.max < 500);
+    checks.add("filtering: longest frame gap while the list changes", `max < ${FRAME_BAR_MS} ms`, gaps.length ? `p50 ${fmt(fg.p50, 1)}, max ${fmt(fg.max, 1)} ms over ${fg.n} changes` : "none", gaps.length > 0 && fg.max < FRAME_BAR_MS);
   }
   const mem = await snapshot(app);
   checks.note(`app + web view processes: ${mem.filter((p) => /kolux-rs|msedgewebview2/i.test(p.name)).map((p) => `${p.name} ${Math.round(p.ws / 1048576)} MB`).join(", ")}`);
