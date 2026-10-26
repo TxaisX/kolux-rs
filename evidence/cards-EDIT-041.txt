@@ -1,0 +1,3 @@
+cmd: pnpm exec vitest run src/inbox/__cards__/EDIT-041.test.ts  (scratch HOME/CLAUDE_CONFIG_DIR/CODEX_HOME under G:\Temp\cards-v3)
+box 2: src/inbox/__cards__/EDIT-041.test.ts::EDIT-041 box 2 > a permission whose terminal has exited: the only button is Answer in Code, no inline answers, the prompt is never read; and ::the same permission with a live terminal is read and offers its answers inline, plus the Answer in Code button — pass line: Test Files 1 passed (1), Tests 2 passed (2)
+box 1: not ticked (App.tsx openPane glue: setScreen/setActiveDir/setFocused need the mounted app; LIVE)
