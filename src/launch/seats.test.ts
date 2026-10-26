@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, saveShape, renameShape, restoreShape, SHAPE_LIMITS, type SavedShape, type Seat, applyLineup, FAST_SETTINGS, lineupAgents, lineupOf, offeredLineup, seatArgs, removeTarget } from "./seats";
+import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, saveShape, renameShape, restoreShape, SHAPE_LIMITS, type SavedShape, type Seat, applyLineup, FAST_SETTINGS, lineupAgents, lineupOf, offeredLineup, seatArgs, removeTarget, setDiscovered } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -178,4 +178,26 @@ test("SESS-021: a lineup keeps shape, folders and each seat's agent and model, n
   const back = applyLineup(l, ["claude"]);
   expect(back.shape).toBe("pair");
   expect(back.seats).toEqual([{ agent: null, model: null, role: "builder" }, { agent: "claude", model: "opus", role: "reviewer" }]);
+});
+
+test("SESS-029: Grok's discovered list replaces the built-in one and offers efforts up to extra-high, flag after the model", () => {
+  setDiscovered("grok", [{ id: "grok-5-preview", label: "Grok 5 Preview" }]);
+  const ids = modelsFor("grok").map((m) => m.id);
+  expect(ids).toEqual(["grok-5-preview", "default"]);
+  expect(modelsFor("grok")[0].efforts).toEqual(["low", "medium", "high", "xhigh"]);
+  expect(modelsFor("grok")[0].defaultEffort).toBe("high");
+  expect(seatArgs({ agent: "grok", model: "grok-5-preview", effort: "xhigh" } as never)).toEqual(["--model", "grok-5-preview", "--effort", "xhigh"]);
+  expect(seatArgs({ agent: "grok", model: "grok-5-preview" } as never)).toEqual(["--model", "grok-5-preview"]);
+});
+
+test("SESS-029: an unreadable or empty answer leaves the list as it was", () => {
+    const before = modelsFor("cursor").map((m) => m.id);
+  setDiscovered("cursor", null);
+  setDiscovered("cursor", []);
+  expect(modelsFor("cursor").map((m) => m.id)).toEqual(before);
+});
+
+test("SESS-029: Cursor's discovered models join after its built-in ones, each once", () => {
+  setDiscovered("cursor", [{ id: "auto", label: "Auto" }, { id: "composer-2", label: "Composer 2" }]);
+  expect(modelsFor("cursor").map((m) => m.id)).toEqual(["auto", "sonnet-4.5", "gpt-5", "composer-2", "default"]);
 });

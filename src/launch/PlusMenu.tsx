@@ -7,7 +7,8 @@
 // Codex and Grok lead and the rest fold behind "Show more agents" (folded again on each open); the
 // search box reaches every installed agent; a blank-terminal row and "Manage agents" sit at the foot.
 // SESS-039: opened from a pane with a worktree folder, it also offers "Open in <editor>" for each
-// outside editor installed (editors.ts).
+// outside editor installed (editors.ts). TERM-042: with `entry` the menu opens with an entry box for a
+// URL, a file or an open tab; TERM-043: on a local Windows client a "Terminal" row opens the shell choice.
 import { useState, type CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import AgentMark from "../marks/AgentMark";
@@ -15,6 +16,11 @@ import { Kbd, useLabel } from "../keys/KeymapContext";
 import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
 import { openIn, openLabel, openTitle, useEditors, type Editor } from "./editors";
 import { markFor } from "./paneMark";
+import NewTabEntryBox from "./NewTabEntryBox";
+import type { EntryTarget } from "./newTabEntryRun";
+import ShellMark from "../terminal/ShellMark";
+import { shellIconOf, windowsShellMenu, type ShellEntry } from "../terminal/shellChoice";
+import "./plusMenuExtras.css";
 
 export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
 
@@ -56,9 +62,24 @@ type Props = {
   dir?: string;
   /** The editors to offer; looked up from the Rust side when left out. */
   editors?: Editor[];
+  /** TERM-042: the entry box; `tabs` are the open tabs it can jump to, `onRun` opens what a row names. */
+  entry?: { tabs: { key: number; name: string }[]; onRun: (target: EntryTarget) => void };
+  /** TERM-043: the installed shells; the choice shows on a local Windows client only. */
+  shells?: ShellEntry[];
+  onShell?: (shell: ShellEntry) => void;
+  /** False for a remote client (the shell choice is local only); `windows` is for tests. */
+  local?: boolean;
+  windows?: boolean;
 };
 
-export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault, onChoose, onClose, onTerminal, onManage, busy = false, style, allOff = false, pass, onRefresh, dir, editors }: Props) {
+function ShellGlyph({ program }: { program: string }) {
+  const icon = shellIconOf(program);
+  return icon === "shell" ? <VendorMark agent="shell" size={13} /> : <ShellMark icon={icon} />;
+}
+
+export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault, onChoose, onClose, onTerminal, onManage, busy = false, style, allOff = false, pass, onRefresh, dir, editors, entry, shells = [], onShell, local = true, windows }: Props) {
+  const [shellsOpen, setShellsOpen] = useState(false);
+  const shellChoices = onShell ? windowsShellMenu(shells, { windows: windows ?? (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows")), local }) : [];
   const [query, setQuery] = useState("");
   const looked = useEditors(!!dir && editors === undefined);
   const outside = dir ? (editors ?? looked) : [];
@@ -78,12 +99,13 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
       <div className="menu-backdrop" onClick={onClose} aria-hidden="true" />
       <div className="menu" role="menu" aria-label="New session" style={style}>
         <div className="menu-title">New session</div>
+        {entry && <NewTabEntryBox tabs={entry.tabs} onRun={entry.onRun} onClose={onClose} />}
         {installed > 3 && (
           <input
             className="field menu-search"
             placeholder="Search agents"
             aria-label="Search agents"
-            autoFocus
+            autoFocus={!entry}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -134,6 +156,26 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
             </span>
             <span className="name">Blank terminal</span>
           </button>
+        )}
+        {shellChoices.length > 1 && (
+          <>
+            <button role="menuitem" className="menu-item" aria-haspopup="menu" aria-expanded={shellsOpen} onClick={() => setShellsOpen((o) => !o)} title="Pick which shell the new terminal runs">
+              <span className="agent-mark">
+                <VendorMark agent="shell" size={13} />
+              </span>
+              <span className="name">Terminal…</span>
+              <span aria-hidden="true">{shellsOpen ? "▾" : "▸"}</span>
+            </button>
+            {shellsOpen &&
+              shellChoices.map((sh) => (
+                <button key={sh.id} role="menuitem" className="menu-item menu-sub" onClick={() => onShell?.(sh)} title={`New terminal: ${sh.program}`}>
+                  <span className="agent-mark">
+                    <ShellGlyph program={sh.program} />
+                  </span>
+                  <span className="name">{sh.name}</span>
+                </button>
+              ))}
+          </>
         )}
         {onChoose && (
           <button role="menuitem" className="menu-item" onClick={onChoose} title="Open a pane that asks which AI, model or terminal to run, and how many">

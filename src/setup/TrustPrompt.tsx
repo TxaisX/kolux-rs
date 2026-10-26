@@ -13,13 +13,13 @@ import "./trust.css";
 
 /** What Rust says the prompt must ask (SAFE-025): the script's kind, its exact text, the project's
  *  name, and whether an approved version of it has since changed. */
-export type TrustAsk = { kind: "setup" | "archive" | "issue"; script: string; changed: boolean; project: string };
+export type TrustAsk = { kind: "setup" | "archive" | "issue" | "tabs"; script: string; changed: boolean; project: string };
 /** The user's answer: skip it, run it this once (this exact text), or trust the whole kolux.yaml. */
 export type TrustAnswer = "skip" | "once" | "always";
 type Invoke = <T>(cmd: string, args: Record<string, unknown>) => Promise<T>;
 type Waiting = { id: number; ask: TrustAsk; done: (a: TrustAnswer) => void };
 
-const KIND_WORDS: Record<TrustAsk["kind"], string> = { setup: "setup script", archive: "archive script", issue: "issue command" };
+const KIND_WORDS: Record<TrustAsk["kind"], string> = { setup: "setup script", archive: "archive script", issue: "issue command", tabs: "default tab commands" };
 
 /** The prompt's title and lead line, worded for a changed script when one approved earlier changed. */
 export function trustWords(ask: TrustAsk): { title: string; lead: string } {

@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+import { openDefaultTabs } from "./setup/DefaultTabs";
 import { gatedSetup, settleSetup, setupRequestOf } from "./orchestration/workerSetup";
 import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
@@ -1342,6 +1343,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (pid && picked.some(Boolean)) pendingLineup.current[batch] = { pid, lineup: lineupOf(chooser.shape ?? "custom", separate ? "separate" : "shared", seats) };
       // A grid chooser gives its place to the new panes; the New session page adds them (SESS-018).
       setPanes((ps) => (inGrid ? ps.flatMap((p) => (p.key === key ? made : [p])) : [...ps, ...made]));
+      for (const n of madeNew) void openTabs(n.cwd, n.branch); // PROJ-034
       // VIEW-021: a preset started from the Agents rail stays the selected session once it runs.
       setAgentSel((sel) => (sel === key ? made[0].key : sel));
       if (!inGrid) {
@@ -1433,10 +1435,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setFocused(pane.key);
   };
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
+  // PROJ-034: kolux.yaml's default tabs open beside the new workspace's first pane (its setup first, when it has one).
+  const openTabs = (dir: string, branch: string | null) => {
+    const root = projects.find((p) => p.id === projectOf(dir))?.path;
+    return root ? openDefaultTabs(root, dir, branch, { nextKey, setPanes, setTabColors, say: setNotice }) : Promise.resolve();
+  };
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
   const runSetup = (dir: string, branch: string | null) =>
     trustedSetup(dir)
-      .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
+      .then((line) => void (line ? cli.current.startSetup(dir, branch, line, "tab", false, () => openTabs(dir, branch)) : openTabs(dir, branch)))
       .catch((err) => setNotice(String(err)));
   // ORCH-017 (T-172-d): a worker start's setup: the trust question, one run in a background Setup
   // tab, and how it ended (its exit code, or null a second after the tab stopped without one)
@@ -3266,7 +3273,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     renameAsk={askName[p.key]}
                     sessionKnown={!!p.session}
                     session={p.session}
-                    onSessionLaunch={(l, fork) => splitPane(p.key, "right", undefined, { agent: p.agent, agentId: p.agentId, account: p.account, setup: p.setup, env: p.env, program: l.program, args: l.args, forkOf: fork ? p.session : undefined })} // after-list #117: Continue / Fork open a second pane beside this one
+                    onSessionLaunch={(l, fork, forkName) => splitPane(p.key, "right", undefined, { agent: p.agent, agentId: p.agentId, account: p.account, setup: p.setup, env: p.env, program: l.program, args: l.args, forkOf: fork ? p.session : undefined, title: fork ? forkName : undefined })}
+                    entryTabs={panes.filter((q) => sameDir(q.cwd, activeDir)).map((q) => ({ key: q.key, name: tabName(q, titles, labelOf(q), liveIds) }))} // TERM-042: the plus menu's entry box jumps to these
+                    onEntry={(t) => (t.kind === "browser" ? openInBrowser(t.url) : t.kind === "file" ? openFile(t.path) : setFocused(t.key))}
+                    shells={shells}
+                    onShell={(sh) => void newTab({ shell: sh })} // TERM-043: the plus menu's shell choice, a tab like the New tab menu's // after-list #117: Continue / Fork open a second pane beside this one
                     onCopyId={(what) => copyId(p, what)}
                     findHandle={findHandle}
                     typed={p.typed}
