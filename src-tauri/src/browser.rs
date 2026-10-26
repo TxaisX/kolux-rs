@@ -185,9 +185,17 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
     if (k === "Space") return e.code === "Space" || e.key === " ";
     return e.code === k || e.key === k;
   };
+  // T-240 (BROW-035): a chord marked `n` (Mod+C, bound to grabbing an element) is the app's only
+  // when no text is selected, in the page or in a field; with a selection the page copies as usual.
+  const copying = () => {
+    const a = document.activeElement;
+    try { if (a && typeof a.selectionStart === "number" && a.selectionStart !== a.selectionEnd) return true; } catch (_) {}
+    const s = getSelection();
+    return !!s && !s.isCollapsed && String(s).length > 0;
+  };
   addEventListener("keydown", (e) => {
     if (e.defaultPrevented || !(e.ctrlKey || e.metaKey || e.altKey)) return;
-    if (!keys.some((d) => keyHit(d, e))) return;
+    if (!keys.some((d) => keyHit(d, e) && !(d.n && copying()))) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     if (e.repeat) return;
@@ -2129,7 +2137,7 @@ mod tests {
         assert!(matches!(navigation(&url, None, &tabs, false, Instant::now()), Nav::Load(false)));
         assert_eq!(keys_script("[]"), r#"window.__kxKeys && window.__kxKeys(JSON.parse("[]"))"#);
         // The page takes a held key once, honours the app's list, and mirrors the app's key matching.
-        for needle in ["__kxKeys", "if (e.repeat) return;", "AltGraph", "\"Key\" + k", "\"Digit\" + k", "k === \"Plus\""] {
+        for needle in ["__kxKeys", "if (e.repeat) return;", "AltGraph", "\"Key\" + k", "\"Digit\" + k", "k === \"Plus\"", "d.n && copying()", "a.selectionStart !== a.selectionEnd", "s.isCollapsed"] {
             assert!(CHORD_SCRIPT.contains(needle), "{needle}");
         }
     }

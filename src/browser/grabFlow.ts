@@ -8,6 +8,16 @@ import { asDataUrl, capturePage, type Picture, sendPicture } from "./picture";
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 type OnSend = ((key: number, text: string) => Promise<void> | void) | undefined;
 
+/** The most bytes the element's picture may take (decoded PNG); a larger one is left out of the grab. */
+export const PICTURE_BUDGET = 2 * 1024 * 1024;
+
+/** The decoded size of a base64 data URL, without decoding it. */
+export function dataUrlBytes(url: string): number {
+  const b64 = url.slice(url.indexOf(",") + 1);
+  const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((b64.length * 3) / 4) - pad);
+}
+
 /** What the details sheet shows: the pick, its rows, the element's cropped picture (PNG data URL) and why there is none. */
 export type Grab = { pick: Pick; rows: Row[]; picture: string | null; problem: string | null };
 
@@ -44,6 +54,10 @@ export async function grabElement(invoke: Invoke, id: number, pick: Pick, cut: (
     else {
       grab.picture = await cut(shot, pick.box);
       if (!grab.picture) grab.problem = "The element is outside the visible page, so there is no picture";
+      else if (dataUrlBytes(grab.picture) > PICTURE_BUDGET) {
+        grab.picture = null;
+        grab.problem = `The element's picture is over ${PICTURE_BUDGET / 1024 / 1024} MB, so it is left out; the details are below`;
+      }
     }
   } catch (err) {
     grab.problem = err instanceof Error ? err.message : String(err);
@@ -58,6 +72,19 @@ export async function copyDetails(write: (text: string) => Promise<void>, pick: 
     return "Details copied";
   } catch {
     return "Copy was refused; the details are selectable on the sheet";
+  }
+}
+
+/** Copy Screenshot: the element's picture as a PNG on the clipboard. Resolves to the line for the sheet. */
+export async function copyScreenshot(write: (items: ClipboardItem[]) => Promise<void>, picture: string | null, Item?: typeof ClipboardItem): Promise<string> {
+  if (!picture) return "There is no picture to copy";
+  try {
+    const raw = atob(picture.slice(picture.indexOf(",") + 1));
+    const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+    await write([new (Item ?? ClipboardItem)({ "image/png": new Blob([bytes], { type: "image/png" }) })]);
+    return "Screenshot copied";
+  } catch {
+    return "Copy was refused; Send to agent keeps the picture";
   }
 }
 

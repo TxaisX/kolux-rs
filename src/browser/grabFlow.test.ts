@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Pick } from "./annotate";
 import { detailRows, detailsText, grabMessage } from "./grab";
-import { copyDetails, grabElement, leavesGrab, sendGrab } from "./grabFlow";
+import { copyDetails, copyScreenshot, dataUrlBytes, grabElement, leavesGrab, PICTURE_BUDGET, sendGrab } from "./grabFlow";
 import { GrabSheet } from "./GrabSheet";
 
 const pick: Pick = { selector: "#buy", path: "main > button#buy", tag: "button", text: "Buy now", box: { x: 100, y: 200, width: 80, height: 30 } };
@@ -55,6 +55,7 @@ describe("T-240 BROW-035 grab mode: pick, picture, sheet", () => {
       expect(html).toContain(r.value.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
     }
     expect(html).toContain("Copy details");
+    expect(html).toMatch(/data-go="copy-shot"(?![^>]*disabled)/);
     expect(html).toContain("Send to agent");
     expect(html).toContain('data-go="close"');
     expect(html).toContain(`src="${CROPPED}"`);
@@ -93,5 +94,48 @@ describe("T-240 BROW-035 grab mode: pick, picture, sheet", () => {
     expect(leavesGrab("Escape")).toBe(true);
     expect(leavesGrab("Enter")).toBe(false);
     expect(leavesGrab("c")).toBe(false);
+  });
+
+  it("Copy Screenshot puts the cropped PNG on the clipboard as image/png, and says so when it is refused or missing", async () => {
+    const items: Record<string, Blob>[] = [];
+    class Item {
+      constructor(public parts: Record<string, Blob>) {
+        items.push(parts);
+      }
+    }
+    const png = `data:image/png;base64,${btoa("PNG-bytes")}`;
+    const write = vi.fn(async (_i: unknown[]) => {});
+    expect(await copyScreenshot(write, png, Item as unknown as typeof ClipboardItem)).toBe("Screenshot copied");
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(Object.keys(items[0])).toEqual(["image/png"]);
+    expect(items[0]["image/png"].type).toBe("image/png");
+    const sent = new Uint8Array(await items[0]["image/png"].arrayBuffer());
+    expect(sent[0]).toBe(0x89);
+    expect(sent.length).toBe(10);
+    expect(await copyScreenshot(async () => Promise.reject(new Error("no")), png, Item as unknown as typeof ClipboardItem)).toMatch(/refused/);
+    const none = vi.fn(async () => {});
+    expect(await copyScreenshot(none, null)).toMatch(/no picture/);
+    expect(none).not.toHaveBeenCalled();
+  });
+
+  it("the sheet's Copy Screenshot is off when the grab has no picture", () => {
+    const plain = { pick, rows: detailRows(pick), picture: null, problem: "x" };
+    const html = renderToStaticMarkup(createElement(GrabSheet, { grab: plain, title: "Shop", url: "https://shop.test/", onClose: () => {} }));
+    expect(html).toMatch(/data-go="copy-shot"[^>]*disabled/);
+  });
+
+  it("a picture over the size budget is left out and the grab still opens with its details and the reason", async () => {
+    const edge = `data:image/png;base64,${"A".repeat(Math.ceil((PICTURE_BUDGET * 4) / 3) + 4)}`;
+    expect(dataUrlBytes(edge)).toBeGreaterThan(PICTURE_BUDGET);
+    const g = await grabElement(backend().invoke, 7, pick, async () => edge);
+    expect(g.picture).toBeNull();
+    expect(g.problem).toMatch(/over 2 MB.*left out/);
+    expect(g.rows).toEqual(detailRows(pick));
+    // just under the budget is kept
+    const fits = `data:image/png;base64,${"A".repeat(Math.floor(PICTURE_BUDGET / 3) * 4)}`;
+    expect(dataUrlBytes(fits)).toBeLessThanOrEqual(PICTURE_BUDGET);
+    expect(dataUrlBytes(fits)).toBeGreaterThan(PICTURE_BUDGET - 3);
+    expect((await grabElement(backend().invoke, 7, pick, async () => fits)).picture).toBe(fits);
+    expect(dataUrlBytes("data:image/png;base64,QQ==")).toBe(1);
   });
 });
