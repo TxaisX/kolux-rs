@@ -1,4 +1,4 @@
-// Stress runner: node scripts/stress/run.mjs <S1..S8|all> [--minutes 30 for S8] [--port 1440 --cdp 9260 --temp G:/Temp/stress]
+// Stress runner: node scripts/stress/run.mjs <S1..S8|S10|all> [--minutes 30 for S8] [--port 1440 --cdp 9260 --temp G:/Temp/stress]
 // Each scenario launches the app from this checkout (scripts/evidence/app-launch.mjs: scratch homes, hidden off-screen window,
 // own identifier), measures, closes it, clears its scratch folder, prints PASS / FAIL and writes
 // evidence/stress-<scenario>-<short sha>.txt with every threshold beside what was measured.
@@ -21,10 +21,10 @@ const opt = (name, fallback) => {
 const want = (args.find((a) => /^(S([1-9]|10)|all)$/i.test(a)) ?? "").toUpperCase();
 const opts = { root, port: Number(opt("port", "1440")), cdp: Number(opt("cdp", "9260")), temp: opt("temp", "G:/Temp/stress").replace(/\\/g, "/") };
 
-const modules = { S1: "./s1-pane-churn.mjs", S2: "./s2-output-flood.mjs", S3: "./s3-many-projects.mjs", S4: "./s4-corrupt-state.mjs", S5: "./s5-hard-kill.mjs", S6: "./s6-unicode-ansi.mjs", S7: "./s7-editor-big-files.mjs", S8: "./s8-soak.mjs" };
+const modules = { S1: "./s1-pane-churn.mjs", S2: "./s2-output-flood.mjs", S3: "./s3-many-projects.mjs", S4: "./s4-corrupt-state.mjs", S5: "./s5-hard-kill.mjs", S6: "./s6-unicode-ansi.mjs", S7: "./s7-editor-big-files.mjs", S8: "./s8-soak.mjs", S10: "./s10-git-load.mjs" };
 const list = want === "ALL" ? Object.keys(modules) : modules[want] ? [want] : null;
 if (!list) {
-  console.error("usage: node scripts/stress/run.mjs <S1..S8|all> [--port 1440] [--cdp 9260] [--temp G:/Temp/stress]");
+  console.error("usage: node scripts/stress/run.mjs <S1..S8|S10|all> [--port 1440] [--cdp 9260] [--temp G:/Temp/stress]");
   process.exit(2);
 }
 

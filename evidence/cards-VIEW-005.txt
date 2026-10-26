@@ -1,0 +1,5 @@
+box 1: NOT PROVEN (LIVE): restore half passes (src/settings/__cards__/VIEW-005.test.ts box 1: openPageAt({openPage:"tasks"}) = tasks; cards_05.rs view005_box1_... : openPage and lastScreen survive a Store reopen). The write half is an inline effect (src/App.tsx:1489-1491 saveSetting(OPEN_PAGE_FIELD, page)).
+box 2: NOT PROVEN (TXAIS): cards_05.rs view005_box2_a_corrupt_settings_file_reads_as_defaults_and_raises_no_notice — ok (no good copy: defaults {} -> startScreen terminals, no page, no notice, get_settings returns Ok).
+  but cards_05.rs view005_box2_with_a_good_copy_a_corrupt_file_reads_from_that_copy_not_from_defaults — ok: with the usual settings.json.bak present the app reads the previous good copy (state.rs T-075 / APP-048), so it can reopen on that copy's screen, not on the terminal workspace, and shows one fallback notice.
+command: cargo test --manifest-path src-tauri/Cargo.toml --test cards_05 — test result: ok. 9 passed; 0 failed
+command: pnpm exec vitest run src/shell/__cards__/VIEW-107.test.ts src/settings/__cards__/VIEW-005.test.ts — Tests 4 passed (4)
