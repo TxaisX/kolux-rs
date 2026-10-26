@@ -105,6 +105,11 @@ export function nextNeedsYou(keys: number[], needs: Set<number>, focused: number
   return [...keys.slice(i + 1), ...keys.slice(0, i + 1)].find((k) => needs.has(k)) ?? null;
 }
 
+/** ux fix 2: how many of the open panes are waiting on the user; the one source for the bell and the window title. */
+export function needsYouCount(keys: number[], needs: Set<number>): number {
+  return keys.filter((k) => needs.has(k)).length;
+}
+
 /** TERM-022: the header chip: the branch, else the short commit of a detached HEAD; none outside git. */
 export function branchChip(git: { branch: string | null; head: string | null } | null): { text: string; tip: string } | null {
   if (!git) return null;

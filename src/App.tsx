@@ -156,7 +156,7 @@ import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SU
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
-import { VOCAB, nextNeedsYou } from "./terminal/status";
+import { VOCAB, needsYouCount, nextNeedsYou } from "./terminal/status";
 import { followedTitle, IDLE, shownAgent, type Identity } from "./terminal/shellMarks";
 import type { KindKey } from "./settings/notifications";
 import { tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
@@ -183,7 +183,7 @@ import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
-import { LAYOUT_FIELD, layoutOf, marksOf, type SavedLayout } from "./terminal/layout";
+import { LAYOUT_FIELD, layoutOf, marksOf, reviveSaved, type SavedLayout } from "./terminal/layout";
 import { layoutWriter } from "./terminal/layoutSave";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
@@ -293,7 +293,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const [dragLeft, setDragLeft] = useState<number | null>(null); // VIEW-050: the left sidebar mid-drag
   // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
-  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? []); // T-543-b: no pane until a workspace is opened
+  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes.map(reviveSaved) ?? []); // T-543-b: no pane until a workspace is opened
   useFileMoves(setPanes); // EDIT-032: editor tabs follow a renamed or moved file
   const [focused, setFocused] = useState(layout?.focused ?? 0);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -392,7 +392,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // TERM-048: the tab right-click menu, at the pointer.
   const nextKey = useRef(layout ? Math.max(1, ...layout.panes.map((p) => p.key)) + 1 : 2);
   // TERM-106: the tabs that came back from the saved layout replay their saved output first.
-  const restoredKeys = useRef(new Set((layout?.panes ?? []).map((p) => p.key)));
+  const restoredKeys = useRef(new Set((layout?.panes ?? []).filter((p) => !p.chooser).map((p) => p.key))); // a chooser has no terminal to wait for
   // ORCH-056 (row 219): open prompts read off each pane's screen mark it waiting (src/status/promptScan.ts).
   usePromptScan(ptys, restoredKeys);
   const runPanes = useRef<Record<string, number>>({});
@@ -566,9 +566,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   });
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
+  // ux fix 2: one count of waiting panes feeds the bell and the window title.
+  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)));
   useEffect(() => {
-    document.title = windowTitle(info);
-  }, [info]);
+    document.title = windowTitle(info, needing);
+  }, [info, needing]);
   // BROW-001: a browser tab is named after its page.
   useEffect(() => {
     const off = listen<{ id: number; title: string }>("browser-title", (e) => setTitles((t) => ({ ...t, [e.payload.id]: e.payload.title })));
@@ -2533,6 +2535,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             : undefined
         }
         screen={screen}
+        needsYou={needing}
         classic={classic}
         sidebarWidth={leftWidth}
         appMenu

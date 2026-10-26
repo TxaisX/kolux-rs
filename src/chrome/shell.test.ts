@@ -99,3 +99,15 @@ test("SESS-006: the create menu has a terminal per installed shell, Choose agent
   // Without the shell list (an old back end) the one default terminal is still there.
   expect(renderToString(createElement(LayoutStrip, { count: 1, onLayout: () => {}, onNewTab: () => {}, open: true }))).toContain(">Terminal</span>");
 });
+
+test("ux fix 2: the bell carries the count of panes that need you and clears at 0", () => {
+  const base: TopBarProps = { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {}, rightOpen: false, onToggleRight: () => {} };
+  const two = renderToString(createElement(TopBar, { ...base, needsYou: 2 }));
+  expect(two).toContain('aria-label="Inbox, 2 need you"');
+  expect(two).toMatch(/class="bell-count"[^>]*>2</);
+  expect(renderToString(createElement(TopBar, { ...base, needsYou: 1 }))).toContain('aria-label="Inbox, 1 needs you"');
+  for (const html of [renderToString(createElement(TopBar, { ...base, needsYou: 0 })), renderToString(createElement(TopBar, base))]) {
+    expect(html).toContain('aria-label="Notifications"');
+    expect(html).not.toContain("bell-count");
+  }
+});

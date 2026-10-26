@@ -85,15 +85,25 @@ export function watchPointer(el: Target, prefs: () => InputPrefs): () => void {
 /** Software drawing is no good for the GPU path: a WebGL context that is really a CPU rasteriser. */
 export const softwareRenderer = (name: string): boolean => /swiftshader|llvmpipe|software|basic render/i.test(name);
 
-/** What this machine offers the GPU path; any failure reads as no WebGL2. */
+const probed = new WeakMap<Document, { webgl2: boolean; software: boolean }>();
+
+/** What this machine offers the GPU path; any failure reads as no WebGL2. Asked once per document, and the
+ *  probe's own context is given back: one left behind per pane counts against the browser's 16-context cap. */
 export function probeGpu(doc: Document = document): { webgl2: boolean; software: boolean } {
+  const known = probed.get(doc);
+  if (known) return known;
+  let found = { webgl2: false, software: false };
   try {
     const gl = doc.createElement("canvas").getContext("webgl2");
-    if (!gl) return { webgl2: false, software: false };
-    const info = gl.getExtension("WEBGL_debug_renderer_info");
-    const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
-    return { webgl2: true, software: softwareRenderer(name) };
+    if (gl) {
+      const info = gl.getExtension("WEBGL_debug_renderer_info");
+      const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
+      found = { webgl2: true, software: softwareRenderer(name) };
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+    }
   } catch {
-    return { webgl2: false, software: false };
+    /* no WebGL2 */
   }
+  if (found.webgl2) probed.set(doc, found); // a failed probe is asked again
+  return found;
 }
