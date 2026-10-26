@@ -28,6 +28,8 @@ pub const DEADMAN: Duration = Duration::from_secs(60);
 pub struct Through {
     on: bool,
     epoch: u64,
+    /// The newest front-end sequence number accepted (calls arrive on a thread pool, out of order).
+    last_seq: Option<u64>,
 }
 
 impl Through {
@@ -36,6 +38,23 @@ impl Through {
         self.on = on;
         self.epoch += 1;
         self.epoch
+    }
+
+    /// Like `set`, but a call numbered `seq` that is not newer than the last numbered call is
+    /// outdated and ignored (`None`); a call with no number (an older front end) is always accepted.
+    pub fn submit(&mut self, on: bool, seq: Option<u64>) -> Option<u64> {
+        if let Some(n) = seq {
+            if self.last_seq.is_some_and(|last| n <= last) {
+                return None;
+            }
+            self.last_seq = Some(n);
+        }
+        Some(self.set(on))
+    }
+
+    /// What every page container should be right now: enabled unless a drag is under way.
+    pub fn pages_enabled(&self) -> bool {
+        !self.on
     }
 
     /// The dead-man timer of call `epoch` fired: true when it is still the latest call and pages are
@@ -62,35 +81,41 @@ pub fn is_page_class(name: &str) -> bool {
     name == PAGE_CLASS
 }
 
-/// The app says a drag started (`on`), is still going (`on` again) or ended (`!on`).
+/// The app says a drag started (`on`), is still going (`on` again) or ended (`!on`); `seq` grows
+/// with each call so a call that overtakes an earlier one on the thread pool is not undone by it.
 #[tauri::command]
-pub async fn browser_drag_through(app: AppHandle, on: bool) -> Result<(), String> {
+pub async fn browser_drag_through(app: AppHandle, on: bool, seq: Option<u64>) -> Result<(), String> {
     let epoch = match STATE.lock() {
-        Ok(mut s) => s.set(on),
+        Ok(mut s) => s.submit(on, seq),
         Err(_) => return Err("drag state unavailable".into()),
     };
-    apply(&app, !on);
+    let Some(epoch) = epoch else { return Ok(()) };
+    apply(&app);
     if on {
         let app = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(DEADMAN);
             let release = STATE.lock().map(|mut s| s.expire(epoch)).unwrap_or(false);
             if release {
-                apply(&app, true);
+                apply(&app);
             }
         });
     }
     Ok(())
 }
 
-/// Enables or disables every open page's container (on the main thread, which owns the windows).
-fn apply(app: &AppHandle, enabled: bool) {
-    let all = holder::containers();
-    let _ = app.run_on_main_thread(move || {
-        for container in all {
-            set_enabled(container, enabled);
-        }
-    });
+/// Sets every open page's container to what the state says now. The state and the container list
+/// are read when the job RUNS on the main thread, so whichever job runs last matches the latest
+/// state, however the calls that queued them interleaved.
+fn apply(app: &AppHandle) {
+    let _ = app.run_on_main_thread(|| apply_now(&holder::containers(), &STATE, &mut set_enabled));
+}
+
+fn apply_now(all: &[isize], state: &Mutex<Through>, set: &mut impl FnMut(isize, bool)) {
+    let enabled = state.lock().map(|s| s.pages_enabled()).unwrap_or(true);
+    for &container in all {
+        set(container, enabled);
+    }
 }
 
 /// A page just made (main thread): it follows a drag that is already under way.
@@ -106,6 +131,11 @@ fn set_enabled(container: isize, enabled: bool) {
     #[link(name = "user32")]
     extern "system" {
         fn EnableWindow(hwnd: *mut core::ffi::c_void, enable: i32) -> i32;
+        fn GetWindowThreadProcessId(hwnd: *mut core::ffi::c_void, pid: *mut u32) -> u32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcessId() -> u32;
     }
     if container == 0 {
         return;
@@ -113,10 +143,17 @@ fn set_enabled(container: isize, enabled: bool) {
     let mut name = [0u16; 32];
     // SAFETY: `name` is a writable buffer of the length passed; a stale handle makes the call return 0.
     let n = unsafe { GetClassNameW(container as _, name.as_mut_ptr(), name.len() as i32) };
-    if n <= 0 || !is_page_class(&String::from_utf16_lossy(&name[..n as usize])) {
+    let mut pid = 0u32;
+    // SAFETY: `pid` is a writable u32; a stale handle leaves it 0.
+    unsafe { GetWindowThreadProcessId(container as _, &mut pid) };
+    // SAFETY: no arguments, no preconditions.
+    let ours = pid != 0 && pid == unsafe { GetCurrentProcessId() };
+    // A destroyed container's number can be reused by another app's window: never touch that.
+    if n <= 0 || !is_page_class(&String::from_utf16_lossy(&name[..n as usize])) || !ours {
+        holder::forget_container(container);
         return;
     }
-    // SAFETY: the handle is a live web view container checked above; EnableWindow only flips its enabled flag.
+    // SAFETY: the handle is a live web view container of this process checked above; EnableWindow only flips its enabled flag.
     unsafe { EnableWindow(container as _, i32::from(enabled)) };
 }
 
@@ -174,5 +211,59 @@ mod tests {
     #[test]
     fn t319c_the_dead_man_wait_outlasts_the_front_end_renewal() {
         assert!(DEADMAN >= Duration::from_secs(40));
+    }
+
+    #[test]
+    fn t319c_a_numbered_call_that_is_not_newer_is_ignored() {
+        let mut s = Through::default();
+        assert!(s.submit(false, Some(5)).is_some());
+        assert!(s.submit(true, Some(4)).is_none(), "an older start overtaken by its end is dropped");
+        assert!(!s.on);
+        assert!(s.submit(true, Some(5)).is_none(), "an equal number is a repeat");
+        assert!(s.submit(true, Some(6)).is_some());
+        assert!(s.on);
+    }
+
+    #[test]
+    fn t319c_a_call_without_a_number_is_accepted() {
+        let mut s = Through::default();
+        assert!(s.submit(true, Some(9)).is_some());
+        assert!(s.submit(false, None).is_some(), "an older front end sends no number");
+        assert!(!s.on);
+        assert!(s.submit(true, None).is_some());
+        assert!(s.on);
+    }
+
+    #[test]
+    fn t319c_the_last_main_thread_job_wins_whatever_order_the_jobs_run_in() {
+        // start (on) then end (off) each set the state and queue a job; both jobs run after the end.
+        let state = Mutex::new(Through::default());
+        state.lock().unwrap().submit(true, Some(1));
+        state.lock().unwrap().submit(false, Some(2));
+        let mut seen = Vec::new();
+        apply_now(&[10, 11], &state, &mut |_, e| seen.push(e)); // the end's job
+        apply_now(&[10, 11], &state, &mut |_, e| seen.push(e)); // the start's job, run last
+        assert_eq!(seen, [true; 4], "an ended drag leaves every page enabled");
+    }
+
+    #[test]
+    fn t319c_a_job_run_after_a_late_start_disables_and_one_run_after_the_end_enables() {
+        let state = Mutex::new(Through::default());
+        let mut seen = Vec::new();
+        state.lock().unwrap().submit(true, Some(1));
+        apply_now(&[7], &state, &mut |_, e| seen.push(e));
+        state.lock().unwrap().submit(false, Some(2));
+        apply_now(&[7], &state, &mut |_, e| seen.push(e));
+        assert_eq!(seen, [false, true]);
+    }
+
+    #[test]
+    fn t319c_an_end_that_reaches_the_back_end_first_leaves_pages_enabled() {
+        let state = Mutex::new(Through::default());
+        state.lock().unwrap().submit(false, Some(2));
+        assert!(state.lock().unwrap().submit(true, Some(1)).is_none());
+        let mut seen = Vec::new();
+        apply_now(&[3], &state, &mut |_, e| seen.push(e));
+        assert_eq!(seen, [true]);
     }
 }

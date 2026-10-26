@@ -50,3 +50,40 @@ LIVE PROOF PENDING (resolver, dev app on scratch homes, never a real agent sessi
      (not stuck disabled). Repeat releasing outside the window, and with alt-tab mid-drag.
   6. Open a new browser tab while holding a drag (script/CLI): it also lets the drag through.
   If step 2 shows the page still swallows the drag: use the FALLBACK above.
+
+REVIEW FIXES (read-only review: MERGE OK WITH FIXES; lane/browser, Sonnet 5.5)
+  H1  browser_drag_through is async, so a start and an end could run on two pool threads and queue
+      ENABLE then DISABLE on the main thread (pages stuck disabled, never expired), or the end could
+      reach the state before the start (pages dead for 60 s). Now: the main-thread job reads the
+      CURRENT state and holder::containers() when it runs (apply_now), so the last job to run always
+      matches the latest state, the watchdog's expire path and settle included; and the front end
+      numbers every call (seq, createSeq: clock-based and strictly increasing, so a reloaded window
+      stays above the old one) and the back end ignores a call whose seq is not newer than the last.
+      A call with no seq (older front end) is accepted. Tests: cargo browser::drag
+      t319c_a_numbered_call_that_is_not_newer_is_ignored, t319c_a_call_without_a_number_is_accepted,
+      t319c_the_last_main_thread_job_wins_whatever_order_the_jobs_run_in,
+      t319c_an_end_that_reaches_the_back_end_first_leaves_pages_enabled; vitest "call numbers" and the
+      installer wiring check.
+  H2  the 20 s renew ran for as long as the gate said "on", so a missed dragend (source re-rendered
+      away, drop outside the window, cursor over a disabled page) kept the pages dead for ever. Now a
+      renew tick renews only if dragover, drag, or a pointermove with the button down was seen since
+      the last tick; otherwise it resets the gate and sends on=false. Tests: vitest "no drag activity
+      across a renewal tick resets the gate", "dragover, drag and a button-down move each count",
+      "activity seen before one tick does not carry over", "a button-less move is not activity"; the
+      renewal test now fires dragover between ticks. Cost: a pointer drag held perfectly still for
+      20 s is released; the next move with the button down starts it again.
+  NIT wry's DestroyWindow on window.close() never calls holder::forget, so a stale HWND could be reused
+      by another wry app's container. set_enabled now also requires GetWindowThreadProcessId(hwnd, &pid)
+      to give GetCurrentProcessId (that call's return value is the thread id; the process id comes back
+      through the out parameter), and an HWND failing the class or pid check is dropped from the list
+      (holder::forget_container). Raw extern "system" user32/kernel32; no new feature or dependency.
+  lib.rs patch: the command name is unchanged (generate_handler! lists names), so
+      evidence/browser-fix-746-lib.rs.patch needs no re-cut; all five patches still apply in order.
+
+LIVE PROOF PENDING after the review fixes (order kept; the HTML5 tab drag goes FIRST)
+  1. Drag a terminal tab across a browser page (HTML5 drag): the split drop target shows over the page
+     and the drop lands. If this shows "no drop", browser_drag::apply flips from set_enabled to
+     hide()/show().
+  2-6. As above (explorer file, splitter, Esc / outside-window / alt-tab, page made mid-drag).
+  7. New: start a tab drag, drop outside the app window with the cursor last over a page: within about
+     20 s the page takes clicks again (the tick sees no drag activity and resets).

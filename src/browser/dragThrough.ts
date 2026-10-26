@@ -8,6 +8,13 @@
 export type Kind = "html5" | "pointer";
 export type Send = (on: boolean) => void;
 
+/** Numbers each call to the back end so one that overtakes an earlier one is not undone by it. Starts
+ *  at the clock, so a reloaded window's numbers stay above the old window's. */
+export function createSeq(now: () => number = () => Date.now()): () => number {
+  let last = 0;
+  return () => (last = Math.max(now(), last + 1));
+}
+
 export type Gate = {
   begin(kind: Kind): void;
   end(kind: Kind): void;
@@ -63,10 +70,21 @@ type Pointerish = Event & { clientX?: number; clientY?: number; buttons?: number
 /** Hooks the window's events to a gate. Returns the stop function. `now` and `send` are injectable. */
 export function installDragThrough(target: EventTarget, send: Send, now: () => number = () => Date.now()): () => void {
   let timer: ReturnType<typeof setInterval> | null = null;
+  // Any sign the drag is alive since the last renewal; a drag over a page is seen by the app view only.
+  let alive = false;
   const gate = createDragGate(
     (on) => {
       send(on);
-      if (on) timer = setInterval(() => gate.renew(), RENEW_MS);
+      if (on) {
+        alive = false;
+        timer = setInterval(() => {
+          // No dragover/drag/button-down move for a whole interval: the dragend was missed, so give the pages back.
+          if (alive) {
+            alive = false;
+            gate.renew();
+          } else gate.reset();
+        }, RENEW_MS);
+      }
       else if (timer) {
         clearInterval(timer);
         timer = null;
@@ -91,12 +109,15 @@ export function installDragThrough(target: EventTarget, send: Send, now: () => n
     on("dragstart", () => begin("html5")),
     // dragend is on the source, which a re-render may have removed; drop is on the target.
     on("dragend", () => gate.end("html5")),
+    on("dragover", () => (alive = true)),
+    on("drag", () => (alive = true)),
     on("drop", () => gate.end("html5")),
     on("pointerdown", (e) => {
       armed = e.button === 0 || e.button === undefined ? { x: e.clientX ?? 0, y: e.clientY ?? 0 } : null;
     }),
     on("pointermove", (e) => {
       const down = ((e.buttons ?? 0) & 1) === 1;
+      if (down) alive = true;
       if (!down) {
         armed = null;
         gate.end("pointer");

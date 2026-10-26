@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import src from "./BrowserPane.tsx?raw";
-import { createDragGate, DRAG_SLOP, GRACE_MS, installDragThrough, RENEW_MS } from "./dragThrough";
+import install from "./dragThroughInstall.ts?raw";
+import { createDragGate, createSeq, DRAG_SLOP, GRACE_MS, installDragThrough, RENEW_MS } from "./dragThrough";
 
 describe("BROW-052: the drag gate", () => {
   it("tells the back end once when a drag starts and once when it ends", () => {
@@ -176,12 +177,57 @@ describe("BROW-052: the window's events drive the gate", () => {
 
   it("a drag that lasts is told again every renewal, and the timer stops with it", () => {
     fire("dragstart");
-    vi.advanceTimersByTime(RENEW_MS * 2 + 5);
+    for (let i = 0; i < 2; i++) {
+      fire("dragover");
+      vi.advanceTimersByTime(RENEW_MS);
+    }
+    vi.advanceTimersByTime(5);
     expect(sent.filter(Boolean).length).toBe(3);
     fire("dragend");
     const n = sent.length;
     vi.advanceTimersByTime(RENEW_MS * 3);
     expect(sent.length).toBe(n);
+  });
+
+  it("no drag activity across a renewal tick resets the gate and tells the back end on=false", () => {
+    fire("dragstart");
+    vi.advanceTimersByTime(RENEW_MS + 5);
+    expect(sent).toEqual([false, true, false]);
+    const n = sent.length;
+    vi.advanceTimersByTime(RENEW_MS * 3);
+    expect(sent.length).toBe(n);
+  });
+
+  it("dragover, drag and a button-down move each count as activity for the next renewal", () => {
+    for (const [type, props] of [
+      ["dragover", {}],
+      ["drag", {}],
+      ["pointermove", { buttons: 1, clientX: 0, clientY: 0 }],
+    ] as const) {
+      sent.length = 0;
+      fire("dragstart");
+      fire(type, props);
+      vi.advanceTimersByTime(RENEW_MS + 5);
+      expect(sent, type).toEqual([true, true]);
+      fire("dragend");
+    }
+  });
+
+  it("activity seen before one tick does not carry over to the next", () => {
+    fire("dragstart");
+    fire("dragover");
+    vi.advanceTimersByTime(RENEW_MS);
+    expect(last()).toBe(true);
+    vi.advanceTimersByTime(RENEW_MS);
+    expect(last()).toBe(false);
+  });
+
+  it("a button-less move is not activity", () => {
+    fire("dragstart");
+    vi.advanceTimersByTime(RENEW_MS - 1);
+    clock += GRACE_MS + 1;
+    fire("pointermove", { buttons: 0 });
+    expect(last()).toBe(false);
   });
 
   it("stopping the watcher gives the pages back", () => {
@@ -193,8 +239,27 @@ describe("BROW-052: the window's events drive the gate", () => {
   });
 });
 
+describe("BROW-052: call numbers", () => {
+  it("grow with every call, even inside one clock tick", () => {
+    const next = createSeq(() => 100);
+    expect([next(), next(), next()]).toEqual([100, 101, 102]);
+  });
+
+  it("a reloaded window starts above the old one", () => {
+    const old = createSeq(() => 1_000);
+    old();
+    old();
+    const fresh = createSeq(() => 5_000);
+    expect(fresh()).toBeGreaterThan(old());
+  });
+});
+
 describe("BROW-052: wiring", () => {
   it("BrowserPane imports the installer so drags are watched from start-up", () => {
     expect(src).toContain('import "./dragThroughInstall"');
+  });
+
+  it("the installer numbers every browser_drag_through call", () => {
+    expect(install).toMatch(/browser_drag_through",\s*\{\s*on,\s*seq: nextSeq\(\)/);
   });
 });

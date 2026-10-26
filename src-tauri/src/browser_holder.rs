@@ -43,6 +43,13 @@ pub fn containers() -> Vec<isize> {
     CONTAINERS.lock().map(|c| c.values().copied().collect()).unwrap_or_default()
 }
 
+/// A container window that no longer is one of ours (destroyed, its number reused) is dropped.
+pub fn forget_container(container: isize) {
+    if let Ok(mut c) = CONTAINERS.lock() {
+        c.retain(|_, v| *v != container);
+    }
+}
+
 pub fn forget(id: u32) {
     if let Ok(mut c) = CONTAINERS.lock() {
         c.remove(&id);
