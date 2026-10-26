@@ -236,7 +236,8 @@ function placeIn(body: string, out: string, prev: string, e: Edit, bw: Span[], p
   const w = r.i0 === 0 && r.i1 === n ? r : regionOf(body, prev, bw, pw, bb, pb, Math.max(0, r.i0 - 1), Math.min(n, r.i1 + 1));
   const outPart = out.slice(r.p.s, r.p.e + delta);
   const outCtx = out.slice(w.p.s, w.p.e + delta);
-  const bodyCtx = body.slice(w.b.s, w.b.e);
+  const lead = leadSpaces(body, w.b.s); // an indented first item reads as nested in a window that cuts its indent
+  const bodyCtx = body.slice(w.b.s - lead, w.b.e);
   // A fence or section line added or removed can change how every later block reads: only whole blocks are sure.
   if (fine && shape(prev.slice(w.p.s, w.p.e)) !== shape(outCtx)) return null;
   // A loose list reads every item loose, so one item of context on each side is not the whole list's reading.
@@ -244,7 +245,7 @@ function placeIn(body: string, out: string, prev: string, e: Edit, bw: Span[], p
   const allowed = new Set([...limitsOf(outCtx), ...limitsOf(bodyCtx)]);
   const tags = new Set([...htmlTagsOf(outCtx), ...htmlTagsOf(bodyCtx)]); // a new HTML-looking span is a limit like a line rule
   const reads = (cand: string) => {
-    const ctx = cand.slice(w.b.s, w.b.e + cand.length - body.length);
+    const ctx = cand.slice(w.b.s - lead, w.b.e + cand.length - body.length);
     return (!fine || shape(ctx) === shape(bodyCtx)) && limitsOf(ctx).every((x) => allowed.has(x)) && htmlTagsOf(ctx).every((x) => tags.has(x)) && same(ctx, outCtx);
   };
   if (fast !== null) {
@@ -257,6 +258,12 @@ function placeIn(body: string, out: string, prev: string, e: Edit, bw: Span[], p
   return reads(next) ? [next, "block", !fine] : null;
 }
 
+const leadSpaces = (t: string, s: number) => {
+  let k = s;
+  while (k > 0 && t[k - 1] === " ") k--;
+  return k === 0 || t[k - 1] === "\n" ? s - k : 0;
+};
+
 /** Whether the rich view reads `a` and `b` the same (never when it fails on either). */
 const same = (a: string, b: string) => {
   const x = roundTrip(a);
@@ -267,14 +274,15 @@ const spaceLines = (t: string) => (t.match(/^[ \t]+\r?$/gm) ?? []).length;
 
 const OPEN = /^<details>[ \t]*\r?$/i;
 const CLOSE = /^<\/details>[ \t]*\r?$/i;
-const BULLET = /^[-*+][ \t]/;
+// Round 5: a bullet or numbered item, indented up to three spaces; the indent is group 1.
+const BULLET = /^( {0,3})([-*+]|\d+[.)])[ \t]/;
 const STRUCT = /^ {0,3}(`{3,}|~{3,})|^<\/?details>[ \t]*\r?$/gim;
 
 const BLANK = /\n[ \t]*\r?\n/;
 
 /** Whether a bullet list that blocks `g` of `t` reach into has a blank line inside or between its items. */
 function looseList(t: string, spans: Span[], g: Span): boolean {
-  const item = (i: number) => i >= 0 && i < spans.length && BULLET.test(t.slice(spans[i].s, spans[i].s + 2));
+  const item = (i: number) => i >= 0 && i < spans.length && BULLET.test(t.slice(spans[i].s, spans[i].s + 16));
   let lo = spans.findIndex((x) => x.e >= g.s);
   if (lo < 0) return false;
   let hi = lo;
@@ -293,7 +301,7 @@ const shape = (t: string) => (t.match(STRUCT) ?? []).map((x) => x.trim().toLower
 
 /** Top-level markdown blocks: runs of lines between blank lines (a line end's \r left out). A fence or a section is
  *  one block, and an indented line after a blank line stays with the block above it (a list item's next paragraph).
- *  `fine` (round 4) also splits a bullet list at each top-level item (with its nested lines) and a section that
+ *  `fine` (round 4) also splits a bullet list (round 5: or a numbered one, indented up to three spaces) at each top-level item (with its nested lines) and a section that
  *  starts a block into its opening lines, each child, and its closing line. */
 export function blockSpans(text: string, fine = false): Span[] {
   const spans: Span[] = [];
@@ -302,6 +310,7 @@ export function blockSpans(text: string, fine = false): Span[] {
   let cur: Span | null = null;
   let gap = false;
   let list = false;
+  let indent = 0; // of the list's items
   let sec = false;
   let pos = 0;
   for (const line of text.split("\n")) {
@@ -313,14 +322,16 @@ export function blockSpans(text: string, fine = false): Span[] {
     }
     const end = start + line.length - (line.endsWith("\r") ? 1 : 0);
     const f = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    const split = !fence && ((list && !depth && BULLET.test(line)) || (sec && depth === 1 && CLOSE.test(line)));
+    const split = !fence && ((list && !depth && BULLET.exec(line)?.[1].length === indent) || (sec && depth === 1 && CLOSE.test(line)));
     if (cur && (!gap || /^[ \t]/.test(line)) && !split) cur.e = end;
     else {
       if (!depth) {
-        list = fine && !f && BULLET.test(line);
+        const item = fine && !f ? BULLET.exec(line) : null;
+        list = item !== null;
+        indent = item ? item[1].length : 0;
         sec = fine && OPEN.test(line);
       }
-      spans.push((cur = { s: start, e: end }));
+      spans.push((cur = { s: start + (list && !depth ? indent : 0), e: end })); // an item starts after its indent, so a retyped item keeps it
     }
     gap = false;
     if (f && (!fence || (f[0] === fence[0] && f.length >= fence.length))) fence = fence ? "" : f;
