@@ -25,7 +25,7 @@ User sees: the selection moves on the same click; every workspace keeps its own 
 Rules: removing a workspace clears its tabs, open files and browser tabs.
 Acceptance:
   - [ ] Switch from A to B and back → A's terminals and tabs are as they were.
-  - [ ] Delete a workspace → none of its tabs remain anywhere.
+  - [x] Delete a workspace → none of its tabs remain anywhere. (cards; evidence/cards-PROJ-066.txt)
 Compat: —
 Source: D-01-066
 
@@ -40,8 +40,8 @@ Rules: several folders can be chosen in one go and each becomes a separate proje
   added again; on Windows the comparison resolves each path to its canonical form and ignores letter
   case; a freshly added project goes to the top of the Recent order.
 Acceptance:
-  - [ ] Choose two sibling repositories together → exactly two new projects appear and nothing else.
-  - [ ] Choose a folder that is registered already → no second row appears.
+  - [x] Choose two sibling repositories together → exactly two new projects appear and nothing else. (cards; evidence/cards-PROJ-001.txt)
+  - [x] Choose a folder that is registered already → no second row appears. (cards; evidence/cards-PROJ-001.txt)
 Compat: —
 Source: D-01-001
 
@@ -55,9 +55,9 @@ Rules: the main checkout is chosen on purpose, never simply whichever worktree i
   worktree list is fully re-read before the hand-off; scratch worktrees that coding tools make for
   their own sub-agents stay out of sight.
 Acceptance:
-  - [ ] Add a repository with three worktrees where the main checkout is not first alphabetically →
-        the main checkout is the active workspace.
-  - [ ] Add a repository that holds a coding tool's scratch worktree → that worktree is not listed.
+  - [x] Add a repository with three worktrees where the main checkout is not first alphabetically →
+        the main checkout is the active workspace. (cards; evidence/cards-PROJ-007.txt)
+  - [x] Add a repository that holds a coding tool's scratch worktree → that worktree is not listed. (cards; evidence/cards-PROJ-007.txt)
 Compat: —
 Source: D-01-007
 
@@ -94,8 +94,8 @@ Rules: spaces turn into hyphens, repeated separators merge, characters Git does 
   remote, a number is added; with no display name typed, the branch name is shown without its refs
   prefix.
 Acceptance:
-  - [ ] Create "Fix login 🔥" → the branch reads like fix-login-fire and the shown name is
-        unchanged.
+  - [x] Create "Fix login 🔥" → the branch reads like fix-login-fire and the shown name is
+        unchanged. (cards; evidence/cards-PROJ-021.txt)
   - [ ] Create a name made only of characters Git rejects → refused with a message.
 Compat: —
   (Kolux RS, T-013-fix-b: emoji outside the short-word table become their Unicode name in words,
@@ -114,10 +114,10 @@ Rules: by default the root is a workspaces folder inside a kolux folder in the h
   dot-git ending; a folder set for one project overrides the global one; folders used before are
   remembered so they can be picked again quickly.
 Acceptance:
-  - [ ] Point the folder at a location on another drive with nesting on, then create a in project
-        app → the new folder sits at that location, inside app, named a.
-  - [ ] Set a separate folder for one project → its new workspaces go there while other projects
-        keep the global folder.
+  - [x] Point the folder at a location on another drive with nesting on, then create a in project
+        app → the new folder sits at that location, inside app, named a. (cards; evidence/cards-PROJ-025.txt)
+  - [x] Set a separate folder for one project → its new workspaces go there while other projects
+        keep the global folder. (cards; evidence/cards-PROJ-025.txt)
 Compat: Today the owner sets a project's own workspaces folder from the CLI through the host-setups
   command group, which is cut (PROJ-096). The folder moves to the per-repository settings page with
   no CLI route (OD-07 in DECISIONS.md); if that is flipped, a kolux command is added to COMPAT.md
@@ -139,7 +139,7 @@ Rules: a choice made for this one workspace always takes priority; a saved base 
 Acceptance:
   - [ ] Delete the saved base branch on the remote, then create a workspace → it starts from the
         default branch and a fallback notice appears.
-  - [ ] Pick a full commit id as the start → the workspace starts there and no fetch happens.
+  - [x] Pick a full commit id as the start → the workspace starts there and no fetch happens. (cards; evidence/cards-PROJ-028.txt)
 Compat: —
 Source: D-01-028
 
@@ -167,8 +167,8 @@ User sees: a workspace made with a name and, optionally, an agent and prompt, a 
 Rules: rm also answers to remove and delete and is marked as destructive; create can make the new
   workspace active in the app; setup can be run, skipped, or left to the project default.
 Acceptance:
-  - [ ] Create one with a name, an agent, a prompt and JSON output → the JSON includes the new
-        folder path; remove it by name → it is gone.
+  - [x] Create one with a name, an agent, a prompt and JSON output → the JSON includes the new
+        folder path; remove it by name → it is gone. (cards; evidence/cards-PROJ-077.txt)
   - [ ] Create with setup skipped → no setup script runs for it.
 Compat: kolux worktree create takes --name plus optional --repo, --agent, --prompt, --setup (run,
   skip or inherit), --base-branch, --issue, --comment, --parent-worktree or --no-parent, --activate,
@@ -187,8 +187,8 @@ Rules: a merged pull request goes to done, while a suppressed pull request count
   agent states sort into needs-you, working and done, with queued as a group of its own; the choice
   is remembered.
 Acceptance:
-  - [ ] Group by pull-request state with one merged pull request → that workspace sits in done.
-  - [ ] Restart after choosing a grouping → the same grouping is in place.
+  - [x] Group by pull-request state with one merged pull request → that workspace sits in done. (cards; evidence/cards-PROJ-045.txt)
+  - [x] Restart after choosing a grouping → the same grouping is in place. (cards; evidence/cards-PROJ-045.txt)
 Compat: —
 Source: D-01-045
 
@@ -200,8 +200,8 @@ User sees: blocked or waiting workspaces come first, then finished ones, then wo
 Rules: an old Recent setting is moved over to Smart once; an agent that was interrupted counts as
   interrupted, not as done.
 Acceptance:
-  - [ ] One workspace blocked and one done → blocked is above done, whichever changed last.
-  - [ ] Interrupt an agent → its workspace is not sorted among the done ones.
+  - [x] One workspace blocked and one done → blocked is above done, whichever changed last. (cards; evidence/cards-PROJ-050.txt)
+  - [x] Interrupt an agent → its workspace is not sorted among the done ones. (cards; evidence/cards-PROJ-050.txt)
 Compat: —
 Source: D-01-050
 
@@ -215,8 +215,8 @@ Rules: unread can be switched by hand, even on the active row; switching branch 
   reported by a session's hooks wins over status guessed from its title; the current workspace's row
   has a thin accent bar showing where the user is.
 Acceptance:
-  - [ ] An agent in a background workspace asks for permission → its row shows the permission state
-        ahead of other activity.
+  - [x] An agent in a background workspace asks for permission → its row shows the permission state
+        ahead of other activity. (cards; evidence/cards-PROJ-063.txt)
   - [ ] Switch branch in a workspace's terminal → the row shows the new branch.
 Compat: —
 Source: D-01-063
@@ -235,8 +235,8 @@ Rules: a workspace with changes is not deleted unless forced, and a locked one i
   not taken back if the user has gone elsewhere; the list holds its scroll position, and with
   reduced motion the row disappears without animation.
 Acceptance:
-  - [ ] Delete a workspace holding an unsaved change → a warning shows; confirming without force is
-        refused.
+  - [x] Delete a workspace holding an unsaved change → a warning shows; confirming without force is
+        refused. (cards; evidence/cards-PROJ-070.txt)
   - [ ] Delete the active row while the list is scrolled → the list does not jump.
 Compat: Keybinding id workspace.delete.
 Source: D-01-070

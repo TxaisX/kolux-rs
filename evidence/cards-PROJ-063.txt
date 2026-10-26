@@ -1,0 +1,5 @@
+box 1: src/projects/__cards__/PROJ-063.test.ts::"a background workspace with a permission request shows permission, ahead of working, done and blocked panes" — pnpm exec vitest run src/projects/__cards__/PROJ-063.test.ts (scratch env G:\Temp\cards-v3) — Test Files 1 passed (1) / Tests 1 passed (1)
+  (row state = strongest of the workspace's pane states; permission outranks every other state in either argument order; smart sort lists it above a working row that changed later)
+  hook side: cargo test --manifest-path src-tauri/Cargo.toml --lib -- a_permission_clears_only_when — test status::tests::a_permission_clears_only_when_the_same_tool_resumes_and_background_work_keeps_working ... ok (PermissionRequest -> "permission")
+box 2: NOT TICKED (LIVE). Backend half passes: cargo test --manifest-path src-tauri/Cargo.toml --test cards_01 — test proj063_box2_backend_half_a_branch_switched_inside_the_workspace_folder_lists_under_the_new_branch ... ok / test result: ok. 10 passed; 0 failed
+  (list_workspaces reads the new branch after `git switch -c` in the folder; the row refresh is the 5 s poll in ProjectsPanel.tsx, not exercised by any test)

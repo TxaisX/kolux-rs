@@ -35,7 +35,6 @@ mod imp {
     use crate::browser::{cookies, crash, holder, permissions, preview, profiles};
     use cookies::Entry;
     use tauri::webview::cookie::SameSite;
-    use tauri::Emitter;
     use std::path::PathBuf;
     use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, GetCookiesCompletedHandler, NavigationStartingEventHandler, PermissionRequestedEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
     use windows::core::{w, Interface, BOOL, HSTRING, PWSTR};
@@ -250,7 +249,7 @@ mod imp {
                 permissions::Answer::DenyQuiet => unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?,
                 permissions::Answer::Deny(text) => {
                     unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?;
-                    let _ = app.emit(crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }));
+                    crate::browser::notices::send(&app, id, crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }), Some(text.to_string()));
                 }
             }
             Ok(())

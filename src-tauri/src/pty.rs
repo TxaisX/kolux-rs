@@ -5,7 +5,7 @@
 //! exit. Dropping the session (or calling `kill`) ends the program, by force if it does not leave.
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -14,6 +14,10 @@ use std::time::Duration;
 /// T-075-b: the background terminal service that owns terminals so they outlive the window.
 #[path = "pty_service.rs"]
 pub mod service;
+
+/// Fix-term 787: the PTY reader's output, batched.
+#[path = "pty_pump.rs"]
+mod pump;
 
 /// T-184-b: the window's side of the service (panes routed through it, taken back after a restart).
 #[path = "pty_link.rs"]
@@ -410,7 +414,7 @@ impl PtySession {
         cmds: Vec<CommandBuilder>,
         cols: u16,
         rows: u16,
-        mut on_output: impl FnMut(&[u8]) + Send + 'static,
+        on_output: impl FnMut(&[u8]) + Send + 'static,
         on_exit: impl FnOnce(Option<u32>) + Send + 'static,
     ) -> Result<Self, String> {
         let pair = native_pty_system()
@@ -439,24 +443,10 @@ impl PtySession {
         let killer = child.clone_killer();
         let pid = child.process_id();
         let job = crate::procs::pane_job(&*child);
-        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
-        thread::Builder::new()
-            .name("pty-reader".into())
-            .spawn(move || {
-                if let Some(n) = note {
-                    on_output(n.as_bytes());
-                }
-                let mut buf = [0u8; 8192];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => on_output(&buf[..n]),
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())?;
+        pump::start(reader, note, on_output)?;
         thread::Builder::new()
             .name("pty-waiter".into())
             .spawn(move || {

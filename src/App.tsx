@@ -188,9 +188,11 @@ import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
+import { scopesFor } from "./keys/keyScopes";
 import { installTapReset } from "./shell/inputExtras";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { usePromptScan } from "./status/promptScan";
+import { useRestoredStatus } from "./status/useRestoredStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
 import { creditedLive, launchedAgent, launchedName } from "./status/credit";
@@ -413,8 +415,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           setSettingsRead(true);
           applyAppearance(readAppearance(s));
           applyWindowBlur(s);
-          // after-list #39: said once when the settings came from the last good copy
-          void invoke<string | null>("settings_fallback_notice").then((m) => m && setNotice(m), () => {});
+          // after-list #39 / row 789: the fallback sentence is told by RecoveryMount now (its own notice, not the single slot the shortcuts file overwrote)
         })
         .catch(() => setSettings({}));
     readSettings();
@@ -637,7 +638,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       const hit =
         tapHit(windowTaps, keymap, e) ||
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
+        matchEvent(keymap, e, scopesFor({ screen, kind, inTree })) ||
         // GIT-042: a preview tab takes the one editor shortcut that applies to it.
         (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
       if (!hit || heldByTerminal(hit.id, settings)) return;
@@ -1169,6 +1170,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "preview", path }]);
     setFocused(key);
   };
+
+  // APP-019: markdown files the system handed to the app open as previews, at start and on each later ask.
+  const openFiles = useRef(openPreview);
+  openFiles.current = openPreview;
+  useEffect(() => {
+    const drain = () => void invoke<string[]>("open_files_take").then((fs) => fs.forEach((f) => openFiles.current(f))).catch(() => undefined);
+    const off = listen("open-files", drain);
+    drain();
+    return () => void off.then((f) => f()).catch(() => undefined);
+  }, []);
 
   // TERM-001: the layout strip sets how many cells the workspace in front holds. Growing adds
   // empty chooser panes (nothing starts on its own); shrinking drops unstarted cells newest
@@ -2440,6 +2451,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   report.current = reportLayout;
   useEffect(() => report.current());
   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+  useRestoredStatus({ panes, hookRef, setHook, setStale, setCrew, setTurn });
   useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
   // STAT-044: a clicked notification focuses the pane that raised it (notification_clicked emits the pane).
   useEffect(() => {
@@ -3127,6 +3139,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     follow={p.follow}
                     notes={notes}
                     onRemoveNote={(n) => setNotes((ns) => ns.filter((x) => x !== n))}
+                    onEditNote={(n, text) => setNotes((ns) => ns.map((x) => (x === n ? { ...x, note: text } : x)))}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}

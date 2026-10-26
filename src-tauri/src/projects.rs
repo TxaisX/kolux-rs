@@ -304,7 +304,11 @@ pub fn unseen(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktre
 
 /// `unseen` over a worktree list already scanned, so the scan can run without the store (T-442).
 pub fn unseen_of(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
-    let list = decorate(store, project, all)?;
+    unseen_in(store, project, decorate(store, project, all)?)
+}
+
+/// `unseen_of` over a list already decorated, so one scan can give both answers (T-442-c).
+fn unseen_in(store: &Store, project: &Project, list: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
     let keys: Vec<String> = list.iter().map(|w| name_key(&w.path)).collect();
     let Some(seen) = seen_of(store, project) else {
         save_seen(store, project, &keys)?;
@@ -1478,6 +1482,27 @@ pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> 
 pub async fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
     let (project, all) = scan(&git, &store, &project_id)?;
     unseen_of(&*store.lock().map_err(|e| e.to_string())?, &project, all)
+}
+
+/// A project's workspaces and the ones made outside Kolux that were not seen yet (T-442-c).
+#[derive(Debug, serde::Serialize)]
+pub struct Scanned {
+    pub list: Vec<Worktree>,
+    pub unseen: Vec<Worktree>,
+}
+
+/// Both answers of `workspace_list` and `workspace_unseen` from one scan of one project.
+pub fn scanned_of(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Scanned, String> {
+    let list = decorate(store, project, all)?;
+    let unseen = unseen_in(store, project, list.clone())?;
+    Ok(Scanned { list, unseen })
+}
+
+/// The sidebar's poll: one `git worktree list` per project instead of one per command.
+#[tauri::command]
+pub async fn workspace_scan(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Scanned, String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    scanned_of(&*store.lock().map_err(|e| e.to_string())?, &project, all)
 }
 
 #[tauri::command]
@@ -3638,6 +3663,31 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
             let _ = git.worktree_remove(&repo, d, None);
         }
         for d in [profile, repo] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    // T-442-c: the sidebar's one call gives what workspace_list and workspace_unseen gave in two.
+    #[test]
+    fn one_scan_gives_the_list_and_the_unseen_alike() {
+        let git = Git::detect().unwrap();
+        let profile = temp("scanned");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("scanned-r");
+        let side = temp("scanned-side");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let first = scanned_of(&store, &project, git.worktrees(Path::new(&project.path)).unwrap()).unwrap();
+        assert!(first.unseen.is_empty(), "the first scan takes what is there as seen");
+        assert_eq!(first.list.len(), 1);
+        git_in(&repo, &["worktree", "add", "-q", "-b", "outside", &side.join("outside").to_string_lossy()]);
+        crate::visibility::set_choice(&store, None, "other", Some(true)).unwrap();
+        let all = git.worktrees(Path::new(&project.path)).unwrap();
+        let both = scanned_of(&store, &project, all.clone()).unwrap();
+        assert_eq!(both.list, decorate(&store, &project, all).unwrap());
+        let fresh: Vec<_> = both.unseen.iter().map(|w| w.branch.clone().unwrap()).collect();
+        assert_eq!(fresh, ["outside"]);
+        assert_eq!(both.list.len(), 2);
+        for d in [profile, repo, side] {
             let _ = fs::remove_dir_all(d);
         }
     }

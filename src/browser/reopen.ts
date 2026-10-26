@@ -16,5 +16,13 @@ export const namesPane = (e: ProfileEvent, id: number): boolean => e.page === id
  *  already gone) does not stop the reopen; an open that fails rejects so the pane can say so. */
 export async function reopenPage(call: Call, id: number, at: Opening): Promise<void> {
   await call("browser_close", { id }).catch(() => {});
-  await call("browser_open", { id, url: at.url, spot: at.spot, background: at.background, shown: at.shown, ...(at.profile === undefined ? {} : { profile: at.profile }) });
+  await openPage(call, id, { url: at.url, spot: at.spot, background: at.background, shown: at.shown, ...(at.profile === undefined ? {} : { profile: at.profile }) });
+}
+
+/** Opens the tab's page, then tells the back end the pane is up (after-list 719): permission and
+ *  download notices raised while the page was being built are held and sent now. A failed open
+ *  rejects; a failed announcement changes nothing the user sees. */
+export async function openPage(call: Call, id: number, args: Record<string, unknown>): Promise<void> {
+  await call("browser_open", { id, ...args });
+  await call("browser_pane_ready", { id }).catch(() => {});
 }
