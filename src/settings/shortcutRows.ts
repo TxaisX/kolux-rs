@@ -46,13 +46,11 @@ export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): 
   // T-164-b: a command nothing runs yet is not offered; drop an id from NOT_ROUTED when its handler lands.
   return [...map.bindings.values()].filter(({ action }) => !NOT_ROUTED.has(action.id)).map(({ action, chords, custom, dropped }) => {
     const defaults = defaultsFor(action, p);
-    const disabled = custom && chords.length === 0 && defaults.length > 0;
     const modified = custom && chords.join() !== defaults.join();
     const clash = map.clashes.find((c) => c.ids.includes(action.id));
     const menu = action.scope === "global" ? nativeHits(chords, native) : [];
     const badges: Badge[] = [];
-    if (disabled) badges.push("Disabled");
-    else if (chords.length === 0) badges.push("Unassigned");
+    if (chords.length === 0) badges.push("Unassigned");
     else if (modified) badges.push("Modified");
     if (clash || menu.length > 0) badges.push("Conflicts");
     const label = (c: string, on: Platform = p) => labelParts(c, on).join("+");

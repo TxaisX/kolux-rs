@@ -17,7 +17,7 @@ test("every command is listed under its area with its chords and badges", () => 
   const by = (id: string) => all.find((r) => r.id === id)!;
   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
   expect(by("zoom.reset").badges).toEqual(["Modified"]);
-  expect(by("zoom.in").badges).toEqual(["Disabled"]);
+  expect(by("zoom.in").badges).toEqual(["Unassigned"]);
   expect(by("view.code").badges).toEqual([]);
   expect(by("workspace.openBoard").badges).toEqual(["Unassigned"]);
   expect(by("view.tasks").badges).toEqual(["Unassigned", "Conflicts"]);
@@ -120,4 +120,9 @@ test("SET-010 box 1: a custom chord on a default's chord flags both rows Conflic
 test("SET-010 box 1: a custom chord that shares nothing with a default raises no Conflicts", () => {
   const all = rows({ keybindings: { "workspace.openBoard": "Mod+Alt+9" } });
   expect(filterRows(all, "conflicting", "")).toEqual([]);
+});
+
+test("SET-011 box 1: a null entry shows Unassigned, not Disabled", () => {
+  const row = rows({ keybindings: { "terminal.clear": null } }).find((r) => r.id === "terminal.clear")!;
+  expect([row.labels, row.badges]).toEqual([[], ["Unassigned"]]);
 });
