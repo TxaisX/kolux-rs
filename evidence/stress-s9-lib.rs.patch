@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index d0174e6f..fb876e4a 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -59,6 +59,8 @@ mod orchestration;
+ mod foreground;
+ mod procs;
+ mod protected;
++#[cfg(test)]
++mod s9_fuzz_tests;
+ mod protected_custom;
+ mod ports;
+ mod labels;
