@@ -6,7 +6,10 @@
 //! a restored permission never blocks the first live event. At quit the agents that can still be
 //! resumed (working, waiting on the user, or stopped on a limit, with their provider session id)
 //! are recorded for every worktree, and a workspace's are recorded when it is put to sleep
-//! (T-167-b). Showing restored rows on their panes, unconfirmed, is still open on T-167-b.
+//! (T-167-b). Restored rows are served as unconfirmed until a live event arrives for their pane;
+//! they carry no pending tool, so they never drive the approve buttons. A row keeps the hook
+//! version its pane reported (a pane older than this build reads "restart this terminal") and the
+//! pane's terminal process id, which keeps its child rows only while that process may still live.
 
 use super::super::identity;
 use crate::status::{Agent, Session, Status};
@@ -15,6 +18,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
+/// The window hears this when a live event comes from a pane whose hooks are from an older Kolux.
+pub const RESTART_EVENT: &str = "agent-restart-terminal";
 /// The state-store key holding the panes' last statuses.
 pub const SAVED_KEY: &str = "agentStatusSaved";
 /// The state-store key holding the agents that can be resumed, written at quit (STAT-037).
@@ -43,6 +48,37 @@ pub struct Row {
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop: Option<Value>,
+    /// The hook version the pane's environment was written with (the identity header's stamp).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_version: Option<u32>,
+    /// The pane's terminal process id when the row was last written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// The sub-agents and teammates the pane had.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<SavedChild>,
+}
+
+/// One child row of a saved pane.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedChild {
+    pub id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub state: String,
+}
+
+/// A saved row as the window shows it (T-167-b): never confirmed, and `restart` when the pane's
+/// hooks were written by an older Kolux.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Restored {
+    #[serde(flatten)]
+    pub row: Row,
+    pub unconfirmed: bool,
+    pub restart: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -55,6 +91,8 @@ struct Saved {
 static LIVE: Mutex<Option<HashMap<u32, Row>>> = Mutex::new(None);
 /// The rows the previous run left, after the holding file was folded onto them.
 static RESTORED: Mutex<Vec<Row>> = Mutex::new(Vec::new());
+/// The panes that reported live since the start: their restored rows are confirmed, so no longer served.
+static CONFIRMED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -94,18 +132,52 @@ pub fn row_of(agent: &str, status: &Status, event: &Value, prev: Option<&Row>, n
         session_id: text("session_id").or_else(|| prev.and_then(|p| p.session_id.clone())),
         cwd: text("cwd").or_else(|| prev.and_then(|p| p.cwd.clone())),
         stop: status.stop.as_ref().and_then(|s| serde_json::to_value(s).ok()),
+        hook_version: prev.and_then(|p| p.hook_version),
+        pid: prev.and_then(|p| p.pid),
+        children: status.children.iter().map(|c| SavedChild { id: c.id.clone(), kind: c.kind.clone(), model: c.model.clone(), state: c.state.to_owned() }).collect(),
+    }
+}
+
+/// A live event came from `pane_key`: its restored row is confirmed and no longer served.
+pub fn confirm(pane_key: u32) {
+    let mut confirmed = CONFIRMED.lock().unwrap_or_else(|p| p.into_inner());
+    if !confirmed.contains(&pane_key) {
+        confirmed.push(pane_key);
+    }
+}
+
+/// True when a pane's hooks were written by an older hook version than this build's.
+pub fn outdated(stamp: Option<u32>, current: u32) -> bool {
+    stamp.is_some_and(|v| v < current)
+}
+
+/// Keeps a row's children only while the pane's process may still live: a process proven gone, or
+/// none recorded, clears them so a pane that slept through its finish reaches done.
+pub fn keep_living_children(rows: &mut [Row], alive: impl Fn(u32) -> Option<bool>) {
+    for row in rows.iter_mut().filter(|r| !r.children.is_empty()) {
+        if row.pid.is_none_or(|pid| alive(pid) == Some(false)) {
+            row.children.clear();
+        }
     }
 }
 
 /// A live hook was answered: the pane's row is updated and, when it changed, the save rewritten.
-pub fn note(app: &tauri::AppHandle, route: &str, body: &[u8], status: &Status) {
+pub fn note(app: &tauri::AppHandle, route: &str, body: &[u8], status: &Status, hook_version: Option<u32>) {
     use tauri::Manager as _;
     let Some((_, agent)) = agent_of(route) else { return };
     let event: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    confirm(status.pane_key);
+    if outdated(hook_version, crate::hooks::HOOK_VERSION) {
+        use tauri::Emitter as _;
+        let _ = app.emit(RESTART_EVENT, serde_json::json!({ "paneKey": status.pane_key }));
+    }
+    let pid = status.terminal.and_then(|t| app.try_state::<crate::terminal::Terminals>()?.list().into_iter().find(|(id, _, _)| *id == t)?.1);
     let rows = {
         let mut live = LIVE.lock().unwrap_or_else(|p| p.into_inner());
         let live = live.get_or_insert_with(HashMap::new);
-        let row = row_of(agent, status, &event, live.get(&status.pane_key), now_ms());
+        let mut row = row_of(agent, status, &event, live.get(&status.pane_key), now_ms());
+        row.hook_version = hook_version.or(row.hook_version);
+        row.pid = pid.or(row.pid);
         if live.get(&status.pane_key) == Some(&row) {
             return;
         }
@@ -140,7 +212,8 @@ pub fn replay(text: &str, rows: &mut Vec<Row>, now: u64) -> usize {
         let Some((change, child)) = session.apply(agent, &event) else { continue };
         let status = Status { pane_key, terminal, change, children: Vec::new(), stop: session.stop.clone(), reply: None, child, interrupted: false, monitoring: session.monitoring() };
         let at = rows.iter().position(|r| r.pane_key == pane_key);
-        let row = row_of(name, &status, &event, at.map(|i| &rows[i]), now);
+        let mut row = row_of(name, &status, &event, at.map(|i| &rows[i]), now);
+        row.hook_version = crate::hooks::identity_version(who).or(row.hook_version);
         match at {
             Some(i) => rows[i] = row,
             None => rows.push(row),
@@ -167,9 +240,11 @@ pub fn startup(store: &crate::state::Store, dir: &Path) {
         }
         let _ = std::fs::remove_file(&taken);
     }
+    keep_living_children(&mut rows, crate::procs::alive);
     if let Err(e) = store.set(SAVED_KEY, &serialize(&rows)) {
         eprintln!("kolux-rs: the agents' status could not be saved: {e}");
     }
+    CONFIRMED.lock().unwrap_or_else(|p| p.into_inner()).clear();
     *RESTORED.lock().unwrap_or_else(|p| p.into_inner()) = rows;
 }
 
@@ -258,10 +333,16 @@ pub fn at_quit(store: &crate::state::Store) {
     }
 }
 
+/// The rows the previous run left whose pane has not reported live yet (STAT-030).
+pub fn unconfirmed_rows() -> Vec<Row> {
+    let confirmed = CONFIRMED.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    RESTORED.lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|r| !confirmed.contains(&r.pane_key)).cloned().collect()
+}
+
 /// The rows the previous run left (STAT-030), for the panes to show unconfirmed (T-167-b).
 #[tauri::command]
-pub fn agent_status_saved() -> Vec<Row> {
-    RESTORED.lock().unwrap_or_else(|p| p.into_inner()).clone()
+pub fn agent_status_saved() -> Vec<Restored> {
+    unconfirmed_rows().into_iter().map(|row| Restored { restart: outdated(row.hook_version, crate::hooks::HOOK_VERSION), unconfirmed: true, row }).collect()
 }
 
 /// The agents recorded for resuming at the last quit (STAT-037; the offer itself is T-066).

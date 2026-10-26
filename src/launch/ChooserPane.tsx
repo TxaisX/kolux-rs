@@ -22,7 +22,7 @@ import { KITS, VENDOR_NAME, assignRoles, type Vendor } from "../kits/catalog";
 import { canLaunch, FEATURED, type AgentPass } from "./agents";
 import { useKeymap } from "../keys/KeymapContext";
 import { savedSeat } from "../chat/controls";
-import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
+import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup, LISTED, setDiscovered } from "./seats";
 
 /** SESS-017: a link to the agent's own documentation, when Kolux knows it (agents.rs `install_page`). */
 function DocsLink({ agent }: { agent: AgentInfo }) {
@@ -48,6 +48,18 @@ export function seatAgents(agents: AgentInfo[], detecting: boolean) {
   const featured = FEATURED.flatMap((id) => agents.filter((a) => a.id === id)).map((agent) => ({ agent, missing: !agent.installed }));
   const more = agents.filter((a) => a.installed && !FEATURED.includes(a.id));
   return { featured: detecting ? [] : featured, more: detecting ? [] : more, none: !detecting && !agents.some((a) => a.installed) };
+}
+
+const asked: Record<string, Promise<boolean>> = {};
+/** SESS-029: one live model listing per agent per app run; true when it added models. */
+function liveModels(id: string): Promise<boolean> {
+  asked[id] ??= invoke<{ id: string; label: string }[] | null>("agent_models", { id })
+    .then((found) => {
+      setDiscovered(id, found);
+      return !!found?.length;
+    })
+    .catch(() => false);
+  return asked[id];
 }
 
 type Props = {
@@ -127,6 +139,11 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
     const saved = id === TERMINAL ? null : savedSeat(id);
     setSeat(i, { agent: id, model: id !== TERMINAL && only ? DEFAULT_MODEL : null, effort: undefined, fast: undefined, ...(saved?.model ? saved : {}) });
   };
+  // SESS-029: Grok and Cursor are asked for their models once per app run.
+  const [, setLive] = useState(0);
+  useEffect(() => {
+    for (const a of agents) if (a.installed && LISTED.includes(a.id)) void liveModels(a.id).then((n) => n && setLive((v) => v + 1));
+  }, [agents]);
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const searched = !pass || canLaunch(pass);
   const ready = allReady(seats) && !busy && searched;
@@ -446,7 +463,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                     <label className="choice">
                       Effort
                       <select aria-label={`Seat ${i + 1}: effort`} value={seat.effort ?? ""} onChange={(e) => setSeat(i, { effort: e.currentTarget.value || undefined })}>
-                        <option value="">Model default</option>
+                        <option value="">{choiceOf(seat)?.defaultEffort ? `Model default (${choiceOf(seat)?.defaultEffort})` : "Model default"}</option>
                         {choiceOf(seat)?.efforts?.map((l) => (
                           <option key={l} value={l}>
                             {l}

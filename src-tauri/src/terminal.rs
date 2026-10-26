@@ -8,6 +8,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+// T-066-d: the session id an id-only agent prints (its own resume hint), told to the window when its pane's program exits.
+#[path = "terminal_session_id.rs"]
+pub mod session_id;
+#[cfg(test)]
+mod flood;
+
 pub const OUTPUT_EVENT: &str = "terminal-output";
 pub const EXIT_EVENT: &str = "terminal-exit";
 /// CLI-024: the app asks the window for a pane's visible frame; the window answers with
@@ -15,6 +21,8 @@ pub const EXIT_EVENT: &str = "terminal-exit";
 pub const SCREEN_EVENT: &str = "terminal-screen-request";
 /// Lines kept per terminal for `kolux terminal read` (CLI-024); older ones are dropped.
 pub const LOG_LINES: usize = 2000;
+/// Fix-term 786: the most a log keeps of a line that has not ended yet.
+const PENDING_CAP: usize = 16 * 1024;
 const SCREEN_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 /// APP-052: the terminal service's wire protocol. Additions only bump it; the window refuses a
 /// service older than the oldest protocol it still speaks (src/terminal/reattach.ts).
@@ -86,12 +94,40 @@ struct Inner {
     panes: HashMap<u32, u32>,
     /// ORCH-057: each session's output count and raw tail, for a viewer's resync.
     snaps: HashMap<u32, Snap>,
+    /// Row 211: which process each session id holds now; a new number every time an id starts (a reused id too).
+    process_gen: HashMap<u32, u64>,
+    process_count: u64,
 }
 
 impl Inner {
+    /// One chunk of a session's output, taken in: the snapshot tail and count (returned), the line log,
+    /// the saved history, the screen-owner bits and the program's last-output time.
+    fn book_chunk(&mut self, id: u32, chunk: &[u8], is_program: bool) -> u64 {
+        let seq = self.snaps.entry(id).or_default().push(chunk);
+        self.logs.entry(id).or_default().push(chunk);
+        if let Some(h) = self.hist.get_mut(&id) {
+            h.append(chunk);
+        }
+        if chunk.contains(&0x1b) {
+            let prev = self.owned.get(&id).copied().unwrap_or(0);
+            let now = screen_owner(prev, chunk);
+            if now != prev {
+                self.owned.insert(id, now);
+            }
+        }
+        if is_program {
+            if let Some(m) = self.marks.get_mut(&id) {
+                m.last_output = Some(Instant::now());
+            }
+        }
+        seq
+    }
+
     /// ORCH-059: a session id about to be (re)used starts as a new incarnation: nothing an earlier
     /// session under the same handle left behind (log, screen bits, end flag, marks, snapshot) carries over.
     fn fresh_incarnation(&mut self, id: u32) {
+        self.process_count += 1;
+        self.process_gen.insert(id, self.process_count);
         self.dirs.remove(&id);
         self.marks.remove(&id);
         self.keys.remove(&id);
@@ -218,8 +254,15 @@ impl Flow {
             return;
         }
         self.pauses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let deadline = Instant::now() + wait;
+        let mut deadline = Instant::now() + wait;
+        let mut lowest = *n;
         while *n > FLOW_LOW {
+            // Fix-term 786: a pane that is slow but answering keeps the reader waiting; only one that has
+            // acknowledged nothing for `wait` is given up on (else its backlog grew without bound).
+            if *n < lowest {
+                lowest = *n;
+                deadline = Instant::now() + wait;
+            }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 // ponytail: a pane that never answers is taken as caught up; the next flood pauses again.
@@ -288,7 +331,8 @@ fn total_memory() -> Option<u64> {
 }
 
 /// TERM-106: past this many bytes a pane's saved output is rewritten down to `HISTORY_KEEP`.
-const HISTORY_CAP: u64 = 256 * 1024;
+/// Fix-term 787: 1 MB, so the rewrite (a read and a write of the file) runs once per ~900 KB of output, not per 128 KB.
+const HISTORY_CAP: u64 = 1024 * 1024;
 /// TERM-106: what a rewrite keeps (the newest bytes, from a line boundary), and the most a restore replays.
 const HISTORY_KEEP: usize = 128 * 1024;
 
@@ -299,6 +343,8 @@ const HISTORY_KEEP: usize = 128 * 1024;
 struct History {
     path: std::path::PathBuf,
     size: u64,
+    /// Fix-term 787: kept open between chunks (an open per chunk cost ~1 ms on Windows); dropped for the rewrite.
+    file: Option<std::fs::File>,
 }
 
 impl History {
@@ -306,17 +352,23 @@ impl History {
         std::fs::create_dir_all(dir.join("history")).ok()?;
         let path = history_file(dir, key);
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        Some(History { path, size })
+        Some(History { path, size, file: None })
     }
 
     fn append(&mut self, chunk: &[u8]) {
         use std::io::Write as _;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+        if self.file.is_none() {
+            self.file = std::fs::OpenOptions::new().create(true).append(true).open(&self.path).ok();
+        }
+        if let Some(f) = &mut self.file {
             if f.write_all(chunk).is_ok() {
                 self.size += chunk.len() as u64;
+            } else {
+                self.file = None;
             }
         }
         if self.size > HISTORY_CAP {
+            self.file = None;
             self.compact();
         }
     }
@@ -529,6 +581,9 @@ pub struct Read {
 /// ponytail: no column-aware buffer. A repaint that moves to a column above 1 and overwrites in place
 /// would still read joined; unproven against real PSReadLine bytes (T-151-d live step 4).
 fn last_drawing(s: &str) -> &str {
+    if !s.as_bytes().contains(&b'\r') && !s.as_bytes().contains(&0x1b) {
+        return s;
+    }
     // A CSI parameter as a number: empty is "left out" (None), zero-padded forms read as their value.
     let num = |p: &str| if p.is_empty() { None } else { Some(p.bytes().fold(0u32, |n, d| n.saturating_mul(10).saturating_add(u32::from(d - b'0')))) };
     let b = s.as_bytes();
@@ -569,6 +624,10 @@ fn last_drawing(s: &str) -> &str {
 
 /// Drops CSI, OSC and two-byte escape sequences, control characters other than tab.
 pub fn strip_ansi(s: &str) -> String {
+    // Fix-term 787: a line with no control character (nearly every line of a flood) is returned as it is.
+    if !s.bytes().any(|b| b < 0x20 && b != b'\t' || b == 0x7f) {
+        return s.to_string();
+    }
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars().peekable();
     while let Some(c) = it.next() {
@@ -616,9 +675,11 @@ impl OutputLog {
     pub fn push(&mut self, chunk: &[u8]) {
         self.written = Some(Instant::now());
         self.pending.extend_from_slice(chunk);
-        while let Some(i) = self.pending.iter().position(|b| *b == b'\n') {
-            let rest = self.pending.split_off(i + 1);
-            let raw = String::from_utf8_lossy(&std::mem::replace(&mut self.pending, rest)).into_owned();
+        let mut start = 0;
+        while let Some(i) = self.pending[start..].iter().position(|b| *b == b'\n') {
+            let end = start + i + 1;
+            let raw = String::from_utf8_lossy(&self.pending[start..end]);
+            start = end;
             let line = raw.trim_end_matches(['\n', '\r']);
             // A carriage return redraws the line from its start: keep what was drawn last.
             let line = last_drawing(line);
@@ -626,11 +687,31 @@ impl OutputLog {
                 self.oldest = 1;
             }
             self.lines.push_back(strip_ansi(line));
-            while self.lines.len() > LOG_LINES {
-                self.lines.pop_front();
-                self.oldest += 1;
-                self.dropped = true;
+            self.trim();
+        }
+        self.pending.drain(..start);
+        // A line that never ends (binary output, a progress bar drawn with CR alone) is cut into lines
+        // at the cap instead of growing without bound.
+        while self.pending.len() > PENDING_CAP {
+            let at = match std::str::from_utf8(&self.pending[..PENDING_CAP]) {
+                Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                _ => PENDING_CAP,
+            };
+            let rest = self.pending.split_off(at);
+            let raw = String::from_utf8_lossy(&std::mem::replace(&mut self.pending, rest)).into_owned();
+            if self.lines.is_empty() && self.oldest == 0 {
+                self.oldest = 1;
             }
+            self.lines.push_back(strip_ansi(last_drawing(&raw)));
+            self.trim();
+        }
+    }
+
+    fn trim(&mut self) {
+        while self.lines.len() > LOG_LINES {
+            self.lines.pop_front();
+            self.oldest += 1;
+            self.dropped = true;
         }
     }
 
@@ -789,6 +870,9 @@ struct ExitPayload {
     /// ORCH-057: "exited" when the end was confirmed with an exit code, "unverifiable" when Kolux could
     /// not learn how the program ended (viewers say so instead of calling it an exit).
     outcome: &'static str,
+    /// T-066-d: the session id the agent printed in its own resume hint before it exited, when it printed one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
 }
 
 /// Terminal `id` ended, however: it exited, its pane closed, or (USAGE-011, T-067-b) the
@@ -878,6 +962,11 @@ impl Terminals {
         let key = crate::cli::secret();
         let strip_key = crate::claude_key::strip_inherited(program.as_deref(), &env);
         for (command, history_var) in commands.iter_mut().zip(history_vars) {
+            // APP-020 on macOS and Linux: what the login shell sets (read at startup), so tools set up in
+            // a profile script are found as in a terminal outside Kolux.
+            for (k, v) in crate::login_env::get() {
+                command.env(k, v);
+            }
             // ACCT-048: an ordinary terminal's environment: none of Kolux's own runtime or build
             // variables, no conda activation that came along only in part, no prompt-theme wizard.
             for (k, _) in std::env::vars_os() {
@@ -1000,31 +1089,13 @@ impl Terminals {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                 // ORCH-057: the count is taken under the registry lock with the snapshot tail, so a snapshot
                 // holds exactly the chunks whose count is not past its own.
-                let seq = out_registry.lock().map(|mut i| i.snaps.entry(id).or_default().push(chunk)).unwrap_or(0);
+                let seq = out_registry.lock().map(|mut i| i.book_chunk(id, chunk, is_program)).unwrap_or(0);
                 let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key, generation: generation(), seq });
                 if let Some(dir) = link_dir.as_deref() {
                     for url in prs.feed(chunk) {
                         let linked = out_app.state::<Mutex<crate::state::Store>>().lock().is_ok_and(|s| crate::scm::link_printed(&s, dir, &url));
                         if linked {
                             let _ = out_app.emit("settings-saved", ());
-                        }
-                    }
-                }
-                if let Ok(mut inner) = out_registry.lock() {
-                    inner.logs.entry(id).or_default().push(chunk);
-                    if let Some(h) = inner.hist.get_mut(&id) {
-                        h.append(chunk);
-                    }
-                    if chunk.contains(&0x1b) {
-                        let prev = inner.owned.get(&id).copied().unwrap_or(0);
-                        let now = screen_owner(prev, chunk);
-                        if now != prev {
-                            inner.owned.insert(id, now);
-                        }
-                    }
-                    if is_program {
-                        if let Some(m) = inner.marks.get_mut(&id) {
-                            m.last_output = Some(Instant::now());
                         }
                     }
                 }
@@ -1038,9 +1109,11 @@ impl Terminals {
                 // still listed ended by itself: Kolux's own kills take it off the list first.
                 let mut by_itself = false;
                 let mut tail = None;
+                let mut session = None;
                 if let Ok(mut inner) = registry.lock() {
                     // AUTO-014: keep the end of a followed run's output before the log goes.
                     tail = inner.logs.get(&id).map(|l| crate::automations::screen_text(&l.read(None, Some(crate::automations::RUN_OUTPUT_LINES))));
+                    session = inner.marks.get(&id).and_then(|m| m.agent).zip(tail.as_ref()).and_then(|(agent, (text, _))| session_id::hint_session(agent, text));
                     by_itself = inner.sessions.remove(&id).is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
@@ -1076,7 +1149,7 @@ impl Terminals {
                 if let Some(d) = &exit_dir {
                     crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
                 }
-                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code) });
+                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code), session });
             }),
         )
     }
@@ -1372,6 +1445,11 @@ impl Terminals {
         (inner.sessions.contains_key(&id) && !inner.ended.contains(&id)).then_some(id)
     }
 
+    /// Row 211: the process generation of session `id` (changes on every spawn, respawn or adoption of that id), None for an unknown id.
+    pub fn process_generation(&self, id: u32) -> Option<u64> {
+        self.inner.lock().ok()?.process_gen.get(&id).copied()
+    }
+
     /// Is `handle` an open terminal?
     pub fn live(&self, handle: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };
@@ -1560,8 +1638,15 @@ impl Terminals {
     }
 }
 
-/// What `terminal_spawn` answers: the session id and, for a Codex pane, the managed account it
-/// runs on (ACCT-023: the pane remembers it; none for Codex's own sign-in).
+/// T-548-b: the managed account a new pane runs under: the Codex account when there is one, else the
+/// active Claude account when the pane got that account's folder (not on the 1-year key, not on Claude's
+/// own sign-in). `claude_active` is read only for a managed Claude pane.
+pub(crate) fn spawn_account(codex: Option<String>, claude_managed: bool, claude_active: impl FnOnce() -> Option<String>) -> Option<String> {
+    codex.or_else(|| if claude_managed { claude_active() } else { None })
+}
+
+/// What `terminal_spawn` answers: the session id and, for a Codex or Claude pane, the managed account it
+/// runs on (ACCT-023: the pane remembers it; none for the agent's own sign-in).
 #[derive(serde::Serialize)]
 pub struct Spawned {
     pub id: u32,
@@ -1646,8 +1731,12 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
         let codex_home = resumed.or_else(|| crate::codex_accounts::active_home(&store));
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
-        let env: Vec<(String, String)> = crate::claude_key::pane_env(program.as_deref(), &settings, token)
-            .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
+        let by_key = crate::claude_key::pane_env(program.as_deref(), &settings, token);
+        let managed = if by_key.is_none() { crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)) } else { None };
+        // T-548-b: a Claude pane on a managed account answers which one, the way a Codex pane does.
+        let used = spawn_account(used, managed.is_some(), || crate::claude_accounts::active(&store));
+        let env: Vec<(String, String)> = by_key
+            .or(managed)
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), codex_home))
             // ACCT-008: a Grok pane gets the saved xAI key; Grok itself prefers its own sign-in.
@@ -2058,6 +2147,23 @@ mod tests {
         assert_eq!(outcome_of(None), "unverifiable", "an end Kolux could not confirm is not called an exit");
     }
 
+    /// Row 211: every process started under a session id has its own generation, so a pass minted
+    /// for the earlier one can be told from the one running now.
+    #[test]
+    fn orch067_f_a_restarted_session_id_has_a_new_process_generation() {
+        let t = Terminals::default();
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        assert_eq!(t.process_generation(9), None, "an unknown id");
+        t.fake_session(9, &dir, Some("claude"));
+        t.fake_session(10, &dir, None);
+        let (first, other) = (t.process_generation(9).unwrap(), t.process_generation(10).unwrap());
+        assert_ne!(first, other);
+        assert_eq!(t.process_generation(9), Some(first), "stable while the process runs");
+        t.fake_session(9, &dir, Some("claude"));
+        assert_ne!(t.process_generation(9), Some(first), "the reused id is a new process");
+        assert_eq!(t.process_generation(10), Some(other), "another pane is untouched");
+    }
+
     /// ORCH-059: a closed terminal is gone from every list and lookup at once, and a session opened again
     /// under the same handle starts as a new terminal with none of the old one's state.
     #[test]
@@ -2324,6 +2430,26 @@ mod tests {
         assert_eq!(every, vec![(handle_of(7), home, Some(started))]);
         assert!(t.sessions().is_empty(), "a shell with no folder is not a worktree session");
         t.inner.lock().unwrap().sessions.remove(&7).unwrap().kill();
+    }
+
+    #[test]
+    fn t548b_a_managed_claude_pane_answers_its_account_and_other_panes_do_not() {
+        let active = || Some("acct-1".to_string());
+        assert_eq!(spawn_account(None, true, active).as_deref(), Some("acct-1"), "a Claude pane on the managed account");
+        assert_eq!(spawn_account(None, false, active), None, "key mode, Claude's own sign-in or a shell");
+        assert_eq!(spawn_account(Some("cx-2".into()), false, active).as_deref(), Some("cx-2"), "a Codex pane keeps its own");
+        assert_eq!(spawn_account(None, true, || None), None, "no active account");
+        let mut read = false;
+        assert_eq!(spawn_account(Some("cx-2".into()), true, || { read = true; active() }).as_deref(), Some("cx-2"));
+        assert!(!read, "the Claude account is not read when Codex answered");
+    }
+
+    #[test]
+    fn t066d_the_exit_event_carries_a_printed_session_id_only_when_there_is_one() {
+        let with = ExitPayload { id: 3, code: Some(0), outcome: "exited", session: Some("run-2026.10.13-a1b2c3".into()) };
+        assert_eq!(serde_json::to_value(&with).unwrap()["session"], "run-2026.10.13-a1b2c3");
+        let without = ExitPayload { id: 3, code: None, outcome: "unverifiable", session: None };
+        assert!(serde_json::to_value(&without).unwrap().get("session").is_none(), "an old window sees the payload it always saw");
     }
 
     #[test]

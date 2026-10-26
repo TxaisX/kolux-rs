@@ -1,40 +1,43 @@
 import { expect, test } from "vitest";
 import { badgeCount } from "./badge";
-import { COOLDOWN_MS, MEMORY_CAP, newPaceMemory, noteId, paced } from "./pace";
+import { COOLDOWN_MS, MEMORY_CAP, newPaceMemory, paced } from "./pace";
 import { ackKey, toAcknowledge } from "./seen";
+
+// Fixed ids: the pacer treats an id as opaque, so the cases below name theirs.
+const fixed = (pane: number, what: string, at: number): string => `${pane}:${what}:${at}`;
 
 test("two completions from one worktree inside the cooldown are one notification (STAT-044)", () => {
   const mem = newPaceMemory();
-  expect(paced(mem, "G:/w/a", noteId(1, "done", 1_000), 1_000)).toBe(true);
+  expect(paced(mem, "G:/w/a", fixed(1, "done", 1_000), 1_000)).toBe(true);
   // a bell for the same event, and another pane in the same worktree, fold into the first
-  expect(paced(mem, "G:/w/a", noteId(1, "bell", 1_000), 1_200)).toBe(false);
-  expect(paced(mem, "G:/w/a", noteId(2, "done", 1_500), 1_500)).toBe(false);
+  expect(paced(mem, "G:/w/a", fixed(1, "bell", 1_000), 1_200)).toBe(false);
+  expect(paced(mem, "G:/w/a", fixed(2, "done", 1_500), 1_500)).toBe(false);
   // another worktree is its own notification
-  expect(paced(mem, "G:/w/b", noteId(3, "done", 1_600), 1_600)).toBe(true);
+  expect(paced(mem, "G:/w/b", fixed(3, "done", 1_600), 1_600)).toBe(true);
   // after the cooldown the worktree may speak again
-  expect(paced(mem, "G:/w/a", noteId(1, "done", 9_000), 1_000 + COOLDOWN_MS)).toBe(true);
+  expect(paced(mem, "G:/w/a", fixed(1, "done", 9_000), 1_000 + COOLDOWN_MS)).toBe(true);
 });
 
 test("the same event never shows twice, a test ignores the pace, focus can silence it (STAT-044)", () => {
   const mem = newPaceMemory();
-  const id = noteId(1, "done", 1_000);
+  const id = fixed(1, "done", 1_000);
   expect(paced(mem, "G:/w/a", id, 1_000)).toBe(true);
   expect(paced(mem, "G:/w/a", id, 1_000 + 2 * COOLDOWN_MS)).toBe(false);
   // a merged repeat is remembered too: it does not surface once the cooldown passes
-  const merged = noteId(1, "bell", 1_000);
+  const merged = fixed(1, "bell", 1_000);
   paced(mem, "G:/w/a", merged, 1_100);
   expect(paced(mem, "G:/w/a", merged, 1_000 + 2 * COOLDOWN_MS)).toBe(false);
   expect(paced(mem, "G:/w/a", "test", 1_001, { test: true })).toBe(true);
-  expect(paced(mem, "G:/w/c", noteId(9, "done", 1), 1, { focused: true, quietWhenFocused: true })).toBe(false);
-  expect(paced(mem, "G:/w/c", noteId(9, "done", 1), 1, { focused: true })).toBe(true);
+  expect(paced(mem, "G:/w/c", fixed(9, "done", 1), 1, { focused: true, quietWhenFocused: true })).toBe(false);
+  expect(paced(mem, "G:/w/c", fixed(9, "done", 1), 1, { focused: true })).toBe(true);
 });
 
 test("the memory stays bounded during a burst (STAT-044)", () => {
   const mem = newPaceMemory();
-  for (let i = 0; i < MEMORY_CAP * 3; i++) paced(mem, `G:/w/${i}`, noteId(i, "done", i), i);
+  for (let i = 0; i < MEMORY_CAP * 3; i++) paced(mem, `G:/w/${i}`, fixed(i, "done", i), i);
   expect(mem.shown.size).toBe(MEMORY_CAP);
-  expect(mem.shown.has(noteId(0, "done", 0))).toBe(false);
-  expect(mem.shown.has(noteId(MEMORY_CAP * 3 - 1, "done", MEMORY_CAP * 3 - 1))).toBe(true);
+  expect(mem.shown.has(fixed(0, "done", 0))).toBe(false);
+  expect(mem.shown.has(fixed(MEMORY_CAP * 3 - 1, "done", MEMORY_CAP * 3 - 1))).toBe(true);
 });
 
 test("the badge counts workspaces, not tabs, caps and clears (STAT-048)", () => {

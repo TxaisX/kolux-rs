@@ -9,6 +9,11 @@ import { inbandTurn } from "../status/inbandSession";
 import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
 import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import { contextText, sessionMenuActions, type Launch } from "./sessionFork";
+import ForkDialog from "./ForkDialog";
+import ShellMark from "./ShellMark";
+import { shellIconOf, type ShellEntry } from "./shellChoice";
+import type { EntryTarget } from "../launch/newTabEntryRun";
+import { bellGate } from "./bellNote";
 import LinkActionMenu from "./LinkActionMenu";
 import { copyTextOf, destinationOf, doorOfItem, linkMenuItems, openFailed, opensMenu, planClick, type Door, type LinkItemId } from "./linkMenu";
 import type { Chip } from "../board/chip";
@@ -18,6 +23,7 @@ import { withMilestones } from "../onboarding/milestoneNote";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal, type ITerminalAddon } from "@xterm/xterm";
+import { xtermLogger } from "./xtermLogger";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
@@ -185,7 +191,12 @@ type Props = {
   onReviewPlan?: () => void;
   /** after-list #117 (TERM-037): the agent session id, and the window opening a second pane that continues or forks it. */
   session?: string;
-  onSessionLaunch?: (launch: Launch, fork: boolean) => void;
+  onSessionLaunch?: (launch: Launch, fork: boolean, name?: string) => void;
+  /** TERM-042 / TERM-043: the plus menu's entry box (open tabs it can jump to, and what a row opens) and shell choice. */
+  entryTabs?: { key: number; name: string }[];
+  onEntry?: (target: EntryTarget) => void;
+  shells?: ShellEntry[];
+  onShell?: (shell: ShellEntry) => void;
   /** The plus menu behind the header's "+" button. */
   agents?: AgentInfo[];
   launching?: boolean;
@@ -236,7 +247,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, session, onSessionLaunch, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, session, onSessionLaunch, entryTabs, onEntry, shells, onShell, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -347,6 +358,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   const linkOpenRef = useRef<(f: Found, door: Door) => void>(() => {});
   const pasteRef = useRef<() => void>(() => {});
   const [naming, setNaming] = useState(false);
+  const [forkAsk, setForkAsk] = useState<Launch | null>(null); // TERM-037: the fork dialog, open for this launch
   useEffect(() => {
     if (renameAsk > 0 && onRename) setNaming(true);
   }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -443,6 +455,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom (wins over the SET-022 text font fields)
       theme: currentTerminal(),
       allowProposedApi: true,
+      logger: xtermLogger, // stress 802: a program's malformed escapes do not flood the console
       // TERM-013: ConPTY repaints the screen itself after a resize, so a taller pane gets blank rows
       // rather than history pulled down for ConPTY to paint over (expand then restore kept scrollback).
       ...(navigator.userAgent.includes("Windows") ? { windowsPty: { backend: "conpty" as const } } : {}),
@@ -689,7 +702,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     term.onData((data) => {
       write(yenToBackslash(currentInput(), data)); // SET-025: a Japanese keyboard's Yen key types a backslash when asked
     });
-    term.onBell(() => bell.current?.());
+    const bellOnce = bellGate(); // T-125-b: one note per burst of bells
+    term.onBell(() => {
+      if (bellOnce()) bell.current?.();
+    });
     // TERM-082 / VIEW-109 (T-306): the enhanced keyboard protocol a program asks for (CSI > / < / = / ? u), per screen;
     // a terminal reset (ESC c) or the program ending turns it off again.
     const kitty = new KittyKeyboard();
@@ -1441,6 +1457,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   // The seat's job title names the pane; else the running program's title (TERM-058); else the
   // workspace folder (an agent launch's creature name); else "Terminal N" (SESS-024).
   const title = followedTitle(jobTitle, live, cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
+  // TERM-043: a plain Windows shell tab wears the icon of the shell it actually started.
+  const shellIcon = shown === "shell" ? shellIconOf(started ?? program) : "shell";
   const agentLabel = name ?? (shown === "shell" ? "Plain shell" : programWord(shown));
   // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
   const model = agent === "shell" ? null : modelOf(args);
@@ -1493,7 +1511,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>
         <span className="agent-mark" title={agentLabel}>
-          <VendorMark agent={shown} size={13} />
+          {shellIcon === "shell" ? <VendorMark agent={shown} size={13} /> : <ShellMark icon={shellIcon} />}
         </span>
         {naming && onRename ? (
           <NameField
@@ -1672,7 +1690,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             },
             agentActions: [
               ...(onReviewPlan ? [{ id: "reviewPlan", name: "Review plan", title: "Read the plan, comment on it, then approve or ask for changes", run: onReviewPlan }] : []),
-              ...sessionMenuActions({ agent, session, program, args, cwd, branch, title: jobTitle }, { launch: onSessionLaunch, copy: copyContext }),
+              ...sessionMenuActions({ agent, session, program, args, cwd, branch, title: jobTitle }, { launch: onSessionLaunch, askFork: setForkAsk, copy: copyContext }),
             ],
             onSplit,
             onEqualize,
@@ -1696,6 +1714,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         <PlusMenu
           agents={agents}
           dir={cwd ?? undefined}
+          entry={onEntry && { tabs: entryTabs ?? [], onRun: (t) => (setPlusAt(null), onEntry(t)) }}
+          shells={shells}
+          onShell={
+            onShell &&
+            ((sh) => {
+              setPlusAt(null);
+              onShell(sh);
+            })
+          }
           defaultId={defaultId}
           onSetDefault={onSetDefault}
           busy={launching}
@@ -1722,6 +1749,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           onPick={(a) => {
             setPlusAt(null);
             onLaunch?.(a);
+          }}
+        />
+      )}
+      {forkAsk && (
+        <ForkDialog
+          onCancel={() => setForkAsk(null)}
+          onCreate={(forkName) => {
+            onSessionLaunch?.(forkAsk, true, forkName);
+            setForkAsk(null);
           }}
         />
       )}

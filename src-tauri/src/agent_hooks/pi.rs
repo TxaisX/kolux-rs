@@ -8,6 +8,8 @@
 //! Kolux writes its own file there, `kolux-rs.ts`, apart from the user's own extensions: it runs
 //! Kolux's hook script with the event name and a small JSON body, only inside a Kolux pane. A file
 //! of that name Kolux did not write is never touched; taking the hooks away deletes only Kolux's.
+//! Titles: the extension names the tab `π - <session name> - <folder>` through Pi's `ctx.ui.setTitle`
+//! once the session has a name (`pi.getSessionName`, `session_info_changed`); nothing else sets it.
 //! Not built here: Pi has no documented event for its own dialogs (approval forwarding is OMP's,
 //! and OMP has no public source), so "needs you while a dialog is open" stays with the open card.
 
@@ -22,6 +24,10 @@ pub const SCRIPT: &str = "pi.cmd";
 pub const MARK_LINE: &str = "// Kolux RS status extension for Pi. Written by Kolux RS; edits are overwritten.";
 /// STAT-021: the Pi events the extension reports, by Pi's own names.
 pub const EVENTS: [&str; 6] = ["session_start", "agent_start", "tool_execution_start", "tool_execution_end", "agent_settled", "session_shutdown"];
+
+/// T-122 (STAT-021, titles): the events after which the extension refreshes Pi's tab title; a
+/// rename (`session_info_changed`) refreshes it too.
+pub const TITLE_EVENTS: [&str; 3] = ["session_start", "agent_start", "agent_settled"];
 
 /// Kolux's own extension file in Pi's user extensions folder.
 pub fn file(home: &Path) -> PathBuf {
@@ -47,6 +53,7 @@ pub fn extension(script_path: &str) -> String {
         "",
         &format!("const SCRIPT = {lit};"),
         &format!("const EVENTS = {events};"),
+        &format!("const TITLE_EVENTS = {};", serde_json::to_string(&TITLE_EVENTS).expect("strings")),
         "",
         "export default function (pi) {",
         "  if (!process.env.KOLUX_PANE_KEY || !process.env.KOLUX_HOOK_IDENTITY) return;",
@@ -66,7 +73,18 @@ pub fn extension(script_path: &str) -> String {
         "    agent_settled: (e) => ({ aborted: e?.aborted === true }),",
         "    session_shutdown: (e) => ({ reason: e?.reason }),",
         "  };",
-        "  for (const name of EVENTS) pi.on(name, (e) => send(name, fields[name](e)));",
+        "  // The tab title comes only from here: the session's name and folder, once Pi has named it.",
+        "  const clean = (s) => String(s ?? \"\").replace(/[\\u0000-\\u001f\\u007f]/g, \" \").trim().slice(0, 80);",
+        "  const retitle = (ctx) => {",
+        "    try {",
+        "      const name = clean(pi.getSessionName?.());",
+        "      if (!name || typeof ctx?.ui?.setTitle !== \"function\") return;",
+        "      const dir = clean(String(ctx.cwd || process.cwd()).split(/[\\\\/]/).filter(Boolean).pop());",
+        "      ctx.ui.setTitle(dir ? `π - ${name} - ${dir}` : `π - ${name}`);",
+        "    } catch {}",
+        "  };",
+        "  for (const name of EVENTS) pi.on(name, (e, ctx) => { send(name, fields[name](e)); if (TITLE_EVENTS.includes(name)) retitle(ctx); });",
+        "  try { pi.on(\"session_info_changed\", (_e, ctx) => retitle(ctx)); } catch {}",
         "}",
         "",
     ]

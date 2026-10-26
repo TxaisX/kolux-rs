@@ -177,10 +177,9 @@ fn absolute(root: &str, rel: &str) -> String {
     format!("{}/{rel}", root.replace('\\', "/").trim_end_matches('/'))
 }
 
-/// T-250-c: the window says back whether it opened each file it was told about. A window that has
-/// not said it listens (an older window, or none) is not waited for: the answer then lists what was
-/// handed over, as before. One that listens has `WAIT` to answer; a file it refused or never answered
-/// is listed as skipped, never as opened.
+/// T-250-c, row 65: the window says back whether it opened each file it was told about. Only a
+/// file the window confirmed is listed as opened. One it refused is skipped with the window's reason;
+/// one it never answered (or any file, when no window listens) is unconfirmed: handed over, outcome unknown.
 pub struct Acks {
     st: Mutex<AckState>,
     cv: Condvar,
@@ -191,6 +190,16 @@ struct AckState {
     next: u64,
     done: Vec<(u64, Option<String>)>,
 }
+
+/// Why a file the window was told about is not confirmed open.
+#[derive(Debug, PartialEq)]
+pub enum Miss {
+    Refused(String),
+    Silent,
+}
+
+const SILENT: &str = "the window did not answer in time, so Kolux cannot say whether it opened";
+const DEAF: &str = "no Kolux window is listening for file requests, so Kolux cannot say whether it opened";
 
 pub static ACKS: Acks = Acks::new();
 pub const WAIT: Duration = Duration::from_secs(3);
@@ -228,8 +237,8 @@ impl Acks {
         self.lock().done.push((id, failed));
         self.cv.notify_all();
     }
-    /// Waits for every id to be answered (at most `within`); gives back the ids that failed or never answered, with the reason.
-    pub fn wait(&self, ids: &[u64], within: Duration) -> Vec<(u64, String)> {
+    /// Waits for every id to be answered (at most `within`); gives back the ids that failed or never answered.
+    pub fn wait(&self, ids: &[u64], within: Duration) -> Vec<(u64, Miss)> {
         let end = Instant::now() + within;
         let mut g = self.lock();
         while !ids.iter().all(|i| g.done.iter().any(|d| d.0 == *i)) {
@@ -242,9 +251,9 @@ impl Acks {
         let out = ids
             .iter()
             .filter_map(|i| match g.done.iter().find(|d| d.0 == *i) {
-                Some((_, Some(why))) => Some((*i, why.clone())),
+                Some((_, Some(why))) => Some((*i, Miss::Refused(why.clone()))),
                 Some((_, None)) => None,
-                None => Some((*i, "the window did not answer".to_string())),
+                None => Some((*i, Miss::Silent)),
             })
             .collect();
         g.done.retain(|d| !ids.contains(&d.0));
@@ -252,16 +261,31 @@ impl Acks {
     }
 }
 
-/// Moves what the window could not open from the opened list to the skipped one.
-pub fn settle(opened: Vec<(u64, Value)>, skipped: &mut Vec<Value>, failures: &[(u64, String)]) -> Vec<Value> {
+/// Keeps as opened only what the window confirmed: a refusal moves to `skipped` with its reason, a
+/// missing answer to `unconfirmed`.
+pub fn settle(opened: Vec<(u64, Value)>, skipped: &mut Vec<Value>, unconfirmed: &mut Vec<Value>, misses: &[(u64, Miss)]) -> Vec<Value> {
     let mut kept = Vec::new();
     for (id, o) in opened {
-        match failures.iter().find(|f| f.0 == id) {
-            Some((_, why)) => skipped.push(json!({ "path": o["path"], "kind": o["kind"], "why": why })),
+        let row = |why: &str| json!({ "path": o["path"], "kind": o["kind"], "why": why });
+        match misses.iter().find(|f| f.0 == id) {
+            Some((_, Miss::Refused(why))) => skipped.push(row(why)),
+            Some((_, Miss::Silent)) => unconfirmed.push(row(SILENT)),
             None => kept.push(o),
         }
     }
     kept
+}
+
+/// What the window said back about files it was told to open. With no window listening nothing is
+/// waited for and nothing counts as opened.
+pub fn confirm(acks: &Acks, within: Duration, opened: Vec<(u64, Value)>, skipped: &mut Vec<Value>, unconfirmed: &mut Vec<Value>) -> Vec<Value> {
+    if !acks.listening() {
+        unconfirmed.extend(opened.into_iter().map(|(_, o)| json!({ "path": o["path"], "kind": o["kind"], "why": DEAF })));
+        return Vec::new();
+    }
+    let ids: Vec<u64> = opened.iter().map(|o| o.0).collect();
+    let misses = acks.wait(&ids, within);
+    settle(opened, skipped, unconfirmed, &misses)
 }
 
 pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
@@ -286,15 +310,7 @@ pub fn dispatch_with(ctx: &Ctx, req: &Request, acks: &Acks, within: Duration) ->
         (ctx.notify)(v);
         id
     };
-    // What the window said back (nothing is waited for when it does not listen).
-    let answered = |opened: Vec<(u64, Value)>, skipped: &mut Vec<Value>| -> Vec<Value> {
-        if !acks.listening() {
-            return opened.into_iter().map(|o| o.1).collect();
-        }
-        let ids: Vec<u64> = opened.iter().map(|o| o.0).collect();
-        let failures = acks.wait(&ids, within);
-        settle(opened, skipped, &failures)
-    };
+    let answered = |opened: Vec<(u64, Value)>, skipped: &mut Vec<Value>, unconfirmed: &mut Vec<Value>| confirm(acks, within, opened, skipped, unconfirmed);
     match req.command.as_str() {
         OPEN | DIFF => {
             let rel = inside(&root, &req.cwd, text("path").ok_or_else(|| Fail::args("a file path is required"))?)?;
@@ -308,9 +324,9 @@ pub fn dispatch_with(ctx: &Ctx, req: &Request, acks: &Acks, within: Duration) ->
             }
             let staged = a["staged"].as_bool().unwrap_or(false);
             let id = tell(if diff { json!({ "kind": "file-diff", "path": abs, "staged": staged }) } else { json!({ "kind": "file-open", "path": abs }) });
-            let mut skipped = Vec::new();
-            let opened = answered(vec![(id, json!({ "path": rel, "kind": if diff { "diff" } else { "edit" }, "staged": staged }))], &mut skipped);
-            Ok(json!({ "worktree": root, "opened": opened, "skipped": skipped }))
+            let (mut skipped, mut unconfirmed) = (Vec::new(), Vec::new());
+            let opened = answered(vec![(id, json!({ "path": rel, "kind": if diff { "diff" } else { "edit" }, "staged": staged }))], &mut skipped, &mut unconfirmed);
+            Ok(json!({ "worktree": root, "opened": opened, "skipped": skipped, "unconfirmed": unconfirmed }))
         }
         _ => {
             let how = mode(text("mode"))?;
@@ -326,8 +342,9 @@ pub fn dispatch_with(ctx: &Ctx, req: &Request, acks: &Acks, within: Duration) ->
                 opened.push((id, json!({ "path": rel, "kind": "diff", "staged": staged })));
             }
             let mut skipped: Vec<Value> = plan.skipped.iter().map(|(p, m, why)| json!({ "path": p, "kind": m, "why": why })).collect();
-            let opened = answered(opened, &mut skipped);
-            Ok(json!({ "worktree": root, "mode": match how { Mode::Diff => "diff", Mode::Edit => "edit", Mode::Both => "both" }, "opened": opened, "skipped": skipped }))
+            let mut unconfirmed = Vec::new();
+            let opened = answered(opened, &mut skipped, &mut unconfirmed);
+            Ok(json!({ "worktree": root, "mode": match how { Mode::Diff => "diff", Mode::Edit => "edit", Mode::Both => "both" }, "opened": opened, "skipped": skipped, "unconfirmed": unconfirmed }))
         }
     }
 }
@@ -353,6 +370,9 @@ pub fn text_of(r: &Value) -> String {
     }
     for s in list("skipped") {
         out.push(format!("skipped {} {} ({})", s["kind"].as_str().unwrap_or("file"), s["path"].as_str().unwrap_or_default(), s["why"].as_str().unwrap_or_default()));
+    }
+    for u in list("unconfirmed") {
+        out.push(format!("unconfirmed {} {} ({})", u["kind"].as_str().unwrap_or("file"), u["path"].as_str().unwrap_or_default(), u["why"].as_str().unwrap_or_default()));
     }
     if out.is_empty() {
         out.push("nothing to open".into());
@@ -449,20 +469,49 @@ mod tests {
     }
 
     #[test]
-    fn t250c_a_file_the_window_could_not_open_or_never_answered_is_skipped_not_opened() {
+    fn t250c_a_file_the_window_refused_is_skipped_and_one_it_never_answered_is_unconfirmed_never_opened() {
         let acks = Acks::new();
         let (a, b, c) = (acks.next_id(), acks.next_id(), acks.next_id());
         acks.report(a, None);
         acks.report(b, Some("that worktree is not in the window".to_string()));
-        let failures = acks.wait(&[a, b, c], Duration::from_millis(30));
-        assert_eq!(failures, vec![(b, "that worktree is not in the window".to_string()), (c, "the window did not answer".to_string())]);
+        let misses = acks.wait(&[a, b, c], Duration::from_millis(30));
+        assert_eq!(misses, vec![(b, Miss::Refused("that worktree is not in the window".to_string())), (c, Miss::Silent)]);
         let mut skipped = vec![json!({ "path": "gone.txt", "kind": "edit", "why": "deleted" })];
-        let opened = settle(vec![(a, json!({ "path": "a.rs", "kind": "diff" })), (b, json!({ "path": "b.rs", "kind": "diff" })), (c, json!({ "path": "c.rs", "kind": "edit" }))], &mut skipped, &failures);
+        let mut unconfirmed = Vec::new();
+        let opened = settle(vec![(a, json!({ "path": "a.rs", "kind": "diff" })), (b, json!({ "path": "b.rs", "kind": "diff" })), (c, json!({ "path": "c.rs", "kind": "edit" }))], &mut skipped, &mut unconfirmed, &misses);
         assert_eq!(opened, vec![json!({ "path": "a.rs", "kind": "diff" })]);
-        assert_eq!(skipped.len(), 3);
+        assert_eq!(skipped.len(), 2);
         assert_eq!(skipped[1], json!({ "path": "b.rs", "kind": "diff", "why": "that worktree is not in the window" }));
+        assert_eq!(unconfirmed, vec![json!({ "path": "c.rs", "kind": "edit", "why": SILENT })]);
         // The answers were taken: a second wait on the same ids sees none.
         assert_eq!(acks.wait(&[a], Duration::from_millis(10)).len(), 1);
+    }
+
+    /// Row 65: what the command reports for each answer the window can give.
+    #[test]
+    fn row65_confirm_reports_opened_only_for_what_the_window_confirmed() {
+        let files = |acks: &Acks| -> Vec<(u64, Value)> { ["a.rs", "b.rs", "c.rs"].iter().map(|p| (acks.next_id(), json!({ "path": p, "kind": "diff" }))).collect() };
+        // No window listens: nothing is waited for and nothing is opened.
+        let acks = Acks::new();
+        let (mut skipped, mut unconfirmed) = (Vec::new(), Vec::new());
+        let t = Instant::now();
+        let opened = confirm(&acks, Duration::from_secs(5), files(&acks), &mut skipped, &mut unconfirmed);
+        assert!(opened.is_empty() && skipped.is_empty() && t.elapsed() < Duration::from_secs(1));
+        assert_eq!(unconfirmed.len(), 3);
+        assert_eq!(unconfirmed[0]["why"], DEAF);
+        // A listening window opens one, refuses one (file vanished) and is silent on the third.
+        acks.listen(true);
+        let list = files(&acks);
+        acks.report(list[0].0, None);
+        acks.report(list[1].0, Some("the file is gone".to_string()));
+        let (mut skipped, mut unconfirmed) = (Vec::new(), Vec::new());
+        let opened = confirm(&acks, Duration::from_millis(30), list, &mut skipped, &mut unconfirmed);
+        assert_eq!(opened, vec![json!({ "path": "a.rs", "kind": "diff" })]);
+        assert_eq!(skipped, vec![json!({ "path": "b.rs", "kind": "diff", "why": "the file is gone" })]);
+        assert_eq!(unconfirmed, vec![json!({ "path": "c.rs", "kind": "diff", "why": SILENT })]);
+        // The printed answer carries all three outcomes, and an unconfirmed file is never called opened.
+        let r = json!({ "opened": opened, "skipped": skipped, "unconfirmed": unconfirmed });
+        assert_eq!(text_of(&r), format!("opened diff a.rs\nskipped diff b.rs (the file is gone)\nunconfirmed diff c.rs ({SILENT})"));
     }
 
     #[test]

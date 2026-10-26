@@ -4,7 +4,7 @@
 //! handful of rows; a database when profiles carry more than a label).
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub const DEFAULT: &str = "default";
@@ -113,6 +113,95 @@ pub fn clone_profile(store: &mut Store, id: &str, page: Option<u32>) -> Result<P
 /// The engine's data folder for a profile: none for the default (the engine's own).
 pub fn data_dir(root: &Path, id: &str) -> Option<PathBuf> {
     (id != DEFAULT && !id.is_empty()).then(|| root.join("browser-profiles").join(id))
+}
+
+/// after-list 153: removes a deleted profile's engine data folder. Refuses an id that is not one
+/// plain folder name and any folder (a link included) that does not resolve to a place below
+/// `<root>/browser-profiles`. `Ok(false)` when there was no folder.
+pub fn remove_data(root: &Path, id: &str) -> Result<bool, String> {
+    let dir = data_dir(root, id).ok_or_else(|| "the default profile has no data folder of its own".to_string())?;
+    let mut parts = Path::new(id).components();
+    if id.contains(['/', '\\', ':']) || !matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None)) {
+        return Err(format!("{id:?} is not a profile folder name"));
+    }
+    if std::fs::symlink_metadata(&dir).is_err() {
+        return Ok(false);
+    }
+    let base = root.join("browser-profiles").canonicalize().map_err(|e| e.to_string())?;
+    let real = dir.canonicalize().map_err(|e| e.to_string())?;
+    if real == base || !real.starts_with(&base) {
+        return Err(format!("{} is outside the profiles folder; left alone", dir.display()));
+    }
+    std::fs::remove_dir_all(&real).map_err(|e| format!("{}: {e}", real.display()))?;
+    Ok(true)
+}
+
+/// Which profile each open tab's page runs in, and which deleted profiles still wait for their
+/// last tab to close before the data folder can go (the engine holds the folder while a page uses it).
+#[derive(Default)]
+pub struct Live {
+    open: HashMap<u32, String>,
+    doomed: Vec<String>,
+}
+
+impl Live {
+    pub fn opened(&mut self, page: u32, profile: &str) {
+        self.open.insert(page, profile.to_string());
+    }
+    pub fn closed(&mut self, page: u32) {
+        self.open.remove(&page);
+    }
+    pub fn doom(&mut self, profile: &str) {
+        if !self.doomed.iter().any(|d| d == profile) {
+            self.doomed.push(profile.to_string());
+        }
+    }
+    /// The doomed profiles no open tab uses any more; they leave the waiting list.
+    pub fn due(&mut self) -> Vec<String> {
+        let (idle, busy): (Vec<String>, Vec<String>) = std::mem::take(&mut self.doomed).into_iter().partition(|d| !self.open.values().any(|p| p == d));
+        self.doomed = busy;
+        idle
+    }
+}
+
+static LIVE: OnceLock<Mutex<Live>> = OnceLock::new();
+
+fn live<R>(f: impl FnOnce(&mut Live) -> R) -> Option<R> {
+    LIVE.get_or_init(Default::default).lock().ok().map(|mut l| f(&mut l))
+}
+
+/// A page opened in `profile` (the default is not recorded: it has no folder to remove).
+pub fn page_opened(page: u32, profile: &str) {
+    if profile != DEFAULT {
+        live(|l| l.opened(page, profile));
+    }
+}
+
+/// A page closed: a deleted profile it was the last user of loses its data folder now.
+pub fn page_closed(page: u32) {
+    live(|l| l.closed(page));
+    sweep();
+}
+
+/// A profile was deleted: its data folder goes now, or as soon as the last open tab using it closes.
+pub fn forget_data(id: &str) {
+    live(|l| l.doom(id));
+    sweep();
+}
+
+/// Removes the data folder of every doomed profile no open tab uses; one that cannot go yet
+/// (the engine may still hold it a moment) waits for the next open or close.
+fn sweep() {
+    let Some(due) = live(Live::due) else { return };
+    if due.is_empty() {
+        return;
+    }
+    let Ok(root) = root() else { return };
+    for id in due {
+        if remove_data(&root, &id).is_err() {
+            live(|l| l.doom(&id));
+        }
+    }
 }
 
 pub fn load(root: &Path) -> Store {
@@ -283,5 +372,76 @@ mod tests {
         assert_eq!(tab_profile(&back, 7), "work");
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load(&dir).profiles.len(), 0);
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kolux-prof153-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn after153_deleting_a_profile_removes_its_data_folder_and_only_that() {
+        let root = scratch("rm");
+        let mine = root.join("browser-profiles").join("work");
+        let other = root.join("browser-profiles").join("home");
+        for d in [&mine, &other] {
+            std::fs::create_dir_all(d.join("EBWebView")).unwrap();
+            std::fs::write(d.join("EBWebView").join("Cookies"), b"x").unwrap();
+        }
+        assert_eq!(remove_data(&root, "work"), Ok(true));
+        assert!(!mine.exists(), "the deleted profile's folder is gone");
+        assert!(other.join("EBWebView").join("Cookies").exists(), "another profile is untouched");
+        assert_eq!(remove_data(&root, "work"), Ok(false), "no folder is not an error");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn after153_a_path_outside_the_profiles_root_is_refused() {
+        let root = scratch("out");
+        std::fs::create_dir_all(root.join("browser-profiles")).unwrap();
+        let outside = root.join("precious");
+        std::fs::create_dir_all(&outside).unwrap();
+        for id in ["..", "../precious", "..\\precious", "a/b", "C:evil", "", DEFAULT] {
+            assert!(remove_data(&root, id).is_err(), "{id:?} must be refused");
+        }
+        assert!(outside.exists() && root.join("browser-profiles").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn after153_a_link_out_of_the_root_is_not_followed() {
+        let root = scratch("link");
+        let base = root.join("browser-profiles");
+        std::fs::create_dir_all(&base).unwrap();
+        let outside = root.join("precious");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep"), b"x").unwrap();
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(base.join("evil")).arg(&outside).output().map(|o| o.status.success()).unwrap_or(false);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, base.join("evil")).is_ok();
+        if made {
+            assert!(remove_data(&root, "evil").is_err());
+            assert!(outside.join("keep").exists(), "the link's target is untouched");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn after153_a_profile_in_use_waits_for_its_last_tab_to_close() {
+        let mut l = Live::default();
+        l.opened(3, "work");
+        l.opened(4, "work");
+        l.doom("work");
+        assert!(l.due().is_empty(), "two tabs still use it");
+        l.closed(3);
+        assert!(l.due().is_empty(), "one tab still uses it");
+        l.closed(4);
+        assert_eq!(l.due(), vec!["work".to_string()]);
+        assert!(l.due().is_empty(), "it is handed out once");
+        l.doom("home");
+        assert_eq!(l.due(), vec!["home".to_string()], "an idle profile is due at once");
     }
 }

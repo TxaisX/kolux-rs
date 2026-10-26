@@ -51,7 +51,7 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
   // beside its first pane, or a cell of its own to the right or below. `then` runs once it ends
   // (the agent waiting for setup), whatever its exit code, and lands as a tab beside it.
   const afterSetup = useRef<Record<number, () => void>>({});
-  const startSetup = (dir: string, branch: string | null, line: SetupLine, where: SetupWhere, show: boolean, then?: () => Promise<number | null> | void) => {
+  const startSetup = (dir: string, branch: string | null, line: SetupLine, where: SetupWhere, show: boolean, then?: () => Promise<unknown> | void) => {
     const key = nextKey.current++;
     setPanes((ps) => {
       const cells = cellsOf(panesIn(ps, dir));

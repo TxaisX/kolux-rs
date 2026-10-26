@@ -158,7 +158,7 @@ describe("BROW-009: a crashed page", () => {
   it("the user's own Retry or a typed address gives the page its one automatic recovery back", () => {
     const crashed = run([...loaded(), ...dead()], run(dead(), run(loaded()).h).h).h;
     const [afterRetry, action] = step(crashed, { t: "retry" });
-    expect(action).toBe("reload");
+    expect(action).toBe("rebuild"); // the dead page cannot reload; BROW-009 builds it again
     expect(afterRetry.recoveries).toBe(0);
     const [afterNav] = step(crashed, { t: "navigate" });
     expect(afterNav.recoveries).toBe(0);
@@ -199,5 +199,29 @@ describe("BROW-024 trusting a local dev server's certificate", () => {
     expect(trustLabel({ offer: false, trusted: true, site: "localhost:8443" })).toBeNull();
     expect(trustLabel({ offer: true, trusted: false, site: null })).toBeNull();
     expect(trustLabel({ offer: true, trusted: false, site: "localhost:8443" })).toBe("Trust This Certificate On localhost:8443 For This Run");
+  });
+});
+
+describe("BROW-009: Retry rebuilds a page a reload cannot bring back", () => {
+  const url = "https://example.com/";
+
+  it("a first-time Retry (a page that only failed to load) still just reloads", () => {
+    const failed = run([{ t: "started", url }, { t: "finished", url }, { t: "probe", answer: "error-page" }]).h;
+    expect(failed.phase).toBe("failed");
+    expect(step(failed, { t: "retry" })[1]).toBe("reload");
+  });
+
+  it("Retry on a page that stayed dead after its one automatic reload rebuilds it", () => {
+    const afterReload = run(dead(), run(loaded()).h).h;
+    expect(afterReload.phase).toBe("recovering");
+    const crashed = run(dead(), afterReload).h;
+    expect(crashed.phase).toBe("crashed");
+    expect(step(crashed, { t: "retry" })[1]).toBe("rebuild");
+  });
+
+  it("an automatic reload that lands on the error page is a crash too, and Retry rebuilds", () => {
+    const h = run([{ t: "probe", answer: "error-page" }], run(dead(), run(loaded()).h).h).h;
+    expect(h.phase).toBe("crashed");
+    expect(step(h, { t: "retry" })[1]).toBe("rebuild");
   });
 });
