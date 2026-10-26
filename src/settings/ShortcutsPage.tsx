@@ -153,6 +153,7 @@ export default function ShortcutsPage() {
                         <td>
                           {r.title}
                           {r.hint && <p className="keys-hint">{r.hint}</p>}
+                          {r.warning && <p className="keys-hint" role="note">{r.warning}</p>}
                           {at >= 0 && <p className="keys-hint">{note ?? "Press the new keys, or tap one modifier twice. Esc keeps what was there."}</p>}
                         </td>
                         <td>

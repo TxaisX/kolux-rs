@@ -4,6 +4,7 @@
 import { defaultsFor, type Platform, type Scope } from "../keys/actions";
 import { labelParts, parseChord, type Keymap } from "../keys/keymap";
 import type { NativeChord } from "../chrome/chromeItems";
+import { systemCapturedChord, systemCaptureWarning } from "../keys/systemCapture";
 
 export const AREAS: Record<Scope, string> = { global: "General", tabs: "Tabs", terminal: "Terminal", browser: "Browser", editor: "Editor", explorer: "File explorer", settings: "Settings" };
 export type Badge = "Modified" | "Unassigned" | "Disabled" | "Conflicts";
@@ -12,7 +13,7 @@ export const FILTERS: Array<[Filter, string]> = [["all", "All"], ["modified", "M
 /** A longer search is cut to this, so an enormous paste cannot freeze the list. */
 export const MAX_QUERY = 100;
 
-export type Row = { id: string; title: string; area: string; chords: string[]; defaults: string[]; labels: string[]; custom: boolean; modified: boolean; badges: Badge[]; hint?: string; find: string[] };
+export type Row = { id: string; title: string; area: string; chords: string[]; defaults: string[]; labels: string[]; custom: boolean; modified: boolean; badges: Badge[]; hint?: string; warning?: string; find: string[] };
 
 const compact = (s: string) => s.toLowerCase().replace(/[\s+]/g, "");
 const names = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -54,6 +55,8 @@ export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): 
     else if (modified) badges.push("Modified");
     if (clash || menu.length > 0) badges.push("Conflicts");
     const label = (c: string, on: Platform = p) => labelParts(c, on).join("+");
+    // Only a chord the user chose: the shipped Ctrl+1 for Select Tab is not nagged about.
+    const taken = modified ? chords.find((c) => !defaults.includes(c) && systemCapturedChord(c, p)) : undefined;
     const every = [...chords, ...action.win32, ...(action.darwin ?? [])];
     const find = [action.title, AREAS[action.scope], action.id, ...(action.keywords ?? [])].map((s) => s.toLowerCase());
     const keys = every.flatMap((c) => [c, label(c, "win32"), label(c, "darwin")]).map(compact);
@@ -68,6 +71,7 @@ export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): 
       modified,
       badges,
       hint: clash || menu.length > 0 ? clashHint(clash, menu, action.id, title, label) : undefined,
+      warning: taken ? systemCaptureWarning(label(taken)) : undefined,
       find: [...find, ...keys.map((k) => "\u0000" + k)],
     };
   });
