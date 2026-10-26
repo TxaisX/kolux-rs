@@ -24,6 +24,7 @@ const pack = {
   "inbox.bell.needs.many": "受信トレイ、{count} 件があなたを待っています",
   "connect.claude": "「接続」を押すと、ブラウザーで Claude のサインインページが一度開き、1 年間有効なキーが保存されます。",
   "connect.codex": "「接続」を押すと、Kolux 専用の Codex ホームに ChatGPT アカウントが追加されます。お使いの Codex フォルダはそのまま変わりません。",
+  "onboarding.connect.wait": "続けるには上で AI をつなぐか、左のボタンであとで設定してください。",
 } satisfies Record<TextKey, string>;
 
 export default pack;

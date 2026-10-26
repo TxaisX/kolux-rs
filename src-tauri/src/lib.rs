@@ -33,7 +33,7 @@ mod fonts;
 pub mod git;
 mod github;
 mod groups;
-mod hooks;
+pub mod hooks;
 mod include;
 mod import;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
@@ -60,6 +60,8 @@ pub mod orchestration;
 mod foreground;
 pub mod procs;
 mod protected;
+#[cfg(test)]
+mod s9_fuzz_tests;
 mod protected_custom;
 mod ports;
 mod labels;
@@ -90,7 +92,7 @@ mod shell_marks;
 mod shell_history;
 mod skill_delete;
 pub mod state;
-mod status;
+pub mod status;
 mod sub_work;
 mod term_import;
 mod sysmem;

@@ -142,7 +142,7 @@ test("STAT-043: a custom file plays and not the system sound; a file that cannot
   expect(started).toEqual([]);
 });
 
-test("STAT-044 fix-1: with Kolux focused and 'Stay quiet' on (the default), only the worktree in view is held back", async () => {
+test("STAT-044: with Kolux focused and 'Stay quiet' on (the default), nothing is shown; a gone-quiet warning still is", async () => {
   resetPacer();
   // these tests run without a DOM: stand in for a focused window
   const g = globalThis as { document?: { hasFocus: () => boolean } };
@@ -150,10 +150,12 @@ test("STAT-044 fix-1: with Kolux focused and 'Stay quiet' on (the default), only
   g.document = { hasFocus: () => true };
   const before = calls.length;
   try {
-    await raiseNotification({}, "t", "b", { id: "q:1", worktree: "C:/w/a", pane: "1", kind: "finish" }, "C:/w/a");
+    await raiseNotification({}, "t", "b", { id: "q:1", worktree: "C:/w/a", pane: "1", kind: "finish" });
+    await raiseNotification({}, "t", "b", { id: "q:2", worktree: "C:/w/b", pane: "2", kind: "finish" });
     expect(calls.slice(before)).toEqual([]);
-    await raiseNotification({}, "t", "b", { id: "q:2", worktree: "C:/w/b", pane: "2", kind: "finish" }, "C:/w/a");
-    expect(calls.slice(before).map(([c]) => c)).toEqual(["notify_event"]);
+    await raiseNotification({}, "t", "b", { id: "q:3", worktree: "C:/w/a", pane: "1", kind: "quiet" });
+    await raiseNotification({}, "t", "b", { id: "q:4", worktree: "C:/w/a", pane: "1", kind: "quiet" });
+    expect(calls.slice(before).map(([c]) => c)).toEqual(["notify_event", "notify_event"]);
   } finally {
     if (had === undefined) delete g.document;
     else g.document = had;

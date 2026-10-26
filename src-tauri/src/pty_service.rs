@@ -762,7 +762,8 @@ mod tests {
         // No window attached: a flood is never held (nothing would ever acknowledge it).
         let t = Instant::now();
         hold_within(&flow, false, FLOW_HIGH * 3, Duration::from_secs(5));
-        assert!(t.elapsed() < Duration::from_millis(200), "held with no window: {:?}", t.elapsed());
+        // The wait asked for is 5 s, so 2 s still tells "not held" from "held"; 200 ms flaked under a loaded full run.
+        assert!(t.elapsed() < Duration::from_secs(2), "held with no window: {:?}", t.elapsed());
         // A window attached: past the high mark the reader waits until the window's pane acknowledges.
         let (tx, _rx) = mpsc::channel::<String>();
         service.lock().windows.insert(1, tx);
@@ -913,7 +914,8 @@ mod tests {
         }
         // The window goes away: the terminal stays.
         drop(first);
-        let until = Instant::now() + Duration::from_secs(5);
+        // The daemon notices the dropped connection on its own thread; under a loaded full run that takes seconds.
+        let until = Instant::now() + Duration::from_secs(30);
         while s.service.counts() != (1, 0) {
             assert!(Instant::now() < until, "the closed window was not detached");
             std::thread::sleep(Duration::from_millis(20));

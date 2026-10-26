@@ -306,6 +306,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const whereTouched = useRef(false); // likewise the "setup opens in" choice
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewAnswered, setPreviewAnswered] = useState(false); // Git has answered for the name now shown
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
@@ -522,10 +523,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   useEffect(() => {
     if (name.trim() === "") {
       setPreview(null);
+      setPreviewAnswered(false);
       return;
     }
     let live = true;
-    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null, branch: existing ? null : branchDraft.trim() || null }).then((s) => live && setPreview(s)).catch(fail);
+    setPreviewAnswered(false);
+    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null, branch: existing ? null : branchDraft.trim() || null })
+      .then((s) => live && (setPreview(s), setPreviewAnswered(true)))
+      .catch(fail);
     return () => {
       live = false;
     };
@@ -984,7 +989,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         onKeyDown={submitKeys(p)}
       />
       <div className="preview">
-        {linked ? `linked to ${itemLabel(linked)}${linked.kind === "pull" ? ", its branch checked out" : ", on a new branch"}` : prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
+        {linked ? `linked to ${itemLabel(linked)}${linked.kind === "pull" ? ", its branch checked out" : ", on a new branch"}` : prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p, !previewAnswered)}
       </div>
       {linked && (
         <div className="btn-row">
