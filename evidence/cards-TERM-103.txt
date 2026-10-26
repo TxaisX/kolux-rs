@@ -1,0 +1,3 @@
+box 1: NOT PROVEN (LIVE): "never shows blank panes" is a rendering result. Decision half passes: src/terminal/__cards__/TERM-103.test.ts (ten terminals: 6 webgl + 4 dom; a GPU load failure leaves the next ones unaffected; switch off = all plain) — pnpm exec vitest run src/terminal/__cards__/TERM-103.test.ts — ✓
+box 2: NOT PROVEN (LIVE): pool half passes (same test, plus renderer.test.ts "the seventh terminal draws plain..."), "still show text" on the plain path needs a window.
+combined run: Test Files 5 passed (5), Tests 19 passed (19)
