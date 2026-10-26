@@ -1,5 +1,6 @@
 // The Agents screen's rail (VIEW-015, VIEW-021): sessions under each saved agent, + adds a
 // not-started preset, and an empty state when no agent is switched on.
+import { Fragment } from "react";
 import { Plus } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor } from "../launch/PlusMenu";
@@ -36,7 +37,8 @@ export default function AgentsRail<S extends Session>({ groups, selected, classi
                 const st = statusOf(p);
                 const ring = ringOf(p);
                 return (
-                <div key={p.key} className={`sess${p.key === selected ? " sel" : ""}${p.seats ? " pending" : ""}`} role="button" tabIndex={0} data-session={p.key} onClick={() => onSelect(p.key)} onKeyDown={(e) => e.key === "Enter" && onSelect(p.key)}>
+                <Fragment key={p.key}>
+                <div className={`sess${p.key === selected ? " sel" : ""}${p.seats ? " pending" : ""}`} role="button" tabIndex={0} data-session={p.key} onClick={() => onSelect(p.key)} onKeyDown={(e) => e.key === "Enter" && onSelect(p.key)}>
                   <VendorMark agent={markFor(p.agentId ?? g.id, p.program)} size={13} />
                   <span className="name">{p.seats ? "New session" : sessionLabel(p, taskOf?.(p.key))}</span>
                   {ring && <Ring percent={ring.percent} size={10} title={ring.title} />}
@@ -44,6 +46,8 @@ export default function AgentsRail<S extends Session>({ groups, selected, classi
                     {st.word}
                   </span>
                 </div>
+                {st.line && <div className="sess-line" style={{ paddingLeft: 49 }} title={st.line} data-session-line={p.key}>{st.line}</div>}
+                </Fragment>
                 );
               })}
             </section>
