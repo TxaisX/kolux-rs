@@ -752,6 +752,9 @@ pub fn run() {
             browser::notices::browser_pane_ready,
             browser::picture::browser_capture, // after-list 151 (BROW-038), 320 (BROW-035)
             browser::picture::browser_save_picture,
+            browser::drag::browser_drag_through, // after-list 746 (T-319-c, BROW-052)
+            browser::pdf::browser_export_pdf, // T-316-b (EDIT-018)
+            browser::pdf::browser_pick_pdf_path,
             browser::browser_viewport,
             browser::browser_cookies_import,
             browser::cookies::browser_import_sources, // T-319-b (BROW-030)
