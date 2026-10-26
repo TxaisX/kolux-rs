@@ -1,0 +1,5 @@
+box 1: src-tauri/tests/cards_05.rs::view107_box1_three_saved_tabs_are_read_back_whole_after_the_store_is_reopened — cargo test --manifest-path src-tauri/Cargo.toml --test cards_05 (scratch env under G:\Temp\cards-v3) — test result: ok. 9 passed; 0 failed (whole file)
+box 1: src/shell/__cards__/VIEW-107.test.ts::box 1 (layoutOf -> JSON -> restoreLayout -> stillThere -> sessionOrder: keys 1,2,3, agents claude/codex/shell, focused 2, activeTab {0:2}) — pnpm exec vitest run src/shell/__cards__/VIEW-107.test.ts src/settings/__cards__/VIEW-005.test.ts — Tests 4 passed (4)
+  MIRROR: src/App.tsx:1566 (layoutOf in the save effect), src/main.tsx:54-70 (restore pipeline; path_kind stood in as "exists").
+  Also already passing: src/settings/general.test.ts "VIEW-107: a failed layout save is retried once, then only the durable part is saved".
+box 2: NOT PROVEN (LIVE): the prompt itself is the close handler's inline effect (src/App.tsx:1530-1553: losable(unsaved.current, ...) -> e.preventDefault(); setQuitAsk). Pure part passes: VIEW-107.test.ts box 2 (losable + quitQuestion name the file and say quitting loses it).

@@ -1,0 +1,3 @@
+command: for v in $(env | grep -o "^KOLUX_[A-Za-z0-9_]*"); do unset $v; done; pnpm exec vitest run --reporter=verbose src/chrome/__cards__/VIEW-001.test.ts src/chrome/__cards__/VIEW-002.test.ts src/chrome/__cards__/VIEW-003.test.ts  (Test Files 3 passed, Tests 5 passed)
+box 2: src/chrome/__cards__/VIEW-003.test.ts::box 2 (the click half): the bell asks for the Inbox screen; on the Inbox it returns to Terminals — pass (✓ 91ms); click -> onScreen("inbox")
+MIRROR src/App.tsx:2533 (onScreen=setScreen) and src/App.tsx:2098 (inbox = screen === "inbox")

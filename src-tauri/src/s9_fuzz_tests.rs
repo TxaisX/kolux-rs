@@ -420,7 +420,6 @@ fn s9_hook_event_json_never_panics() {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 828"]
 fn s9_hook_status_line_usage_never_panics() {
     let rep = campaign(
         "hook_usage",
@@ -457,7 +456,6 @@ fn s9_hook_status_line_usage_never_panics() {
 
 /// A report with the figures the status line sends, each at an extreme.
 #[test]
-#[ignore = "S9 REAL: after.md row 828"]
 fn s9_hook_status_line_extreme_numbers() {
     let rep = campaign(
         "hook_usage_numbers",
@@ -552,7 +550,6 @@ fn s9_hook_http_request_never_panics() {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 829"]
 fn s9_hook_identity_header_never_panics_and_never_aliases() {
     use base64::Engine;
     let rep = campaign(
@@ -729,7 +726,6 @@ fn escape_chunk(r: &mut Rng) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 832"]
 fn s9_osc_screen_owner_never_panics() {
     let rep = campaign(
         "osc_screen_owner",
@@ -1142,6 +1138,7 @@ fn s9_mask_protected_label_run_scaling() {
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "S9 timing: judged by the opt-level 3 run; unoptimised mask is 2-4x over 1 s/MiB")]
 fn s9_mask_protected_hostile_size_time() {
     assert_time(&time_test("time_protected_mask", crate::protected::mask));
 }
@@ -1192,7 +1189,6 @@ fn s9_hook_hostile_size_time() {
 }
 
 #[test]
-#[ignore = "S9 REAL: after.md row 832"]
 fn s9_osc_hostile_size_time() {
     install_hook();
     let mut lines = vec![];
