@@ -99,9 +99,9 @@ Rules: Classic is the default and comes first, then 16 hued themes in colour-whe
   theme, and a violet sample when no hued theme is chosen; pop-out windows share the main window's
   theme.
 Acceptance:
-  - [ ] Fresh profile → Classic is selected; click Teal → sidebar, top bar and accent colours turn
-        teal within one frame.
-  - [ ] Save an unknown theme name in the settings and start → Classic is shown and selected.
+  - [x] Fresh profile → Classic is selected; click Teal → sidebar, top bar and accent colours turn
+        teal within one frame. (cards; evidence/cards-SET-001.txt)
+  - [x] Save an unknown theme name in the settings and start → Classic is shown and selected. (cards; evidence/cards-SET-001.txt)
   - [ ] With Rose chosen, open a pop-out window → it is Rose as well.
 Compat: a saved theme imports by its name; anything other than Classic or one of the 16 hues imports
   as Classic.
@@ -116,9 +116,9 @@ Rules: tint spans −180 to +180 degrees (default 0); saturation spans 0 to 160 
   spans −3 to +6 steps (default 0); all three are greyed out while Classic is chosen; a value outside
   its span is pulled to the nearest end, and a non-numeric value falls back to its default.
 Acceptance:
-  - [ ] Choose Classic → all three sliders are disabled.
-  - [ ] Choose Moss and drag saturation to 0 → the interface goes grey; back to 100 → Moss returns.
-  - [ ] Save saturation 500 in the settings → the app uses 160; save a word instead → the app uses 100.
+  - [x] Choose Classic → all three sliders are disabled. (cards; evidence/cards-SET-002.txt)
+  - [x] Choose Moss and drag saturation to 0 → the interface goes grey; back to 100 → Moss returns. (cards; evidence/cards-SET-002.txt)
+  - [x] Save saturation 500 in the settings → the app uses 160; save a word instead → the app uses 100. (cards; evidence/cards-SET-002.txt)
 Compat: saved tint, saturation and depth numbers import, clamped to these spans.
 Source: D-17-002
 
@@ -131,9 +131,9 @@ Rules: Match is one more entry in the same picker; the scheme catalogue, the sep
   and imported schemes all stay available; the opposite direction (app colours taken from a terminal
   scheme) was suggested once, never shipped, and is not part of this card.
 Acceptance:
-  - [ ] Choose Match, then switch the app theme from Sky to Ember → open terminals recolour without
-        being reopened.
-  - [ ] Choose a catalogue scheme again → terminals stop following the app hue.
+  - [x] Choose Match, then switch the app theme from Sky to Ember → open terminals recolour without
+        being reopened. (cards; evidence/cards-SET-003.txt)
+  - [x] Choose a catalogue scheme again → terminals stop following the app hue. (cards; evidence/cards-SET-003.txt)
 Compat: —
 Source: D-17-003
 
@@ -149,7 +149,7 @@ Rules: mode, theme and app font are in place before any window draws for the fir
 Acceptance:
   - [ ] Save Dark, Cobalt and a non-default app font, restart, record the screen at 60 fps → the first
         frame is dark Cobalt in that font, with no light frame.
-  - [ ] Switch Light to Dark and back → no visible colour fade on the panels.
+  - [x] Switch Light to Dark and back → no visible colour fade on the panels. (cards; evidence/cards-SET-004.txt)
 Compat: —
 Source: D-17-004
 
@@ -161,9 +161,9 @@ User sees: the app changes at once; on System it tracks the operating system and
 Rules: System is the default; in light mode terminals use a separate light scheme by default, and the
   user can turn that off to keep a single scheme for both modes.
 Acceptance:
-  - [ ] Mode System, switch the operating system to dark while the app runs → the app turns dark with
-        no restart.
-  - [ ] Mode Light with the separate light scheme on → terminals use the light scheme.
+  - [x] Mode System, switch the operating system to dark while the app runs → the app turns dark with
+        no restart. (cards; evidence/cards-SET-005.txt)
+  - [x] Mode Light with the separate light scheme on → terminals use the light scheme. (cards; evidence/cards-SET-005.txt)
 Compat: a saved System, Light or Dark choice imports unchanged.
 Source: D-17-005
 
@@ -187,7 +187,7 @@ Rules: the pages are General, Appearance, Accounts & keys, Agents, Terminal & se
   only places them in the page list.
 Acceptance:
   - [ ] Press Mod+Comma → Settings opens on the last page used, or the first.
-  - [ ] Count the pages in the side list → exactly the ten named, plus one per repository.
+  - [x] Count the pages in the side list → exactly the ten named, plus one per repository. (cards; evidence/cards-SET-006.txt)
   - [ ] Follow an in-app link to the shortcut policy → Shortcuts opens, scrolled to that setting.
 Compat: the keybinding command id app.settings stays, with Mod+Comma as its default.
 Source: D-17-006

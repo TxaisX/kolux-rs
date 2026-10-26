@@ -6,3 +6,4 @@ box 2: src-tauri/tests/cards_15.rs::skill036_box2_the_served_page_carries_the_li
 box 3: SKILL-036.test.ts::box 3 (artifact_add rejects with the real Rust error text; toast "Could not add that page: could not read missing.html: ..."; list titles unchanged, no viewer; cancelling the picker adds no toast) — same vitest command — Tests 3 passed (3)
 box 3: cards_15.rs::skill036_box3_an_unreadable_file_is_an_error_and_the_list_is_unchanged (missing file and a folder both Err("could not read ..."), list byte-for-byte equal before/after, a failed re-add keeps the stored copy) — same cargo command — ok. 5 passed; 0 failed
 gates: pnpm exec tsc --noEmit clean; cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings clean
+MIRROR box 2: ArtifactsPage.tsx:60-66 handler; message delivery simulated, final ShellExecute/xdg-open not run. Live spawn re-confirms.

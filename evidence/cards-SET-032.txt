@@ -8,3 +8,4 @@ box 2: src-tauri/tests/cards_17.rs::set032_box2_kolux_workspaces_dir_sets_the_fo
   test result: ok. 4 passed; 0 failed
 box 2: src/projects/__cards__/SET-032.test.ts::box 2: with KOLUX_WORKSPACES_DIR supplying the folder the field shows it and says where it came from — pnpm exec vitest run src/projects/__cards__/SET-032.test.ts src/settings/__cards__/SET-030.test.ts src/settings/__cards__/SET-027.test.ts (same scratch env) — Tests 6 passed (6)
   (page reads workspaces_place_get {fromEnv:true}: field shows the folder, label "Workspaces folder (from KOLUX_WORKSPACES_DIR)", nothing saved)
+MIRROR box 1: projects.rs:2359 set_place is private (needs State); the test writes the same two settings, then runs real place_from/create_workspace. Live spawn re-confirms.
