@@ -1,3 +1,4 @@
+import { marked, type Token } from "marked";
 import { describe, expect, it } from "vitest";
 import { mapEdit, richBlocker, richBlockerSince, richChange } from "./frontMatter";
 import { roundTrip, unsupported } from "./markdown";
@@ -305,6 +306,78 @@ describe("round 6: loose-list gaps are put back by item", () => {
     it("italic items, edit the last item", () => {
       const b = "- _Note_ one\n\n- _Note_ two\n\n- three\n";
       keep(b, "three", "threes", b.replace("three", "threes"));
+    });
+  });
+});
+
+// Round 7 (HIGH-1..3): an edit inside a fence nested in a list item keeps the fence's indent or is refused; a pure insertion at an
+// item's line start moves that item's gap; an ordered marker whose only change is its number does not drop its gap.
+describe("round 7", () => {
+  const P = "\n\nTail para here.\n";
+  const edit = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    expect(prev).toContain(from);
+    const out = roundTrip(prev.replace(from, to))!;
+    let refused = 0;
+    const next = apply(body, richChange(body, out, prev, () => refused++));
+    if (refused) expect(next).toBe(body);
+    else expect(roundTrip(next)).toBe(out);
+    return { next, refused };
+  };
+  /** The code blocks of `md` as an independent parser (marked) reads them, nested ones too. */
+  const codes = (md: string): string[] => {
+    const out: string[] = [];
+    const walk = (ts: Token[]) => {
+      for (const t of ts) {
+        if (t.type === "code") out.push((t as { text: string }).text);
+        const kids = t as { tokens?: Token[]; items?: Token[] };
+        if (kids.items) walk(kids.items);
+        if (kids.tokens) walk(kids.tokens);
+      }
+    };
+    walk(marked.lexer(md));
+    return out;
+  };
+  describe("HIGH-1: an edit inside a fence nested in a list item", () => {
+    const shapes: [string, string, string][] = []; // [name, loose body, tight body]
+    for (const [mark, ind] of [["- ", 2], ["- ", 3], ["- ", 4], ["1. ", 3]] as const) {
+      for (const f of ["```", "~~~"]) {
+        const I = " ".repeat(ind);
+        const [nb, nc] = mark === "1. " ? ["2. ", "3. "] : ["- ", "- "];
+        shapes.push([`${JSON.stringify(mark)} fence ${f} at indent ${ind}`, `${mark}a\n\n${I}${f}\n${I}x\n${I}${f}\n\n${nb}b\n\n${nc}c\n` + P, `${mark}a\n${I}${f}\n${I}x\n${I}${f}\n${nb}b\n${nc}c\n` + P]);
+      }
+    }
+    it.each(shapes)("%s: x -> y keeps the code block (or is refused), loose and tight", (_, loose, tight) => {
+      for (const body of [loose, tight]) {
+        const { next, refused } = edit(body, "x", "y");
+        if (refused) continue;
+        expect(codes(next)).toEqual(codes(body).map((c) => c.replace("x", "y")));
+        expect(next).toBe(body.replace("x", "y"));
+      }
+    });
+    it.each(shapes)("%s: a multi-line code edit keeps the code block (or is refused)", (_, loose, tight) => {
+      for (const body of [loose, tight]) {
+        const { next, refused } = edit(body, "x", "x\nz");
+        if (refused) continue;
+        expect(codes(next).length).toBe(1);
+        expect(codes(next)[0]).toMatch(/x\s+z/);
+      }
+    });
+    it.each(shapes)("%s: an edit elsewhere in the note is saved, not refused", (_, loose, tight) => {
+      for (const body of [loose, tight]) {
+        for (const [from, to] of [["Tail", "Tails"], ["a", "aa"], ["b", "bb"], ["c", "cc"]]) {
+          const { next, refused } = edit(body, from, to);
+          expect(refused, `${from} in ${JSON.stringify(body)}`).toBe(0);
+          expect(codes(next)).toEqual(codes(body));
+        }
+      }
+    });
+    it.each([
+      ["loose", "- a\n\n  ```\n  x\n  ```\n\n- b\n\n- c\n" + P],
+      ["tight", "- a\n  ```\n  x\n  ```\n- b\n- c\n" + P],
+    ])("the reviewer's %s repro is refused or placed with the indent, never broken", (_, b) => {
+      const { next, refused } = edit(b, "x", "y");
+      expect(next).toBe(refused ? b : b.replace("x", "y"));
     });
   });
 });

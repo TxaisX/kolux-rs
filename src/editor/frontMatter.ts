@@ -82,12 +82,47 @@ export function mapEdit(body: string, out: string, prev: string): string | null 
 /** Round 5 (HIGH-1): the view drops a loose list's blank lines, so it is placed as the tight list the view reads and the gaps go back. */
 function placeBody(body: string, out: string, prev: string): string | null {
   if (prev === out) return body;
+  const got = placeLoose(body, out, prev);
+  if (got === null || got === body || !/```|~~~/.test(body + got)) return got;
+  if (fenceDamaged(body, got, prev, out)) return (placeStats.refused++, null);
+  return got;
+}
+
+/** Round 7 (HIGH-1): the view spells a fence nested in a list item at column 0 (or, for `~~~`, as text), so a retyped item or code line
+ *  can lose the fence's indent or the fence lines themselves. A placement is refused when a code line sits less indented than the fence
+ *  it was in, or, with no fence line added or removed in the view's reading, when the file's count of fence lines changed. */
+function fenceDamaged(body: string, got: string, prev: string, out: string): boolean {
+  const was = fenceShorts(body);
+  if ([...fenceShorts(got)].some(([l, n]) => n > (was.get(l) ?? 0))) return true;
+  const lines = (t: string) => (t.match(/^[ \t]*(`{3,}|~{3,})/gm) ?? []).length;
+  return shape(prev) === shape(out) && lines(body) !== lines(got);
+}
+
+function placeLoose(body: string, out: string, prev: string): string | null {
   const tight = collapseGaps(body);
   if (!tight) return mapTight(body, out, prev);
   const next = mapTight(tight.text, out, prev);
   const kept = next === null ? null : regap(tight, next, prev, out);
   if (next !== null && kept === null) placeStats.refused++;
   return kept;
+}
+
+/** Round 7 (HIGH-1): the view spells a fence nested in a list item at column 0, so a retyped code line loses the fence's indent and
+ *  the item ends there. The non-blank code lines of fences opened with an indent that sit less indented than their fence, counted per line text. */
+function fenceShorts(text: string): Map<string, number> {
+  const found = new Map<string, number>();
+  let fence = "";
+  let indent = 0;
+  for (const line of text.split("\n")) {
+    const f = FENCE.exec(line)?.[1];
+    if (fence) {
+      if (f && f[0] === fence[0] && f.length >= fence.length && /^[ \t]*[`~]+[ \t]*\r?$/.test(line)) fence = "";
+      else if (indent && /\S/.test(line) && width(/^[ \t]*/.exec(line)![0]) < indent) found.set(line, (found.get(line) ?? 0) + 1);
+      continue;
+    }
+    if (f) (fence = f), (indent = width(/^[ \t]*/.exec(line)![0]));
+  }
+  return found;
 }
 
 /** `at`: where the gap's item line starts in the tight text; `item`: that line's number among the tight text's item lines. */
