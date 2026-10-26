@@ -91,7 +91,7 @@ mod status;
 mod sub_work;
 mod term_import;
 mod sysmem;
-mod terminal;
+pub mod terminal;
 #[cfg(test)]
 mod test_dir;
 mod tools;
