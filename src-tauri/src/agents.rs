@@ -409,9 +409,6 @@ pub fn resume_args(id: &str, session: Option<&str>) -> Vec<String> {
 
 /// SET-027, SESS-027: the built-in arguments that skip an agent's permission prompts; Manual leaves
 /// them out. Claude Code, Codex (sandboxed, DT-C46), Gemini CLI (`--yolo`) and Aider (`--yes-always`).
-// ponytail: Goose gets its mode through an environment variable, not a flag; the variable's name
-// waits on a firewall-allowlist entry only the coordinator adds (COMPAT.md 6.1), so Goose starts
-// without a no-prompt mode until that lands (PLAN.md T-056-b).
 fn prompt_skips(id: &str) -> &'static [&'static str] {
     match id {
         "claude" => &["--permission-mode", "auto"],
@@ -420,6 +417,12 @@ fn prompt_skips(id: &str) -> &'static [&'static str] {
         "aider" => &["--yes-always"],
         _ => &[],
     }
+}
+
+/// SESS-027 (T-056-b): Goose has no no-prompt flag, so its start line carries `GOOSE_MODE=auto`
+/// instead; the user's own variable of that name (checked by the caller) and Manual win.
+fn built_in_env(id: &str, no_prompt: bool) -> Option<(&'static str, &'static str)> {
+    (no_prompt && id == "goose").then_some(("GOOSE_MODE", "auto"))
 }
 
 /// SESS-027: switches an agent does not accept, as (switch, takes a value). They are removed from the
@@ -582,6 +585,11 @@ pub fn start_line_as(settings: &serde_json::Value, id: &str, extra: &[String], p
     let mut line = line_for(id, own.as_deref(), yolo, &extra, &resume, prompt)?;
     line.program = field("command").map(str::to_string);
     line.env = field("env").map(parse_env).unwrap_or_default();
+    if let Some((k, v)) = built_in_env(id, yolo && own.is_none()) {
+        if !line.env.iter().any(|(n, _)| n.eq_ignore_ascii_case(k)) {
+            line.env.push((k.to_string(), v.to_string()));
+        }
+    }
     Ok(line)
 }
 
@@ -868,6 +876,35 @@ mod tests {
             assert!(page.is_none_or(|p| p.starts_with("https://") && !p.contains(' ')), "{id}: {page:?}");
         }
         assert!(catalogue().iter().all(|a| a.docs == install_page(&a.id).is_some()));
+    }
+
+    #[test]
+    fn sess027_goose_starts_in_auto_mode_through_its_environment() {
+        let mode = |l: &StartLine| l.env.iter().filter(|(k, _)| k == "GOOSE_MODE").map(|(_, v)| v.clone()).collect::<Vec<_>>();
+        let none = serde_json::json!({});
+        let goose = start_line(&none, "goose", &[], "", true).unwrap();
+        assert_eq!(mode(&goose), vec!["auto".to_string()]);
+        assert_eq!(goose.args, Vec::<String>::new(), "no flag is added; the mode travels in the environment");
+        // other agents get none of it, in either mode
+        for id in ["claude", "codex", "gemini", "aider", "kilo", "amp"] {
+            assert!(start_line(&none, id, &[], "", true).unwrap().env.is_empty(), "{id}");
+        }
+        // Manual leaves Goose on its own mode
+        let manual = serde_json::json!({ "agentPermissions": "manual" });
+        assert!(start_line(&manual, "goose", &[], "", true).unwrap().env.is_empty());
+        // the user's own GOOSE_MODE wins, however it is spelled, and their other variables stay
+        let own = serde_json::json!({ "agentOptions": { "goose": { "env": "goose_mode = approve
+X=1" } } });
+        let line = start_line(&own, "goose", &[], "", true).unwrap();
+        assert_eq!(line.env, vec![("goose_mode".to_string(), "approve".to_string()), ("X".to_string(), "1".to_string())]);
+        // the user's other variables sit beside the built-in one
+        let other = serde_json::json!({ "agentOptions": { "goose": { "env": "X=1" } } });
+        assert_eq!(start_line(&other, "goose", &[], "", true).unwrap().env, vec![("X".to_string(), "1".to_string()), ("GOOSE_MODE".to_string(), "auto".to_string())]);
+        // the user's own default arguments replace the built-ins (COMPAT 6.1), the mode included
+        let args = serde_json::json!({ "agentOptions": { "goose": { "args": "session --debug" } } });
+        assert!(start_line(&args, "goose", &[], "", true).unwrap().env.is_empty());
+        // restored tabs get it too
+        assert_eq!(mode(&start_line_as(&none, "goose", &[], "", true, Start::Restore(Some("sid"))).unwrap()), vec!["auto".to_string()]);
     }
 
     #[test]
