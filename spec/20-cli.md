@@ -96,9 +96,9 @@ Rules: run-create attaches the new run to the coordinator terminal it resolves; 
   change something accept `--retry-request` for exact recovery; run-current reports the run attached
   to the calling coordinator terminal, or to the one named with `--from`.
 Acceptance:
-  - [ ] `kolux orchestration run-create --objective x`, then `kolux orchestration run-current` in
-        the same terminal → shows that run.
-  - [ ] `kolux orchestration run-list --limit 1` → one row and a cursor for the next page.
+  - [x] `kolux orchestration run-create --objective x`, then `kolux orchestration run-current` in
+        the same terminal → shows that run. (cards; evidence/cards-CLI-030.txt)
+  - [x] `kolux orchestration run-list --limit 1` → one row and a cursor for the next page. (cards; evidence/cards-CLI-030.txt)
 Compat: orchestration run-create, run-use, run-current, run-list and run-show; `--objective`,
   `--id`, `--from`, `--takeover-legacy`, `--limit`, `--cursor` and `--retry-request`.
 Source: D-20-030
@@ -124,10 +124,10 @@ Rules: nine message types are given with `--type`: status, dispatch, escalation,
   error says so plainly; reply takes `--id` and `--body`, and has to go through the same kolux
   program that asked the question.
 Acceptance:
-  - [ ] A worker sends a worker-done message with `--outcome` succeeded and no `--to` → it lands in
-        the coordinator's run mailbox.
-  - [ ] `kolux orchestration send --type heartbeat --to @all` is refused before the sender is even
-        worked out.
+  - [x] A worker sends a worker-done message with `--outcome` succeeded and no `--to` → it lands in
+        the coordinator's run mailbox. (cards; evidence/cards-CLI-031.txt)
+  - [x] `kolux orchestration send --type heartbeat --to @all` is refused before the sender is even
+        worked out. (cards; evidence/cards-CLI-031.txt)
 Compat: orchestration send and reply; `--to`, `--run`, `--from`, `--subject`, `--body`, `--type`,
   `--priority`, `--thread-id`, `--payload`, `--task-id`, `--dispatch-id`, `--dispatch-capability`,
   `--outcome`, `--files-modified`, `--report-path`, `--phase`, `--retry-request` and `--id`; the
@@ -151,9 +151,9 @@ Rules: plain check returns the oldest unacknowledged batch; `--ack` acknowledges
   filtered out, a full page of 100 rows comes with a warning, and peek combined with wait fails with
   a clear reason; inbox with `--full` includes all the supported issue context, within limits.
 Acceptance:
-  - [ ] Two messages arrive → check returns both; check with `--ack` afterwards returns nothing new.
-  - [ ] `kolux orchestration check --wait --timeout-ms 30000` prints keepalives on stderr and
-        returns as soon as a message arrives.
+  - [x] Two messages arrive → check returns both; check with `--ack` afterwards returns nothing new. (cards; evidence/cards-CLI-032.txt)
+  - [x] `kolux orchestration check --wait --timeout-ms 30000` prints keepalives on stderr and
+        returns as soon as a message arrives. (cards; evidence/cards-CLI-032.txt)
 Compat: orchestration check and inbox; `--terminal`, `--run`, `--ack`, `--unread`, `--peek`,
   `--all`, `--types`, `--format`, `--wait`, `--timeout-ms`, `--limit`, `--full` and
   `--retry-request`.
