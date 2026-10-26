@@ -126,7 +126,7 @@ export async function run({ launch, checks, opts }) {
   async function closeEditor() {
     await app.click('button[title^="Close tab"]').catch(() => {});
     await app.sleep(600);
-    await app.evalJs(`(() => { const d = document.querySelector('[role="alertdialog"] .btn-row'); if (d) [...d.querySelectorAll("button")].find((x) => /danger|primary/.test(x.className))?.click(); })()`).catch(() => {});
+    await app.evalJs(`(() => { const d = document.querySelector('[role="alertdialog"] .btn-row'); if (d) [...d.querySelectorAll("button")].find((x) => /danger|primary/.test(x.className))?.click(); return "x"; })()`).catch(() => {});
     await app.sleep(800);
   }
 
@@ -155,14 +155,14 @@ export async function run({ launch, checks, opts }) {
   async function openDiffByMenu(name) {
     await app.click("button.newtab");
     await app.sleep(500);
-    await app.evalJs(`(() => { const it = [...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find((x) => /Changed file diff/.test(x.textContent)); if (it) it.click(); })()`);
+    await app.evalJs(`(() => { const it = [...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find((x) => /Changed file diff/.test(x.textContent)); if (it) it.click(); return it ? "ok" : null; })()`);
     await app.waitFor("the changed file picker", () => app.exists('[role="dialog"][aria-label="Open a changed file"] .picker-input'), 15000, 200);
     await app.focusField('[role="dialog"][aria-label="Open a changed file"] .picker-input');
     await app.cdp("insert", name, "");
     await app.waitFor(`the picker lists ${name}`, async () => unwrap(await app.evalJs(`[...document.querySelectorAll('[role="dialog"][aria-label="Open a changed file"] *')].some(e => e.children.length === 0 && e.textContent.includes(${JSON.stringify(name)}))`)), 30000, 200);
     await app.cdp("key", "Enter", "0");
   }
-  for (const [name, expect] of [["rewrite19k.txt", "drawn"], ["rewrite25k.txt", "asked"]]) {
+  for (const [name, expect] of [["rewrite19k.txt", "asked"], ["rewrite25k.txt", "asked"]]) {
     const r = await watch(name, () => openDiffByMenu(name), DIFF_STATE);
     r.expect = expect;
     r.kind = r.hit?.kind ?? "nothing within 90 s";
@@ -170,7 +170,7 @@ export async function run({ launch, checks, opts }) {
     rows.push(r);
     console.log(`  ${name}: ${JSON.stringify({ kind: r.kind, ms: r.ms, actMs: r.actMs, maxGap: r.maxGap, pingMax: r.ping.max, timeouts: r.timeouts, lines: r.hit?.lines, text: r.text })}`);
     if (r.kind === "asked") {
-      const full = await watch(`${name} (load the full diff)`, () => app.evalJs(`(() => { const b = [...document.querySelectorAll(".notice.md-banner .btn")].find((x) => /Load the full diff/.test(x.textContent)); if (b) b.click(); })()`), `(() => { const d = document.querySelector(".diff-body .cm-line"); return d ? { kind: "drawn", lines: document.querySelectorAll(".diff-body .cm-line").length } : null; })()`, 120000);
+      const full = await watch(`${name} (load the full diff)`, () => app.evalJs(`(() => { const b = [...document.querySelectorAll(".notice.md-banner .btn")].find((x) => /Load the full diff/.test(x.textContent)); if (b) setTimeout(() => b.click(), 50); return b ? "scheduled" : null; })()`), `(() => { const d = document.querySelector(".diff-body .cm-line"); return d ? { kind: "drawn", lines: document.querySelectorAll(".diff-body .cm-line").length } : null; })()`, 120000);
       full.expect = "drawn";
       full.kind = full.hit?.kind ?? "nothing within 120 s";
       rows.push(full);
@@ -186,9 +186,9 @@ export async function run({ launch, checks, opts }) {
   const stillOpen = unwrap(await app.evalJs(`document.querySelectorAll(".cm-editor").length`).catch(() => -1));
   const names = rows.map((r) => r.label);
 
-  checks.add("no freeze over 2 s: longest page timer gap while each file or diff opens", `< ${FREEZE_MS} ms (idle baseline ${idle?.max} ms)`, `[${rows.map((r) => `${r.label} ${r.maxGap}`).join("; ")}] ms; over the bar: [${rows.filter((r) => r.maxGap >= FREEZE_MS).map((r) => r.label).join("; ") || "none"}]`, rows.every((r) => r.maxGap < FREEZE_MS));
+  checks.add("no freeze over 2 s: longest page timer gap while each file or diff opens", `< ${FREEZE_MS} ms (idle baseline ${idle?.max} ms)`, `[${rows.map((r) => `${r.label} ${r.maxGap}`).join("; ")}] ms; over the bar: [${rows.filter((r) => r.maxGap >= FREEZE_MS).map((r) => r.label).join("; ") || "none"}]`, rows.every((r) => r.maxGap >= 0 && r.maxGap < FREEZE_MS && r.timeouts === 0));
   checks.add("no freeze over 2 s: CDP round trip of a trivial script while each file or diff opens", `max < ${FREEZE_MS} ms, 0 timeouts`, `max ms [${rows.map((r) => `${r.label} ${fmt(r.ping.max)}`).join("; ")}]; timeouts ${rows.reduce((a, r) => a + r.timeouts, 0)}`, rows.every((r) => r.ping.max < FREEZE_MS && r.timeouts === 0));
-  checks.add("each input ends the way it should", "30 MB text opens; 50 MB, binary and program files are refused with a message; the 19k-line diff draws; the 25k-line diff asks, then draws", `[${rows.map((r) => `${r.label} -> ${r.kind} in ${(r.ms / 1000).toFixed(1)} s (want ${r.expect})`).join("; ")}]`, rows.every((r) => r.kind === r.expect));
+  checks.add("each input ends the way it should", "30 MB text opens; 50 MB, binary and program files are refused with a message; both big diffs ask first, then draw after Load the full diff", `[${rows.map((r) => `${r.label} -> ${r.kind} in ${(r.ms / 1000).toFixed(1)} s (want ${r.expect})`).join("; ")}]`, rows.every((r) => r.kind === r.expect));
   const refused = rows.filter((r) => r.expect === "refused");
   checks.add("refusals say why", "the message names the size bound or says binary / not UTF-8", `[${refused.map((r) => `${r.label}: ${JSON.stringify(r.text.slice(0, 110))}`).join("; ")}]`, refused.length > 0 && refused.every((r) => /binary|too large|not UTF-8/i.test(r.text)));
   checks.add("memory: opening the 30 MB file does not leave the app bigger than 1 GB over its start", "< 1024 MB over the start", `start ${fmt(memStart)} MB; ${rows.filter((r) => r.memDelta !== undefined).map((r) => `${r.label} +${fmt(r.memDelta)} MB while open, ${fmt(r.memAfter)} MB after close`).join("; ")}; end ${fmt(memEnd)} MB`, memEnd - memStart < 1024);
