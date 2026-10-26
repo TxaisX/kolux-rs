@@ -8157,7 +8157,14 @@ mod tests {
             s.save_settings(&settings).unwrap();
         }
         let sent: Mutex<Vec<Value>> = Mutex::new(Vec::new());
-        let notify = |v: Value| sent.lock().unwrap().push(v);
+        // Row 65: a listening window that confirms every file it is told about.
+        file_cli::ACKS.listen(true);
+        let notify = |v: Value| {
+            if let Some(id) = v["ack"].as_u64() {
+                file_cli::ACKS.report(id, None);
+            }
+            sent.lock().unwrap().push(v);
+        };
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
         let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
@@ -8205,6 +8212,7 @@ mod tests {
         assert_eq!(e["skipped"], json!([{ "path": "gone.txt", "kind": "edit", "why": "deleted" }]));
         assert_eq!(e["opened"].as_array().unwrap().len(), 3);
         assert!(dispatch(&ctx, &req("file.open-changed", &one, json!({ "mode": "tabs" }))).is_err());
+        file_cli::ACKS.listen(false);
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
