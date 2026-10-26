@@ -34,9 +34,9 @@ Rules: the publish result is picked up from the session's terminal output or fro
   the file's name; pages on a network share are never opened and are listed as
   unavailable; WSL or SSH paths that this machine cannot read are listed as remote.
 Acceptance:
-  - [ ] Claude publishes the same page twice → the library holds one entry showing the second version.
-  - [ ] A page that points at a file outside its own folder → that file is not copied in.
-  - [ ] A page stored on a network share → listed as unavailable, and the app never reads it.
+  - [x] Claude publishes the same page twice → the library holds one entry showing the second version. (cards; evidence/cards-SKILL-035.txt)
+  - [x] A page that points at a file outside its own folder → that file is not copied in. (cards; evidence/cards-SKILL-035.txt)
+  - [x] A page stored on a network share → listed as unavailable, and the app never reads it. (cards; evidence/cards-SKILL-035.txt)
 Compat: —
 Source: D-15-035
 
@@ -54,9 +54,9 @@ Rules: the Artifacts sidebar button is always there; search looks at titles, ign
   the viewer is sandboxed, serves only the files stored for that entry, and hands clicked links to
   the system browser; the viewer has remote, loading and could-not-show states.
 Acceptance:
-  - [ ] Search with two words → only titles holding both stay in the list.
-  - [ ] Click a link inside a viewed artifact → it opens in the system browser, not in Kolux.
-  - [ ] Add artifact with a file that cannot be read → an error toast, and the list is unchanged.
+  - [x] Search with two words → only titles holding both stay in the list. (cards; evidence/cards-SKILL-036.txt)
+  - [x] Click a link inside a viewed artifact → it opens in the system browser, not in Kolux. (cards; evidence/cards-SKILL-036.txt)
+  - [x] Add artifact with a file that cannot be read → an error toast, and the list is unchanged. (cards; evidence/cards-SKILL-036.txt)
 Compat: —
 Source: D-15-036
 

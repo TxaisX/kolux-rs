@@ -1,12 +1,12 @@
 //! spec/10 P0 boxes SAFE-023, SAFE-024 (folder trust) and the status half of SAFE-001 (plan review button).
-//! Every trust file lives under the scratch root G:\Temp\cards-v3\; nothing here touches a real agent home.
+//! Every trust file lives under the scratch root (found from the home marker); nothing here touches a real agent home.
+
+mod scratch_root;
 
 use kolux_rs_lib::status::{report, Agent};
 use kolux_rs_lib::trust::{claude_config_file, claude_key, trust_folders};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-
-const ROOT: &str = r"G:\Temp\cards-v3";
 
 fn norm(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_lowercase()
@@ -14,11 +14,7 @@ fn norm(p: &Path) -> String {
 
 /// A fresh folder under the scratch root; refuses to run when the agent homes are not redirected there.
 fn scratch(tag: &str) -> PathBuf {
-    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "USERPROFILE", "HOME"] {
-        let v = std::env::var(var).unwrap_or_default();
-        assert!(norm(Path::new(&v)).starts_with(&norm(Path::new(ROOT))), "{var} must point under {ROOT}, not {v}");
-    }
-    let d = Path::new(ROOT).join("safe10").join(format!("{tag}-{}", std::process::id()));
+    let d = scratch_root::root().join("safe10").join(format!("{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join(".kolux-rs-scratch"), "").unwrap();
@@ -45,7 +41,7 @@ fn safe023_box2_launching_again_in_the_same_folder_leaves_the_trust_file_byte_fo
     let d = scratch("b2");
     // The path Kolux resolves for Claude's configuration is the redirected one.
     let resolved = claude_config_file();
-    assert!(norm(&resolved).starts_with(&norm(Path::new(ROOT))), "{resolved:?} is not under the scratch root");
+    assert!(norm(&resolved).starts_with(&norm(scratch_root::root())), "{resolved:?} is not under the scratch root");
     assert!(resolved.ends_with(".claude.json"));
     let file = d.join(".claude.json");
     std::fs::write(&file, r#"{"userID":"u1","projects":{"G:/Elsewhere":{"hasTrustDialogAccepted":true,"allowedTools":["Bash"]}}}"#).unwrap();
@@ -70,7 +66,7 @@ fn safe023_box2_launching_again_in_the_same_folder_leaves_the_trust_file_byte_fo
     assert_eq!(after["projects"].as_object().unwrap().len(), 2, "no duplicate entry");
     assert_eq!(after["projects"]["G:/Elsewhere"]["allowedTools"], json!(["Bash"]), "every other project and setting kept");
     assert_eq!(after["userID"], "u1");
-    assert!(norm(&file).starts_with(&norm(Path::new(ROOT))), "the file written lies under the scratch root");
+    assert!(norm(&file).starts_with(&norm(scratch_root::root())), "the file written lies under the scratch root");
 }
 
 #[test]
@@ -88,7 +84,7 @@ fn safe024_box1_six_worktrees_are_covered_by_one_call_and_one_write() {
     let mut names: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
     names.sort();
     assert!(names.iter().all(|n| !n.ends_with(".bak-kolux")), "{names:?}");
-    assert!(norm(&file).starts_with(&norm(Path::new(ROOT))), "the file written lies under the scratch root");
+    assert!(norm(&file).starts_with(&norm(scratch_root::root())), "the file written lies under the scratch root");
 }
 
 #[test]
@@ -104,7 +100,7 @@ fn safe024_box2_thirteen_folders_are_refused_before_any_path_is_worked_out() {
     // Twelve is the most that goes through.
     let twelve = folders(&d, &["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]);
     assert_eq!(trust_folders(&file, "claude", &twelve).unwrap(), 12);
-    assert!(norm(&file).starts_with(&norm(Path::new(ROOT))), "the file written lies under the scratch root");
+    assert!(norm(&file).starts_with(&norm(scratch_root::root())), "the file written lies under the scratch root");
 }
 
 fn status(pane: u32, j: &str) -> Value {
@@ -149,7 +145,7 @@ fn safe001_box2_a_shell_permission_carries_no_plan() {
 use kolux_rs_lib::hooks::reply_body;
 
 fn pre_tool(tool: &str, command: &str) -> Vec<u8> {
-    json!({ "hook_event_name": "PreToolUse", "session_id": "cards", "tool_name": tool, "cwd": r"G:\Temp\cards-v3\safe10\work", "tool_input": { "command": command } }).to_string().into_bytes()
+    json!({ "hook_event_name": "PreToolUse", "session_id": "cards", "tool_name": tool, "cwd": scratch_root::root().join("safe10").join("work").to_string_lossy().as_ref(), "tool_input": { "command": command } }).to_string().into_bytes()
 }
 
 /// The ask's reason when the hook asks, None when it answers `{}` (no opinion).
@@ -277,7 +273,7 @@ fn temp_roots_elsewhere() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         for k in ["TEMP", "TMP", "TMPDIR"] {
-            std::env::set_var(k, r"G:\Temp\cards-v3-temp-roots");
+            std::env::set_var(k, format!("{}-temp-roots", scratch_root::root().display()));
         }
     });
 }

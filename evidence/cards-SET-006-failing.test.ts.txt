@@ -1,0 +1,12 @@
+// SET-006 box 1 (repository half) FAILS: SettingsPage.tsx:303 `useEffect(() => rememberPage(page), [page])` runs on mount with the
+// placeholder page "general" before project_list answers, overwriting the saved "repo:<id>"; the later pageOf(lastPage(), ids) then reads "general".
+// Measured: after mount the stored value is "general" and the side list marks General. Lives beside src/settings/__cards__/SET-004-006.test.ts
+// (same imports, helpers `openWithShortcut`, `current`, `heading`, `h`, `store`). Not part of the suite.
+test("SET-006 box 1b: a repository page used last comes back once the project list is read", async () => {
+  h.projects = [{ id: "p1", name: "alpha" }, { id: "p2", name: "beta" }];
+  store.set("kolux.settingsPage", "repo:p2");
+  const m = await openWithShortcut();
+  await until(() => current(m.container).includes("beta"), "the remembered repository page");
+  expect(heading(m.container)).toBe("beta");
+});
+
