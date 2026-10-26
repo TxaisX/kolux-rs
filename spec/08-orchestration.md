@@ -75,8 +75,8 @@ Rules: the line gives the count and the exact check command, adding the Run when
 Acceptance:
   - [ ] Coordinator idle, a worker sends to run:<id> → within a few seconds the coordinator pane
       shows the line and the agent runs check.
-  - [ ] Coordinator in the middle of a turn → no line until the turn ends.
-  - [ ] Coordinator blocked in a waiting check → nothing typed; the wait returns the message.
+  - [x] Coordinator in the middle of a turn → no line until the turn ends. (cards; evidence/cards-ORCH-007.txt)
+  - [x] Coordinator blocked in a waiting check → nothing typed; the wait returns the message. (cards; evidence/cards-ORCH-007.txt)
 Compat: —
 Source: D-08-007
 
@@ -190,12 +190,12 @@ Rules: a Run is only a namespace with a home mailbox; creating one schedules no 
   request id makes the create safe to repeat: the same id hands back the first answer instead of
   making a second Run.
 Acceptance:
-  - [ ] In an agent pane, run run-create → the JSON reply holds a Run id, and run-current from that
-      pane prints the same id.
-  - [ ] Run run-create from a plain shell the runtime does not know as a pane → turned away with a
-      binding error; no Run exists afterwards.
-  - [ ] Run run-create twice with the same retry request id → one Run id both times; the number of
-      Runs does not change.
+  - [x] In an agent pane, run run-create → the JSON reply holds a Run id, and run-current from that
+      pane prints the same id. (cards; evidence/cards-ORCH-001.txt)
+  - [x] Run run-create from a plain shell the runtime does not know as a pane → turned away with a
+      binding error; no Run exists afterwards. (cards; evidence/cards-ORCH-001.txt)
+  - [x] Run run-create twice with the same retry request id → one Run id both times; the number of
+      Runs does not change. (cards; evidence/cards-ORCH-001.txt)
 Compat: `kolux orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]`.
 Source: D-08-001
 
@@ -210,10 +210,10 @@ Rules: changing tasks needs an explicit binding; a pane tied to no Run cannot al
   Run brought over from an older install can only be inspected until someone explicitly takes it
   over (see ORCH-048)
 Acceptance:
-  - [ ] Create two Runs and run-use the first → run-current prints the first, and task-list shows
-      only that Run's tasks.
-  - [ ] run-list with a page size of 1 → one Run and a cursor; handing the cursor back returns the
-      next Run.
+  - [x] Create two Runs and run-use the first → run-current prints the first, and task-list shows
+      only that Run's tasks. (cards; evidence/cards-ORCH-002.txt)
+  - [x] run-list with a page size of 1 → one Run and a cursor; handing the cursor back returns the
+      next Run. (cards; evidence/cards-ORCH-002.txt)
 Compat: `kolux orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>]`,
   `kolux orchestration run-current`, `kolux orchestration run-list [--limit <n>] [--cursor <c>]` and
   `kolux orchestration run-show --id <run>`; each accepts `--json`.
@@ -240,10 +240,10 @@ Rules: a recipient is a Run mailbox (run:<id>), a worker (dispatch:<id>), a term
   finished is turned away, the error points at that Run's mailbox instead, and nothing is kept for
   the finished worker.
 Acceptance:
-  - [ ] Send to run:<id> with a subject → a receipt with one message id; check on the coordinator
-      returns that message.
-  - [ ] Send a done report with no outcome → turned away; nothing is stored.
-  - [ ] Send a heartbeat to @all → turned away.
+  - [x] Send to run:<id> with a subject → a receipt with one message id; check on the coordinator
+      returns that message. (cards; evidence/cards-ORCH-003.txt)
+  - [x] Send a done report with no outcome → turned away; nothing is stored. (cards; evidence/cards-ORCH-003.txt)
+  - [x] Send a heartbeat to @all → turned away. (cards; evidence/cards-ORCH-003.txt)
 Compat: `kolux orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>|@<group>] [--body <text>] [--type status|dispatch|worker_done|merge_ready|escalation|handoff|decision_gate|question|heartbeat] [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>] [--outcome succeeded|failed] [--files-modified <list>] [--report-path <path>] [--phase <p>] [--retry-request <id>] [--json]`.
 Source: D-08-003
 
@@ -262,11 +262,11 @@ Rules: without an acknowledgement the next check returns the same batch again; a
   naming it; after run-use moves the pane to another Run, an older waiter is fenced so it cannot
   take the new Run's mail.
 Acceptance:
-  - [ ] Send two messages, then check → both, in order, under one delivery id; check again without
-      acknowledging → the same two.
-  - [ ] Acknowledge that delivery id, then check → nothing.
-  - [ ] `kolux orchestration check --wait --timeout-ms 40000` with no mail → at least two keepalive
-      lines on standard error, then a timeout result.
+  - [x] Send two messages, then check → both, in order, under one delivery id; check again without
+      acknowledging → the same two. (cards; evidence/cards-ORCH-005.txt)
+  - [x] Acknowledge that delivery id, then check → nothing. (cards; evidence/cards-ORCH-005.txt)
+  - [x] `kolux orchestration check --wait --timeout-ms 40000` with no mail → at least two keepalive
+      lines on standard error, then a timeout result. (cards; evidence/cards-ORCH-005.txt)
 Compat: `kolux orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all] [--types <list>] [--format] [--wait] [--timeout-ms <ms>] [--json]`;
   the keepalive lines carry a fixed marker name, plus an older alias, that agent scripts may watch
   for.
@@ -282,10 +282,10 @@ Rules: a reply inherits the thread of the message it answers; every delivered me
   reply command ready to run, so agents never have to build one; inbox only reads; it acknowledges
   nothing.
 Acceptance:
-  - [ ] A worker replies to a coordinator's message → the coordinator's check shows the reply on the
-      same thread id.
-  - [ ] Inbox with a limit of 5 → five rows at most; with the full option the bodies are shown
-      whole.
+  - [x] A worker replies to a coordinator's message → the coordinator's check shows the reply on the
+      same thread id. (cards; evidence/cards-ORCH-006.txt)
+  - [x] Inbox with a limit of 5 → five rows at most; with the full option the bodies are shown
+      whole. (cards; evidence/cards-ORCH-006.txt)
 Compat: `kolux orchestration reply --id <message> --body <text>`;
   `kolux orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]`.
 Source: D-08-006
