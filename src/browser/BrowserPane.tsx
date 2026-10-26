@@ -22,7 +22,7 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
-import { namesPane, type ProfileEvent, reopenPage } from "./reopen";
+import { namesPane, openPage, type ProfileEvent, reopenPage } from "./reopen";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
@@ -371,7 +371,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         // open tabs or send chords until it is shown (council FIX-2).
         const body = host.current!;
         const shown = body.clientWidth > 0 && body.clientHeight > 0;
-        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
+        await openPage(invoke, id, { url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
         opened.current = true;
         if (alive) {
           setOpen(true);

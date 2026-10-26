@@ -68,6 +68,9 @@ pub mod lease;
 // T-272-b (BROW-032): how a page's permission requests are answered.
 #[path = "browser_permissions.rs"]
 pub mod permissions;
+// after-list 719 (T-272-b): notices held for a pane that is still being built.
+#[path = "browser_notices.rs"]
+pub mod notices;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -985,6 +988,7 @@ fn err(e: tauri::Error) -> String {
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>) -> Result<(), String> {
     let url = parse(&url)?;
+    notices::opening(id); // after-list 719: its notices wait for the pane's browser_pane_ready
     families().join(id, url.as_str(), Instant::now()); // T-272-c
     let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
     wake::watch(&app); // T-283 (BROW-010)
@@ -1392,6 +1396,7 @@ pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
     families().leave(id); // T-272-c
+    notices::closed(id); // after-list 719
     holder::forget(id); // T-272-d
     certs::closed(id); // T-158: a closed tab's waiting certificate challenge goes with it
     forget_tab(id);
