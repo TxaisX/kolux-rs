@@ -99,8 +99,8 @@ Rules: the older dialog offers 1 through 12 plus "More…" for any number, never
   session page offers 1, 2, 3, 4, 6 and 8 (the rebuild should settle on one set); new seats arrive
   empty and never copy another seat's agent; shrinking removes seats from the bottom.
 Acceptance:
-  - [ ] Set the count to 3 → three empty seats; set it to 2 → the third seat goes and the first two are untouched.
-  - [ ] Enter 15 in the free field → fifteen seats appear.
+  - [x] Set the count to 3 → three empty seats; set it to 2 → the third seat goes and the first two are untouched. (cards; evidence/cards-SESS-013.txt)
+  - [x] Enter 15 in the free field → fifteen seats appear. (cards; evidence/cards-SESS-013.txt)
 Compat: —
 Source: D-02-013
 
