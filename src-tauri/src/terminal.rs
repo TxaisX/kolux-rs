@@ -11,6 +11,8 @@ use tauri::{AppHandle, Emitter, Manager};
 // T-066-d: the session id an id-only agent prints (its own resume hint), told to the window when its pane's program exits.
 #[path = "terminal_session_id.rs"]
 pub mod session_id;
+#[cfg(test)]
+mod flood;
 
 pub const OUTPUT_EVENT: &str = "terminal-output";
 pub const EXIT_EVENT: &str = "terminal-exit";
@@ -19,6 +21,8 @@ pub const EXIT_EVENT: &str = "terminal-exit";
 pub const SCREEN_EVENT: &str = "terminal-screen-request";
 /// Lines kept per terminal for `kolux terminal read` (CLI-024); older ones are dropped.
 pub const LOG_LINES: usize = 2000;
+/// Fix-term 786: the most a log keeps of a line that has not ended yet.
+const PENDING_CAP: usize = 16 * 1024;
 const SCREEN_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 /// APP-052: the terminal service's wire protocol. Additions only bump it; the window refuses a
 /// service older than the oldest protocol it still speaks (src/terminal/reattach.ts).
@@ -93,6 +97,29 @@ struct Inner {
 }
 
 impl Inner {
+    /// One chunk of a session's output, taken in: the snapshot tail and count (returned), the line log,
+    /// the saved history, the screen-owner bits and the program's last-output time.
+    fn book_chunk(&mut self, id: u32, chunk: &[u8], is_program: bool) -> u64 {
+        let seq = self.snaps.entry(id).or_default().push(chunk);
+        self.logs.entry(id).or_default().push(chunk);
+        if let Some(h) = self.hist.get_mut(&id) {
+            h.append(chunk);
+        }
+        if chunk.contains(&0x1b) {
+            let prev = self.owned.get(&id).copied().unwrap_or(0);
+            let now = screen_owner(prev, chunk);
+            if now != prev {
+                self.owned.insert(id, now);
+            }
+        }
+        if is_program {
+            if let Some(m) = self.marks.get_mut(&id) {
+                m.last_output = Some(Instant::now());
+            }
+        }
+        seq
+    }
+
     /// ORCH-059: a session id about to be (re)used starts as a new incarnation: nothing an earlier
     /// session under the same handle left behind (log, screen bits, end flag, marks, snapshot) carries over.
     fn fresh_incarnation(&mut self, id: u32) {
@@ -222,8 +249,15 @@ impl Flow {
             return;
         }
         self.pauses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let deadline = Instant::now() + wait;
+        let mut deadline = Instant::now() + wait;
+        let mut lowest = *n;
         while *n > FLOW_LOW {
+            // Fix-term 786: a pane that is slow but answering keeps the reader waiting; only one that has
+            // acknowledged nothing for `wait` is given up on (else its backlog grew without bound).
+            if *n < lowest {
+                lowest = *n;
+                deadline = Instant::now() + wait;
+            }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 // ponytail: a pane that never answers is taken as caught up; the next flood pauses again.
@@ -292,7 +326,8 @@ fn total_memory() -> Option<u64> {
 }
 
 /// TERM-106: past this many bytes a pane's saved output is rewritten down to `HISTORY_KEEP`.
-const HISTORY_CAP: u64 = 256 * 1024;
+/// Fix-term 787: 1 MB, so the rewrite (a read and a write of the file) runs once per ~900 KB of output, not per 128 KB.
+const HISTORY_CAP: u64 = 1024 * 1024;
 /// TERM-106: what a rewrite keeps (the newest bytes, from a line boundary), and the most a restore replays.
 const HISTORY_KEEP: usize = 128 * 1024;
 
@@ -303,6 +338,8 @@ const HISTORY_KEEP: usize = 128 * 1024;
 struct History {
     path: std::path::PathBuf,
     size: u64,
+    /// Fix-term 787: kept open between chunks (an open per chunk cost ~1 ms on Windows); dropped for the rewrite.
+    file: Option<std::fs::File>,
 }
 
 impl History {
@@ -310,17 +347,23 @@ impl History {
         std::fs::create_dir_all(dir.join("history")).ok()?;
         let path = history_file(dir, key);
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        Some(History { path, size })
+        Some(History { path, size, file: None })
     }
 
     fn append(&mut self, chunk: &[u8]) {
         use std::io::Write as _;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+        if self.file.is_none() {
+            self.file = std::fs::OpenOptions::new().create(true).append(true).open(&self.path).ok();
+        }
+        if let Some(f) = &mut self.file {
             if f.write_all(chunk).is_ok() {
                 self.size += chunk.len() as u64;
+            } else {
+                self.file = None;
             }
         }
         if self.size > HISTORY_CAP {
+            self.file = None;
             self.compact();
         }
     }
@@ -533,6 +576,9 @@ pub struct Read {
 /// ponytail: no column-aware buffer. A repaint that moves to a column above 1 and overwrites in place
 /// would still read joined; unproven against real PSReadLine bytes (T-151-d live step 4).
 fn last_drawing(s: &str) -> &str {
+    if !s.as_bytes().contains(&b'\r') && !s.as_bytes().contains(&0x1b) {
+        return s;
+    }
     // A CSI parameter as a number: empty is "left out" (None), zero-padded forms read as their value.
     let num = |p: &str| if p.is_empty() { None } else { Some(p.bytes().fold(0u32, |n, d| n.saturating_mul(10).saturating_add(u32::from(d - b'0')))) };
     let b = s.as_bytes();
@@ -573,6 +619,10 @@ fn last_drawing(s: &str) -> &str {
 
 /// Drops CSI, OSC and two-byte escape sequences, control characters other than tab.
 pub fn strip_ansi(s: &str) -> String {
+    // Fix-term 787: a line with no control character (nearly every line of a flood) is returned as it is.
+    if !s.bytes().any(|b| b < 0x20 && b != b'\t' || b == 0x7f) {
+        return s.to_string();
+    }
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars().peekable();
     while let Some(c) = it.next() {
@@ -620,9 +670,11 @@ impl OutputLog {
     pub fn push(&mut self, chunk: &[u8]) {
         self.written = Some(Instant::now());
         self.pending.extend_from_slice(chunk);
-        while let Some(i) = self.pending.iter().position(|b| *b == b'\n') {
-            let rest = self.pending.split_off(i + 1);
-            let raw = String::from_utf8_lossy(&std::mem::replace(&mut self.pending, rest)).into_owned();
+        let mut start = 0;
+        while let Some(i) = self.pending[start..].iter().position(|b| *b == b'\n') {
+            let end = start + i + 1;
+            let raw = String::from_utf8_lossy(&self.pending[start..end]);
+            start = end;
             let line = raw.trim_end_matches(['\n', '\r']);
             // A carriage return redraws the line from its start: keep what was drawn last.
             let line = last_drawing(line);
@@ -630,11 +682,31 @@ impl OutputLog {
                 self.oldest = 1;
             }
             self.lines.push_back(strip_ansi(line));
-            while self.lines.len() > LOG_LINES {
-                self.lines.pop_front();
-                self.oldest += 1;
-                self.dropped = true;
+            self.trim();
+        }
+        self.pending.drain(..start);
+        // A line that never ends (binary output, a progress bar drawn with CR alone) is cut into lines
+        // at the cap instead of growing without bound.
+        while self.pending.len() > PENDING_CAP {
+            let at = match std::str::from_utf8(&self.pending[..PENDING_CAP]) {
+                Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                _ => PENDING_CAP,
+            };
+            let rest = self.pending.split_off(at);
+            let raw = String::from_utf8_lossy(&std::mem::replace(&mut self.pending, rest)).into_owned();
+            if self.lines.is_empty() && self.oldest == 0 {
+                self.oldest = 1;
             }
+            self.lines.push_back(strip_ansi(last_drawing(&raw)));
+            self.trim();
+        }
+    }
+
+    fn trim(&mut self) {
+        while self.lines.len() > LOG_LINES {
+            self.lines.pop_front();
+            self.oldest += 1;
+            self.dropped = true;
         }
     }
 
@@ -1007,31 +1079,13 @@ impl Terminals {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                 // ORCH-057: the count is taken under the registry lock with the snapshot tail, so a snapshot
                 // holds exactly the chunks whose count is not past its own.
-                let seq = out_registry.lock().map(|mut i| i.snaps.entry(id).or_default().push(chunk)).unwrap_or(0);
+                let seq = out_registry.lock().map(|mut i| i.book_chunk(id, chunk, is_program)).unwrap_or(0);
                 let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key, generation: generation(), seq });
                 if let Some(dir) = link_dir.as_deref() {
                     for url in prs.feed(chunk) {
                         let linked = out_app.state::<Mutex<crate::state::Store>>().lock().is_ok_and(|s| crate::scm::link_printed(&s, dir, &url));
                         if linked {
                             let _ = out_app.emit("settings-saved", ());
-                        }
-                    }
-                }
-                if let Ok(mut inner) = out_registry.lock() {
-                    inner.logs.entry(id).or_default().push(chunk);
-                    if let Some(h) = inner.hist.get_mut(&id) {
-                        h.append(chunk);
-                    }
-                    if chunk.contains(&0x1b) {
-                        let prev = inner.owned.get(&id).copied().unwrap_or(0);
-                        let now = screen_owner(prev, chunk);
-                        if now != prev {
-                            inner.owned.insert(id, now);
-                        }
-                    }
-                    if is_program {
-                        if let Some(m) = inner.marks.get_mut(&id) {
-                            m.last_output = Some(Instant::now());
                         }
                     }
                 }
