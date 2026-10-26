@@ -47,11 +47,11 @@
 // of flow 4 is on whether or not the switch exists yet (T-152-gate), and moves the window to the second screen
 // when there is one. Attach mode changes the running app's settings for flow 4 and puts them back afterwards;
 // it cannot run flow 5 (it has no exe path to relaunch).
-import { spawn, execFile } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createApp, moveScript } from "./app-launch.mjs";
 // The launching shell may be a pane of another Kolux build (the old app sets KOLUX_USER_DATA_PATH, hook port/token and pane ids);
 // none of it may reach the app under test, its panes or the CLI it runs.
 for (const k of Object.keys(process.env)) if (k.startsWith("KOLUX_")) delete process.env[k];
@@ -97,21 +97,11 @@ const required = (n) => n !== 5 || QUIT_REQUIRED;
 const repo = join(TEMP, "repo");
 const marks = join(TEMP, "marks");
 const standin = join(TEMP, "standin");
-// T-152-c (5): the app's own temp folder (TEMP/TMP) holds the scratch agent config folders but not
-// the scratch home below: a debug build refuses a temp folder that holds the home as scratch.
-const appTemp = join(TEMP, "tmp");
-const claudeConfig = join(appTemp, "claude-config");
-const codexHome = join(appTemp, "codex-home");
-// T-152-c (2): the app keeps its hook scripts, status line slot and backup record under the user's home
-// (USERPROFILE on Windows, HOME elsewhere), so a run gets a scratch home and never writes the real one.
-// Cargo and rustup find their own folders from the home too, so those stay pinned to the real ones.
-const userHome = join(TEMP, "home");
-const realHome = homedir();
-// Windows finds AppData from the home too (%USERPROFILE%AppDataRoaming), and the app will not start
-// when that folder is missing, so a launched app keeps its profile under the scratch home as well.
-const roaming = join(userHome, "AppData", "Roaming");
-const local = join(userHome, "AppData", "Local");
-const profile = ATTACH ? join(process.env.APPDATA ?? "", IDENTIFIER) : join(roaming, IDENTIFIER);
+const log = (...x) => console.log(...x);
+// The launcher, scratch homes and process helpers are shared with scripts/stress (app-launch.mjs).
+const app = createApp({ root, port: PORT, cdp: CDP, identifier: IDENTIFIER, temp: TEMP, suffix: ".smoke", offscreen: OFFSCREEN, attach: ATTACH, keep: KEEP, buildMinutes: BUILD_MINUTES, log });
+const { run, ps, sleep, waitFor, cdp, evalJs, invoke, count, exists, shown, click, clickWhere, focusField, focusPane, treeOf, closeAndCount, byName, killAll, treeGone, alive } = app;
+const { profile, claudeConfig, userHome } = app.paths;
 const koluxSettings = join(profile, "settings.json");
 // A plain text file: the Explorer opens it in the CodeMirror editor, whose save writes the text as typed.
 const smokeFile = join(repo, "notes.txt");
@@ -120,78 +110,8 @@ const ORIGINAL = "original line\n";
 const SETTING = "needsStrip";
 const SHELL_NAMES = new Set(["powershell.exe", "pwsh.exe", "cmd.exe"]);
 
-const log = (...a) => console.log(...a);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const run = (file, a, options = {}) =>
-  new Promise((resolve, reject) => {
-    execFile(file, a, { windowsHide: true, maxBuffer: 1 << 24, ...options }, (err, stdout, stderr) => (err ? reject(Object.assign(err, { stdout, stderr })) : resolve({ stdout, stderr })));
-  });
-const ps = (script) => run("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).then((r) => r.stdout.trim());
 const git = (a) => run("git", a, { cwd: repo });
 
-async function waitFor(what, probe, ms = 15000, every = 250) {
-  const end = Date.now() + ms;
-  let last;
-  for (;;) {
-    try {
-      last = await probe();
-      if (last) return last;
-    } catch (e) {
-      last = e;
-    }
-    if (Date.now() > end) throw new Error(`timed out after ${ms} ms waiting for ${what}${last instanceof Error ? ` (${last.message})` : ""}`);
-    await sleep(every);
-  }
-}
-
-// cdp.mjs as a child: every call is one connection to the page, which keeps this file free of protocol code.
-const cdp = async (...a) => (await run(process.execPath, [cdpScript, "main", ...a], { env: { ...process.env, CDP_PORT: CDP } })).stdout.trim();
-const evalJs = async (expr) => {
-  const out = await cdp("eval", expr);
-  let v;
-  try {
-    v = JSON.parse(out);
-  } catch {
-    throw new Error(`eval gave no JSON: ${out.slice(0, 200)}`);
-  }
-  if (v && typeof v === "object" && v.exceptionDetails) throw new Error(`page threw: ${v.exceptionDetails.exception?.description ?? v.exceptionDetails.text}`);
-  return v;
-};
-const invoke = (cmd, params = {}) => evalJs(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(params)}).then(v => v === undefined ? null : v)`);
-const count = (sel) => evalJs(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
-const exists = async (sel) => (await count(sel)) > 0;
-// Panes outside the grid (a tab behind another) have no offsetParent; only the ones a user sees count.
-// T-543-b: a fresh profile opens with no pane at all, so there is no workspace-less "Terminal 1" any more.
-const shown = (sel) => evalJs(`[...document.querySelectorAll(${JSON.stringify(sel)})].filter(e => e.offsetParent !== null).length`);
-const click = async (sel) => {
-  const r = await evalJs(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return "missing"; e.click(); return "clicked"; })()`);
-  if (r !== "clicked") throw new Error(`nothing to click at ${sel}`);
-};
-// Matches the element's own text, or its .name child when it has one (menu items also carry a shortcut).
-const clickWhere = async (sel, textRe) => {
-  const r = await evalJs(`(() => { const e = [...document.querySelectorAll(${JSON.stringify(sel)})].find(x => ${textRe}.test((x.querySelector(".name") ?? x).textContent || "")); if (!e) return "missing"; e.click(); return "clicked"; })()`);
-  if (r !== "clicked") throw new Error(`no ${sel} whose text matches ${textRe}`);
-};
-const focusField = async (sel) => {
-  const r = await cdp("focus", sel);
-  if (r !== "focused") throw new Error(`could not focus ${sel}: ${r}`);
-};
-// The n-th shown pane takes the focus the way a click would (App.tsx listens for mousedown), then its text field.
-// T-545 (council flow-1 verdict 2026-10-13, harness-only): a pane makes its input field in its mount effect, so a pane
-// shown this instant may not have the field yet. Poll for the field up to 10 s; the pane itself is never waited for.
-const focusPane = async (paneSel, index, fieldSel) => {
-  const started = Date.now();
-  let r, polls = 0;
-  for (;;) {
-    r = await evalJs(`(() => { const p = [...document.querySelectorAll(${JSON.stringify(paneSel)})].filter(e => e.offsetParent !== null)[${index}]; if (!p) return "missing pane"; p.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); const f = p.querySelector(${JSON.stringify(fieldSel)}); if (!f) return "missing field"; f.focus(); return document.activeElement === f ? "focused" : "not-focused"; })()`);
-    if (r !== "missing field") break;
-    if (Date.now() - started > 10000) throw new Error(`${paneSel} #${index}: missing field after ${Date.now() - started} ms`);
-    polls++;
-    await sleep(100);
-  }
-  if (polls > 0) console.log(`focusPane ${paneSel} #${index}: field after ${Date.now() - started} ms`);
-  if (r !== "focused") throw new Error(`${paneSel} #${index}: ${r}`);
-};
 const TERM = "section.pane[data-agent]";
 // Shell panes only: data-agent is the agent name, so a Claude pane matches TERM but not SHELL.
 const SHELL = 'section.pane[data-agent="shell"]';
@@ -230,197 +150,20 @@ async function settled(file, quiet = 2000, ms = 20000) {
   return last;
 }
 
-// ---------- processes: the app's descendant tree, survivors, graceful close ----------
-// Every process under `pid` by Win32_Process ParentProcessId, with its name, thread count and creation time
-// (a child created before its parent is a reused pid, not a child).
-async function treeOf(pid) {
-  const out = await ps(
-    `$all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ThreadCount,CreationDate
-     $byId = @{}; foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
-     $want = @([int]${pid}); $i = 0; $out = @()
-     while ($i -lt $want.Count) { $p = $want[$i]; $i++; $pc = $byId[$p]
-       foreach ($c in $all) { if ($c.ParentProcessId -eq $p -and $want -notcontains [int]$c.ProcessId -and ($null -eq $pc -or $null -eq $pc.CreationDate -or $null -eq $c.CreationDate -or $c.CreationDate -ge $pc.CreationDate)) { $want += [int]$c.ProcessId; $out += $c } } }
-     $out | ForEach-Object { "$($_.ProcessId)|$($_.Name)|$($_.ParentProcessId)|$($_.ThreadCount)|$($_.CreationDate)" }`,
-  );
-  return out
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((l) => {
-      const [pid, name, ppid, threads, created] = l.split("|");
-      return { pid: Number(pid), name, ppid: Number(ppid), threads: Number(threads), created };
-    });
-}
-// The entries of `tree` that are still the same processes (pid, name and creation time all match).
-async function survivorsOf(tree) {
-  if (tree.length === 0) return [];
-  const ids = tree.map((t) => t.pid).join(",");
-  const out = await ps(`Get-CimInstance Win32_Process | Where-Object { @(${ids}) -contains [int]$_.ProcessId } | ForEach-Object { "$($_.ProcessId)|$($_.Name)|$($_.CreationDate)" }`);
-  const alive = new Set(out.split(/\r?\n/).filter(Boolean));
-  return tree.filter((t) => alive.has(`${t.pid}|${t.name}|${t.created}`));
-}
-const byName = (list) => {
-  const m = new Map();
-  for (const t of list) m.set(t.name, (m.get(t.name) ?? 0) + 1);
-  return [...m].map(([n, c]) => `${n} x${c}`).join(", ") || "none";
-};
-const killAll = async (list) => {
-  for (const t of list) await run("taskkill", ["/PID", String(t.pid), "/F"]).catch(() => {});
-};
-// T-552: a relaunch starts only once every process of the old tree has exited.
-const treeGone = (tree) => waitFor("the old process tree to exit", async () => (await survivorsOf(tree)).length === 0, 15000, 250);
-const alive = async (pid) => (await ps(`if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 'alive' } else { 'gone' }`)) === "alive";
-// The app's own quit path: a window close request over CDP (what the X button sends; App.tsx may ask about
-// unsaved editor text, then the window is destroyed and the app exits). WM_CLOSE by PostMessage when the page
-// cannot be reached. Never taskkill.
-async function gracefulClose(pid) {
-  const t0 = Date.now();
-  let how = "window close over CDP";
-  try {
-    await invoke("plugin:window|close", { label: "main" });
-  } catch {
-    how = "WM_CLOSE by PostMessage (the page did not answer)";
-    await ps(
-      `Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);' -Name M -Namespace U
-       [U.M]::PostMessage((Get-Process -Id ${pid}).MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null`,
-    ).catch(() => {});
-  }
-  const gone = await waitFor("the app to exit", async () => !(await alive(pid)), 30000, 500).catch(() => false);
-  if (!gone) throw new Error(`the app (pid ${pid}) did not exit within 30 s of a ${how}`);
-  await sleep(2000); // children that are on their way out get a moment before they count as survivors
-  return `${how}, exited in ${((Date.now() - t0) / 1000).toFixed(1)} s`;
-}
-// Capture, close, count: what flow 5 and the final close share.
-async function closeAndCount(pid) {
-  const tree = await treeOf(pid);
-  const how = await gracefulClose(pid);
-  const survivors = await survivorsOf(tree);
-  return { tree, how, survivors };
-}
-
-// ---------- the app: launch, relaunch or attach ----------
-let dev = null; // the `pnpm tauri dev` child in launch mode
-let vite = null; // a vite started by this script for a relaunch, when tauri dev took its own down
-let appPid = null;
-let exePath = null; // the built kolux-rs.exe inside this checkout, learned from the first launch
-let closeReport = null; // the final close's line
-
-async function pageUp(ms) {
-  await waitFor(
-    "the app page over CDP",
-    async () => {
-      const targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json();
-      return targets.some((t) => t.type === "page" && new RegExp(`localhost:${PORT}|tauri\\.localhost`).test(t.url));
+// launch/relaunch/close, the process tree and the orphan scan live in app-launch.mjs (shared with scripts/stress).
+const launch = () =>
+  app.launch({
+    prepare: () => {
+      rmSync(profile, { recursive: true, force: true });
+      mkdirSync(profile, { recursive: true });
+      writeFileSync(koluxSettings, JSON.stringify({ confirmCloseRunning: false, agentStatusHooks: true }, null, 2));
     },
-    ms,
-    2000,
-  );
-  await waitFor("the sidebar", () => exists("aside.sidebar"), 60000, 1000);
-}
-// Second-screen rule: dev windows go to the screen at X=-1920 when it is there. Council FIX-1 (FIX-SOON 2):
-// --offscreen moves the window at run time to -32000,-32000 (0x0015 = keep size, keep z-order, do not
-// activate), on any number of screens, so nothing about the window is compiled into the debug exe.
-const OFFSCREEN_AT = [-32000, -32000];
-const moveScript = (pid, offscreen = OFFSCREEN) => {
-  const [x, y, flags, screens] = offscreen ? [...OFFSCREEN_AT, "0x0015", ""] : [-1920, 0, "0x0005", "if ([System.Windows.Forms.Screen]::AllScreens.Count -lt 2) { 'one screen'; exit }"];
-  return `Add-Type -AssemblyName System.Windows.Forms; ${screens}
-     Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f);' -Name W -Namespace U
-     $h = [IntPtr]::Zero; for ($i = 0; $i -lt 20 -and $h -eq [IntPtr]::Zero; $i++) { $h = (Get-Process -Id ${pid}).MainWindowHandle; if ($h -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500 } }
-     if ($h -eq [IntPtr]::Zero) { 'no window handle' } else { [U.W]::SetWindowPos($h,[IntPtr]::Zero,${x},${y},0,0,${flags}) | Out-Null; '${offscreen ? "moved off-screen" : "moved"}' }`;
-};
-const moveWindow = (pid) => ps(moveScript(pid));
-const appEnv = () => ({ ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: codexHome, TEMP: appTemp, TMP: appTemp, USERPROFILE: userHome, HOME: userHome, APPDATA: roaming, LOCALAPPDATA: local, CARGO_HOME: process.env.CARGO_HOME ?? join(realHome, ".cargo"), RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(realHome, ".rustup") });
-
-async function launch() {
-  if (!IDENTIFIER.endsWith(".smoke")) throw new Error(`refusing to wipe the profile of ${IDENTIFIER}: use an identifier ending in ".smoke" or --attach`);
-  rmSync(profile, { recursive: true, force: true });
-  mkdirSync(profile, { recursive: true });
-  writeFileSync(koluxSettings, JSON.stringify({ confirmCloseRunning: false, agentStatusHooks: true }, null, 2));
-  mkdirSync(claudeConfig, { recursive: true });
-  // T-152-b (2): a dev run writes a Claude settings file only below this scratch marker.
-  writeFileSync(join(claudeConfig, ".kolux-rs-scratch"), "");
-  mkdirSync(codexHome, { recursive: true });
-  mkdirSync(local, { recursive: true });
-  const cfg = join(TEMP, "tauri.smoke.json");
-  writeFileSync(cfg, JSON.stringify(smokeConfig()));
-  const logFile = join(TEMP, "tauri-dev.log");
-  const out = openSync(logFile, "w");
-  // One command string through the shell: pnpm is a .cmd on Windows, which Node will not spawn directly.
-  dev = spawn(`pnpm tauri dev --config "${cfg}"`, {
-    cwd: root,
-    shell: true,
-    windowsHide: true,
-    stdio: ["ignore", out, out],
-    env: { ...appEnv(), CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? "4" },
   });
-  log(`launching: pnpm tauri dev (identifier ${IDENTIFIER}, vite ${PORT}, CDP ${CDP}; log ${logFile})`);
-  await pageUp(BUILD_MINUTES * 60_000);
-  // The app's pid comes from its executable path inside this checkout, never from a window title.
-  const exe = join(root, "src-tauri", "target").replace(/'/g, "''");
-  const found = await waitFor(
-    "the app process",
-    async () => {
-      const line = await ps(`$p = Get-CimInstance Win32_Process -Filter "Name='kolux-rs.exe'" | Where-Object { $_.ExecutablePath -like '${exe}*' } | Select-Object -First 1; if ($p) { "$($p.ProcessId)|$($p.ExecutablePath)" }`);
-      return line.includes("|") ? line : null;
-    },
-    30000,
-    1000,
-  );
-  appPid = Number(found.split("|")[0]);
-  exePath = found.split("|")[1];
-  log(`app pid ${appPid} (${exePath}); window: ${await moveWindow(appPid)}`);
-}
-
-const viteServing = async () => {
-  try {
-    return (await fetch(`http://localhost:${PORT}/`)).ok;
-  } catch {
-    return false;
-  }
-};
-// The same profile again: the exe tauri dev built (its devUrl and identifier were compiled in from the
-// --config above), started straight from this script so its pid is known at once.
-async function relaunch() {
-  if (!exePath) throw new Error("no exe path from a first launch: flow 5 needs launch mode");
-  if (!(await viteServing())) {
-    if (vite?.pid) await run("taskkill", ["/PID", String(vite.pid), "/T", "/F"]).catch(() => {});
-    const out = openSync(join(TEMP, "vite.log"), "a");
-    vite = spawn(`pnpm exec vite --port ${PORT} --strictPort`, { cwd: root, shell: true, windowsHide: true, stdio: ["ignore", out, out], env: process.env });
-    await waitFor(`vite on ${PORT}`, viteServing, 60000, 1000);
-  }
-  const out = openSync(join(TEMP, "app.log"), "a");
-  const child = spawn(exePath, [], { cwd: join(root, "src-tauri"), windowsHide: true, stdio: ["ignore", out, out], env: appEnv() });
-  child.on("error", (e) => log(`WARN relaunch: ${e.message}`));
-  if (!child.pid) throw new Error("the relaunched app has no pid");
-  appPid = child.pid;
-  await pageUp(90_000);
-  await moveWindow(appPid);
-}
-
-// The orphan scan: survivors of the tree captured before the close, never a taskkill first. The dev tree,
-// a vite this script started and the survivors are ended afterwards as cleanup, not as the check.
+const relaunch = () => app.relaunch();
 async function closeApp() {
-  if (ATTACH || KEEP) return;
-  if (appPid && (await alive(appPid))) {
-    const { tree, how, survivors } = await closeAndCount(appPid);
-    const ok = survivors.length === 0;
-    closeReport = [ok, `${how}; pre-close tree ${tree.length} (${byName(tree)}); survivors ${survivors.length} (${byName(survivors)})`];
-    await killAll(survivors);
-  }
-  appPid = null;
-  if (dev?.pid) await run("taskkill", ["/PID", String(dev.pid), "/T", "/F"]).catch(() => {});
-  if (vite?.pid) await run("taskkill", ["/PID", String(vite.pid), "/T", "/F"]).catch(() => {});
-  // Cleanup only: a shell or stand-in still running from the temp folder that no tree covered. Its names are
-  // fixed and this script's own ancestors (the cmd and pnpm chain that ran it carries --temp too) are skipped.
-  const left = await ps(
-    `$names = @('kolux-rs.exe','powershell.exe','pwsh.exe','cmd.exe','conhost.exe','OpenConsole.exe','ping.exe','curl.exe')
-     $all = Get-CimInstance Win32_Process; $mine = @(); $p = $PID; while ($p -and $mine -notcontains $p) { $mine += $p; $p = ($all | Where-Object ProcessId -eq $p).ParentProcessId }
-     $all | Where-Object { $names -contains $_.Name -and $_.CommandLine -like '*${TEMP.replace(/'/g, "''")}*' -and $mine -notcontains $_.ProcessId } | ForEach-Object { "$($_.ProcessId) $($_.Name)" }`,
-  ).catch(() => "");
-  if (left) {
-    log(`cleanup: processes still running from the temp folder, ended now:\n${left}`);
-    for (const line of left.split(/\r?\n/)) await run("taskkill", ["/PID", line.split(" ")[0], "/F"]).catch(() => {});
-  }
+  closeReport = await app.closeApp();
 }
+let closeReport = null; // the final close's line
 
 // ---------- setup: a throwaway repo as a project, its main checkout open with one shell ----------
 async function setup() {
@@ -662,7 +405,7 @@ async function flow5() {
   if (!before) throw new Error(`no ${koluxSettings} before the quit`);
   parts.push(`live: ${shells} shells, ${claudePanes} Claude stand-in pane, ${SETTING}=false; settings.json ${before.length} bytes`);
   // Quit: the tree first, then the app's own close, then the survivors.
-  const first = await closeAndCount(appPid);
+  const first = await closeAndCount(app.pid);
   parts.push(`quit: ${first.how}; pre-close tree ${first.tree.length} (${byName(first.tree)}); survivors ${first.survivors.length} (${byName(first.survivors)})`);
   if (first.survivors.length > 0) fails.push(`${first.survivors.length} process(es) from the pre-close tree survived the quit: ${byName(first.survivors)}`);
   await killAll(first.survivors);
@@ -706,7 +449,7 @@ async function flow5() {
   const claudeBack = await count(CLAUDE);
   parts.push(`come back: settings.json ${identical ? "byte-identical" : "CHANGED"}; ${SETTING}=false ${holds ? "holds" : "LOST"}; ${restored}/${shells} shells restored, ${echoed.length} echoed a marker; ${claudeBack} Claude pane back`);
   // The storm: 12 saved shell panes, 10 relaunches, stalled shells (ThreadCount <= 1) 15 s after each launch.
-  const second = await closeAndCount(appPid);
+  const second = await closeAndCount(app.pid);
   await killAll(second.survivors);
   await treeGone(second.tree);
   const cfg = JSON.parse(read(koluxSettings));
@@ -721,11 +464,11 @@ async function flow5() {
     const t0 = Date.now();
     await relaunch();
     await sleep(Math.max(0, 15000 - (Date.now() - t0)));
-    const tree = await treeOf(appPid);
+    const tree = await treeOf(app.pid);
     const sh = tree.filter((t) => SHELL_NAMES.has(t.name));
     seen.push(sh.length);
     stalled.push(sh.filter((t) => t.threads <= 1).length);
-    const c = await closeAndCount(appPid);
+    const c = await closeAndCount(app.pid);
     left.push(c.survivors.length);
     await killAll(c.survivors);
     await treeGone(c.tree);
@@ -737,7 +480,7 @@ async function flow5() {
   const logAt = read(appLog)?.length ?? 0;
   const tq = Date.now();
   await invoke("plugin:window|close", { label: "main" }).catch(() => {});
-  await waitFor("the app to exit", async () => !(await alive(appPid)), 30000, 100);
+  await waitFor("the app to exit", async () => !(await alive(app.pid)), 30000, 100);
   const quitS = ((Date.now() - tq) / 1000).toFixed(1);
   const tr = Date.now();
   let upS = null;
@@ -750,25 +493,18 @@ async function flow5() {
   const said = (read(appLog) ?? "").slice(logAt).match(/failed to create webview|panicked|still closing/i);
   if (said) fails.push(`stress: the immediate relaunch logged "${said[0]}"`);
   parts.push(`stress: relaunched at once after a quit (exited in ${quitS} s); page ${upS === null ? "NOT up" : `up in ${upS} s`}; ${said ? `log says "${said[0]}"` : "no webview failure in the log"}`);
-  if (appPid && (await alive(appPid))) {
-    const last = await closeAndCount(appPid);
+  if (app.pid && (await alive(app.pid))) {
+    const last = await closeAndCount(app.pid);
     await killAll(last.survivors);
     await treeGone(last.tree);
   }
-  appPid = null;
+  app.pid = null;
   const stalledTotal = stalled.reduce((a, b) => a + b, 0);
   parts.push(`storm: 10 relaunches with 12 saved shell panes; shells seen [${seen.join(" ")}]; stalled (ThreadCount <= 1 at 15 s) [${stalled.join(" ")}] = ${stalledTotal}; survivors per close [${left.join(" ")}]`);
   if (stalledTotal > 0) fails.push(`${stalledTotal} stalled shell(s) across the 10 relaunches`);
   const text = parts.join(" · ");
   if (fails.length > 0) throw new Error(`${fails.join("; ")} · ${text}`);
   return text;
-}
-
-// T-560: the config the app is started with. Council FIX-1 (FIX-SOON 2): it never carries window
-// entries, because tauri dev compiles this config into the debug exe and a window placed off-screen there
-// would stay unreachable for every later start of that exe; --offscreen moves the window at run time.
-function smokeConfig() {
-  return { identifier: IDENTIFIER, build: { devUrl: `http://localhost:${PORT}`, beforeDevCommand: `pnpm exec vite --port ${PORT} --strictPort` } };
 }
 
 // T-560: removes the temp folder once the app (pid) has exited, waiting up to 10 s, then retries a folder
@@ -881,7 +617,7 @@ if (flag("self-test")) {
   const cleaned = await removeTemp(d, null, 8);
   checks.push([cleaned === null && !existsSync(d) && existsSync(TEMP) && existsSync(sibling), `only TEMP/held was removed; TEMP and its other files stay: ${cleaned ?? "held gone"}, TEMP ${existsSync(TEMP) ? "kept" : "GONE"}, sibling ${existsSync(sibling) ? "kept" : "GONE"}`]);
   if (!hadSibling) rmSync(sibling, { force: true });
-  const cfg = smokeConfig();
+  const cfg = app.config();
   const off = moveScript(4242, true);
   const on = moveScript(4242, false);
   checks.push([
@@ -930,13 +666,13 @@ for (const n of ONLY) {
   const [, ok, note] = results[results.length - 1];
   log(`flow ${n}: ${ok ? "PASS" : "FAIL"}: ${note}`);
 }
-const lastPid = appPid;
+const lastPid = app.pid;
 try {
   await closeApp();
 } catch (e) {
   log(`WARN close: ${e.message}`);
 }
-if (KEEP) log(`kept ${TEMP}${ATTACH ? "" : ` and the app (pid ${appPid})`}`);
+if (KEEP) log(`kept ${TEMP}${ATTACH ? "" : ` and the app (pid ${app.pid})`}`);
 log("");
 const lines = [];
 const tag = (n) => (required(n) ? "" : " [report-only]");

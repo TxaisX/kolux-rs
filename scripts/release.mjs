@@ -58,6 +58,15 @@ export const isStale = (lock, now, alive) => !lock || now - lock.at > STALE_MS |
 export function manifest(version, notes, signature, url, now = new Date()) {
   return { version, notes, pub_date: now.toISOString(), platforms: { "windows-x86_64": { signature, url } } };
 }
+/** APP-061: the packaged command line reports the release version and its help works. `cli` runs it
+ *  with the given words and returns what it printed; a mismatch throws, which stops the release. */
+export function smokeCli(cli, version) {
+  const said = cli(["--version"]);
+  if (said !== version) throw new Error(`smoke test: kolux --version says ${said}, the release is ${version}`);
+  const help = cli(["--help"]);
+  if (!help.includes("--version") || !help.includes("worktree")) throw new Error("smoke test: kolux --help did not print the command list");
+}
+
 export const installerName = (version) => `Kolux RS_${version}_x64-setup.exe`;
 export const downloadUrl = (version) => `https://github.com/${FEED_REPO}/releases/download/v${version}/${encodeURIComponent(installerName(version))}`;
 export const isGitHub = (repo) => /^(https:\/\/github\.com\/|git@github\.com:)/.test(repo ?? "");
@@ -209,8 +218,7 @@ export function buildOnce(o, env = process.env) {
   if (!fs.existsSync(exe) || fs.statSync(exe).size < 1 << 20) throw new Error(`smoke test: no installer at ${exe}`);
   const signature = fs.existsSync(exe + ".sig") ? fs.readFileSync(exe + ".sig", "utf8").trim() : "";
   if (!signature) throw new Error(`smoke test: the installer has no signature (${exe}.sig)`);
-  const cliVersion = sh(path.join(target, "kolux.exe"), ["--version"]);
-  if (cliVersion !== version) throw new Error(`smoke test: kolux --version says ${cliVersion}, the release is ${version}`);
+  smokeCli((words) => sh(path.join(target, "kolux.exe"), words), version);
   const appVersion = JSON.parse(fs.readFileSync(path.join(dir, "src-tauri", "tauri.conf.json"), "utf8")).version;
   if (appVersion !== version) throw new Error(`smoke test: the app says ${appVersion}, the release is ${version}`);
   const out = path.join(dir + "-out", `v${version}`);
@@ -220,7 +228,7 @@ export function buildOnce(o, env = process.env) {
   const m = manifest(version, notes, signature, downloadUrl(version));
   fs.writeFileSync(path.join(out, "latest.json"), JSON.stringify(m, null, 2));
   fs.writeFileSync(path.join(out, "notes.md"), notes);
-  say(`smoke test passed: installer, signature, kolux --version and the manifest all say ${version}`);
+  say(`smoke test passed: installer, signature, kolux --version and --help, and the manifest all say ${version}`);
   if (o.noPublish) {
     say(`built ${version}, not published; the files are in ${out}`);
     return { version, sha, notes, out, published: false };
@@ -234,8 +242,10 @@ export function buildOnce(o, env = process.env) {
     say(`published ${version} to the folder ${pub}`);
   } else {
     if (!onGitHub(repo, env)) throw new Error(`the source repository ${repo} is not on GitHub, so nothing is published; set KOLUX_RELEASE_PUBLISH_DIR to rehearse`);
-    const files = ["latest.json", installerName(version), installerName(version) + ".sig"].map((f) => path.join(out, f));
+    // APP-031: the manifest goes up last, so a release is never announced before its installer is there.
+    const files = [installerName(version), installerName(version) + ".sig"].map((f) => path.join(out, f));
     sh("gh", ["release", "create", `v${version}`, "--repo", FEED_REPO, "--title", `Kolux RS ${version}`, "--notes-file", path.join(out, "notes.md"), ...files]);
+    sh("gh", ["release", "upload", `v${version}`, "--repo", FEED_REPO, path.join(out, "latest.json")]);
     say(`published ${version} to ${FEED_REPO}`);
   }
   return { version, sha, notes, out, published: true };

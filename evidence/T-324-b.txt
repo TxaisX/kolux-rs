@@ -1,0 +1,18 @@
+T-324-b (lane fix-other, 2026-10-25, Claude Sonnet 5.5)
+Built: APP-022 + APP-032 (b27716f8), APP-038 (8edf9bdf), APP-019 + APP-007 hide-switch (this pass, one commit on 8edf9bdf).
+Not built: see PLAN.md T-324-b-rest.
+
+Readings (logs G:/Temp/fix-other-v3-logs/p11-*.log):
+- cargo test --lib lifecycle:: tray:: cli::       178 passed, 0 failed
+- cargo test --lib resources:: lifecycle:: tray:: cli::app0   103 passed, 0 failed
+- cargo clippy --all-targets -D warnings (queued patches + T-324-b-lib applied, then reversed): clean
+  (fixed a dead-code error in resources/renderer_heap.rs left by b27716f8: MIB moved into the test module)
+- tsc --noEmit with T-248-c-App + T-324-b-App patches applied: exit 0; vitest src/settings src/feedback src/shell: 79 files / 461 passed
+
+LIVE PROOF PENDING (batched):
+1. Close the app; double-click a .md file (and one whose path has spaces) with Kolux as the handler -> the app starts and
+   shows the file in a preview pane. Open another .md while it runs -> the running window comes forward and shows it.
+2. Settings > Notifications on Windows with the tray icon: "Closing the window keeps Kolux in the tray" is shown;
+   with the tray icon missing it is not.
+3. KOLUX_RENDERER_HEAP_MB=2048 launch -> the interface process's --max-old-space-size is 2048.
+4. Feedback box: add screenshots, Open on GitHub, paste in the issue page.
