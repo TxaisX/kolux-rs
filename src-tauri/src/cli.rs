@@ -3083,6 +3083,8 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
     reconcile_late(&mut dispatches, &|t| ctx.terminals.live(&crate::terminal::handle_of(t)).then(|| mark_program(ctx.terminals, t)));
     // cli FIX-12: and one whose late terminal is gone (closed by hand) is spent before any arm reads it.
     spend_gone_late(&mut dispatches, &|h| ctx.terminals.live(h));
+    // after-list row 625: what each worker's hooks reported is kept on its row, to outlive the terminal.
+    keep_transcripts(&mut dispatches, &worker_read::own_transcript);
     // ORCH-033: a pane acts in its own Run; another Run can be named to read it, never to change it.
     let own = pane.and_then(|p| m.run_of(p, &dispatches));
     let run = named.clone().or_else(|| own.clone());
@@ -3280,7 +3282,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             let hook = tid.and_then(crate::status::state_of);
             let passes = o::passes(&dispatches);
             let worker = worker_read::Worker { d: &d, live, hook, passes: &passes };
-            let transcript = || tid.and_then(worker_read::own_transcript).and_then(|p| worker_read::transcript_items(d["agent"].as_str(), &p, live));
+            let transcript = || tid.and_then(worker_read::own_transcript).or_else(|| worker_read::kept_transcript(&d)).and_then(|p| worker_read::transcript_items(d["agent"].as_str(), &p, live));
             let terminal = |after: Option<u64>, limit: usize| tid.and_then(|t| ctx.terminals.read(t, after, Some(limit)));
             worker_read::read(&worker, &ask, transcript, terminal, worker_read::archive_lines)?
         }
@@ -3707,6 +3709,32 @@ fn load_list(store: &Store, key: &str) -> Vec<Value> {
 
 fn save_list(store: &Store, key: &str, list: &[Value]) -> Result<(), Fail> {
     store.set(key, &Value::Array(list.to_vec()).to_string()).map_err(|e| Fail::new("failed", e.to_string()))
+}
+
+/// after-list row 625: the transcript each worker's pane reported through its hooks is kept on the
+/// dispatch row, so worker-read still has it once the terminal ends and the hook sessions go.
+/// Returns whether any row changed.
+fn keep_transcripts(dispatches: &mut [Value], own: &dyn Fn(u32) -> Option<PathBuf>) -> bool {
+    let mut changed = false;
+    for d in dispatches.iter_mut().filter(|d| d["released"] != true) {
+        let Some(t) = crate::orchestration::terminal_of(d).and_then(|h| h.strip_prefix("term-")?.parse::<u32>().ok()) else { continue };
+        let Some(path) = own(t).map(|p| p.to_string_lossy().into_owned()) else { continue };
+        if d["transcript"].as_str() != Some(path.as_str()) {
+            d["transcript"] = json!(path);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// The terminal-exit side of the same: stamps the rows of `terminal` before its sessions are retired.
+/// Called by `terminal.rs` when a pane exits.
+pub(crate) fn keep_transcript_of(store: &Store, terminal: u32) {
+    let mut dispatches = load_list(store, DISPATCHES_KEY);
+    let mine = |t: u32| (t == terminal).then(|| worker_read::own_transcript(t)).flatten();
+    if keep_transcripts(&mut dispatches, &mine) {
+        let _ = save_list(store, DISPATCHES_KEY, &dispatches);
+    }
 }
 
 /// ORCH-027: a worker's own terminal ended by itself (not closed by Kolux) before the worker
@@ -7754,6 +7782,46 @@ mod tests {
         assert_eq!(dispatch(&ctx, &req("terminal.read", json!({ "terminal": "dispatch-t089d-2" }))).unwrap_err().code, "no_terminal");
         crate::status::terminal_ended(T);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// after-list row 625 (T-089-d): the transcript a pane's hooks reported stays on the dispatch row,
+    /// so worker-read still reads it after the terminal ends and its hook sessions are retired.
+    /// `via_exit` stamps through the terminal-exit path; else any worker command stamps it.
+    fn fix625_run(tag: &str, t: u32, pane: u32, via_exit: bool) {
+        let (dir, git_, store) = fix8_world(tag);
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        terminals.fake_session(t, &wd, Some("claude"));
+        let id = format!("dispatch-{tag}");
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[worker_row(json!({ "id": id, "runId": null, "taskId": "task-625", "status": "running", "released": false, "worktree": wd, "agent": "claude", "terminal": t }))]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-625", "runId": null, "status": "dispatched" })]).unwrap();
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args, pane: None, cli: String::new(), arrived: None };
+        let transcript = dir.join("session.jsonl");
+        let line = |i: u32, role: &str, text: &str| json!({ "type": role, "uuid": format!("u{i}"), "isSidechain": false, "message": { "id": format!("m{i}"), "role": role, "content": [{ "type": "text", "text": text }] } }).to_string();
+        std::fs::write(&transcript, format!("{}\n{}\n", line(0, "user", "build it"), line(1, "assistant", "built"))).unwrap();
+        crate::status::report(pane, Some(t), crate::status::Agent::Claude, &json!({ "hook_event_name": "UserPromptSubmit", "prompt": "build it", "transcript_path": transcript.to_string_lossy() }));
+        if via_exit {
+            keep_transcript_of(&store.lock().unwrap(), t);
+        } else {
+            dispatch(&ctx, &req(WORKER_SHOW, json!({ "dispatch": id }))).unwrap();
+        }
+        crate::status::terminal_ended(t);
+        let read = dispatch(&ctx, &req(WORKER_READ, json!({ "dispatch": id, "source": "transcript" }))).unwrap();
+        let turns: Vec<&str> = read["turns"].as_array().unwrap().iter().filter_map(|x| x["text"].as_str()).collect();
+        assert_eq!((read["source"].as_str(), turns), (Some("transcript"), vec!["build it", "built"]), "{read}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fix625_a_worker_command_keeps_the_transcript_on_the_row_past_the_terminal() {
+        fix625_run("fix625a", 926_111, 926_211, false);
+    }
+
+    #[test]
+    fn fix625_b_the_terminal_exit_keeps_the_transcript_on_the_row() {
+        fix625_run("fix625b", 926_112, 926_212, true);
     }
 
     /// cli FIX-11 items 4 and 5 (council FIX-SOON 3 and AFTER 1 on 9afdd308): pending notes follow

@@ -63,11 +63,11 @@ function startBridge() {
   });
 }
 
-type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; trust: string | null; busy: boolean; connecting: boolean; onRetry: () => void; onTrust: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
+type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; handler: boolean | null; trust: string | null; busy: boolean; connecting: boolean; onRetry: () => void; onTrust: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
 
 /** T-074 (BROW-008, BROW-009): what the user sees over a page that failed or crashed. */
-function LoadOverlay({ overlay, diag, trust, busy, connecting, onRetry, onTrust, onHttps, onOpen }: OverlayProps) {
-  const m = overlayModel(overlay, diag);
+function LoadOverlay({ overlay, diag, handler, trust, busy, connecting, onRetry, onTrust, onHttps, onOpen }: OverlayProps) {
+  const m = overlayModel(overlay, diag, handler);
   return (
     <div className="load-overlay" role="alert" data-kind={overlay.kind}>
       <h2>{m.title}</h2>
@@ -175,6 +175,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const health = useRef<Health>(freshHealth());
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [diag, setDiag] = useState<Diagnosis | null>(null);
+  // After-list 21: whether the system has a program for the address (null until known).
+  const [handler, setHandler] = useState<boolean | null>(null);
   // T-158 (BROW-024): whether the engine's certificate challenge for this local site waits here.
   const [cert, setCert] = useState<CertState | null>(null);
   // While an overlay action runs all its buttons are disabled together; the connecting indicator
@@ -188,11 +190,16 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (e.t === "started") {
       setBusy(false);
       setDiag(null);
+      setHandler(null);
       setCert(null);
     }
     if (action === "reload") invoke("browser_go", { id, what: "reload" }).catch(() => {});
     if (action === "overlay") {
       setBusy(false);
+      const at = h.url;
+      invoke<boolean | null>("browser_external_handler", { url: at })
+        .then((v) => health.current.url === at && setHandler(v))
+        .catch(() => {});
       if (h.phase === "failed") {
         const { url } = h;
         invoke<Diagnosis>("browser_diagnose", { url })
@@ -1025,7 +1032,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         </div>
       )}
       <div ref={host} className="pane-body">
-        {overlay && <LoadOverlay overlay={overlay} diag={diag} trust={trustLabel(cert)} busy={busy} connecting={connecting} onRetry={retry} onTrust={trustCert} onHttps={switchHttps} onOpen={openExternally} />}
+        {overlay && <LoadOverlay overlay={overlay} diag={diag} handler={handler} trust={trustLabel(cert)} busy={busy} connecting={connecting} onRetry={retry} onTrust={trustCert} onHttps={switchHttps} onOpen={openExternally} />}
       </div>
     </section>
   );

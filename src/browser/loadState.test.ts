@@ -77,6 +77,17 @@ describe("BROW-008: a page that fails to load", () => {
       expect(m.openExternally).toBe(false);
       expect(m.switchHttps).toBeNull();
     });
+    it("Open Externally also needs an outside handler: hidden when the system has none, kept when unknown", () => {
+      const cert = overlayModel({ kind: "failed", url: "https://expired.example/" }, { kind: "certificate", local: false, https: null }, false);
+      expect(cert.openExternally).toBe(false);
+      for (const known of [true, null] as const) {
+        expect(overlayModel({ kind: "failed", url: "https://expired.example/" }, { kind: "certificate", local: false, https: null }, known).openExternally).toBe(true);
+      }
+      expect(overlayModel({ kind: "crashed", url: "http://localhost:3000/" }, null, false).openExternally).toBe(false);
+      expect(overlayModel({ kind: "crashed", url: "http://localhost:3000/" }, null, true).openExternally).toBe(true);
+      // a handler never makes an unreachable address openable
+      expect(overlayModel({ kind: "failed", url: "http://no.such.host.invalid/" }, { kind: "unknown-host", local: false, https: null }, true).openExternally).toBe(false);
+    });
     it("a failure out of crash recovery leaves out the network troubleshooting text", () => {
       const m = overlayModel({ kind: "crashed", url: "http://localhost:3000/" }, { kind: "refused", local: true, https: null });
       expect(m.title).toMatch(/stopped responding/i);

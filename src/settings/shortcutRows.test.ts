@@ -11,7 +11,7 @@ const rows = (file: unknown = null) => shortcutRows(resolve(file, "win32"));
 const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
 
 test("every command is listed under its area with its chords and badges", () => {
-  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+Alt+Q", "worktree.quickOpen": "Mod+Alt+Q" } });
   expect(all.length).toBe(135); // every command, Reopen closed tab included again (T-239), view.space added (T-146-e)
   expect(ids(all)).toContain("tab.reopenClosed");
   const by = (id: string) => all.find((r) => r.id === id)!;
@@ -21,14 +21,14 @@ test("every command is listed under its area with its chords and badges", () => 
   expect(by("view.code").badges).toEqual([]);
   expect(by("workspace.openBoard").badges).toEqual(["Unassigned"]);
   expect(by("view.tasks").badges).toEqual(["Unassigned", "Conflicts"]);
-  // Its override was dropped, but the file still holds it, so the row still offers Reset.
-  expect([by("view.tasks").custom, by("worktree.quickOpen").custom]).toEqual([true, false]);
+  // Both overrides were dropped (user against user), but the file still holds them, so the rows still offer Reset.
+  expect([by("view.tasks").custom, by("worktree.quickOpen").custom]).toEqual([true, true]);
   expect(by("worktree.quickOpen").badges).toEqual(["Conflicts"]);
-  expect(by("worktree.quickOpen").hint).toBe("Ctrl+P is also used by Open Tasks here. Give one of them other keys.");
+  expect(by("worktree.quickOpen").hint).toBe("Ctrl+Alt+Q is also used by Open Tasks here. Give one of them other keys.");
 });
 
 test("filters: all, modified, unassigned, conflicting", () => {
-  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+Alt+Q", "worktree.quickOpen": "Mod+Alt+Q" } });
   expect(filterRows(all, "all", "").length).toBe(135);
   expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
   expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);

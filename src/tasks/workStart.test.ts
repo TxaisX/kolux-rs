@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existingWorkspace, linkKey, workItem, workLabel } from "./workStart";
+import { existingWorkspace, linkKey, linkedRows, workItem, workLabel } from "./workStart";
 
 describe("GIT-049 starting or resuming a workspace from an item", () => {
   it("turns a task row into the item the create command takes", () => {
@@ -32,5 +32,15 @@ describe("GIT-049 starting or resuming a workspace from an item", () => {
     expect(workLabel("C:/x", { kind: "issue" })).toBe("Resume workspace");
     expect(workLabel(null, { kind: "issue" })).toBe("Start workspace");
     expect(workLabel(null, { kind: "pr" })).toBe("Check out in a workspace");
+  });
+  it("lists the workspaces of an opened or pasted address's repository even when the picker has not chosen it", () => {
+    const row = (host: string, repo: string, checking = false) => ({ key: `${host}/${repo}`, host, repo, checking });
+    const chosen = [row("github.com", "acme/app")];
+    const all = [...chosen, row("github.com", "acme/lib"), row("git.corp.example", "acme/lib"), row("", "", true)];
+    expect(linkedRows(chosen, all, [])).toEqual(chosen);
+    expect(linkedRows(chosen, all, [{ host: "github.com", repo: "Acme/Lib" }])).toEqual([chosen[0], all[1]]);
+    // The same name on another host is another repository; an address of a repository with no project adds nothing.
+    expect(linkedRows(chosen, all, [{ host: "git.corp.example", repo: "acme/lib" }])).toEqual([chosen[0], all[2]]);
+    expect(linkedRows(chosen, all, [{ host: "github.com", repo: "acme/unknown" }, { host: "github.com", repo: "acme/app" }])).toEqual(chosen);
   });
 });

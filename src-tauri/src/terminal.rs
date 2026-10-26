@@ -1063,6 +1063,10 @@ impl Terminals {
                         f.release();
                     }
                 }
+                // Row 625: a worker's transcript path stays on its dispatch row before its hook sessions go.
+                if let Ok(store) = exit_app.state::<Mutex<crate::state::Store>>().lock() {
+                    crate::cli::keep_transcript_of(&store, id);
+                }
                 turns_end(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
                 crate::automations::follow(&exit_app, |s| {
