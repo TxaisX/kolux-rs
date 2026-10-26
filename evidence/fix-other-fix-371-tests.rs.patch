@@ -1,0 +1,48 @@
+diff --git a/src-tauri/src/agent_hooks/tests.rs b/src-tauri/src/agent_hooks/tests.rs
+index fa5965bc..62d5d0d3 100644
+--- a/src-tauri/src/agent_hooks/tests.rs
++++ b/src-tauri/src/agent_hooks/tests.rs
+@@ -1633,9 +1633,40 @@ fn fix_hooks_scratch_temp_beside_home_admits_marked_temp_and_still_refuses_any_h
+     let real = root.join("Users").join("someone").join(".claude");
+     fs::create_dir_all(&real).unwrap();
+     assert!(scratch_only(&real.join("settings.json"), &tmp, &home).unwrap_err().contains("left alone"));
+-    // The old failing layout (TEMP one level above HOME) is still refused, marker or not.
+-    let err = scratch_only(&cfg.join("settings.json"), &root, &home).unwrap_err();
+-    assert!(err.contains("holds the home folder"), "{err}");
++    // TEMP one level above a HOME that is itself marked scratch (row 371): admitted.
++    assert!(scratch_only(&cfg.join("settings.json"), &root, &home).is_ok());
++    let _ = fs::remove_dir_all(&root);
++}
++
++/// Row 371: only a HOME that is itself scratch may sit under TEMP; the user's real home never passes.
++#[test]
++fn row371_a_home_under_temp_passes_only_when_it_is_marked_scratch() {
++    let root = temp("row371-home");
++    let (cfg, home, real) = (root.join("tmp").join("cfg"), root.join("home"), root.join("Users").join("someone"));
++    for d in [&cfg, &home, &real] {
++        fs::create_dir_all(d).unwrap();
++    }
++    fs::write(cfg.join(SCRATCH_MARKER), "").unwrap();
++    let file = cfg.join("settings.json");
++    // Unmarked home under TEMP (the real home, or USERPROFILE): refused.
++    for h in [&home, &real, &root.join("Users")] {
++        let err = scratch_only(&file, &root, h).unwrap_err();
++        assert!(err.contains("holds the home folder") && err.contains("left alone"), "{err}");
++    }
++    // A marker in TEMP itself marks no home.
++    fs::write(root.join(SCRATCH_MARKER), "").unwrap();
++    assert!(scratch_only(&file, &root, &home).unwrap_err().contains("holds the home folder"));
++    assert!(scratch_only(&file, &root, &root).unwrap_err().contains("holds the home folder"));
++    // A marked scratch home, or one below a marked folder, is admitted.
++    fs::write(home.join(SCRATCH_MARKER), "").unwrap();
++    assert!(scratch_only(&file, &root, &home).is_ok());
++    assert!(scratch_only(&file, &root, &home.join("AppData")).is_err(), "a home that does not exist cannot be resolved");
++    fs::create_dir_all(home.join("AppData")).unwrap();
++    assert!(scratch_only(&file, &root, &home.join("AppData")).is_ok());
++    // The marker on home never admits a file that is not itself scratch.
++    assert!(scratch_only(&real.join("settings.json"), &root, &home).is_err());
++    // The unmarked real home is still refused after all that.
++    assert!(scratch_only(&file, &root, &real).is_err());
+     let _ = fs::remove_dir_all(&root);
+ }
+ 

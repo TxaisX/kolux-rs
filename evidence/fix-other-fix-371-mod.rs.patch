@@ -1,0 +1,42 @@
+diff --git a/src-tauri/src/agent_hooks/mod.rs b/src-tauri/src/agent_hooks/mod.rs
+index faa72cd9..33d44a87 100644
+--- a/src-tauri/src/agent_hooks/mod.rs
++++ b/src-tauri/src/agent_hooks/mod.rs
+@@ -486,7 +486,7 @@ pub fn claude_target(profile: &Path) -> Result<PathBuf, String> {
+ /// `scratch`, holds the scratch marker (a marker in `scratch` itself does not count). Both sides
+ /// are resolved, so `..`, links and letter case cannot slip past; anything that cannot be resolved
+ /// is refused. T-152-c (5): a `scratch` that is a drive root, or that is or holds `home` (the
+-/// user's home folder), is too wide to be scratch and refuses everything.
++/// user's home folder), is too wide to be scratch and refuses everything, unless that `home` is itself marked scratch.
+ pub fn scratch_only(file: &Path, scratch: &Path, home: &Path) -> Result<(), String> {
+     let refuse = |why: &str| Err(format!("a test, dev or lane run writes agent settings only under {} below a {SCRATCH_MARKER} marker{why}; {} left alone", scratch.display(), file.display()));
+     let Ok(root) = fs::canonicalize(scratch) else { return refuse(" (the temp folder cannot be resolved)") };
+@@ -494,13 +494,12 @@ pub fn scratch_only(file: &Path, scratch: &Path, home: &Path) -> Result<(), Stri
+         return refuse(" (the temp folder is a drive root)");
+     }
+     match fs::canonicalize(home) {
+-        Ok(h) if h.starts_with(&root) => return refuse(&format!(" (the temp folder holds the home folder {})", home.display())),
++        // A home that is itself marked scratch (strictly below the temp folder) is not the user's.
++        Ok(h) if h.starts_with(&root) && !marked_below(&h, &root) => return refuse(&format!(" (the temp folder holds the home folder {})", home.display())),
+         Ok(_) => {}
+         Err(_) => return refuse(&format!(" (the home folder {} cannot be resolved)", home.display())),
+     }
+-    let inside = file.parent().map(fs::canonicalize).and_then(Result::ok).is_some_and(|dir| {
+-        dir.starts_with(&root) && dir.ancestors().take_while(|a| a.starts_with(&root) && *a != root).any(|a| a.join(SCRATCH_MARKER).is_file())
+-    });
++    let inside = file.parent().map(fs::canonicalize).and_then(Result::ok).is_some_and(|dir| dir.starts_with(&root) && marked_below(&dir, &root));
+     if inside {
+         Ok(())
+     } else {
+@@ -508,6 +507,11 @@ pub fn scratch_only(file: &Path, scratch: &Path, home: &Path) -> Result<(), Stri
+     }
+ }
+ 
++/// `dir`, or a folder above it that is still strictly below `root`, holds the scratch marker.
++fn marked_below(dir: &Path, root: &Path) -> bool {
++    dir.ancestors().take_while(|a| a.starts_with(root) && *a != root).any(|a| a.join(SCRATCH_MARKER).is_file())
++}
++
+ /// Claude Code's scripts, hooks and status line, after its settings were copied once.
+ fn install_claude_all(home: &Path, profile: &Path) -> Result<(), String> {
+     install_claude_at(home, &claude_target(profile)?)
