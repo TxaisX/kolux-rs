@@ -357,7 +357,7 @@ Rules: a background host keeps sessions alive while the app is closed; scrollbac
   (Kolux RS, DT-C27 as changed 2026-10-20: Txais chose that terminals keep running after quit. The
   background host is built (T-075-b); the window routing its panes through it is T-184-b.)
 Acceptance:
-  - [ ] Quit with a build running; reopen; the build output continues in the same pane.
+  - [x] Quit with a build running; reopen; the build output continues in the same pane. (cards; evidence/cards-TERM-105.txt)
   - [ ] Restored panes accept typing at once and the pane that had focus before quitting has it
       again.
 Compat: —
@@ -384,7 +384,7 @@ Rules: saved history is written safely so a crash leaves a usable copy; large hi
   are kept to one piece, 256 KB on disk and the newest 128 KB replayed.)
 Acceptance:
   - [ ] After killing the host, reopened panes show their earlier output above a new prompt.
-  - [ ] A tab the user closed on purpose before the crash does not come back.
+  - [x] A tab the user closed on purpose before the crash does not come back. (cards; evidence/cards-TERM-106.txt)
 Compat: —
 Source: D-03-106
 
@@ -403,7 +403,7 @@ Rules: list shows terminals and can narrow to one worktree, cap how many are ret
   or every terminal of a worktree; a terminal created from the command line without focus starts in
   the background, stays alive and is listed.
 Acceptance:
-  - [ ] kolux terminal send --enter types text and submits it.
+  - [x] kolux terminal send --enter types text and submits it. (cards; evidence/cards-TERM-125.txt)
   - [ ] kolux terminal close --worktree X --all closes every terminal there.
 Compat: CLI group kolux terminal with the subcommands list, show, read, send, wait, create, switch
   (also focus), rename, split and close. Flags, alphabetically: --all, --command, --cursor,
