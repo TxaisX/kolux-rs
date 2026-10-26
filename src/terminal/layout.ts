@@ -41,6 +41,8 @@ export type SavedPane = {
   /** after-list #100: a pinned tab and its Tab Color come back after a restart. */
   pinned?: boolean;
   color?: string;
+  /** An empty chooser pane (SESS-007): it comes back empty, with its pre-picked agent if it had one. */
+  chooser?: true;
 };
 export type SavedLayout = { panes: SavedPane[]; activeTab: Record<number, number>; focused: number; activeDir: string | null; stacked: Record<string, boolean> };
 
@@ -57,14 +59,15 @@ export function marksOf(panes: SavedPane[]): { pinned: Set<number>; colors: TabC
 /** A live pane as App keeps it; the fields beyond SavedPane are what a restart cannot rebuild. */
 type LivePane = Omit<SavedPane, "env"> & { seats?: unknown[]; env?: unknown; typed?: string; task?: string };
 
-/** What to write down: every started tab, stripped to what a restart can rebuild. A chooser that
- *  was never started is no tab yet; an agent comes back at its prompt (its arguments carried the
- *  one-off opening prompt and environment). */
+/** What to write down: every tab, stripped to what a restart can rebuild. A chooser that was never
+ *  started is kept as an empty chooser so the grid keeps its size; an agent comes back at its prompt
+ *  (its arguments carried the one-off opening prompt and environment). */
 export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, focused: number, activeDir: string | null, stacked: Record<string, boolean>, marks?: Marks): SavedLayout {
   const kept: SavedPane[] = [];
   for (const p of panes) {
-    if (p.seats && p.program === null && !p.kind) continue;
+    const chooser = !!p.seats && p.program === null && !p.kind;
     const s: SavedPane = { key: p.key, cwd: p.cwd, branch: p.branch, agent: p.agent, program: p.program, args: p.agent === "shell" ? p.args : [] };
+    if (chooser) s.chooser = true;
     if (p.agentId !== undefined) s.agentId = p.agentId;
     if (p.session) s.session = p.session;
     if (p.forkOf) s.forkOf = p.forkOf;
@@ -80,6 +83,12 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
     kept.push(s);
   }
   return tidy(kept, activeTab, focused, activeDir, stacked);
+}
+
+/** A saved pane as App's live pane: a saved chooser gets its seat back (the agent it was pre-set to, else blank). */
+export function reviveSaved(p: SavedPane): Omit<SavedPane, "chooser"> & { seats?: { agent: string | null; model: string | null }[] } {
+  const { chooser, ...rest } = p;
+  return chooser ? { ...rest, seats: [{ agent: p.agentId ?? null, model: null }] } : rest;
 }
 
 /** SESS-030 (T-066-c): whether the restore loop asks the Rust side for this tab's start line. Only
@@ -117,6 +126,7 @@ function readPane(v: unknown): SavedPane | null {
   if (typeof o.staged === "boolean") p.staged = o.staged;
   if (o.pinned === true) p.pinned = true;
   if (isTabColor(o.color)) p.color = o.color;
+  if (o.chooser === true && !p.kind && p.program === null) p.chooser = true;
   return p;
 }
 
