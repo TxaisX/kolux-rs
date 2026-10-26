@@ -15,6 +15,7 @@ import { AFTER_START_MS, publishDelay, recall, remember, RescanLimiter } from ".
 import { dragPayload, planFor, resumeBlock, SESSION_DRAG, type ResumePlan } from "./resume";
 import { chatResumeBlock } from "./chatResume";
 import SessionDetail from "./SessionDetail";
+import SessionFiles from "./SessionFiles";
 
 export type PanelProps = {
   /** The window's settings and the way to save one (the view options and the scope live there, so every window sees them). */
@@ -329,6 +330,7 @@ function AgentsPanelBody(props: PanelProps) {
                 <button type="button" className="btn" title="Start a new session in the agent you pick, carrying this conversation" onClick={() => askCarry({ agent: s.agent, id: s.id, title: s.title })}>
                   Continue with…
                 </button>
+                <SessionFiles session={s} onNote={setNote} onDeleted={() => { setList((l) => l && l.filter((x) => x.agent !== s.agent || x.id !== s.id)); load(false); }} />
               </div>
             </li>
           );

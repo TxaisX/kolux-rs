@@ -1,0 +1,228 @@
+// VIEW 089 (T-153-d): delete, reveal or open a past session's files. The window names a session by
+// agent and id only; the paths come from the session roots, and a path that is not strictly inside
+// the folder that agent keeps sessions in (a `..` hop, a link leading out) is refused.
+
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+
+use super::list::{find_session, Roots};
+
+/// A session's transcript and what travels with it, inside `root`.
+#[derive(Debug, PartialEq)]
+pub struct Located {
+    pub root: PathBuf,
+    pub file: PathBuf,
+    /// Claude keeps a session's sub-agent runs and tool output in a folder named after its id.
+    pub extra: Option<PathBuf>,
+}
+
+/// `path` as a real location strictly below `root`, or the reason it is refused. Links are refused
+/// outright: a session file is never a link, and one that leads out must not be followed.
+pub fn confined(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let refused = || format!("{} is not inside the sessions folder, so Kolux leaves it alone.", path.display());
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(refused());
+    }
+    if fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.file_type().is_symlink() {
+        return Err(refused());
+    }
+    let (real_root, real) = (root.canonicalize().map_err(|e| format!("{}: {e}", root.display()))?, path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?);
+    if real == real_root || !real.starts_with(&real_root) {
+        return Err(refused());
+    }
+    Ok(real)
+}
+
+/// The folders an agent's sessions live in.
+fn session_dirs(roots: &Roots, agent: &str) -> Vec<PathBuf> {
+    match agent {
+        "claude" | "openclaude" => roots.claude.iter().map(|c| c.join("projects")).collect(),
+        "codex" => roots.codex.iter().flat_map(|h| [h.join("sessions"), h.join("archived_sessions")]).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Where session `id` of `agent` is on disk, every path checked against its sessions folder.
+pub fn locate(roots: &Roots, agent: &str, id: &str) -> Result<Located, String> {
+    if !crate::agents::safe_session(id) {
+        return Err("That session's name cannot be used to find its files.".into());
+    }
+    let (file, _) = find_session(roots, agent, id).ok_or("That session is no longer on this computer.")?;
+    let root = session_dirs(roots, agent).into_iter().find(|d| file.starts_with(d)).ok_or("That session is not in a folder Kolux manages.")?;
+    let file = confined(&root, &file)?;
+    let extra = (agent != "codex").then(|| file.with_file_name(id)).filter(|d| d.is_dir()).map(|d| confined(&root, &d)).transpose()?;
+    Ok(Located { root, file, extra })
+}
+
+/// Removes exactly these paths. Every path is checked before the first is touched, so a refused one
+/// leaves the rest in place. Answers how many were removed.
+pub fn delete_all(root: &Path, paths: &[PathBuf]) -> Result<usize, String> {
+    let real: Vec<PathBuf> = paths.iter().map(|p| confined(root, p)).collect::<Result<_, _>>()?;
+    for p in &real {
+        let gone = if p.is_dir() { fs::remove_dir_all(p) } else { fs::remove_file(p) };
+        gone.map_err(|e| format!("could not delete {}: {e}", p.display()))?;
+    }
+    Ok(real.len())
+}
+
+/// Deletes session `id` of `agent`: its transcript and, for Claude, the folder of the same name.
+pub fn delete(roots: &Roots, agent: &str, id: &str) -> Result<usize, String> {
+    let at = locate(roots, agent, id)?;
+    let all: Vec<PathBuf> = at.extra.into_iter().chain([at.file]).collect();
+    delete_all(&at.root, &all)
+}
+
+fn roots_now(store: &Mutex<crate::state::Store>) -> Result<Roots, String> {
+    Ok(super::list::live_roots(&store.lock().map_err(|e| e.to_string())?.settings()))
+}
+
+/// The session's own transcript file, found and checked off the window's thread.
+async fn file_of(store: tauri::State<'_, Mutex<crate::state::Store>>, agent: String, id: String) -> Result<PathBuf, String> {
+    let roots = roots_now(&store)?;
+    tauri::async_runtime::spawn_blocking(move || locate(&roots, &agent, &id).map(|l| l.file)).await.map_err(|e| e.to_string())?
+}
+
+/// The Delete button, after the window has asked "are you sure". Answers how many items went.
+#[tauri::command]
+pub async fn session_delete(store: tauri::State<'_, Mutex<crate::state::Store>>, agent: String, id: String) -> Result<usize, String> {
+    let roots = roots_now(&store)?;
+    tauri::async_runtime::spawn_blocking(move || delete(&roots, &agent, &id)).await.map_err(|e| e.to_string())?
+}
+
+/// Show the session's transcript in the file manager (the same door a file link uses).
+#[tauri::command]
+pub async fn session_reveal(store: tauri::State<'_, Mutex<crate::state::Store>>, agent: String, id: String) -> Result<(), String> {
+    let file = file_of(store, agent, id).await?;
+    crate::links::reveal(&file)
+}
+
+/// Open the session's transcript in the system's own program for it.
+#[tauri::command]
+pub async fn session_open(store: tauri::State<'_, Mutex<crate::state::Store>>, agent: String, id: String) -> Result<(), String> {
+    let file = file_of(store, agent, id).await?;
+    crate::artifacts::system_open(&file.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("kolux-rs-sessfiles-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn put(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    const USER: &str = "{\"type\":\"user\",\"cwd\":\"/w\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+
+    fn claude_roots(root: &Path) -> Roots {
+        Roots { claude: vec![root.to_path_buf()], codex: vec![] }
+    }
+
+    #[test]
+    fn view089_delete_removes_one_session_and_its_folder_and_leaves_the_neighbours() {
+        let root = tmp("one");
+        let dir = root.join("projects").join("C--w");
+        put(&dir.join("aaa.jsonl"), USER);
+        put(&dir.join("bbb.jsonl"), USER);
+        put(&dir.join("aaa").join("subagents").join("agent-1.jsonl"), USER);
+        put(&dir.join("bbb").join("tool-results").join("t.txt"), "x");
+        put(&dir.join("agent-9.jsonl"), USER);
+        let roots = claude_roots(&root);
+        assert_eq!(delete(&roots, "claude", "aaa"), Ok(2), "the transcript and the folder of the same name");
+        assert!(!dir.join("aaa.jsonl").exists() && !dir.join("aaa").exists());
+        for kept in ["bbb.jsonl", "bbb/tool-results/t.txt", "agent-9.jsonl"] {
+            assert!(dir.join(kept).exists(), "{kept} is another session's and stays");
+        }
+        assert!(delete(&roots, "claude", "aaa").unwrap_err().contains("no longer"), "a second delete finds nothing");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn view089_delete_handles_a_codex_rollout_in_either_folder() {
+        let home = tmp("codex");
+        let live = home.join("sessions").join("2026").join("10").join("20").join("rollout-2026-10-20T10-00-00-abc123.jsonl");
+        let kept = home.join("sessions").join("2026").join("10").join("20").join("rollout-2026-10-20T11-00-00-def456.jsonl");
+        let old = home.join("archived_sessions").join("rollout-2026-09-01T10-00-00-old789.jsonl");
+        for f in [&live, &kept, &old] {
+            put(f, "{}\n");
+        }
+        let roots = Roots { claude: vec![], codex: vec![home.clone()] };
+        assert_eq!(delete(&roots, "codex", "abc123"), Ok(1));
+        assert_eq!(delete(&roots, "codex", "old789"), Ok(1));
+        assert!(!live.exists() && !old.exists() && kept.exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn view089_an_outside_path_and_a_dotdot_path_are_refused_and_nothing_is_deleted() {
+        let root = tmp("fence");
+        let inside = root.join("projects").join("p").join("s.jsonl");
+        let outside = root.join("outside.txt");
+        put(&inside, USER);
+        put(&outside, "keep");
+        let sessions = root.join("projects");
+        assert!(delete_all(&sessions, std::slice::from_ref(&outside)).unwrap_err().contains("not inside"));
+        let hop = sessions.join("p").join("..").join("..").join("outside.txt");
+        assert!(delete_all(&sessions, &[hop]).unwrap_err().contains("not inside"));
+        assert!(delete_all(&sessions, std::slice::from_ref(&sessions)).unwrap_err().contains("not inside"), "the sessions folder itself is not a session");
+        assert!(delete_all(&sessions, &[inside.clone(), outside.clone()]).is_err());
+        assert!(inside.exists() && outside.exists(), "a refused path stops the whole delete before it starts");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn view089_a_session_name_that_climbs_out_is_refused() {
+        let root = tmp("name");
+        put(&root.join("projects").join("p").join("s.jsonl"), USER);
+        let roots = claude_roots(&root);
+        for bad in ["..", "../s", "a/b", "a\\b", "-x", ""] {
+            assert!(delete(&roots, "claude", bad).is_err(), "{bad:?}");
+        }
+        assert!(root.join("projects").join("p").join("s.jsonl").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn view089_a_link_leading_out_of_the_sessions_folder_is_not_followed() {
+        let root = tmp("link");
+        let sessions = root.join("projects");
+        let outside = root.join("elsewhere");
+        put(&outside.join("secret.jsonl"), USER);
+        fs::create_dir_all(&sessions).unwrap();
+        let link = sessions.join("proj");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, &link).is_ok();
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).output().map(|o| o.status.success()).unwrap_or(false);
+        if !made {
+            eprintln!("no link could be made here; the test is skipped");
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        let through = link.join("secret.jsonl");
+        assert!(delete_all(&sessions, &[through]).is_err(), "a path through a link that leaves the folder");
+        assert!(locate(&claude_roots(&root), "claude", "secret").is_err(), "a session found through such a link is not located");
+        assert!(outside.join("secret.jsonl").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn view089_locate_names_the_transcript_reveal_and_open_hand_over() {
+        let root = tmp("locate");
+        let f = root.join("projects").join("p").join("zzz.jsonl");
+        put(&f, USER);
+        let got = locate(&claude_roots(&root), "claude", "zzz").unwrap();
+        assert_eq!(got.file, f.canonicalize().unwrap());
+        assert_eq!(got.extra, None);
+        assert!(locate(&claude_roots(&root), "gemini", "zzz").is_err(), "an agent whose sessions Kolux does not read");
+        let _ = fs::remove_dir_all(&root);
+    }
+}

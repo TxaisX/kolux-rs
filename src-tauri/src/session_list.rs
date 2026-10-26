@@ -440,7 +440,7 @@ pub fn roots_for(settings: &Value, process_env: impl Fn(&str) -> Option<String>,
     Roots { claude, codex }
 }
 
-fn live_roots(settings: &Value) -> Roots {
+pub(super) fn live_roots(settings: &Value) -> Roots {
     roots_for(settings, env_text, user_home())
 }
 
