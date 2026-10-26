@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { detectPlatform } from "../keys/keymap";
 import { fitIn, outsideDismisses } from "../terminal/PaneMenu";
+import { SuggestionGate } from "./suggestionGate";
 import { editMenuItems, fieldKind, type EditAction, type EditItem, type FieldLike } from "./editMenuModel";
 
 const SUGGESTIONS_EVENT = "edit-menu-suggestions";
@@ -66,14 +67,24 @@ export default function EditMenuHost() {
   const [menu, setMenu] = useState<Open | null>(null);
   useEffect(() => {
     const platform = detectPlatform();
+    const gate = new SuggestionGate();
     let hooked = false;
-    invoke<boolean>("edit_menu_suggestions_available")
-      .then((v) => (hooked = v))
-      .catch(() => {});
+    let cancelled = false;
+    let timer = 0;
     let waiting: ((words: string[]) => void) | null = null;
-    const un = listen<{ words: string[] }>(SUGGESTIONS_EVENT, (e) => waiting?.(e.payload.words ?? []));
+    const un = listen<{ words: string[]; seq: number }>(SUGGESTIONS_EVENT, (e) => {
+      if (gate.answer(e.payload.seq)) waiting?.(e.payload.words ?? []);
+    });
+    // The host hides the engine's menu only after this call, so a menu is never hidden with nobody to draw ours.
+    un.then(() => (cancelled ? undefined : invoke<boolean>("edit_menu_ready", { ready: true }).then((v) => (hooked = v)))).catch(() => {});
+    const abandon = () => {
+      window.clearTimeout(timer);
+      if (waiting) gate.timedOut();
+      waiting = null;
+    };
     const onContext = (e: MouseEvent) => {
       if (e.defaultPrevented) return;
+      abandon();
       const target = e.target instanceof HTMLElement ? e.target : null;
       const kind = fieldKind(describeField(target));
       if (!target || kind === "none") {
@@ -87,7 +98,8 @@ export default function EditMenuHost() {
       };
       // Left alone, the engine raises its own event (which carries the suggestions) and draws no menu of its own.
       if (hooked && kind === "editable") {
-        const timer = window.setTimeout(() => show([]), SUGGESTION_WAIT_MS);
+        gate.begin();
+        timer = window.setTimeout(() => (abandon(), show([])), SUGGESTION_WAIT_MS);
         waiting = (words) => (window.clearTimeout(timer), show(words));
       } else {
         e.preventDefault();
@@ -96,6 +108,9 @@ export default function EditMenuHost() {
     };
     document.addEventListener("contextmenu", onContext);
     return () => {
+      cancelled = true;
+      abandon();
+      invoke("edit_menu_ready", { ready: false }).catch(() => {});
       document.removeEventListener("contextmenu", onContext);
       void un.then((f) => f());
     };

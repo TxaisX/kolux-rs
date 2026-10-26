@@ -21,7 +21,7 @@
          })
          .invoke_handler(tauri::generate_handler![
              app_info,
-+            edit_menu::edit_menu_suggestions_available,
++            edit_menu::edit_menu_ready,
              get_settings,
              settings_fallback_notice,
              settings_patch,
