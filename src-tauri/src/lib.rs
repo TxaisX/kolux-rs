@@ -263,6 +263,9 @@ pub fn run() {
             for n in &prep.notes {
                 diag::write(&dir, n);
             }
+            // After-list row 789: what was set aside or repaired is also told to the user, once, by the page.
+            let told = resources::recovery::startup_notes(&prep, &app.state::<resources::recovery::Perms>().0);
+            app.manage(resources::recovery::StartupNotes(Mutex::new(told)));
             if prep.backup_worthwhile() {
                 if let Err(e) = resources::recovery::backup_state(&dir) {
                     diag::write(&dir, &format!("the last good copy of state.db could not be refreshed: {e} (APP-049)"));
@@ -585,6 +588,7 @@ pub fn run() {
             projects::workspace_branches,
             projects::workspace_open_branch,
             projects::workspace_unseen,
+            projects::workspace_scan,
             projects::workspace_seen,
             projects::workspace_hide,
             projects::workspace_rename, projects::workspace_details_get, projects::workspace_details_save,
@@ -895,6 +899,7 @@ pub fn run() {
             cli::file_cli::cli_file_result,
             diag::diag_bundle,
             resources::recovery::ui_heartbeat,
+            resources::recovery::startup_recovery_notes,
             resources::recovery::graphics_crash_noted,
             resources::recovery::graphics_keep_running,
             resources::recovery::graphics_restart_safe,
