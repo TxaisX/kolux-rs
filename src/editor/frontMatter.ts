@@ -102,7 +102,20 @@ function fenceDamaged(body: string, got: string, prev: string, out: string): boo
 }
 
 function placeLoose(body: string, out: string, prev: string): string | null {
-  const tight = collapseGaps(body);
+  const before = { ...placeStats };
+  const first = placeTight(body, out, prev, collapseGaps(body));
+  if (first !== null) return first;
+  // Round 8 (MEDIUM-1): a refused placement is tried again with the blank line between a parent and its first sub-item taken out too.
+  const deep = collapseGaps(body, true);
+  if (!deep || deep.gaps.length === (collapseGaps(body)?.gaps.length ?? 0)) return null;
+  const refused = { ...placeStats };
+  Object.assign(placeStats, before);
+  const again = placeTight(body, out, prev, deep);
+  if (again === null) Object.assign(placeStats, refused);
+  return again;
+}
+
+function placeTight(body: string, out: string, prev: string, tight: ReturnType<typeof collapseGaps>): string | null {
   const base = tight?.text ?? body;
   const next = mapTight(base, out, prev);
   let kept = next === null ? null : tight ? regap(tight, next, prev, out) : next;
@@ -154,7 +167,7 @@ function fenceShorts(text: string): Map<string, number> {
 }
 
 /** `at`: where the gap's item line starts in the tight text; `item`: that line's number among the tight text's item lines. */
-type Gap = { at: number; raw: string; item: number; cut?: number };
+type Gap = { at: number; raw: string; item: number; cut?: number; parent?: number };
 
 const ITEM = /^([ \t]*)([-*+]|\d+[.)])[ \t]/;
 const FENCE = /^[ \t]*(`{3,}|~{3,})/;
@@ -164,10 +177,11 @@ const kind = (m: RegExpExecArray) => (/\d/.test(m[2]) ? m[2].slice(-1) : m[2]);
 /** `body` with the blank lines between sibling list items taken out (the list as the view reads it), and where each went.
  *  Null when there are none. Only blank lines straight before an item that continues the item list above it count;
  *  a blank line inside an item, before a paragraph or in code stays. */
-export function collapseGaps(body: string): { text: string; gaps: Gap[] } | null {
+export function collapseGaps(body: string, parents = false): { text: string; gaps: Gap[] } | null {
   if (!BLANK.test(body)) return null;
   const gaps: Gap[] = [];
-  const stack: { w: number; k: string }[] = [];
+  const stack: { w: number; k: string; c: number; i: number }[] = [];
+  let afterItem = false; // the last non-blank line was an item line
   let text = "";
   let fence = "";
   let blank = -1; // where the blank lines before this line start in `body`, or -1
@@ -193,15 +207,20 @@ export function collapseGaps(body: string): { text: string; gaps: Gap[] } | null
       const w = width(m[1]);
       while (stack.length && stack[stack.length - 1].w > w) stack.pop();
       const top = stack[stack.length - 1];
-      if (blank >= 0 && top && top.w === w && top.k === kind(m)) {
+      const sibling = blank >= 0 && top && top.w === w && top.k === kind(m);
+      // Round 8 (MEDIUM-1): the blank line between a parent's text and its first sub-item (only when asked: the retry after a refusal).
+      const child = parents && blank >= 0 && afterItem && top && top.i === items - 1 && w >= top.c && w <= top.c + 3;
+      if (sibling || child) {
         text += body.slice(copied, blank);
-        gaps.push({ at: text.length, raw: body.slice(blank, start), item: items });
+        gaps.push({ at: text.length, raw: body.slice(blank, start), item: items, ...(child ? { parent: top.i } : {}) });
         copied = start;
       }
       if (top && top.w === w) stack.pop();
-      stack.push({ w, k: kind(m) });
+      stack.push({ w, k: kind(m), c: w + m[2].length + 1, i: items });
       items++;
+      afterItem = true;
     } else {
+      afterItem = false;
       const w = width(/^[ \t]*/.exec(line)![0]);
       if (blank >= 0 && w === 0) stack.length = 0;
       else while (stack.length && stack[stack.length - 1].w >= w && w > 0) stack.pop();
@@ -289,17 +308,33 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
   for (const g of tight.gaps) {
     const f = fate[g.item];
     const j = f === "before" ? g.item : f === "after" ? g.item + dn : -1;
+    const fp = g.parent === undefined ? f : fate[g.parent];
+    // A parent gap is kept only where neither line is touched: an edit near it cannot say where the gap belongs now.
+    if (g.parent !== undefined && (j < 0 || fp === "cut")) return null;
     if (j < 0) continue;
     if (j >= ns.length || used.has(j)) return null;
     used.add(j);
     const cut = blankAbove(next, ns[j]);
     if (cut < 0) return null;
-    if (noSiblingAbove(next, ns[j])) continue;
+    if (g.parent === undefined) {
+      if (noSiblingAbove(next, ns[j])) continue;
+    } else if (lineAbove(next, ns[j]) !== ns[fp === "before" ? g.parent : g.parent + dn]) return null; // the parent is no longer right above
     kept.push({ at: ns[j] - cut, raw: g.raw, item: j, cut });
   }
   kept.sort((a, b) => a.at - b.at);
   const restored = restore(next, kept);
   return looseReadsAlike(tight.text, next, kept) ? restored : null;
+}
+
+/** Round 8 (MEDIUM-1): where the last non-blank line above `at` starts, or -1. */
+function lineAbove(text: string, at: number): number {
+  for (let end = at; end > 0; ) {
+    const start = text.lastIndexOf("\n", end - 2) + 1;
+    const line = text.slice(start, end);
+    end = start;
+    if (!/^[ \t]*\r?\n?$/.test(line)) return start;
+  }
+  return -1;
 }
 
 /** Round 8 (NEW-HIGH-1): whether the nested item line at `at` has no sibling above it any more (the edit deleted them), so it now sits

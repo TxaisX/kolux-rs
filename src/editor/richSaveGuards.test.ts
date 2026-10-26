@@ -450,4 +450,18 @@ describe("round 8", () => {
       expect(next).toBe(want + P);
     });
   });
+
+  describe("MEDIUM-1: adding a sub-item keeps the gap between a parent and its sub-list", () => {
+    const shapes: [string, string, string, string, string][] = [
+      ["after n2", "- a\n\n  - n1\n  - n2\n- b\n", "    - n2\n", "    - n2\n    - x\n", "- a\n\n    - n1\n    - n2\n    - x\n- b\n"],
+      ["n1 only", "- a\n\n  - n1\n- b\n", "    - n1\n", "    - n1\n    - x\n", "- a\n\n    - n1\n    - x\n- b\n"],
+      ["ordered", "1. a\n\n   1. n1\n   2. n2\n2. b\n", "    2. n2\n", "    2. n2\n    3. x\n", "1. a\n\n   1. n1\n   2. n2\n    3. x\n2. b\n"],
+      ["indent-4 children", "- a\n\n    - n1\n    - n2\n- b\n", "    - n2\n", "    - n2\n    - x\n", "- a\n\n    - n1\n    - n2\n    - x\n- b\n"],
+    ];
+    it.each(shapes)("%s", (_, b, from, to, want) => {
+      const { next, refused } = edit(b + P, from, to);
+      expect(refused).toBe(0);
+      expect(next).toBe(want + P);
+    });
+  });
 });
