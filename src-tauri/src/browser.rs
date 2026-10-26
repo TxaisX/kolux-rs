@@ -28,6 +28,9 @@ pub mod profiles;
 pub mod preview;
 #[path = "browser_ports.rs"]
 pub mod ports;
+// After-list 21 (BROW-008): whether the system has a program for a link, so Open Externally can hide.
+#[path = "browser_handler.rs"]
+pub mod handler;
 // T-240: BROW-028 cookies brought in from a file (BROW-029 keeps Google sign-ins out).
 #[path = "browser_cookies.rs"]
 pub mod cookies;
@@ -1588,7 +1591,7 @@ pub enum Act<'a> {
     /// or went) and set its zoom (the emulated scale).
     Relayout(u32, Option<f64>),
     /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
-    SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
+    SetCookie(u32, cookies::Entry),
     /// T-251 (CLI-047): one DevTools call on the page's engine (a picture of the page).
     DevTools(u32, &'a str, String),
     /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
@@ -1682,7 +1685,7 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             Ok(serde_json::Value::Null)
         }
         Act::SetCookie(id, c) => {
-            view(app, id)?.set_cookie(c).map_err(err)?;
+            engine::set_cookie(&view(app, id)?, c, cookies::COOKIE_WAIT)?;
             Ok(serde_json::Value::Null)
         }
         Act::DevTools(id, method, params) => {
@@ -1786,7 +1789,7 @@ pub fn navigate_to(id: u32, url: &str) -> Result<String, String> {
 
 /// `kolux cookie set --httpOnly`: the engine's cookie store takes it (blocking; never called from
 /// the main thread, the command line's requests run on their own).
-pub fn set_cookie(id: u32, c: tauri::webview::cookie::Cookie<'static>) -> Result<(), String> {
+pub fn set_cookie(id: u32, c: cookies::Entry) -> Result<(), String> {
     driver()?(Act::SetCookie(id, c)).map(|_| ())
 }
 

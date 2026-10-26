@@ -735,6 +735,7 @@ pub fn run() {
             browser::browser_viewport,
             browser::browser_cookies_import,
             browser::cookies::browser_import_sources, // T-319-b (BROW-030)
+            browser::handler::browser_external_handler, // after-list 21 (BROW-008)
             browser::browser_probe,
             browser::browser_diagnose,
             browser::certs::browser_cert,
