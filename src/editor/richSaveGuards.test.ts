@@ -378,6 +378,49 @@ describe("round 7", () => {
     ])("the reviewer's %s repro is refused or placed with the indent, never broken", (_, b) => {
       const { next, refused } = edit(b, "x", "y");
       expect(next).toBe(refused ? b : b.replace("x", "y"));
+      expect(refused).toBe(1);
+    });
+  });
+
+  describe("HIGH-2: a pure insertion at an item's line start moves that item's gap", () => {
+    it("a nested item added after the last nested item keeps the outer gap", () => {
+      const b = "- a\n  - n1\n\n- b\n" + P;
+      const { next, refused } = edit(b, "n1", "n1\n    - n2");
+      expect(refused).toBe(0);
+      expect(next).toBe("- a\n    - n1\n    - n2\n\n- b\n" + P);
+    });
+    it("a third nested item keeps the n2/b gap and the a/n1 blank line, or is refused", () => {
+      const b = "- a\n\n  - n1\n\n  - n2\n\n- b\n\n- c\n" + P;
+      const { next, refused } = edit(b, "n2", "n2\n    - n3");
+      if (refused) return expect(next).toBe(b);
+      expect(next).toMatch(/^- a\n\n +- n1\n\n +- n2\n +- n3\n\n- b\n\n- c\n/);
+    });
+    it("a top-level item added at the end of a loose list keeps every gap", () => {
+      const b = "- a\n\n- b\n\n- c\n" + P;
+      const { next, refused } = edit(b, "c", "c\n- d");
+      if (refused) return expect(next).toBe(b);
+      expect(next).toMatch(/^- a\n\n- b\n\n- c\n(\n)?- d\n/);
+    });
+  });
+
+  describe("HIGH-3: a renumbered ordered list keeps the gaps the edit did not touch", () => {
+    it("deleting an item before a gap keeps that gap", () => {
+      const b = "1. a\n2. b\n3. c\n\n4. d\n" + P;
+      const { next, refused } = edit(b, "\n2. b", "");
+      if (refused) return expect(next).toBe(b);
+      expect(next).toMatch(/c\n\n\d\. d\n/);
+    });
+    it("inserting after the first item of a loose list keeps the later gaps", () => {
+      const b = "1. alpha\n\n2. beta\n\n3. gamma\n\n4. delta\n" + P;
+      const { next, refused } = edit(b, "alpha", "alpha\n2. new");
+      if (refused) return expect(next).toBe(b);
+      expect(next).toMatch(/new\n\n\d\. beta\n\n\d\. gamma\n\n\d\. delta\n/);
+    });
+    it("deleting an item of a loose list keeps the later gaps", () => {
+      const b = "1. alpha\n\n2. beta\n\n3. gamma\n\n4. delta\n" + P;
+      const { next, refused } = edit(b, "\n2. beta", "");
+      if (refused) return expect(next).toBe(b);
+      expect(next).toMatch(/alpha\n\n\d\. gamma\n\n\d\. delta\n/);
     });
   });
 });

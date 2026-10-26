@@ -95,17 +95,45 @@ function fenceDamaged(body: string, got: string, prev: string, out: string): boo
   const was = fenceShorts(body);
   if ([...fenceShorts(got)].some(([l, n]) => n > (was.get(l) ?? 0))) return true;
   const lines = (t: string) => (t.match(/^[ \t]*(`{3,}|~{3,})/gm) ?? []).length;
+  // An indented fence the placement moved to column 0 left its item.
+  const nested = (t: string) => (t.match(/^[ \t]+(`{3,}|~{3,})/gm) ?? []).length;
+  if (nested(got) < nested(body) && shape(prev) === shape(out)) return true;
   return shape(prev) === shape(out) && lines(body) !== lines(got);
 }
 
 function placeLoose(body: string, out: string, prev: string): string | null {
   const tight = collapseGaps(body);
-  if (!tight) return mapTight(body, out, prev);
-  const next = mapTight(tight.text, out, prev);
-  const kept = next === null ? null : regap(tight, next, prev, out);
+  const base = tight?.text ?? body;
+  const next = mapTight(base, out, prev);
+  let kept = next === null ? null : tight ? regap(tight, next, prev, out) : next;
+  // A blank line the edit did not touch must survive the placement (the blocks retyped in the view's spelling can drop one).
+  if (kept !== null && next !== null && blankLines(next) < blankLines(base) + blankLines(out) - blankLines(prev)) kept = null;
+  if (kept !== null && next !== null && blankMoved(base, next, prev, out)) kept = null;
   if (next !== null && kept === null) placeStats.refused++;
   return kept;
 }
+
+/** Whether the retyped text added or dropped a blank line above an item away from the edit (the view spells a list loose when one item
+ *  holds two blocks, tight otherwise, and a retyped list takes that spelling for the items the user did not touch). */
+function blankMoved(base: string, next: string, prev: string, out: string): boolean {
+  const e = changeBetween(prev, out);
+  if (!e) return false;
+  const ps = itemStarts(prev);
+  const bs = itemStarts(base);
+  const ns = itemStarts(next);
+  const dn = itemStarts(out).length - ps.length;
+  if (bs.length !== ps.length || ns.length - bs.length !== dn) return false;
+  const fate = itemFates(prev, out, ps);
+  const touched = (i: number) => i < 0 || (e.from <= (ps[i + 1] ?? prev.length) && e.to > ps[i]) || (e.from === e.to && e.from > ps[i] && e.from < (ps[i + 1] ?? prev.length));
+  return ps.some((_, i) => {
+    if (fate[i] === "cut" || touched(i) || touched(i - 1)) return false;
+    const at = ns[fate[i] === "before" ? i : i + dn];
+    return at !== undefined && (blankAbove(next, at) !== 0) !== (blankAbove(base, bs[i]) !== 0);
+  });
+}
+
+/** Blank lines straight above an indented line: inside an item, not a gap between blocks. */
+const blankLines = (t: string) => (t.match(/\n[ \t]*\r?\n(?=[ \t]+\S)/g) ?? []).length;
 
 /** Round 7 (HIGH-1): the view spells a fence nested in a list item at column 0, so a retyped code line loses the fence's indent and
  *  the item ends there. The non-blank code lines of fences opened with an indent that sit less indented than their fence, counted per line text. */
@@ -217,6 +245,32 @@ function blankAbove(text: string, at: number): number {
   return BLANK_LINE.test(text.slice(start(s), s)) ? -1 : at - s;
 }
 
+const numberless = (line: string) => line.replace(/^([ \t]*)\d+([.)])/, "$1#$2");
+
+/** Where each item line of `prev` stands against the edit, by whole lines with ordered numbers ignored (the view renumbers them):
+ *  "before" it (the edit is wholly above the line, or only after its marker), "after" it (the line is below the edit, a pure
+ *  insertion at its start counts), or "cut" (the edit changes its line break or marker). */
+function itemFates(prev: string, out: string, starts: number[]): ("before" | "after" | "cut")[] {
+  const pl = prev.split("\n").map(numberless);
+  const ol = out.split("\n").map(numberless);
+  let p = 0;
+  while (p < pl.length && p < ol.length && pl[p] === ol[p]) p++;
+  let s = 0;
+  while (s < pl.length - p && s < ol.length - p && pl[pl.length - 1 - s] === ol[ol.length - 1 - s]) s++;
+  const hi = pl.length - s;
+  let col = 0; // how far line p reads the same in both: past the marker, the edit is inside the item's text
+  if (p < pl.length && p < ol.length) while (col < pl[p].length && pl[p][col] === ol[p][col]) col++;
+  const marker = p < pl.length ? (ITEM.exec(pl[p])?.[0].length ?? 0) : 0;
+  const fates: ("before" | "after" | "cut")[] = [];
+  let line = 0;
+  let at = 0;
+  for (const st of starts) {
+    while (at < st) if (prev.charCodeAt(at++) === 10) line++;
+    fates.push(line < p ? "before" : line >= hi ? "after" : line === p && ol.length - s > p && col >= marker ? "before" : "cut");
+  }
+  return fates;
+}
+
 /** `next` (the edited tight text) with the blank lines put back before the item lines they were before, found by item number
  *  (the edit changes `prev` into `out`). Row 94 round 6: never by word number, an emoji item has no words. A gap whose line
  *  break or marker the edit covers is dropped; one that cannot be found again for sure, or whose place does not read back as a
@@ -231,11 +285,10 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
   if (ts.length !== ps.length || ns.length - ts.length !== dn) return null;
   const kept: Gap[] = [];
   const used = new Set<number>();
+  const fate = itemFates(prev, out, ps);
   for (const g of tight.gaps) {
-    const line = ps[g.item];
-    const marker = ITEM.exec(prev.slice(line, line + 64))?.[0].length ?? 0;
-    // Before: the edit ends at or before the line break above the item. After: it starts past the item's marker.
-    const j = e.to <= line - 1 ? g.item + dn : e.from >= line + marker ? g.item : -1;
+    const f = fate[g.item];
+    const j = f === "before" ? g.item : f === "after" ? g.item + dn : -1;
     if (j < 0) continue;
     if (j >= ns.length || used.has(j)) return null;
     used.add(j);
