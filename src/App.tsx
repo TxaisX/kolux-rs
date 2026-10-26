@@ -19,7 +19,7 @@
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { saveChanged } from "./settings/saveChanged";
-import { applySetting } from "./projects/settingWrite";
+import { applySetting, applySettings, rebaseSettings } from "./projects/settingWrite";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -508,6 +508,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // Row 794: built on the latest settings, so writes before the next render (Clear filters, then a tick) all land.
   const saveSetting = (key: string, value: unknown) => {
     const { was, next } = applySetting(settingsRef, key, value);
+    setSettings(next);
+    saveChanged(was, next).catch((err) => setNotice(String(err)));
+  };
+  // Row 794-b: a page hands back the whole settings it built from its last render; only what it changed lands on the latest.
+  const savePageSettings = (rendered: Record<string, unknown>, built: Record<string, unknown>) => {
+    const { was, next } = rebaseSettings(settingsRef, rendered, built);
     setSettings(next);
     saveChanged(was, next).catch((err) => setNotice(String(err)));
   };
@@ -2737,11 +2743,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             onRemoved={removed}
             onSleep={removedAll}
             nest={settings[NESTING_KEY] !== false}
-            onNest={(on) => {
-              const next = { ...settings, [NESTING_KEY]: on };
-              setSettings(next);
-              saveChanged(settings, next).catch((err) => setNotice(String(err)));
-            }}
+            onNest={(on) => saveSetting(NESTING_KEY, on)}
             agents={agents}
             defaultId={defaultId}
             onSetDefault={setDefault}
@@ -2838,10 +2840,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               projects={projects}
               agents={agents}
               settings={settings}
-              onSettings={(next) => {
-                setSettings(next);
-                saveChanged(settings, next).catch((err) => setNotice(String(err)));
-              }}
+              onSettings={(built) => savePageSettings(settings, built)}
             />
           )}
           {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} onStart={fromItem} onResume={(dir) => cli.current.select(dir, null, true)} />}
@@ -2849,10 +2848,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             <RoutingPage
               agents={agents}
               settings={settings}
-              onSettings={(next) => {
-                setSettings(next);
-                saveChanged(settings, next).catch((err) => setNotice(String(err)));
-              }}
+              onSettings={(built) => savePageSettings(settings, built)}
             />
           )}
           {terminals && (
@@ -3310,11 +3306,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           </div>
         </div>
         <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open || fullPage} offered={offeredRight} onTab={(tab) => {
-          const next = { ...settings };
-          next[RIGHT_KEYS.tab] = tab;
-          if (wsKind.folder && activeDir !== null) next[FOLDER_TAB_KEY] = rememberTab(settings[FOLDER_TAB_KEY], activeDir, tab);
+          const patch: Record<string, unknown> = { [RIGHT_KEYS.tab]: tab };
+          if (wsKind.folder && activeDir !== null) patch[FOLDER_TAB_KEY] = rememberTab(settingsRef.current[FOLDER_TAB_KEY], activeDir, tab);
+          const { was, next } = applySettings(settingsRef, patch);
           setSettings(next);
-          saveChanged(settings, next).catch((err) => setNotice(String(err)));
+          saveChanged(was, next).catch((err) => setNotice(String(err)));
         }} onWidth={(w, done) => {
           const used = clampWidth(w, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0);
           setDragWidth(done ? null : used);
