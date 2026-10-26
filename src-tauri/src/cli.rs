@@ -2572,7 +2572,14 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
     let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs_for_socket(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
     let home = |dir: &str| lists.iter().flat_map(|(_, all, _)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
     let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
-    let dispatches = load_list(&*lock()?, DISPATCHES_KEY)?;
+    // ps only reads: an unreadable dispatch list degrades to no workers (and says so), it does not fail the listing.
+    let (dispatches, dispatches_unread) = match load_list(&*lock()?, DISPATCHES_KEY) {
+        Ok(d) => (d, false),
+        Err(e) => {
+            eprintln!("kolux-rs: worktree ps: {}", e.message);
+            (Vec::new(), true)
+        }
+    };
     let mut rows = Vec::new();
     for (p, all, degraded) in &lists {
         for w in all {
@@ -2591,7 +2598,10 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
         }
     }
     let worktrees: usize = lists.iter().map(|(_, all, _)| all.len()).sum();
-    let scope = json!({ "repos": repos, "worktrees": worktrees, "shown": rows.len(), "machine": "this computer only", "hosts": hosts() });
+    let mut scope = json!({ "repos": repos, "worktrees": worktrees, "shown": rows.len(), "machine": "this computer only", "hosts": hosts() });
+    if dispatches_unread {
+        scope["workersUnread"] = json!(true);
+    }
     let truncated = limit.is_some_and(|n| rows.len() > n);
     rows.truncate(limit.unwrap_or(usize::MAX));
     let mut out = json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts(), "scope": scope });
@@ -3778,7 +3788,7 @@ pub(crate) fn worker_exited(store: &Store, terminal: u32, code: Option<u32>, now
     let worktree = d["worktree"].as_str().unwrap_or_default().to_string();
     // Only the title comes from the tasks and they are not saved here, so an unreadable list just falls back to the id.
     let tasks = load_list(store, TASKS_KEY).unwrap_or_default();
-    let title =tasks.iter().find(|t| t["id"] == task_id.as_str()).and_then(|t| t["title"].as_str()).filter(|t| !t.trim().is_empty()).unwrap_or(&task_id).to_string();
+    let title = tasks.iter().find(|t| t["id"] == task_id.as_str()).and_then(|t| t["title"].as_str()).filter(|t| !t.trim().is_empty()).unwrap_or(&task_id).to_string();
     let how = code.map(|c| format!("with exit code {c}")).unwrap_or_else(|| "without an exit code".into());
     let body = format!(
         "The worker on {task_id} ({id}, in {worktree}) ended {how} before it reported done. Retry it with `{cli} orchestration worker-stop --dispatch {id}` then `{cli} orchestration worker-start --task {task_id}`, or hand the task to someone else.",
@@ -5485,6 +5495,26 @@ mod tests {
         assert!(err.message.contains("can't check for secrets to hide; read refused") && err.message.contains(DISPATCHES_KEY), "{}", err.message);
         assert!(!err.message.contains("pass-SECRET-123") && !err.data.to_string().contains("pass-SECRET-123"), "the error never carries a pass");
         assert_eq!(store.lock().unwrap().get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_ps_still_answers_when_the_dispatch_list_cannot_be_read() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-ps-unread-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "worktree.ps".into(), cwd: dir.display().to_string(), args: json!({}), pane: None, cli: String::new(), arrived: None };
+        let broken = "[{\"id\": \"dispatch-3\"}, ";
+        store.lock().unwrap().set(DISPATCHES_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let out = dispatch(&ctx, &req).unwrap();
+        assert_eq!(out["scope"]["workersUnread"], true);
+        assert_eq!(store.lock().unwrap().get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken), "ps changed nothing");
         drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
