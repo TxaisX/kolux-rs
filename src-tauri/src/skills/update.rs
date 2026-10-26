@@ -335,7 +335,6 @@ impl Job {
         *locked(&self.st) = Status { state: "running".into(), names: names.clone(), command: cmd.line(), ..Status::idle() };
         let job = self.clone();
         std::thread::spawn(move || {
-            let _lock = lock; // held until the rescan below is done
             let ran = installer.run(&cmd, &cancel);
             let after = fresh(&env, workspace.as_deref());
             let mut st = locked(&job.st);
@@ -354,6 +353,8 @@ impl Job {
                     Result1 { name: n.clone(), ok: !still, reason: still.then(|| if st.stopped { "Stopped before it finished".to_string() } else { st.error.clone().unwrap_or_else(|| "The copy is still out of date".into()) }) }
                 })
                 .collect();
+            // Freed before "done" is published, so a caller reacting to "done" never meets Busy.
+            drop(lock);
             st.state = "done".into();
         });
         Ok(())
@@ -676,7 +677,9 @@ mod tests {
         assert_eq!(s.log, "done");
         assert_eq!(report(&t, None).available, 0);
         // The lock was let go: another operation may take it, and a new update may start.
-        assert!(crate::skill_delete::lock(&app).is_ok());
+        let freed = crate::skill_delete::lock(&app);
+        assert!(freed.is_ok());
+        drop(freed);
         job.clear();
         assert_eq!(job.status().state, "idle");
     }

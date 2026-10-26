@@ -9,6 +9,10 @@ export const COOLDOWN_MS = 5_000;
 /** How many identities the memory keeps; the oldest goes first. */
 export const MEMORY_CAP = 64;
 
+export type NotifyKind = "finish" | "stop" | "bell" | "quiet" | "test";
+/** One agent event as the backend hears it: `id` is the click target key, `pane` the pane to focus. */
+export type NotifyEvent = { id: string; worktree: string | null; pane: string | null; kind: NotifyKind };
+
 export type PaceMemory = { shown: Map<string, number>; lastByDir: Map<string, number> };
 export type PaceOptions = { cooldownMs?: number; focused?: boolean; quietWhenFocused?: boolean; test?: boolean };
 
