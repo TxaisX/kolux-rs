@@ -153,7 +153,7 @@ test("SET-011 box 1: terminal.clear set to null in the keybindings map has no ch
   const { c } = await page(file({ version: 1, keybindings: { "terminal.clear": null } }));
   expect(chords(row(c, "terminal.clear"))).toEqual([]);
   expect(text(row(c, "terminal.clear"))).toContain("None");
-  expect(badges(row(c, "terminal.clear"))).toEqual(["Disabled"]); // unbound on purpose reads Disabled, not Unassigned
+  expect(badges(row(c, "terminal.clear"))).toEqual(["Unassigned"]); // spec/17 SET-011 box 1: unbound reads Unassigned
   await pickFilter(c, "Unassigned");
   await settle();
   expect(ids(c)).toContain("terminal.clear");

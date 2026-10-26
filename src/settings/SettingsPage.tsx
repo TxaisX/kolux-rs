@@ -273,7 +273,10 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
       .catch(() => setProjects([]));
   }, [target]);
   useEffect(() => {
-    if (target) setPage(target.page);
+    if (target) {
+      setPage(target.page);
+      rememberPage(target.page);
+    }
   }, [target, n]);
   // SET-007: a search across every page; a link into Settings or a page picked on the left ends it.
   const [query, setQuery] = useState("");
@@ -287,6 +290,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
   const go = (p: Page) => {
     setQuery("");
     setPage(p);
+    rememberPage(p); // only a page picked here is stored, never the mount-time placeholder
   };
   useEffect(() => {
     // Mod+F (settings.search) wins over a terminal's or the window's own use of the chord.
@@ -300,7 +304,6 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
     window.addEventListener("keydown", find, true);
     return () => window.removeEventListener("keydown", find, true);
   }, [keymap]);
-  useEffect(() => rememberPage(page), [page]);
   // USAGE 012: opening the Usage page counts as having tried the usage feature (Explore Kolux).
   useEffect(() => void (page === "usage" && markGuide("tried", "usage").catch(() => {})), [page]);
   useScrollTo(target?.section, page, n);

@@ -1,4 +1,4 @@
-// after-list row (install trial): a user's own chord wins over a built-in default; only user-vs-user clashes drop.
+// after-list row (install trial): a user's own chord wins over a built-in default (both rows then clash, DT-C48); only user-vs-user clashes drop.
 import { expect, test } from "vitest";
 import { chordsOf, matchEvent, resolve, type KeyLike } from "./keymap";
 
@@ -9,7 +9,7 @@ test("a user chord that a built-in default also holds is kept and the default gi
   expect(chordsOf(map, "view.tasks")).toEqual(["Mod+P"]);
   expect(chordsOf(map, "worktree.quickOpen")).toEqual([]);
   expect(map.bindings.get("view.tasks")?.dropped).toBeUndefined();
-  expect(map.clashes).toEqual([]);
+  expect(map.clashes).toEqual([{ chord: "Mod+P", ids: ["view.tasks", "worktree.quickOpen"] }]); // DT-C48: the default row shows Conflicts too
   expect(map.errors).toEqual([]);
   expect(map.warnings.join(" ")).toContain("Mod+P");
   expect(matchEvent(map, key({ key: "p", code: "KeyP", ctrlKey: true }), ["global"])?.id).toBe("view.tasks");
