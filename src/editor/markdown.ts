@@ -66,7 +66,9 @@ export function limitsOf(md: string): string[] {
 }
 
 /** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
-export function unsupported(md: string): string | null {
+export function unsupported(source: string): string | null {
+  // Round 9 (MEDIUM-1): the round trip gives LF, so a CRLF note is read as its LF self (a tag split over lines must match what comes back).
+  const md = source.replace(/\r\n/g, "\n");
   const hit = limitsOf(md);
   if (hit.length) return hit[0];
   const prose = withoutCode(md);

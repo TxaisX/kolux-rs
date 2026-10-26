@@ -331,7 +331,8 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
     const cut = blankAbove(next, ns[j]);
     if (cut < 0) return null;
     if (g.parent === undefined) {
-      if (noSiblingAbove(next, ns[j])) continue;
+      // Round 9 (HIGH-1): only when the edit made it so; a lazy line already reads as the parent's text in the file's own gap.
+      if (noSiblingAbove(next, ns[j]) && !noSiblingAbove(tight.text, ts[g.item])) continue;
     } else if (lineAbove(next, ns[j]) !== ns[fp === "before" ? g.parent : g.parent + dn]) return null; // the parent is no longer right above
     kept.push({ at: ns[j] - cut, raw: g.raw, item: j, cut });
   }

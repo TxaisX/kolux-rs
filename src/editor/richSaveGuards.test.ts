@@ -496,3 +496,44 @@ describe("round 8", () => {
     });
   });
 });
+
+describe("round 9", () => {
+  const P = "\n\nTail para here.\n";
+  const edit = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    expect(prev).toContain(from);
+    const out = roundTrip(prev.replace(from, to))!;
+    let refused = 0;
+    const next = apply(body, richChange(body, out, prev, () => refused++));
+    if (refused) expect(next).toBe(body);
+    else expect(roundTrip(next)).toBe(out);
+    return { next, refused };
+  };
+
+  describe("MEDIUM-1: unsupported() reads a CRLF note as it reads the LF one", () => {
+    const crlf = (t: string) => t.replace(/\n/g, "\r\n");
+    it("gives the same answer for the reviewer's <details> string in LF and CRLF", () => {
+      const lf = "<details>\n<summary>S 4</summary\n\n>\\*\n\nInner\n\n</details";
+      expect(unsupported(crlf(lf))).toBe(unsupported(lf));
+    });
+    it("a tag that survives the round trip stays supported in CRLF", () => {
+      const lf = "<details>\n<summary>S</summary>\n\nInner\n\n</details>\n";
+      expect(unsupported(crlf(lf))).toBe(unsupported(lf));
+    });
+  });
+
+  describe("HIGH-1: a lazy continuation line is not a parent's text", () => {
+    const shapes: [string, string][] = [
+      ["width-0 lazy line", "- a\n  - n1\nlazy\n\n  - n2\n- b\n"],
+      ["lazy line after two siblings", "- a\n  - n1\n  - n2\nlazy\n\n  - n3\n- b\n"],
+      ["under-indented lazy line", "- a\n    - n1\n  lazy\n\n    - n2\n- b\n"],
+    ];
+    it.each(shapes)("%s: an edit far away keeps every byte near the list", (_, b) => {
+      for (const [from, to] of [["Tail", "TailX"], ["b", "bX"]] as const) {
+        const { next, refused } = edit(b + P, from, to);
+        if (!refused) expect(next).toBe((b + P).replace(from === "b" ? "- b" : from, from === "b" ? "- bX" : to));
+      }
+      expect(edit(b + P, "Tail", "TailX").refused).toBe(0);
+    });
+  });
+});

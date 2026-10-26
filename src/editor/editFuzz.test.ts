@@ -67,6 +67,10 @@ const KINDS = [
   (i: number) => `- a ${i}\n  \`\`\`\n  x\n  \`\`\`\n- b\n- c`,
   (i: number) => `1. a ${i}\n\n   \`\`\`\n   x\n   \`\`\`\n\n2. b\n\n3. c`,
   (i: number) => `\`\`\`\n- x code line ${i}\n\`\`\`\n\n- a\n\n- b\n\n\`\`\`\n- y code line\n\`\`\``,
+  // Round 9: lazy continuation lines (column 0 and under-indented) in a nested list, then a gap and a sibling.
+  (i: number) => `- a ${i}\n  - n1\nlazy\n\n  - n2\n- b`,
+  (i: number) => `- a ${i}\n  - n1\n  - n2\nlazy\n\n  - n3\n- b`,
+  (i: number) => `- a ${i}\n    - n1\n  lazy\n\n    - n2\n- b`,
 ];
 
 const PUNCT = [" ", ".", ",", "*", "_", "-", "=", "#", ">", "`", "|", "\n", "\n\n", "1. ", "- ", " word ", "Q", "[", "]", "\\"];
