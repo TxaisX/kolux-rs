@@ -1,0 +1,5 @@
+command: for v in $(env | grep -o "^KOLUX_[A-Za-z0-9_]*"); do unset $v; done; pnpm exec vitest run --reporter=verbose src/chrome/__cards__/VIEW-001.test.ts src/chrome/__cards__/VIEW-002.test.ts src/chrome/__cards__/VIEW-003.test.ts  (Test Files 3 passed, Tests 5 passed)
+command: cargo test --manifest-path src-tauri/Cargo.toml --lib -- menu::tests::t054 menu::tests::t049b  (scratch CLAUDE_CONFIG_DIR/CODEX_HOME/HOME) -> test result: ok. 2 passed; 0 failed
+box 3: src/chrome/__cards__/VIEW-002.test.ts::box 3: switching to Board with the mouse sends the menu screen board — pass (✓); src-tauri/src/menu.rs menu::tests::t054_view_menu_ticks_exactly_the_current_screen_and_none_for_other_screens — ok (board -> only screen.board ticked)
+box 4: src/chrome/__cards__/VIEW-002.test.ts::box 4: turning the new look off sends classic, and the top-bar switch is gone — pass (✓); menu::tests::t049b_classic_drops_workspace_view_and_switching_the_look_rebuilds_the_menu — ok (classic View = [Appearance], new look View = [Workspace View, Appearance])
+MIRROR src/App.tsx:538 (useMenuBar(menuBarState(...))) and src/App.tsx:2533 (onScreen=setScreen)

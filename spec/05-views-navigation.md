@@ -130,8 +130,8 @@ Rules: permission beats unread, unread beats freshly done; ages switch from hour
   days; no status work happens while the palette is closed; ages read in minutes until a full hour
   has passed.
 Acceptance:
-  - [ ] Agent waiting on approval with unread output → row shows the permission mark.
-  - [ ] Agent finished 50 minutes ago → age reads 50m; one finished three days ago → 3d.
+  - [x] Agent waiting on approval with unread output → row shows the permission mark. (cards; evidence/cards-VIEW-040.txt)
+  - [x] Agent finished 50 minutes ago → age reads 50m; one finished three days ago → 3d. (cards; evidence/cards-VIEW-040.txt)
 Compat: —
   (Kolux RS, T-029 deferred: waits for the palette, T-098.)
 Source: D-05-040
@@ -142,8 +142,8 @@ User does: presses Mod+Shift+J (Mac) or Mod+J (Windows, Linux).
 User sees: focus moves to the next pane waiting on the user.
 Rules: its default chord is the palette's chord swapped per platform.
 Acceptance:
-  - [ ] Two panes waiting → pressing twice visits both.
-  - [ ] No pane is waiting → focus stays where it is.
+  - [x] Two panes waiting → pressing twice visits both. (cards; evidence/cards-VIEW-047.txt)
+  - [x] No pane is waiting → focus stays where it is. (cards; evidence/cards-VIEW-047.txt)
 Compat: a keybinding command; its exact command id is held back pending the allowlist (area 04
   carries the same command).
 Source: D-05-047
@@ -176,8 +176,8 @@ Rules: follows the user's used-or-remaining display preference; never prints a n
   (Kolux RS, T-040-b: the line is the Agents rail's footer, "Claude 38% used · resets today 15:00",
   in the reset words the Codex pill uses; a broken provider value reads 0.)
 Acceptance:
-  - [ ] Claude at 37.6 % used, preference used → shows 38 % and a local reset time.
-  - [ ] Provider with no 5-hour window → the usage line stays empty.
+  - [x] Claude at 37.6 % used, preference used → shows 38 % and a local reset time. (cards; evidence/cards-VIEW-018.txt)
+  - [x] Provider with no 5-hour window → the usage line stays empty. (cards; evidence/cards-VIEW-018.txt)
 Compat: —
 Source: D-05-018
 
@@ -211,8 +211,8 @@ Rules: the order follows the left-to-right order of the labels in the top-bar sw
 Acceptance:
   - [ ] New look, on Agents, press the chord three times → Board, Terminals, Agents.
   - [ ] Classic look, press the chord → nothing changes.
-  - [ ] Switch to Board with the mouse, open the menu → Board is checked.
-  - [ ] Turn the new look off → the submenu is gone.
+  - [x] Switch to Board with the mouse, open the menu → Board is checked. (cards; evidence/cards-VIEW-002.txt)
+  - [x] Turn the new look off → the submenu is gone. (cards; evidence/cards-VIEW-002.txt)
 Compat: the cycle command is a keybinding command with default Mod+Alt+V; its exact command id is
   held back pending the allowlist.
 Source: D-05-002
@@ -227,7 +227,7 @@ Rules: classic chrome keeps a sidebar-width title header and no top bar; the top
   the native window controls on Windows.
 Acceptance:
   - [ ] Click the search hint → the worktree palette opens with focus in its input.
-  - [ ] Click the bell → the Inbox page opens.
+  - [x] Click the bell → the Inbox page opens. (cards; evidence/cards-VIEW-003.txt)
 Compat: —
 Source: D-05-003
 
