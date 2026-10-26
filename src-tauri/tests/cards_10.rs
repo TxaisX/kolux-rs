@@ -268,3 +268,186 @@ fn safe012_box3_production_deploys_ask_a_deploy_without_the_flag_and_a_productio
     assert_asks(&["vercel --prod", "wrangler deploy --env production"]);
     assert_runs(&["vercel deploy", "npm install --production"]);
 }
+
+// SAFE-013 / SAFE-014 / SAFE-019 (batch 3). The cwd is a made-up workspace outside every temp root; nothing is touched on disk.
+const WORK: &str = r"G:\Dev\fakeproj\app";
+
+/// The machine's TEMP is G:\Temp, which holds the scratch home the safety rule forces; point the temp roots elsewhere (as text only, never created) so home is not mistaken for a temp folder.
+fn temp_roots_elsewhere() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for k in ["TEMP", "TMP", "TMPDIR"] {
+            std::env::set_var(k, r"G:\Temp\cards-v3-temp-roots");
+        }
+    });
+}
+
+fn asks_in(tool: &str, command: &str) -> Option<String> {
+    temp_roots_elsewhere();
+    let body = json!({ "hook_event_name": "PreToolUse", "session_id": "cards", "tool_name": tool, "cwd": WORK, "tool_input": { "command": command } }).to_string();
+    let reply = reply_body("/claude", body.as_bytes(), &json!({}));
+    if reply == "{}" {
+        return None;
+    }
+    let v: Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "ask", "{command}: {reply}");
+    Some(v["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap().to_string())
+}
+
+fn must_ask(tool: &str, commands: &[&str], rule: &str) {
+    for c in commands {
+        let why = asks_in(tool, c).unwrap_or_else(|| panic!("should ask: {c}"));
+        assert!(why.contains(rule), "{c}: names {rule}: {why}");
+    }
+}
+
+fn must_run(tool: &str, commands: &[&str]) {
+    for c in commands {
+        assert_eq!(asks_in(tool, c), None, "should run: {c}");
+    }
+}
+
+const OUTSIDE: &str = "Deleting folders outside the workspace";
+
+#[test]
+fn safe013_box1_root_documents_parent_here_git_folder_and_a_shell_variable_each_ask() {
+    let _d = scratch("safe013a");
+    must_ask("Bash", &["rm -rf /", r"rm -rf C:\Users\someone\Documents\old", "rm -rf ~/Documents/old", "rm -rf ..", "rm -rf .", "rm -rf .git", "rm -rf $TARGET"], OUTSIDE);
+}
+
+#[test]
+fn safe013_box2_cd_to_home_bare_cd_popd_and_find_into_xargs_each_ask() {
+    let _d = scratch("safe013b");
+    must_ask("Bash", &["cd $HOME && rm -rf build", "cd && rm -rf build", "popd && rm -rf build", "find . -name node_modules | xargs rm -rf"], OUTSIDE);
+}
+
+#[test]
+fn safe013_box3_remove_item_on_home_a_piped_listing_and_rd_on_documents_each_ask() {
+    let _d = scratch("safe013c");
+    must_ask("PowerShell", &[r"Remove-Item -Recurse -Force C:\Users\someone", "Get-ChildItem build | Remove-Item -Recurse", r"rd /s /q C:\Users\someone\Documents"], OUTSIDE);
+}
+
+#[test]
+fn safe013_box4_deps_and_build_output_inside_the_worktree_and_a_tmp_scratch_folder_run() {
+    let _d = scratch("safe013d");
+    must_run("Bash", &["rm -rf node_modules dist", "rm -rf build/*", "cd packages/web && rm -rf dist", "rm -rf /tmp/scratch-folder"]);
+    must_run("PowerShell", &["rd /s /q node_modules"]);
+}
+
+const TF: &str = "terraform apply -auto-approve";
+
+fn utf16_b64(cmd: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(cmd.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>())
+}
+
+#[test]
+fn safe014_box1_bash_c_a_command_substitution_and_cmd_c_wrapping_a_dangerous_command_ask() {
+    let _d = scratch("safe014a");
+    must_ask("Bash", &["bash -c \"rm -rf /\"", "echo $(rm -rf /)", r"cmd /c rd /s /q C:\Users"], OUTSIDE);
+}
+
+#[test]
+fn safe014_box2_powershell_switch_values_and_a_base64_command_are_seen_through() {
+    let _d = scratch("safe014b");
+    let infra = "Infrastructure changes";
+    must_ask("Bash", &[
+        &format!("powershell -ExecutionPolicy Bypass -Command \"{TF}\""),
+        &format!("powershell -ep bypass -Command \"{TF}\""),
+        &format!("powershell -WindowStyle Hidden -Command \"{TF}\""),
+        &format!("powershell -of text -Command \"{TF}\""),
+        &format!("powershell -EncodedCommand {}", utf16_b64(TF)),
+    ], infra);
+}
+
+#[test]
+fn safe014_box3_a_powershell_file_run_then_a_semicolon_then_terraform_apply_asks() {
+    let _d = scratch("safe014c");
+    must_ask("Bash", &[&format!("powershell -File deploy.ps1; {TF}")], "Infrastructure changes");
+}
+
+#[test]
+fn safe014_box4_doubled_slash_cmd_and_run_together_switches_on_the_windows_folder_ask() {
+    let _d = scratch("safe014d");
+    must_ask("Bash", &[r"cmd //c rd /s /q C:\Windows", r"rd /s/q C:\Windows", r"del /q/s C:\Windows\system32\x.dll"], OUTSIDE);
+}
+
+#[test]
+fn safe014_box5_wrapper_options_and_values_before_rm_on_a_system_folder_ask_and_timeout_length_is_skipped() {
+    let _d = scratch("safe014e");
+    must_ask("Bash", &["sudo -u root rm -rf /usr", "sudo -uroot rm -rf /usr", "nice -n 10 rm -rf /usr", "env -u NAME rm -rf /usr", "timeout 5 rm -rf /usr"], OUTSIDE);
+    must_ask("Bash", &[&format!("timeout 30s {TF}")], "Infrastructure changes");
+}
+
+#[test]
+fn safe014_box6_harmless_lookalikes_and_text_that_is_only_printed_run() {
+    let _d = scratch("safe014f");
+    must_run("Bash", &["sudo -u root ls build", "timeout 5 ls", "nice -n 10 echo hi", "powershell -ExecutionPolicy Bypass -Command \"Write-Host hi\"", "rd /s/q build", "echo \"rm -rf /\"", "echo 'rm -rf /'"]);
+}
+
+use kolux_rs_lib::protected_custom::{listen, protected_attempts};
+
+/// Pauses `command` through the hook (cwd names the test, so parallel tests keep their rows apart) and returns the kept command text.
+fn kept(cwd: &str, call: &str, command: &str) -> String {
+    let body = json!({ "hook_event_name": "PreToolUse", "session_id": cwd, "tool_use_id": call, "cwd": cwd, "tool_name": "Bash", "tool_input": { "command": command } }).to_string();
+    let reply = listen("/claude", body.as_bytes(), &json!({})).unwrap_or_else(|| panic!("should pause: {command}"));
+    assert!(reply.contains("\"ask\""), "{reply}");
+    protected_attempts().into_iter().find(|a| a.worktree == cwd).unwrap_or_else(|| panic!("no attempt kept for {command}")).command
+}
+
+#[test]
+fn safe019_box1_a_live_stripe_key_in_a_paused_command_shows_only_prefix_four_dots_and_last_four() {
+    let _d = scratch("safe019a");
+    let key = format!("sk_live_{}ab12", "x".repeat(20));
+    let shown = kept("G:/Dev/cards-safe019a", "t1", &format!("stripe refunds create --charge ch_1 --api-key {key}"));
+    assert!(shown.contains("sk_live_....ab12"), "{shown}");
+    assert!(!shown.contains(&key) && !shown.contains("xxxx"), "{shown}");
+    let page = serde_json::to_string(&protected_attempts().into_iter().filter(|a| a.worktree == "G:/Dev/cards-safe019a").collect::<Vec<_>>()).unwrap();
+    assert!(!page.contains(&key) && !page.contains("xxxx"), "{page}");
+}
+
+#[test]
+fn safe019_box2_a_mysql_short_password_flag_a_token_flag_and_a_postgres_url_with_credentials_are_masked() {
+    let _d = scratch("safe019b");
+    let (pw, tok, url_pw) = (format!("pw{}", "q9".repeat(6)), format!("tk{}", "z7".repeat(8)), format!("up{}", "w3".repeat(5)));
+    let cases = [
+        (format!("mysql -u root -p{pw} -e \"DROP TABLE users\""), pw.clone()),
+        (format!("stripe refunds create --charge ch_1 --token {tok}"), tok.clone()),
+        (format!("psql postgres://dbadmin:{url_pw}@db.example.com:5432/app -c \"DROP TABLE users\""), url_pw.clone()),
+    ];
+    for (i, (cmd, secret)) in cases.iter().enumerate() {
+        let shown = kept("G:/Dev/cards-safe019b", &format!("c{i}"), cmd);
+        assert!(!shown.contains(secret.as_str()), "{secret} leaked: {shown}");
+        assert!(shown.contains(kolux_rs_lib::protected::HIDDEN), "marked hidden: {shown}");
+    }
+    let page = serde_json::to_string(&protected_attempts().into_iter().filter(|a| a.worktree == "G:/Dev/cards-safe019b").collect::<Vec<_>>()).unwrap();
+    assert!(cases.iter().all(|(_, s)| !page.contains(s.as_str())), "{page}");
+}
+
+#[test]
+fn safe015_box1_force_push_switched_off_runs_with_no_prompt_and_switched_on_asks_again() {
+    let _d = scratch("safe015a");
+    let push = "git push --force origin main";
+    let go = |settings: Value| reply_body("/claude", &pre_tool("Bash", push), &settings);
+    // The settings the Safety page saves (src/settings/__cards__/SAFE-015.test.ts): off adds the id, on takes it out.
+    assert!(go(json!({ "protectedOff": [] })).contains("\"ask\""));
+    assert_eq!(go(json!({ "protectedOff": ["force-push"] })), "{}");
+    assert!(go(json!({ "protectedOff": [] })).contains("Force-push to main"));
+    // Another rule switched off leaves the force-push asking.
+    assert!(go(json!({ "protectedOff": ["stripe"] })).contains("\"ask\""));
+}
+
+#[test]
+fn safe015_box2_master_switch_off_means_no_protected_command_asks() {
+    let _d = scratch("safe015b");
+    temp_roots_elsewhere();
+    let off = json!({ "protectedAsk": false });
+    let every_rule = [
+        "stripe refunds create --charge ch_1", "git push --force origin main", "dropdb production", "terraform apply -auto-approve",
+        "vercel --prod", "rm -rf ~", "git reset --hard",
+    ];
+    for c in every_rule {
+        assert!(reply_body("/claude", &pre_tool("Bash", c), &json!({})).contains("\"ask\""), "asks with the switch on: {c}");
+        assert_eq!(reply_body("/claude", &pre_tool("Bash", c), &off), "{}", "master off: {c}");
+    }
+}

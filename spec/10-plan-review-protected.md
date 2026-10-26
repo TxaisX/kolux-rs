@@ -278,15 +278,15 @@ Rules: recursive deletes are rm with a recursive flag; rd, rmdir, del and erase 
   hook cwd, which a Kolux pane makes the worktree folder, DT-C23; a temp root wins over the
   workspace test, so a repository kept under TEMP is not protected from its own deletes.)
 Acceptance:
-  - [ ] rm -rf on the filesystem root, on a folder in the user's documents, on .., on ., on .git, or
-        on a path held in a shell variable → each asks.
-  - [ ] cd to the home variable and then rm -rf build; a bare cd and then rm -rf build; popd and
-        then rm -rf build; a find piped through xargs into rm -rf → each asks.
-  - [ ] Remove-Item with recurse and force on the home folder; a directory listing piped into
-        Remove-Item with recurse; rd /s /q on the documents folder → each asks.
-  - [ ] rm -rf of the dependency and build folders inside the worktree, of everything under a build
+  - [x] rm -rf on the filesystem root, on a folder in the user's documents, on .., on ., on .git, or
+        on a path held in a shell variable → each asks. (cards; evidence/cards-SAFE-013.txt)
+  - [x] cd to the home variable and then rm -rf build; a bare cd and then rm -rf build; popd and
+        then rm -rf build; a find piped through xargs into rm -rf → each asks. (cards; evidence/cards-SAFE-013.txt)
+  - [x] Remove-Item with recurse and force on the home folder; a directory listing piped into
+        Remove-Item with recurse; rd /s /q on the documents folder → each asks. (cards; evidence/cards-SAFE-013.txt)
+  - [x] rm -rf of the dependency and build folders inside the worktree, of everything under a build
         folder, from a package subfolder after a cd into it, or of a scratch folder in /tmp; rd /s
-        /q of the dependency folder → each runs.
+        /q of the dependency folder → each runs. (cards; evidence/cards-SAFE-013.txt)
 Compat: —
 Source: D-10-013
 
@@ -314,18 +314,18 @@ Rules: every program in a chain is inspected (semicolons, ampersands, pipes, and
   PowerShell -File script, a shell reading stdin, and the commands find runs through its exec flag
   are not read, and the window title of a start command is skipped only when it is empty quotes.)
 Acceptance:
-  - [ ] bash -c wrapping rm -rf / → asks; rm -rf / inside a $( ) substitution → asks; cmd /c
-        wrapping rd /s /q on the Users folder → asks.
-  - [ ] powershell -ExecutionPolicy Bypass -Command wrapping terraform apply -auto-approve → asks;
+  - [x] bash -c wrapping rm -rf / → asks; rm -rf / inside a $( ) substitution → asks; cmd /c
+        wrapping rd /s /q on the Users folder → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] powershell -ExecutionPolicy Bypass -Command wrapping terraform apply -auto-approve → asks;
         the same with -ep bypass, -WindowStyle Hidden, -of text, or as a base64-encoded command →
-        asks.
-  - [ ] A powershell -File run, then a semicolon, then terraform apply -auto-approve → asks.
-  - [ ] cmd //c wrapping rd /s /q on the Windows folder → asks; rd /s/q on the Windows folder →
-        asks; del /q/s on a file under the Windows folder → asks.
-  - [ ] sudo -u root, sudo -uroot, nice -n 10, env -u NAME, or timeout 5 placed before rm -rf on a
-        system folder → each asks; timeout 30s terraform apply -auto-approve → asks.
-  - [ ] sudo -u root ls build, timeout 5 ls, nice -n 10 echo hi, powershell -ExecutionPolicy Bypass
-        -Command printing hi, rd /s/q build, and echoing the text rm -rf / → each runs.
+        asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] A powershell -File run, then a semicolon, then terraform apply -auto-approve → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] cmd //c wrapping rd /s /q on the Windows folder → asks; rd /s/q on the Windows folder →
+        asks; del /q/s on a file under the Windows folder → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] sudo -u root, sudo -uroot, nice -n 10, env -u NAME, or timeout 5 placed before rm -rf on a
+        system folder → each asks; timeout 30s terraform apply -auto-approve → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] sudo -u root ls build, timeout 5 ls, nice -n 10 echo hi, powershell -ExecutionPolicy Bypass
+        -Command printing hi, rd /s/q build, and echoing the text rm -rf / → each runs. (cards; evidence/cards-SAFE-014.txt)
 Compat: —
 Source: D-10-014
 
@@ -342,9 +342,9 @@ Rules: with the master switch off no rule ever asks, and it is on by default; th
   on at any time; settings search finds the section; in the rebuild the section sits on the kept
   Safety page.
 Acceptance:
-  - [ ] Switch the force-push rule off → Claude's next force-push of main runs with no prompt;
-        switch it on → it asks again.
-  - [ ] Turn the master switch off → no protected command asks.
+  - [x] Switch the force-push rule off → Claude's next force-push of main runs with no prompt;
+        switch it on → it asks again. (cards; evidence/cards-SAFE-015.txt)
+  - [x] Turn the master switch off → no protected command asks. (cards; evidence/cards-SAFE-015.txt)
 Compat: importing settings from the old app must carry over the master switch, the list of
   turned-off built-ins, the custom rules and the per-project overrides.
 Source: D-10-015
@@ -362,10 +362,10 @@ Rules: Stripe live and test secret keys, restricted keys and webhook signing sec
   the value attached; Stripe values that are already masked pass through the second pass untouched;
   the raw key never reaches the attempts list.
 Acceptance:
-  - [ ] A paused command holding a live Stripe key → the list shows only the prefix, four dots and
-        the last four characters.
-  - [ ] A MySQL client with the password stuck to its short flag, a command with a token flag, and a
-        Postgres connection URL carrying a user and password → all three are masked.
+  - [x] A paused command holding a live Stripe key → the list shows only the prefix, four dots and
+        the last four characters. (cards; evidence/cards-SAFE-019.txt)
+  - [x] A MySQL client with the password stuck to its short flag, a command with a token flag, and a
+        Postgres connection URL carrying a user and password → all three are masked. (cards; evidence/cards-SAFE-019.txt)
 Compat: —
 Source: D-10-019
 
