@@ -19,6 +19,7 @@ import { withMilestones } from "../onboarding/milestoneNote";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal, type ITerminalAddon } from "@xterm/xterm";
+import { xtermLogger } from "./xtermLogger";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
@@ -444,6 +445,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom (wins over the SET-022 text font fields)
       theme: currentTerminal(),
       allowProposedApi: true,
+      logger: xtermLogger, // stress 802: a program's malformed escapes do not flood the console
       // TERM-013: ConPTY repaints the screen itself after a resize, so a taller pane gets blank rows
       // rather than history pulled down for ConPTY to paint over (expand then restore kept scrollback).
       ...(navigator.userAgent.includes("Windows") ? { windowsPty: { backend: "conpty" as const } } : {}),
