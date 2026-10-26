@@ -171,7 +171,8 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
     if (j < 1 || j >= nw.length) return null;
     const t = next.slice(nw[j - 1].e, nw[j].s);
     const nl = t.lastIndexOf("\n");
-    if (nl < 0 || !/^[ \t]*([-*+][ \t]*)?$/.test(t.slice(nl + 1))) return null;
+    // A fence line between the two words (code has no words) means the boundary is not where the words say.
+    if (nl < 0 || !/^[ \t]*([-*+][ \t]*)?$/.test(t.slice(nl + 1)) || /\n[ \t]*(`{3,}|~{3,})/.test(t.slice(0, nl))) return null;
     kept.push({ at: nw[j - 1].e + nl + 1, raw: g.raw });
   }
   return looseReadsAlike(tight.text, next, kept) ? restore(next, kept) : null;
@@ -242,11 +243,13 @@ function placeIn(body: string, out: string, prev: string, e: Edit, bw: Span[], p
   if (fine && shape(prev.slice(w.p.s, w.p.e)) !== shape(outCtx)) return null;
   // A loose list reads every item loose, so one item of context on each side is not the whole list's reading.
   if (fine && (looseList(body, bb, r.b) || looseList(prev, pb, r.p))) return null;
-  const allowed = new Set([...limitsOf(outCtx), ...limitsOf(bodyCtx)]);
+  // A line rule reads past the window's last character (a `[r]:` ends at its line end), so its limits take the whole last line.
+  const wide = (t: string, from: number, to: number) => t.slice(from, t.indexOf("\n", Math.max(0, to - 1)) + 1 || t.length);
+  const allowed = new Set([...limitsOf(wide(out, w.p.s, w.p.e + delta)), ...limitsOf(wide(body, w.b.s - lead, w.b.e))]);
   const tags = new Set([...htmlTagsOf(outCtx), ...htmlTagsOf(bodyCtx)]); // a new HTML-looking span is a limit like a line rule
   const reads = (cand: string) => {
     const ctx = cand.slice(w.b.s - lead, w.b.e + cand.length - body.length);
-    return (!fine || shape(ctx) === shape(bodyCtx)) && limitsOf(ctx).every((x) => allowed.has(x)) && htmlTagsOf(ctx).every((x) => tags.has(x)) && same(ctx, outCtx);
+    return (!fine || shape(ctx) === shape(bodyCtx)) && limitsOf(wide(cand, w.b.s - lead, w.b.e + cand.length - body.length)).every((x) => allowed.has(x)) && htmlTagsOf(ctx).every((x) => tags.has(x)) && same(ctx, outCtx);
   };
   if (fast !== null) {
     const end = fast.length - (body.length - r.b.e);

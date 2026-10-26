@@ -213,3 +213,23 @@ describe("LOW-1: the reference-definition rule stops at a line end", () => {
     expect(unsupported(next)).toBeNull();
   });
 });
+
+// Round 5 fuzz seeds 85 and 173 (found after the first 60): a window that cuts a line rule short, and a gap put back past an emptied item.
+describe("fuzz regressions: a `[r]:` line cut short by the window, a gap past an emptied item", () => {
+  const run = (body: string, out: string) => {
+    const prev = roundTrip(body)!;
+    let refused = 0;
+    const next = apply(body, richChange(body, out, prev, () => refused++));
+    if (refused) expect(next).toBe(body);
+    else expect(roundTrip(next)).toBe(out);
+    return { next, refused };
+  };
+  it("joining a line to a later `[r]:` does not leave it opening a reference definition (CRLF)", () => {
+    const body = "temperature 0 -- -5 today1 2.twosee 2\r\nthere [r]:\r\n";
+    const { next } = run(body, "temperature 0 -- -5 today1 2.twosee 2 [r]:");
+    expect(unsupported(next)).toBeNull();
+  });
+  it("emptying an item in a loose list keeps the blank lines out of the fence after it", () => {
+    run("- - a [0 -\n\n  indented\n\n- para\n- b\n\n```-\ncode 1\n\nmore code\n```\n", "- - a [0 -\n\n  indented\n\n-\n\n```-\ncode 1\n\nmore code\n```");
+  });
+});
