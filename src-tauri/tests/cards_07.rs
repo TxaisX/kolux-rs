@@ -94,7 +94,7 @@ fn acct004_box1_connect_keeps_the_key_and_names_a_renewal_a_year_ahead() {
     let raw = std::fs::read_to_string(dir.join("settings.json")).unwrap();
     assert!(!raw.contains(KEY), "the key is never in the clear");
     let has = secrets::read_setting(&store, ck::TOKEN_FIELD).unwrap().is_some();
-    let status = ck::status_at(&store.settings(), has, NOW);
+    let status = ck::status_checked(&store.settings(), has, false, NOW);
     assert!(status.connected && !status.renew_due && !status.expired);
     assert_eq!(status.expires_at, Some(NOW + 365 * DAY), "good for twelve months, so the renewal month is a year ahead");
     let wire = serde_json::to_value(&status).unwrap();
@@ -111,14 +111,14 @@ fn acct004_box2_a_key_made_340_days_ago_warns_with_renew_due() {
     let store = store.lock().unwrap();
     ck::keep(&store, KEY, NOW - 340 * DAY).unwrap(); // the stored creation date, backdated
     let has = secrets::read_setting(&store, ck::TOKEN_FIELD).unwrap().is_some();
-    let status = ck::status_at(&store.settings(), has, NOW);
+    let status = ck::status_checked(&store.settings(), has, false, NOW);
     assert!(status.connected && status.renew_due && !status.expired);
     assert_eq!(status.days_left, Some(25));
     let wire = serde_json::to_value(&status).unwrap();
     assert_eq!((wire["renewDue"].as_bool(), wire["expired"].as_bool(), wire["daysLeft"].as_i64()), (Some(true), Some(false), Some(25)));
     // One day short of the warning window: no warning yet.
     ck::keep(&store, KEY, NOW - 334 * DAY).unwrap();
-    assert!(!ck::status_at(&store.settings(), true, NOW).renew_due);
+    assert!(!ck::status_checked(&store.settings(), true, false, NOW).renew_due);
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn acct009_box1_after_quit_the_settings_file_holds_no_key_text_and_reopening_is_
     // Reopen: a new store over the same folder.
     let store = Store::open(&dir).unwrap();
     assert_eq!(secrets::read_setting(&store, ck::TOKEN_FIELD).unwrap().as_deref(), Some(KEY));
-    let status = ck::status_at(&store.settings(), true, NOW + DAY);
+    let status = ck::status_checked(&store.settings(), true, false, NOW + DAY);
     assert!(status.connected && !status.expired, "the Claude key is still connected after reopening");
     assert_eq!(grok::connection(false, secrets::read_setting(&store, grok::KEY_FIELD).unwrap().is_some()), "key", "the xAI key too");
     // And the window never receives either key (lib.rs:131 sends settings through without_secrets).
@@ -439,7 +439,7 @@ fn acct009_box2_a_profile_with_clear_credentials_is_sealed_by_the_first_launch_a
     let store = store.lock().unwrap();
     let token = secrets::read_setting(&store, ck::TOKEN_FIELD).unwrap();
     assert_eq!(token.as_deref(), Some(KEY));
-    assert!(ck::status_at(&store.settings(), true, NOW + DAY).connected);
+    assert!(ck::status_checked(&store.settings(), true, false, NOW + DAY).connected);
     assert_eq!(ck::pane_env(Some("claude"), &store.settings(), token), Some((ck::ENV, KEY.to_string())));
     assert_eq!(secrets::read_setting(&store, grok::KEY_FIELD).unwrap().as_deref(), Some(CLEAR_XAI));
     assert_eq!(secrets::read_file(&vault.join("claude-a1.json"), &dir).unwrap().as_deref(), Some(CLEAR_VAULT));
