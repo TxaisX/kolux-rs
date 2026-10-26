@@ -2846,6 +2846,15 @@ mod tests {
         assert_eq!(time_left(s(8), s(8)), None);
         assert_eq!(time_left(s(9), s(8)), None);
     }
+
+    // T-195 (after-list 89): a test exe that links the web view path must still load (it needs the app manifest).
+    #[test]
+    fn t195_the_test_exe_links_the_web_view_path_and_loads() {
+        let reach: fn(&AppHandle, u32) -> Result<Webview, String> = view;
+        std::hint::black_box(reach);
+        let driver: fn(Act) -> Result<serde_json::Value, String> = drive;
+        std::hint::black_box(driver);
+    }
 }
 
 #[cfg(test)]
