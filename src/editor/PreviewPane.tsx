@@ -11,6 +11,10 @@ import { baseName, subscribe, textOf } from "./buffers";
 import { domPick, selections } from "./notes";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { outline } from "./toc";
+import { splitFront } from "./frontMatter";
+import { FrontMatterBlock } from "../shell/MdViewControls";
+import { frontControl } from "../shell/mdView";
+import { mdPrefs, setMdPrefs } from "../shell/mdPrefs";
 import { followClick, type LinkHandler } from "./linkClicks";
 import { drawDiagrams, loadRenderers, renderNote, watchRenderers } from "./diagrams";
 import { filterDataPictures } from "./notePictures";
@@ -41,7 +45,12 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
     void loadRenderers();
     return watchRenderers(() => setLibs((n) => n + 1));
   }, []);
-  const html = useMemo(() => (text === null ? "" : renderNote(text, renderMarkdown)), [text, libs]);
+  // EDIT-019 (row 94): front matter is its own block above the note, shown at first and remembered per file (VIEW-113); the page below is the body.
+  const { front, body } = useMemo(() => splitFront(text ?? ""), [text]);
+  const [hideFront, setHideFront] = useState(() => mdPrefs(path).hideFront);
+  useEffect(() => void setMdPrefs(path, { hideFront }), [path, hideFront]);
+  const frontCtl = frontControl(front, hideFront);
+  const html = useMemo(() => (text === null ? "" : renderNote(body, renderMarkdown)), [text, body, libs]);
   useEffect(() => {
     let alive = true;
     if (page.current) void drawDiagrams(page.current, true, () => alive);
@@ -51,7 +60,7 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
   }, [html]);
   // EDIT-009: the note's own pictures (beside it on disk) are read through the file fence and shown as they scroll in.
   useEffect(() => (page.current ? showPicturesIn(page.current, path) : undefined), [html, path]);
-  const hasHeadings = useMemo(() => outline(text ?? "").length > 0, [text]);
+  const hasHeadings = useMemo(() => outline(body).length > 0, [body]);
 
   useEffect(() => {
     let alive = true;
@@ -106,6 +115,11 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
         <span className="path" title={path}>
           {path}
         </span>
+        {frontCtl && (
+          <button className="ib" aria-pressed={frontCtl.pressed} title={frontCtl.label} aria-label={frontCtl.label} onClick={() => setHideFront((v) => !v)}>
+            Front
+          </button>
+        )}
         {hasHeadings && (
           <button className="ib" aria-pressed={toc} title="Contents" aria-label="Contents" onClick={() => setToc((v) => !v)}>
             <List size={13} />
@@ -126,7 +140,8 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
         </div>
       )}
       {find && <FindBar pane={id} root={root} open={find} onClose={() => (setFind(null), section.current?.focus())} />}
-      {toc && hasHeadings && <Contents md={text ?? ""} path={path} root={root} onClose={() => setToc(false)} />}
+      {toc && hasHeadings && <Contents md={body} path={path} root={root} onClose={() => setToc(false)} />}
+      <FrontMatterBlock front={front} hide={hideFront} />
       <div
         ref={page}
         className="pane-body md-preview"

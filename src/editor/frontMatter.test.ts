@@ -96,3 +96,19 @@ describe("row 135: a rich edit rewrites only what the user changed", () => {
     expect(keepRaw("x\n", "y", undefined)).toBe("y");
   });
 });
+
+// Row 94 (EDIT-019): the Preview tab shows the front matter as its own block (PreviewPane renders splitFront(...).body).
+describe("preview of a note with front matter", () => {
+  it("whole-note markdown turns the front matter into a rule and a heading; the body alone does not", async () => {
+    const { marked } = await import("marked");
+    const whole = marked.parse(note, { async: false });
+    expect(whole).toContain("<hr");
+    expect(whole).toContain("<h2");
+    const { front, body } = splitFront(note);
+    const page = marked.parse(body, { async: false });
+    expect(page).not.toContain("<hr");
+    expect(page).not.toContain("<h2");
+    expect(page).toContain("<h1");
+    expect(front).toBe("---\ntitle: Plan\ntags: [a, b]\n---\n");
+  });
+});

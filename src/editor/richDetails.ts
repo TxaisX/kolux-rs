@@ -158,7 +158,7 @@ export function makeDetails(all: () => Transformer[]): MultilineElementTransform
       if (head[1]) s.append($createTextNode(head[1]));
       const b = new BodyNode();
       const text = lines.slice(startLineIndex + 2, end).join("\n").replace(/^\s*\n/, "").replace(/\n\s*$/, "");
-      if (text.trim()) $convertFromMarkdownString(text, all(), b);
+      if (text.trim()) $importFlowing(text, all(), b);
       if (!b.getFirstChild()) b.append($createParagraphNode());
       d.append(s, b);
       rootNode.append(d);
@@ -180,3 +180,16 @@ export function makeDetails(all: () => Transformer[]): MultilineElementTransform
 /** `md` without the open and close lines of sections in the shape the rich view reads (so the HTML check does not flag them). */
 export const withoutSections = (md: string): string =>
   md.replace(/^<details>[ \t]*\r?\n<summary>[^<>\n]*<\/summary>[ \t]*$/gim, "").replace(/^<\/details>[ \t]*$/gim, "");
+
+/** Row 94 (EDIT-019): `md` read into the editor with adjacent lines flowing as one paragraph. A section's
+ * title line gets a blank line after it first, since joining would pull the body text into the title. */
+export function $importFlowing(md: string, all: Transformer[], into?: ElementNode): void {
+  let fence = "";
+  const lines = md.split("\n").flatMap((line, i, rows) => {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (f && (!fence || (f[0] === fence[0] && f.length >= fence.length))) fence = fence ? "" : f;
+    const next = rows[i + 1];
+    return !fence && TITLE.test(line) && next !== undefined && next.trim() !== "" ? [line, ""] : [line];
+  });
+  $convertFromMarkdownString(lines.join("\n"), all, into, false, true);
+}
