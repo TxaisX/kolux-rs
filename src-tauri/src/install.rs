@@ -207,9 +207,14 @@ pub fn agent_installs(installs: tauri::State<'_, Installs>) -> HashMap<String, I
 }
 
 /// Whether the card can install the agent itself; otherwise it offers the install page.
+pub fn agent_can_install_now(agent: &str) -> bool {
+    cfg!(windows) && package(agent).is_some() && crate::agents::find_program("winget").is_some()
+}
+
+/// Async so the WinGet PATH probe (158 ms under load) runs off the UI thread, which a sync command would hold.
 #[tauri::command]
-pub fn agent_can_install(agent: String) -> bool {
-    cfg!(windows) && package(&agent).is_some() && crate::agents::find_program("winget").is_some()
+pub async fn agent_can_install(agent: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || agent_can_install_now(&agent)).await.unwrap_or(false)
 }
 
 #[tauri::command]
@@ -343,3 +348,22 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod can_install_async_tests {
+    use super::*;
+
+    fn is_async<F: std::future::Future>(_: fn(String) -> F) {}
+
+    #[test]
+    fn agent_can_install_is_an_async_command_that_matches_the_sync_one() {
+        is_async(agent_can_install);
+        let _scratch = crate::test_dir::temp("can-install-async");
+        for agent in ["claude", "codex", "grok", "unknown-agent"] {
+            let old = cfg!(windows) && package(agent).is_some() && crate::agents::find_program("winget").is_some();
+            assert_eq!(agent_can_install_now(agent), old, "{agent}");
+            assert_eq!(tauri::async_runtime::block_on(agent_can_install(agent.into())), old, "{agent} through the command");
+        }
+        assert!(!agent_can_install_now("unknown-agent"), "no installer, no install");
+    }
+}
