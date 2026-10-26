@@ -174,3 +174,52 @@ describe("the twin-pane re-show asks the same question as the first show", () =>
     expect(richBlocker("---\ntags: [a, <!-- x -->]\n---\nbody\n", false)).toBeNull();
   });
 });
+
+// Row 94 review round 3 (HOLD): the word check alone cannot see marker or line-break damage. Each edit must save a
+// body the rich view reads back as its own text, and every byte outside the touched paragraph stays as the file had it.
+describe("marker and line-break damage next to respelt emphasis", () => {
+  const PRE = "Keep __this__ one\nas is\n\n\n";
+  const POST = "\n\n\nAnd _keep_ this\n";
+  /** `body` placed between two untouched paragraphs (only after one when `end`), edited in the rich view's spelling. */
+  const check = (body: string, ed: (p: string) => string, exact?: string, end = false) => {
+    const full = PRE + body + (end ? "" : POST);
+    const prev = roundTrip(full)!;
+    const cp = roundTrip(body)!;
+    expect(prev).toContain(cp);
+    const out = prev.replace(cp, ed(cp));
+    let refused = 0;
+    const next = apply(full, richChange(full, out, prev, () => refused++));
+    expect(refused).toBe(0);
+    expect(roundTrip(next)).toBe(roundTrip(out));
+    expect(next.startsWith(PRE)).toBe(true);
+    if (!end) expect(next.endsWith(POST)).toBe(true);
+    if (exact !== undefined) expect(next).toBe(PRE + exact + (end ? "" : POST));
+  };
+  it("H1: Enter after italic at line end", () => check("see _this_\nwrapped", (p) => p.replace("* wr", "*\n\nwr")));
+  it("H1: Enter after bold at line end", () => check("see __this__\nwrapped", (p) => p.replace("** wr", "**\n\nwr")));
+  it("H1: Backspace joining the next line onto italic", () => check("see _this_\nwrapped", (p) => p.replace("* wr", "*wr")));
+  it("H1: Enter before italic at line start", () => check("wrapped\n_this_ see", (p) => p.replace("wrapped *", "wrapped\n\n*")));
+  it("H1: typing after italic at line end", () => check("see _this_\nwrapped", (p) => p.replace("* wr", "*Q wr")));
+  it("H2: a period after italic at the note's end keeps the last line end", () => check("see _this_\n", (p) => p + ".", "see *this*.\n", true));
+  it("H2: a period after italic before extra blank lines", () => check("see _this_\n\n\nNext one", (p) => p.replace("*\n\n", "*.\n\n"), "see *this*.\n\n\nNext one"));
+  it("H2: a period after italic with a trailing space", () => check("see _this_ \n\nNext one", (p) => p.replace("*\n\n", "*.\n\n"), "see *this*.\n\nNext one"));
+  it("H2: CRLF note", () => {
+    const body = "one __two__\r\n";
+    const prev = roundTrip(body)!;
+    const next = apply(body, richChange(body, prev + ".", prev));
+    expect(roundTrip(next)).toBe(roundTrip(prev + "."));
+    expect(next.endsWith("\r\n")).toBe(true);
+  });
+  it("H2: front matter stays and the period lands", () => {
+    const fm = "---\ntitle: x\n---\n";
+    const prev = roundTrip("see _this_\n")!;
+    const next = apply(fm + "see _this_\n", richChange(fm + "see _this_\n", prev + ".", prev));
+    expect(next).toBe(fm + "see *this*.\n");
+  });
+  it("H3: pasting at the start of a paragraph after extra blank lines", () => check("a\n\n\n\nb", (p) => p.replace("\nb", "\nNote: b"), "a\n\n\n\nNote: b"));
+  it("H3: selecting the blank lines and typing a space joins the paragraphs", () => check("a\n\n\n\nb", (p) => p.replace("a\n\nb", "a b"), "a b"));
+  it("M1: typing at the start of a paragraph after extra blank lines is accepted", () => check("a\n\n\n\nb", (p) => p.replace("\nb", "\nZb"), "a\n\n\n\nZb"));
+  it("M1: Backspace at the start of that paragraph joins it", () => check("a\n\n\n\nb", (p) => p.replace("a\n\nb", "ab"), "ab"));
+  it("M2: a letter typed right after _API_", () => check("the _API_ call", (p) => p.replace("* call", "*s call")));
+  it("M2: a letter typed right before __API__", () => check("the __API__ call", (p) => p.replace("the **", "the X**")));
+});
