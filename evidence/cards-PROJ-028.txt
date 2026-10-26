@@ -1,0 +1,6 @@
+box 1: OPEN (LIVE part: the notice shown in the sidebar). Backend proven:
+  src-tauri/tests/cards_01.rs::proj028_box1_a_saved_base_deleted_on_the_remote_falls_back_to_the_default_with_a_notice — cargo test --manifest-path src-tauri/Cargo.toml --test cards_01 (scratch env under G:/Temp/cards-v3) — ... ok
+  (local bare remote; saved base origin/dev resolves while the remote has it; after `git branch -D dev` on the remote: base origin/main, note "the saved base origin/dev no longer exists ... started from origin/main", the created workspace's HEAD equals origin/main and carries the note)
+box 2: src-tauri/tests/cards_01.rs::proj028_box2_a_full_commit_id_as_the_start_is_used_directly_with_no_fetch — same command — test proj028_box2_a_full_commit_id_as_the_start_is_used_directly_with_no_fetch ... ok
+  (remote gets a newer commit; create from the 40-hex id: base == id, HEAD == id, note None, no .git/FETCH_HEAD, origin/main unmoved; control: resolve_base with origin/main writes FETCH_HEAD and moves origin/main)
+  test result: ok. 9 passed; 0 failed (final run of cards_01)
