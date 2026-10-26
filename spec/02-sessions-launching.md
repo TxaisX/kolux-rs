@@ -49,9 +49,9 @@ Rules: an agent counts as installed only when a program that can actually run is
   Path then the user Path from the registry, expanded; on macOS and Linux the process PATH plus
   the usual install folders stand for it, DT-C10.)
 Acceptance:
-  - [ ] Install only Claude Code and Codex, open the plus menu → exactly those two agents are offered.
-  - [ ] Launch Kolux from the Start menu while an agent exists only in its default install location → that agent is still offered.
-  - [ ] Put a non-executable file named after an agent on the search path → that agent is not offered.
+  - [x] Install only Claude Code and Codex, open the plus menu → exactly those two agents are offered. (cards; evidence/cards-SESS-001.txt)
+  - [x] Launch Kolux from the Start menu while an agent exists only in its default install location → that agent is still offered. (cards; evidence/cards-SESS-001.txt)
+  - [x] Put a non-executable file named after an agent on the search path → that agent is not offered. (cards; evidence/cards-SESS-001.txt)
 Compat: every agent keeps a stable id; settings, saved shapes and per-agent shortcut ids refer to
   agents by it.
 Source: D-02-001
@@ -67,7 +67,7 @@ Rules: the menu lists only agents that are detected and switched on, the default
   default), a temporary starting row shows until it is ready.
 Acceptance:
   - [ ] Click plus, then Claude Code → a new pane appears with Claude Code running in it.
-  - [ ] Make Codex the default → Codex moves to the top of the plus menu with its shortcut shown.
+  - [x] Make Codex the default → Codex moves to the top of the plus menu with its shortcut shown. (cards; evidence/cards-SESS-004.txt)
 Compat: —
 Source: D-02-004
 

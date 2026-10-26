@@ -1,0 +1,4 @@
+box 2: src/launch/PlusMenu.test.ts::"making Codex the default moves it to the top with the shortcut, and the others offer 'default'" — pnpm exec vitest run src/launch/PlusMenu.test.ts src/launch/agents.test.ts (scratch env G:\Temp\cards-v3) — Test Files 2 passed (2) / Tests 11 passed (11)
+  (PlusMenu rendered with defaultId codex and tab.newAgent bound to Ctrl+Alt+T: first menuitem is Codex with the kbd chip containing Ctrl; Claude's row has no chip; src/launch/agents.test.ts menuAgents puts the default first)
+  glue not run live: the "default" button writing the defaultAgent settings key (App.tsx:557) and the live re-render after it.
+box 1: not proven here (needs a live window and a running agent), see ledger LIVE.
