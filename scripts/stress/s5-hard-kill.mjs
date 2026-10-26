@@ -1,7 +1,7 @@
 // S5 hard kill: the app process is killed (taskkill /F /T on its own pid, no graceful path) while layout saves are in
 // flight, 10 times. Bars each time: settings.json (or its .bak) still parses, state.db passes an integrity check, the
 // app relaunches, and the panes it restores are the panes the settings on disk describe.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { TERM, addProjectAndOpen, gitInit, installProbe, pageErrors, seedProfile } from "./lib.mjs";
 
@@ -9,7 +9,9 @@ export const title = "Hard kill during layout saves (10 times)";
 export const seed = seedProfile;
 const KILLS = 10;
 
-// In the page, not awaited: opens and closes terminal tabs every ~40 ms (each one writes the layout), 3..8 panes.
+// In the page, not awaited: opens and closes terminal tabs in bursts of 3 (~40 ms apart) with 700 ms of quiet between them,
+// 3..8 panes. The layout writer is a 400 ms trailing debounce, so only the quiet gaps produce a write (a continuous stream of
+// changes writes nothing, which an earlier version of this script ran into).
 const CHURN_JS = `(() => {
   window.__churn = { stop: false, ops: 0 };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -30,7 +32,7 @@ const CHURN_JS = `(() => {
         }
         window.__churn.ops++;
       } catch (e) { /* the page is going away */ }
-      await sleep(40);
+      await sleep(window.__churn.ops % 3 === 0 ? 700 : 40);
     }
   })();
   return "churning";
@@ -56,13 +58,21 @@ const parses = (f) => {
 };
 const savedPanes = (f) => {
   try {
-    return (readFileSync(f, "utf8").match(/"agent":/g) ?? []).length;
+    const v = JSON.parse(readFileSync(f, "utf8"));
+    return Array.isArray(v?.savedLayout?.panes) ? v.savedLayout.panes.length : 0;
   } catch {
     return -1;
   }
 };
+const mtimeOf = (f) => {
+  try {
+    return `${statSync(f).mtimeMs}:${statSync(f).size}`;
+  } catch {
+    return "";
+  }
+};
 
-export async function run({ launch, checks }) {
+export async function run({ launch, checks, opts }) {
   const app = await launch("s5");
   const repo = join(app.temp, "repo");
   await gitInit(app, repo, "s5");
@@ -76,13 +86,33 @@ export async function run({ launch, checks }) {
   for (let k = 1; k <= KILLS; k++) {
     const row = { k };
     await app.evalJs(CHURN_JS);
-    const delay = Math.round(200 + rnd() * 1300);
-    await app.sleep(delay);
+    const probe = () => app.evalJs(`({ ops: window.__churn?.ops ?? -1, panes: document.querySelectorAll(${JSON.stringify(TERM)}).length })`).then((v) => v?.result?.value ?? v, () => ({}));
+    // Odd kills: a random time into the churn. Even kills: as soon as settings.json changes on disk (a save has just started).
+    let delay = Math.round(200 + rnd() * 1300);
+    let live;
+    row.mode = k % 2 ? "random" : "on-save";
+    if (k % 2) {
+      await app.sleep(delay);
+      live = await probe();
+    } else {
+      await app.sleep(300);
+      live = await probe();
+      const before = mtimeOf(settings);
+      const t0 = Date.now();
+      while (Date.now() - t0 < 6000 && mtimeOf(settings) === before) await app.sleep(2);
+      row.sawSave = mtimeOf(settings) !== before;
+      delay = Date.now() - t0 + 300;
+    }
+    row.ops = live?.ops;
+    row.panesAtKill = live?.panes;
     const pid = app.pid;
     const tree = await app.treeOf(pid);
     // The hard kill: this app's own pid and its descendants, nothing else.
     await app.run("taskkill", ["/PID", String(pid), "/T", "/F"]).catch(() => {});
     await app.treeGone([{ pid, name: "kolux-rs.exe", created: undefined }, ...tree]).catch(() => {});
+    // tauri dev takes its vite down some seconds after the app dies; end that tree now so the relaunch never races it.
+    if (app.dev?.pid) await app.run("taskkill", ["/PID", String(app.dev.pid), "/T", "/F"]).catch(() => {});
+    for (let i = 0; i < 20 && (await fetch("http://localhost:" + opts.port + "/").then((r) => r.ok, () => false)); i++) await app.sleep(500);
     await app.sleep(1500);
     row.delay = delay;
     row.settings = parses(settings);
@@ -91,6 +121,7 @@ export async function run({ launch, checks }) {
     row.tmp = readdirSync(profile).filter((f) => /\.tmp$/.test(f));
     row.corruptCopies = readdirSync(profile).filter((f) => /\.(corrupt-|damaged-)/.test(f)).length;
     row.expected = savedPanes(settings);
+    row.settingsBytes = (() => { try { return readFileSync(settings).length; } catch { return -1; } })();
     const t0 = Date.now();
     try {
       await app.relaunch();
@@ -102,6 +133,8 @@ export async function run({ launch, checks }) {
       row.getSettings = await app.invoke("get_settings").then((s) => (s && typeof s === "object" ? `${Object.keys(s).length} keys` : "empty"), (e) => `ERR ${e.message.slice(0, 80)}`);
     } catch (e) {
       row.relaunchError = e.message.slice(0, 160);
+      row.appLogTail = (() => { try { return readFileSync(join(app.temp, "app.log"), "utf8").split(/\r?\n/).filter(Boolean).slice(-4).map((l) => l.slice(0, 200)); } catch { return []; } })();
+      row.page = await app.evalJs(`(document.body?.innerText ?? "").slice(0, 200) + " | panes=" + document.querySelectorAll(${JSON.stringify(TERM)}).length + " | readyState=" + document.readyState`).then((v) => v?.result?.value ?? v, (x) => `ERR ${x.message.slice(0, 80)}`);
     }
     rows.push(row);
     console.log(`  kill ${k}: ${JSON.stringify(row)}`);
@@ -109,6 +142,8 @@ export async function run({ launch, checks }) {
   }
   const bad = (pred) => rows.filter(pred).map((r) => r.k);
   checks.add(`app was killed ${KILLS} times mid layout save`, `${KILLS} kills`, `${rows.length} kills; delays after churn start [${rows.map((r) => r.delay).join(" ")}] ms`, rows.length === KILLS);
+  checks.add("the layout really changed while the app was killed (not a vacuous run)", "ops > 0 in every round", `ops [${rows.map((r) => r.ops).join(" ")}]; panes at kill [${rows.map((r) => r.panesAtKill).join(" ")}]`, rows.every((r) => r.ops > 0));
+  checks.add("saves really landed and varied (not a vacuous run)", "a save seen before 5 of 5 on-save kills; saved pane counts differ and exceed 1", `saves seen [${rows.filter((r) => r.mode === "on-save").map((r) => r.sawSave).join(" ")}]; saved pane counts [${rows.map((r) => r.expected).join(" ")}]`, rows.filter((r) => r.mode === "on-save").every((r) => r.sawSave) && new Set(rows.map((r) => r.expected)).size > 1 && rows.some((r) => r.expected > 1));
   checks.add("settings.json parses after every kill (or is absent while the .bak parses)", "10 of 10", `${rows.filter((r) => r.settings === "ok" || (r.settings === "absent" && r.bak === "ok")).length} of ${rows.length}; states [${rows.map((r) => r.settings).join(" ")}]; bad kills [${bad((r) => !(r.settings === "ok" || (r.settings === "absent" && r.bak === "ok"))).join(" ") || "none"}]`, bad((r) => !(r.settings === "ok" || (r.settings === "absent" && r.bak === "ok"))).length === 0);
   checks.add("settings.json.bak is never left unparseable", "ok or absent every time", `[${rows.map((r) => r.bak).join(" ")}]`, rows.every((r) => r.bak === "ok" || r.bak === "absent"));
   checks.add("state.db passes the SQLite integrity check after every kill", "ok every time", `[${rows.map((r) => r.db).join(" | ")}]`, rows.every((r) => r.db.startsWith("ok")));
