@@ -215,8 +215,8 @@ Rules: unread can be switched by hand, even on the active row; switching branch 
   reported by a session's hooks wins over status guessed from its title; the current workspace's row
   has a thin accent bar showing where the user is.
 Acceptance:
-  - [ ] An agent in a background workspace asks for permission → its row shows the permission state
-        ahead of other activity.
+  - [x] An agent in a background workspace asks for permission → its row shows the permission state
+        ahead of other activity. (cards; evidence/cards-PROJ-063.txt)
   - [ ] Switch branch in a workspace's terminal → the row shows the new branch.
 Compat: —
 Source: D-01-063

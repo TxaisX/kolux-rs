@@ -2,7 +2,7 @@
 //! Needs `git`, `projects` and `state` public in lib.rs.
 
 use kolux_rs_lib::git::Git;
-use kolux_rs_lib::projects::{add_project, create_workspace, load_projects, place_from, resolve_base, Place, Project};
+use kolux_rs_lib::projects::{add_project, create_workspace, list_workspaces, load_projects, place_from, resolve_base, Place, Project};
 use kolux_rs_lib::state::Store;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -346,4 +346,24 @@ fn proj077_box2_create_with_setup_skipped_tells_the_window_to_skip_while_run_and
         assert_eq!((told["kind"].as_str(), told["setup"].as_str()), (Some("created"), Some(want)));
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn proj063_box2_backend_half_a_branch_switched_inside_the_workspace_folder_lists_under_the_new_branch() {
+    let git = Git::detect().unwrap();
+    let profile = scratch("p63-profile");
+    let store = Store::open(&profile).unwrap();
+    let parent = scratch("p63-repos");
+    let root = scratch("p63-root");
+    let (_remote, _work, project) = cloned_project(&git, &store, &parent);
+    let made = create_workspace(&git, &nested_at(&root), &project, "feature", None).unwrap();
+    let folder = PathBuf::from(&made.worktree.path);
+    let branch_of = |path: &str| list_workspaces(&git, &store, &project).unwrap().into_iter().find(|w| same(&w.path, Path::new(path))).and_then(|w| w.branch);
+    assert!(branch_of(&made.worktree.path).is_some_and(|b| b.ends_with("feature")));
+    git_out(&folder, &["switch", "-c", "elsewhere"]);
+    assert_eq!(branch_of(&made.worktree.path).as_deref(), Some("elsewhere"), "the next listing reads the folder's branch afresh");
+    drop(store);
+    for d in [profile, parent, root] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }
