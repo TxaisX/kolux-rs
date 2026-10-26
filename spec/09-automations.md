@@ -34,9 +34,9 @@ Rules: numbering is per automation, starts at 1 and only goes up; skipped runs, 
   live terminal only while that terminal still belongs to the run, never a pane that now shows
   something else.
 Acceptance:
-  - [ ] Delete a run's worktree → View run shows the saved output with a note that it is a snapshot.
-  - [ ] A run fails → Rerun shows; delete the automation → Rerun is gone.
-  - [ ] Make history fail to load → an error with a recovery action, not an empty list.
+  - [x] Delete a run's worktree → View run shows the saved output with a note that it is a snapshot. (cards; evidence/cards-AUTO-013.txt)
+  - [x] A run fails → Rerun shows; delete the automation → Rerun is gone. (cards; evidence/cards-AUTO-013.txt)
+  - [x] Make history fail to load → an error with a recovery action, not an empty list. (cards; evidence/cards-AUTO-013.txt)
 Compat: —
 Source: D-09-013
 
@@ -52,11 +52,11 @@ Rules: a finish reported at a session boundary, an old idle state, or a ready pr
   reconnect, and any that cannot be found are closed after a short settling period; the same refusal
   repeated for the same due time collapses into one entry with a counter.
 Acceptance:
-  - [ ] Kill the agent before it starts working → the run reads failed, not completed.
-  - [ ] Restart Kolux while a run is still going → tracking continues and the run completes when the
-        agent finishes.
-  - [ ] An every-five-minutes automation whose project is gone for an hour → one collapsed skipped
-        entry, not twelve.
+  - [x] Kill the agent before it starts working → the run reads failed, not completed. (cards; evidence/cards-AUTO-012.txt)
+  - [x] Restart Kolux while a run is still going → tracking continues and the run completes when the
+        agent finishes. (cards; evidence/cards-AUTO-012.txt)
+  - [x] An every-five-minutes automation whose project is gone for an hour → one collapsed skipped
+        entry, not twelve. (cards; evidence/cards-AUTO-012.txt)
 Compat: carried-over run history must keep each run's status (the four progress states, the four
   skip causes, and failed to dispatch) and how it was started (timetable, by hand, or event).
 Source: D-09-012

@@ -310,3 +310,174 @@ fn auto005_box2_the_same_create_sent_twice_leaves_one_automation() {
     assert_eq!(first["id"], second["id"]);
     assert_eq!(count(&store), 1);
 }
+
+// ---------------------------------------------------------------- AUTO-012
+
+/// A store with one existing-workspace claude automation, a launcher that only records, and its run started by hand.
+fn started_run(tag: &str) -> (PathBuf, Mutex<Store>, PathBuf, Value) {
+    let dir = scratch(tag);
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+    seed_project(&store.lock().unwrap(), &ws);
+    let hourly = json!({ "preset": "hourly", "time": "00:00", "timezone": "UTC" });
+    let made = auto::save_automation(&store.lock().unwrap(), &form(&ws, "r1", hourly), FRI_NOON).unwrap();
+    let git = Git::detect().unwrap();
+    let notify = |_: &str, _: Value| {};
+    let yes = |_: &str| true;
+    let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+    let run = auto::run(&l, made["id"].as_str().unwrap(), "manual").unwrap();
+    (dir, store, ws, run)
+}
+
+fn run_row(store: &Mutex<Store>, run_id: &str) -> Value {
+    let all = auto::list(&store.lock().unwrap()).unwrap();
+    all["runs"].as_array().unwrap().iter().find(|r| r["id"] == run_id).cloned().unwrap()
+}
+
+#[test]
+fn auto012_box1_an_agent_killed_before_it_works_ends_failed_and_a_ready_prompt_never_completes_it() {
+    let (_dir, store, ws, run) = started_run("a012b1");
+    let id = run["id"].as_str().unwrap();
+    assert_eq!(run_row(&store, id)["status"], json!("dispatched"));
+    let s = store.lock().unwrap();
+    assert_eq!(auto::claim(&s, 7, Some(3), &ws.to_string_lossy(), Some("claude")).unwrap().as_deref(), Some(id));
+    // The agent's ready prompt already on screen at launch (an idle/done state, never seen working) is not a finish.
+    assert_eq!(auto::on_status(&s, Some(7), 3, "done", false, false, None, FRI_NOON as u64).unwrap(), None);
+    drop(s);
+    assert_eq!(run_row(&store, id)["status"], json!("dispatched"), "a ready prompt is not a completion");
+    // The agent is killed before it started working.
+    let closed = auto::pane_ended(&store.lock().unwrap(), 7, Some(137), FRI_NOON as u64 + 1_000).unwrap();
+    assert_eq!(closed.as_deref(), Some(id));
+    let row = run_row(&store, id);
+    assert_eq!(row["status"], json!("failed"));
+    assert_ne!(row["status"], json!("completed"));
+    assert_eq!(row["detail"], json!("The agent stopped before it began working (exit code 137)"));
+}
+
+#[test]
+fn auto012_box2_a_run_in_progress_survives_a_restart_and_completes_when_the_agent_finishes() {
+    let (_dir, store, ws, run) = started_run("a012b2");
+    let id = run["id"].as_str().unwrap();
+    let t0 = FRI_NOON as u64;
+    {
+        let s = store.lock().unwrap();
+        auto::claim(&s, 7, Some(3), &ws.to_string_lossy(), Some("claude")).unwrap();
+        assert_eq!(auto::on_status(&s, Some(7), 3, "working", false, false, None, t0).unwrap(), None);
+        // Kolux restarts: the run stays dispatched, waiting for its pane.
+        auto::tidy(&s, t0 + 5_000).unwrap();
+    }
+    let waiting = run_row(&store, id);
+    assert_eq!(waiting["status"], json!("dispatched"));
+    assert!(waiting["terminal"].is_null(), "the old process's terminal number is let go");
+    // The terminal service still holds its terminal: tracking continues through it.
+    let alive = |t: u32, p: Option<u32>| (t == 7 && p == Some(3)).then_some(auto::Held { alive: true, output: Some(("agent output so far".into(), false)) });
+    assert_eq!(auto::reconnect(&store.lock().unwrap(), &alive, t0 + 6_000).unwrap(), vec![id.to_string()]);
+    let back = run_row(&store, id);
+    assert_eq!((back["status"].as_str(), back["terminal"].as_u64()), (Some("dispatched"), Some(7)));
+    // Nothing closes it as lost, and the agent's genuine finish still completes it.
+    assert!(auto::settle(&store.lock().unwrap(), t0 + auto::SETTLE_MS + 10_000).unwrap().is_empty());
+    assert_eq!(auto::on_status(&store.lock().unwrap(), Some(7), 3, "done", false, false, None, t0 + 60_000).unwrap().as_deref(), Some(id));
+    let done = run_row(&store, id);
+    assert_eq!(done["status"], json!("completed"));
+    assert_eq!(done["finishedAt"], json!(t0 + 60_000));
+}
+
+#[test]
+fn auto012_box3_twelve_refusals_in_an_hour_for_a_gone_project_collapse_into_one_skipped_entry() {
+    let dir = scratch("a012b3");
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+    seed_project(&store.lock().unwrap(), &ws);
+    let every5 = json!({ "preset": "custom", "custom": "*/5 * * * *", "timezone": "UTC" });
+    let made = auto::save_automation(&store.lock().unwrap(), &form(&ws, "r1", every5), auto::now_ms() as i64).unwrap();
+    let id = made["id"].as_str().unwrap().to_string();
+    let first_due = made["nextRunAt"].as_i64().unwrap();
+    // The project is removed from Kolux.
+    store.lock().unwrap().set("projects", "[]").unwrap();
+
+    let git = Git::detect().unwrap();
+    let notify = |_: &str, _: Value| {};
+    let yes = |_: &str| true;
+    let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+    for k in 0..12 {
+        let out = auto::tick(&l, first_due + k * 300_000 + 1_000).unwrap();
+        assert_eq!(out.len(), 1, "due time {k} is looked at");
+    }
+    let all = auto::list(&store.lock().unwrap()).unwrap();
+    let mine: Vec<&Value> = all["runs"].as_array().unwrap().iter().filter(|r| r["automationId"] == id.as_str()).collect();
+    assert_eq!(mine.len(), 1, "one entry, not twelve: {mine:?}");
+    assert_eq!((mine[0]["status"].as_str(), mine[0]["cause"].as_str()), (Some("skipped"), Some("unavailable")));
+    assert_eq!(mine[0]["detail"], json!("its project is no longer in Kolux"));
+    assert_eq!(mine[0]["repeats"], json!(12));
+}
+
+// ---------------------------------------------------------------- AUTO-013
+
+#[test]
+fn auto013_box1_a_run_whose_worktree_was_deleted_still_lists_with_its_saved_output_and_a_gone_flag() {
+    let (_dir, store, ws, run) = started_run("a013b1");
+    let id = run["id"].as_str().unwrap();
+    let t0 = FRI_NOON as u64;
+    {
+        let s = store.lock().unwrap();
+        auto::claim(&s, 7, Some(3), &ws.to_string_lossy(), Some("claude")).unwrap();
+        auto::on_status(&s, Some(7), 3, "working", false, false, None, t0).unwrap();
+        auto::on_status(&s, Some(7), 3, "done", false, false, None, t0 + 1_000).unwrap();
+        assert_eq!(auto::keep_output(&s, id, "all 12 checks passed", false).unwrap().as_deref(), Some(id));
+    }
+    let live = run_row(&store, id);
+    assert_eq!(live["worktree"].as_str().map(|w| w.replace('\u{5c}', "/")), Some(ws.to_string_lossy().replace('\u{5c}', "/")));
+    assert!(live["worktreeGone"].is_null(), "the worktree is still there");
+    // The run's worktree is deleted: the row is still listed, flagged gone, and carries the output saved when it ended.
+    std::fs::remove_dir_all(&ws).unwrap();
+    let gone = run_row(&store, id);
+    assert_eq!(gone["worktreeGone"], json!(true));
+    assert_eq!(gone["output"], json!("all 12 checks passed"));
+    assert_eq!(gone["number"], json!(1));
+}
+
+#[test]
+fn auto013_box2_deleting_an_automation_takes_its_failed_run_with_it_and_leaves_other_histories() {
+    let (_dir, store, ws, run) = started_run("a013b2");
+    let id = run["id"].as_str().unwrap();
+    {
+        let s = store.lock().unwrap();
+        auto::claim(&s, 7, Some(3), &ws.to_string_lossy(), Some("claude")).unwrap();
+        auto::pane_ended(&s, 7, Some(1), FRI_NOON as u64).unwrap();
+    }
+    let failed = run_row(&store, id);
+    assert_eq!(failed["status"], json!("failed"));
+    let auto_id = failed["automationId"].as_str().unwrap().to_string();
+    // A second automation's history must stay.
+    let hourly = json!({ "preset": "hourly", "time": "00:00", "timezone": "UTC" });
+    let other = auto::save_automation(&store.lock().unwrap(), &form(&ws, "r2", hourly), FRI_NOON).unwrap();
+    let other_id = other["id"].as_str().unwrap().to_string();
+    let git = Git::detect().unwrap();
+    let notify = |_: &str, _: Value| {};
+    let yes = |_: &str| true;
+    let l = Launch { git: &git, store: &store, claude_config: PathBuf::new(), installed: &yes, notify: &notify };
+    let kept = auto::run(&l, &other_id, "manual").unwrap();
+
+    auto::delete(&store.lock().unwrap(), &auto_id).unwrap();
+    let all = auto::list(&store.lock().unwrap()).unwrap();
+    let runs = all["runs"].as_array().unwrap();
+    assert!(runs.iter().all(|r| r["automationId"] != auto_id.as_str()), "the failed run (and so its Rerun) is gone");
+    assert!(runs.iter().any(|r| r["id"] == kept["id"]), "another automation's run stays");
+    assert!(all["automations"].as_array().unwrap().iter().all(|a| a["id"] != auto_id.as_str()));
+}
+
+#[test]
+fn auto013_box3_unreadable_run_history_is_reported_as_an_error_not_as_an_empty_list() {
+    let (_dir, store, _ws, _run) = started_run("a013b3");
+    store.lock().unwrap().set(RUNS_KEY, "{ not a list").unwrap();
+    let all = auto::list(&store.lock().unwrap()).unwrap();
+    let err = all["runsError"].as_str().expect("an error is reported with the list");
+    assert!(err.starts_with("the saved runs could not be read"), "{err}");
+    assert_eq!(all["automations"].as_array().unwrap().len(), 1, "the automations themselves still list");
+    assert_eq!(all["runs"], json!([]));
+    // A healthy empty history carries no error: the page can tell the two apart.
+    store.lock().unwrap().set(RUNS_KEY, "[]").unwrap();
+    assert!(auto::list(&store.lock().unwrap()).unwrap()["runsError"].is_null());
+}
