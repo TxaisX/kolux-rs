@@ -1,0 +1,28 @@
+diff --git a/src-tauri/src/pty.rs b/src-tauri/src/pty.rs
+index 9b957430..400d0d31 100644
+--- a/src-tauri/src/pty.rs
++++ b/src-tauri/src/pty.rs
+@@ -468,8 +468,7 @@ impl PtySession {
+     }
+ 
+     /// A session over a fake writer, for tests of the write path with no PTY behind it.
+-    #[cfg(test)]
+-    pub(crate) fn fake(writer: Box<dyn Write + Send>) -> Self {
++    pub fn fake(writer: Box<dyn Write + Send>) -> Self {
+         #[derive(Debug)]
+         struct NoChild;
+         impl ChildKiller for NoChild {
+diff --git a/src-tauri/src/terminal.rs b/src-tauri/src/terminal.rs
+index 52c53715..1a708673 100644
+--- a/src-tauri/src/terminal.rs
++++ b/src-tauri/src/terminal.rs
+@@ -1425,8 +1425,7 @@ impl Terminals {
+ 
+     /// cli FIX-7: a session over a fake writer, for tests in other modules. `program` is the mark
+     /// Kolux recorded for it (none for a plain shell); it has been quiet for five seconds.
+-    #[cfg(test)]
+-    pub(crate) fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
++    pub fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
+         let long_ago = Instant::now() - Duration::from_secs(5);
+         let mut inner = self.inner.lock().unwrap();
+         inner.fresh_incarnation(id);
