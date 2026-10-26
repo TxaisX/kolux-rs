@@ -178,3 +178,21 @@ describe("a block quote with a blank > line opens in source view", () => {
     expect(unsupported("> q __one__\n> q _two_\n> wrap")).toBeNull();
   });
 });
+
+// Round 5 (LOW-2): the placement check covers the HTML-tag rule of `unsupported`, not only the line rules.
+describe("LOW-2: a placement never makes a span the rich view reads as HTML", () => {
+  it.each([
+    ["Intro </summary>\n\nfoo _w_ bar>\n", (p: string) => p.replace("</summary>", "</summary")],
+  ] as const)("%j", (body, ed) => {
+    expect(unsupported(body)).toBeNull();
+    const prev = roundTrip(body)!;
+    const out = ed(prev);
+    let refused = 0;
+    const next = apply(body, richChange(body, out, prev, () => refused++));
+    if (refused) expect(next).toBe(body);
+    else {
+      expect(roundTrip(next)).toBe(roundTrip(out));
+      if (unsupported(out) === null) expect(unsupported(next)).toBeNull();
+    }
+  });
+});

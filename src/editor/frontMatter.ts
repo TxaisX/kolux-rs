@@ -4,7 +4,7 @@
 // byte as it was. The text here is the buffer's (CodeMirror joins lines with \n; the file's own
 // line ends are put back when it is written).
 import { diff } from "@codemirror/merge";
-import { changeBetween, limitsOf, RICH_LIMIT, roundTrip, unsupported } from "./markdown";
+import { changeBetween, htmlTagsOf, limitsOf, RICH_LIMIT, roundTrip, unsupported } from "./markdown";
 
 /** The front matter block including its closing line and that line's end ("" when there is none),
  *  and the rest of the note. `front + body` is always the whole text. */
@@ -70,7 +70,17 @@ export const placeStats = { fast: 0, block: 0, refused: 0, whole: 0 };
  *  blocks of their own, so only the touched item is retyped and checked; the whole list or section is used when the
  *  edit adds or removes a fence or section line, or the item-level placement fails. */
 export function mapEdit(body: string, out: string, prev: string): string | null {
-  // Round 5 (HIGH-1): the view drops a loose list's blank lines, so it is placed as the tight list the view reads and the gaps go back.
+  const got = placeBody(body, out, prev);
+  const e = changeBetween(prev, out);
+  // Round 5 (LOW-2): a typed or removed < or > can open or close a tag blocks away, past what the placement reads, so the whole note is checked.
+  if (got === null || got === body || !e || !/[<>]/.test(prev.slice(e.from, e.to) + e.insert)) return got;
+  if (unsupported(body.endsWith("\n") ? out + "\n" : out) !== null || unsupported(got) === null) return got;
+  placeStats.refused++;
+  return null;
+}
+
+/** Round 5 (HIGH-1): the view drops a loose list's blank lines, so it is placed as the tight list the view reads and the gaps go back. */
+function placeBody(body: string, out: string, prev: string): string | null {
   if (prev === out) return body;
   const tight = collapseGaps(body);
   if (!tight) return mapTight(body, out, prev);
@@ -232,9 +242,10 @@ function placeIn(body: string, out: string, prev: string, e: Edit, bw: Span[], p
   // A loose list reads every item loose, so one item of context on each side is not the whole list's reading.
   if (fine && (looseList(body, bb, r.b) || looseList(prev, pb, r.p))) return null;
   const allowed = new Set([...limitsOf(outCtx), ...limitsOf(bodyCtx)]);
+  const tags = new Set([...htmlTagsOf(outCtx), ...htmlTagsOf(bodyCtx)]); // a new HTML-looking span is a limit like a line rule
   const reads = (cand: string) => {
     const ctx = cand.slice(w.b.s, w.b.e + cand.length - body.length);
-    return (!fine || shape(ctx) === shape(bodyCtx)) && limitsOf(ctx).every((x) => allowed.has(x)) && same(ctx, outCtx);
+    return (!fine || shape(ctx) === shape(bodyCtx)) && limitsOf(ctx).every((x) => allowed.has(x)) && htmlTagsOf(ctx).every((x) => tags.has(x)) && same(ctx, outCtx);
   };
   if (fast !== null) {
     const end = fast.length - (body.length - r.b.e);

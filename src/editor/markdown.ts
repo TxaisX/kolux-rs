@@ -85,6 +85,9 @@ const withoutCode = (md: string): string => withoutSections(md.replace(/^ {0,3}(
 
 const HTML_TAG = /<\/?[a-z][\w-]*(\s[^<>]*)?\/?>/gi;
 
+/** The HTML tags `md` shows as typed (code left out): the tag rule of `unsupported`, as the strings a placement must not add. */
+export const htmlTagsOf = (md: string): string[] => [...new Set(withoutCode(md).match(HTML_TAG) ?? [])];
+
 const words = (s: string) => (s.match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
 
 /** The markdown the rich view would write back for this text (null when Lexical fails on it). */
