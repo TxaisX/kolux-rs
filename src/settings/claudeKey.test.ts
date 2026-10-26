@@ -44,6 +44,7 @@ test("a key Claude refused before its date reads ran out with Renew and the key-
   const c = keyCard(refused);
   expect(c.state).toBe("expired");
   expect(c.headline).toBe("Connected · 1-year key ran out");
+  expect(c.detail).not.toContain(" in ");
   expect(c.actions).toEqual(["renew", "disconnect"]);
   expect(c.attention?.reason).toBe("key-expired");
 });
