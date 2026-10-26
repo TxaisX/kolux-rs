@@ -1066,3 +1066,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · worktrees T-110-b close · COMPAT 5.5 as given; this tree's own setup.rs and the lane's T-110-b code; no outside source
 > 2026-10-25 · fix-ui T-103-b, T-101-b · spec/05 VIEW-036 and spec/03 TERM-002, TERM-009 as given; this tree's own keys, launch and shell code; no outside source
 > 2026-10-25 · fix-other T-056-b · COMPAT 6.1 and SESS-027 as given; this tree's own agents.rs; no outside source
+> 2026-10-25 · fix-other T-324-b APP-014 · spec/19 APP-014 as given; public docs learn.microsoft.com/microsoft-edge/webview2/reference/win32/icorewebview2contextmenuitem (spell-check item name, label); this tree's own PaneMenu and keys code

@@ -1,0 +1,27 @@
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -45,6 +45,7 @@
+ mod install;
+ mod keybindings;
+ mod kits;
++mod edit_menu;
+ mod links;
+ mod lifecycle;
+ mod menu;
+@@ -316,6 +317,8 @@
+             if let Some(w) = app.get_webview_window("main") {
+                 browser::engine::watch_app_failures(&w, dir.clone());
+             }
++            // APP-014: spelling suggestions for the text-field menu (Windows).
++            edit_menu::install(app.handle());
+             if let Some(w) = app.get_webview_window("main") {
+                 std::thread::spawn(move || {
+                     std::thread::sleep(std::time::Duration::from_secs(5));
+@@ -505,6 +508,7 @@
+         })
+         .invoke_handler(tauri::generate_handler![
+             app_info,
++            edit_menu::edit_menu_suggestions_available,
+             get_settings,
+             settings_fallback_notice,
+             settings_patch,

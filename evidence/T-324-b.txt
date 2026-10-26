@@ -16,3 +16,24 @@ LIVE PROOF PENDING (batched):
    with the tray icon missing it is not.
 3. KOLUX_RENDERER_HEAP_MB=2048 launch -> the interface process's --max-old-space-size is 2048.
 4. Feedback box: add screenshots, Open on GitHub, paste in the issue page.
+
+APP-014 (right-click menu in text fields; fix-other pass 13)
+Built: src/editmenu/editMenuModel.ts (which rows a field gets; 12 tests), src/editmenu/EditMenuHost.tsx (one document-level
+contextmenu listener, the app's own .menu look, Escape / outside click dismiss, keeps the field's focus and selection),
+src-tauri/src/edit_menu.rs (Windows: WebView2 ContextMenuRequested; items named "spellCheck" are the suggestions; 3 tests).
+Rules kept: a right-click outside editable text gets no app menu (the page cancels the engine's own); plain inputs get
+suggestions + Cut/Copy/Paste/Select All; read-only boxes get Copy/Select All; password boxes get Paste/Select All; the terminal
+keeps its own pane menu; a handler that already took the click (explorer rows, table actions in the rich-text editor) wins.
+Per platform: Windows = suggestions (up to 5) at the top + edit rows. macOS / Linux = edit rows only: the web view there
+gives the page no way to ask for spelling suggestions (no spellchecker built, by design).
+Source: learn.microsoft.com ICoreWebView2ContextMenuItem (Name "spellCheck" for suggestions; Label has the accelerator ampersand).
+Not built: "Add to dictionary"; table rows inside the menu of the editor's own table menu (that menu stays as it was).
+Paste is only greyed when the clipboard is known empty; the host does not probe the clipboard (a read would raise a permission prompt).
+Patches (apply after the six pending ones, in this order): evidence/fix-other-fix-T-324-b-APP-014-lib.rs.patch (mod line,
+command registration, edit_menu::install in setup), evidence/fix-other-fix-T-324-b-APP-014-App.tsx.patch (import + <EditMenuHost />).
+Readings (logs G:/Temp/fix-other-v3-logs/p13-*.log): see the ledger PASS 12 line.
+
+LIVE PROOF PENDING (batched):
+5. Type "helo" in a text box (e.g. the pane title box), right-click the word -> suggestions listed first, then Cut/Copy/Paste/Select All;
+   pick "hello" -> the word is replaced. (If the word is not selected by the right-click, the pick inserts at the caret: report it.)
+6. Right-click plain text outside any box (a settings label) -> no menu at all. Right-click in a terminal pane -> the pane menu as before.
