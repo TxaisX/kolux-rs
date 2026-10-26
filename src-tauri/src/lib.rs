@@ -4,7 +4,7 @@ mod repo_scan;
 mod activity;
 pub mod agents;
 mod app_look;
-mod artifacts;
+pub mod artifacts;
 mod automations;
 mod badge;
 mod awake;
