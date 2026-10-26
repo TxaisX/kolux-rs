@@ -202,8 +202,8 @@ Rules: profiles that existed before the redesign stay on Classic until the user 
   Terminals, and Mod+Alt+V steps through them; in the rebuild these choices live in General instead of
   the old Views & sessions page.
 Acceptance:
-  - [ ] Existing profile → Classic; choose New → the top bar with Agents, Board and Terminals appears.
-  - [ ] Set Board as the first screen, restart with New → Board shows first.
+  - [x] Existing profile → Classic; choose New → the top bar with Agents, Board and Terminals appears. (cards; evidence/cards-SET-037.txt)
+  - [x] Set Board as the first screen, restart with New → Board shows first. (cards; evidence/cards-SET-037.txt)
 Compat: the command that steps through workspace screens keeps its old keybinding command id (written
   with a capital letter, so it is held back pending the allowlist) and Mod+Alt+V.
 Source: D-17-037
@@ -217,9 +217,9 @@ Rules: a tier left empty means the provider's default; effort choices depend on 
   model keeps the effort if it is still offered and resets it otherwise; only providers that can route
   by tier are listed.
 Acceptance:
-  - [ ] Give the fast tier a small model and run an orchestrated task on that tier → the worker's header
-        names the small model.
-  - [ ] Pick a model that has no effort levels → the effort picker disappears.
+  - [x] Give the fast tier a small model and run an orchestrated task on that tier → the worker's header
+        names the small model. (cards; evidence/cards-SET-028.txt)
+  - [x] Pick a model that has no effort levels → the effort picker disappears. (cards; evidence/cards-SET-028.txt)
 Compat: —
 Source: D-17-028
 
@@ -233,8 +233,8 @@ Rules: search looks at command titles, group names, extra keywords, command ids,
   row says whether the command still works while a terminal has focus or is held back by the terminal
   policy (SET-014); commands behind a feature flag that is off are left out.
 Acceptance:
-  - [ ] Pick the Unassigned filter → only commands without a chord are listed.
-  - [ ] Search Mod+K (or the way it is drawn on screen) → the clear-terminal command shows.
+  - [x] Pick the Unassigned filter → only commands without a chord are listed. (cards; evidence/cards-SET-008.txt)
+  - [x] Search Mod+K (or the way it is drawn on screen) → the clear-terminal command shows. (cards; evidence/cards-SET-008.txt)
 Compat: —
 Source: D-17-008
 
@@ -254,10 +254,10 @@ Rules: Esc ends recording and changes nothing; one command may hold several chor
   the terminal command that changes the system input source; every change is saved to the keybindings
   file at once, sent to every window, and used to rebuild the app menu.
 Acceptance:
-  - [ ] Record Mod+Shift+K on a command → the row shows it with a Modified badge, and the file holds
-        the entry.
-  - [ ] Press Esc while recording → the previous chord stays.
-  - [ ] Press reset → the default chord returns and the Modified badge goes away.
+  - [x] Record Mod+Shift+K on a command → the row shows it with a Modified badge, and the file holds
+        the entry. (cards; evidence/cards-SET-009.txt)
+  - [x] Press Esc while recording → the previous chord stays. (cards; evidence/cards-SET-009.txt)
+  - [x] Press reset → the default chord returns and the Modified badge goes away. (cards; evidence/cards-SET-009.txt)
 Compat: —
 Source: D-17-009
 
@@ -301,9 +301,9 @@ Rules: the file's shape is given under Compat; entries in the section for the ru
 Acceptance:
   - [ ] Put terminal.clear with the value null in the keybindings map and reload → the clear-terminal
         command shows Unassigned.
-  - [ ] Break the file's syntax and reload → an error diagnostic, the default chords work, and the
-        broken file itself stays untouched.
-  - [ ] Add a win32 section overriding a shared entry → on Windows the section's value applies.
+  - [x] Break the file's syntax and reload → an error diagnostic, the default chords work, and the
+        broken file itself stays untouched. (cards; evidence/cards-SET-011.txt)
+  - [x] Add a win32 section overriding a shared entry → on Windows the section's value applies. (cards; evidence/cards-SET-011.txt)
 Compat: `~/.kolux/keybindings.json` keeps its shape: an optional schema reference, a version number
   of 1, a keybindings map from command id to a chord string, a list of chord strings, or null or false,
   and an optional platforms object holding darwin, linux and win32 maps of the same kind. Import keeps
@@ -322,9 +322,9 @@ Rules: there are 129 commands, 78 with a chord and 51 without, among them one ne
   Session have no chord, and Ctrl+Shift+N stays with Create worktree; command ids face the user because they key the keybindings
   file, so the rebuild keeps them.
 Acceptance:
-  - [ ] Fresh profile on Windows → Alt+1 selects tab 1, Ctrl+Shift+J opens the palette, Mod+Shift+D
-        splits right.
-  - [ ] Fresh profile → the Unassigned filter lists the board, dashboard, tasks, inbox and floor views.
+  - [x] Fresh profile on Windows → Alt+1 selects tab 1, Ctrl+Shift+J opens the palette, Mod+Shift+D
+        splits right. (cards; evidence/cards-SET-013.txt)
+  - [x] Fresh profile → the Unassigned filter lists the board, dashboard, tasks, inbox and floor views. (cards; evidence/cards-SET-013.txt)
 Compat: default chords, macOS first and then Windows and Linux where they differ: quick open Mod+P;
   app.settings Mod+Comma; force reload Mod+Shift+R; worktree.palette Mod+J | Mod+Shift+J;
   workspace.create Mod+N | Mod+Shift+N; workspace.delete Mod+Shift+Backspace; select workspace by
