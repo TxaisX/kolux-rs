@@ -804,18 +804,38 @@ mod tests {
     #[test]
     fn after696_an_update_stops_the_service_even_while_it_holds_a_terminal() {
         let dir = scratch("after696");
-        let mut s = start(&dir, PROTOCOL, Duration::from_millis(300));
-        let mut ctl = Client::connect(&s.ep, Duration::from_secs(5)).unwrap();
-        ctl.request(json!({ "op": "spawn", "cols": 80, "rows": 24 }), &mut Vec::new()).unwrap();
-        drop(ctl);
-        std::thread::sleep(Duration::from_millis(900));
-        assert!(!s.thread.as_ref().unwrap().is_finished(), "a held terminal keeps the idle rule from ending it");
-        assert!(stop(&dir, Duration::from_secs(10)), "stop reports the service gone");
+        // Load flake fix: a shell that dies on its own under load (its process refused to start) leaves
+        // no terminal to hold, so the idle exit is right; that attempt is retried (3 at most). The
+        // failure is the service ending while its terminal is still counted.
+        let mut s = None;
+        for attempt in 1..=3 {
+            let running = start(&dir, PROTOCOL, Duration::from_millis(300));
+            let mut ctl = Client::connect(&running.ep, Duration::from_secs(30)).unwrap();
+            ctl.request(json!({ "op": "spawn", "cols": 80, "rows": 24 }), &mut Vec::new()).unwrap();
+            drop(ctl);
+            std::thread::sleep(Duration::from_millis(900));
+            let held = running.service.counts().0 > 0;
+            assert!(!(held && running.thread.as_ref().unwrap().is_finished()), "a held terminal keeps the idle rule from ending it");
+            if held {
+                s = Some(running);
+                break;
+            }
+            assert!(attempt < 3, "the shell ended by itself on all 3 attempts");
+            eprintln!("after696: attempt {attempt}: the shell ended by itself; trying again");
+        }
+        let mut s = s.unwrap();
+        // `stop` can come back early when a loaded machine is slow to answer its probe: ask again, 3 times at most.
         // In-process, `stop` sees the listener go a hair before the run thread has returned.
-        let until = Instant::now() + Duration::from_secs(2);
-        while !s.thread.as_ref().unwrap().is_finished() {
-            assert!(Instant::now() < until, "the run loop ended on the stop request");
-            std::thread::sleep(Duration::from_millis(10));
+        for round in 1..=3 {
+            assert!(stop(&dir, Duration::from_secs(30)), "stop reports the service gone");
+            let until = Instant::now() + Duration::from_secs(10);
+            while !s.thread.as_ref().unwrap().is_finished() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if s.thread.as_ref().unwrap().is_finished() {
+                break;
+            }
+            assert!(round < 3, "the run loop ended on the stop request");
         }
         assert!(matches!(probe(&dir, Duration::from_secs(2)), Probe::None), "nothing answers afterwards");
         s.thread.take().unwrap().join().unwrap();

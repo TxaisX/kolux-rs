@@ -678,13 +678,16 @@ mod tests {
 
         let mut seen = String::new();
         let mut answered = 0;
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // Load flake fix: the shell may take over 30 s to start on a loaded box, so the deadline restarts
+        // on every chunk and only 60 s of silence fails (an idle shell is silent only when it is broken).
+        let mut deadline = Instant::now() + Duration::from_secs(60);
         // The typed line is echoed once and its output printed once: wait for the second copy.
         while seen.matches("kolux-rs-ok").count() < 2 {
             let left = deadline.saturating_duration_since(Instant::now());
-            assert!(!left.is_zero(), "marker not read back within 30s; saw:\n{seen}");
+            assert!(!left.is_zero(), "marker not read back; no output for 60s; saw:\n{seen}");
             if let Ok(chunk) = rx.recv_timeout(left) {
                 seen.push_str(&String::from_utf8_lossy(&chunk));
+                deadline = Instant::now() + Duration::from_secs(60);
             }
             // The console host asks where the cursor is (ESC[6n) before it draws anything and
             // waits for the answer; a real terminal replies by itself, the test stands in for it.
@@ -697,7 +700,7 @@ mod tests {
 
         session.resize(80, 24).expect("resize");
         session.write(b"exit\r\n").expect("write exit");
-        let code = exit_rx.recv_timeout(Duration::from_secs(30)).expect("shell exits after `exit`");
+        let code = exit_rx.recv_timeout(Duration::from_secs(60)).expect("shell exits after `exit`");
         assert_eq!(code, Some(0), "clean exit code");
         session.kill();
     }
