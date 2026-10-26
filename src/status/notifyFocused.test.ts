@@ -32,6 +32,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 const { useAgentEvents } = await import("./useAgentStatus");
+const { resetPacer } = await import("../settings/notifications");
 
 const none = () => {};
 const pane = (key: number) => ({ key, cwd: null, branch: null, agent: "claude", program: null, args: [] });
@@ -51,6 +52,7 @@ beforeEach(() => {
   refs.length = 0;
   effs.length = 0;
   sent.length = 0;
+  resetPacer(); // the window-wide pacer merges repeats in one folder for 5 s
 });
 
 test("the quiet-while-focused switch is on by default: a focused window raises no desktop note (STAT-042)", async () => {
