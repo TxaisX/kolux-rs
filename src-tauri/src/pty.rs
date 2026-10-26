@@ -468,8 +468,8 @@ impl PtySession {
     }
 
     /// A session over a fake writer, for tests of the write path with no PTY behind it.
-    #[cfg(test)]
-    pub(crate) fn fake(writer: Box<dyn Write + Send>) -> Self {
+    #[cfg(any(test, feature = "test-fakes"))]
+    pub fn fake(writer: Box<dyn Write + Send>) -> Self {
         #[derive(Debug)]
         struct NoChild;
         impl ChildKiller for NoChild {
