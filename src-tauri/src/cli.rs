@@ -3622,7 +3622,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             if let Some(key) = retry {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                let mut receipts = so::Receipts::load(&store);
+                let mut receipts = so::Receipts::try_load(&store).map_err(|e| Fail::new("failed", e))?;
                 receipts.record(&key, now_ms(), out.clone());
                 receipts.save(&store).map_err(|e| Fail::new("failed", e))?;
             }
