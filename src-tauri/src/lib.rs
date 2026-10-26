@@ -2,7 +2,7 @@ mod folder_projects;
 mod floating_trust;
 mod repo_scan;
 mod activity;
-mod agents;
+pub mod agents;
 mod app_look;
 mod artifacts;
 mod automations;
