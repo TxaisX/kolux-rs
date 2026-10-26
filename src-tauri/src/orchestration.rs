@@ -951,10 +951,17 @@ impl Mail {
         })
     }
 
-    pub fn save(&self, store: &crate::state::Store) -> Result<(), Fail> {
+    /// Refuses while the stored mail is unread (row 193); callers that change other state first ask this
+    /// before changing anything, so a refused save never leaves half a change behind.
+    pub fn ensure_readable(&self) -> Result<(), Fail> {
         if self.unread {
             return Err(Fail::new("failed", format!("the orchestration mail ({KEY}) could not be read, so nothing was saved over it; try again")));
         }
+        Ok(())
+    }
+
+    pub fn save(&self, store: &crate::state::Store) -> Result<(), Fail> {
+        self.ensure_readable()?;
         let text = serde_json::to_string(self).map_err(|e| Fail::new("failed", e.to_string()))?;
         store.set(KEY, &text).map_err(|e| Fail::new("failed", e.to_string()))
     }
@@ -1483,7 +1490,7 @@ impl Mail {
         match scope {
             "tasks" => self.gates.clear(),
             "messages" => self.messages.clear(),
-            "all" => *self = Mail { seq: self.seq, ..Mail::default() },
+            "all" => *self = Mail { seq: self.seq, unread: self.unread, ..Mail::default() },
             _ => return Err(args("give exactly one of --all, --tasks or --messages")),
         }
         Ok(())
