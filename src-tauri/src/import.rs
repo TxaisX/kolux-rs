@@ -508,6 +508,22 @@ pub fn drop_retired(settings: &mut Value) -> usize {
     before - map.len()
 }
 
+/// APP-061 (T-199): the old-profile check of the packaged-build smoke test. Runs the carry-over into
+/// a throwaway `profile` (its former-name folder beside it) and says what was added. Refuses the
+/// installed app's own profile folder, so the check can never touch real data.
+pub fn migrate_check(profile: &Path) -> Result<Value, String> {
+    let production = profile.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(crate::hooks::agent_hooks::PRODUCTION_ID));
+    if production {
+        return Err("refused: this is the installed app's own profile; point KOLUX_USER_DATA_PATH at a throwaway folder".into());
+    }
+    profile.parent().and_then(former_profile).filter(|f| !same_folder(f, profile)).ok_or("no former-name folder beside the profile")?;
+    fs::create_dir_all(profile).map_err(|e| e.to_string())?;
+    let store = Mutex::new(Store::open(profile).map_err(|e| e.to_string())?);
+    let p = carry_over(profile, &store).ok_or("the carry-over did not run (done before, locked, or its settings could not be read)")?;
+    let added: Vec<&String> = p.add.iter().map(|(n, _)| n).collect();
+    Ok(serde_json::json!({ "profile": profile, "added": added, "renamed": p.renamed, "kept": p.kept, "skipped": p.skipped.total(), "summary": p.summary() }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,5 +898,27 @@ mod tests {
         assert_eq!(after["theme"], json!("light"));
         assert!(after.as_object().unwrap().keys().all(|k| !is_retired(k)), "{after}");
         drop(store);
+    }
+
+    #[test]
+    fn t199_app061_migrate_check_carries_into_a_throwaway_profile_and_only_once() {
+        let root = crate::test_dir::temp("imp-t199");
+        let profile = root.join("kolux.smoke");
+        seed_former(&root, "Nightshift", json!({"uiLook": "new", "nightshiftLanguage": "fr", "someUnknownThing": 1}));
+        let out = migrate_check(&profile).expect("carried");
+        assert_eq!(out["added"], json!(["uiLook", "language"]));
+        assert_eq!((out["renamed"].clone(), out["skipped"].clone()), (json!(1), json!(1)));
+        assert_eq!(settings(&open(&profile)), json!({"uiLook": "new", "language": "fr"}));
+        assert!(migrate_check(&profile).unwrap_err().contains("did not run"));
+    }
+
+    #[test]
+    fn t199_app061_migrate_check_refuses_the_installed_profile_and_a_missing_former_folder() {
+        let (root, installed) = profile("imp-t199-refuse");
+        seed_former(&root, "Nightshift", json!({"uiLook": "new"}));
+        assert!(migrate_check(&installed).unwrap_err().starts_with("refused"));
+        assert!(!installed.join("state.db").exists());
+        let bare = crate::test_dir::temp("imp-t199-bare");
+        assert!(migrate_check(&bare.join("kolux.smoke")).unwrap_err().contains("no former-name folder"));
     }
 }

@@ -67,6 +67,20 @@ export function smokeCli(cli, version) {
   if (!help.includes("--version") || !help.includes("worktree")) throw new Error("smoke test: kolux --help did not print the command list");
 }
 
+/** APP-061: the packaged CLI carries an old-name profile into a throwaway one. `cli(words, env)` runs it;
+ *  `root` is an empty scratch folder that gets a Nightshift folder and the throwaway profile beside it.
+ *  Carried: a listed setting, and one under its old name; refused: a secret-like one. */
+export function smokeMigration(cli, root) {
+  const old = path.join(root, "Nightshift");
+  fs.mkdirSync(old, { recursive: true });
+  fs.writeFileSync(path.join(old, "settings.json"), JSON.stringify({ uiLook: "new", nightshiftLanguage: "fr", nightshiftGithubToken: "smoke-secret" }));
+  const profile = path.join(root, "kolux.smoke");
+  const said = JSON.parse(cli(["profile", "migrate", "--json"], { KOLUX_USER_DATA_PATH: profile }));
+  const added = (said.result ?? said).added ?? [];
+  if (!added.includes("uiLook") || !added.includes("language")) throw new Error(`smoke test: the old-profile migration carried ${JSON.stringify(added)}, not uiLook and language`);
+  if (added.length !== 2) throw new Error(`smoke test: the old-profile migration carried more than the allow-list: ${JSON.stringify(added)}`);
+}
+
 export const installerName = (version) => `Kolux RS_${version}_x64-setup.exe`;
 export const downloadUrl = (version) => `https://github.com/${FEED_REPO}/releases/download/v${version}/${encodeURIComponent(installerName(version))}`;
 export const isGitHub = (repo) => /^(https:\/\/github\.com\/|git@github\.com:)/.test(repo ?? "");
@@ -218,7 +232,10 @@ export function buildOnce(o, env = process.env) {
   if (!fs.existsSync(exe) || fs.statSync(exe).size < 1 << 20) throw new Error(`smoke test: no installer at ${exe}`);
   const signature = fs.existsSync(exe + ".sig") ? fs.readFileSync(exe + ".sig", "utf8").trim() : "";
   if (!signature) throw new Error(`smoke test: the installer has no signature (${exe}.sig)`);
-  smokeCli((words) => sh(path.join(target, "kolux.exe"), words), version);
+  const kolux = (words, env) => sh(path.join(target, "kolux.exe"), words, env ? { env: { ...process.env, ...env } } : {});
+  smokeCli(kolux, version);
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kolux-migrate-smoke-"));
+  try { smokeMigration(kolux, scratch); } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
   const appVersion = JSON.parse(fs.readFileSync(path.join(dir, "src-tauri", "tauri.conf.json"), "utf8")).version;
   if (appVersion !== version) throw new Error(`smoke test: the app says ${appVersion}, the release is ${version}`);
   const out = path.join(dir + "-out", `v${version}`);
@@ -228,7 +245,7 @@ export function buildOnce(o, env = process.env) {
   const m = manifest(version, notes, signature, downloadUrl(version));
   fs.writeFileSync(path.join(out, "latest.json"), JSON.stringify(m, null, 2));
   fs.writeFileSync(path.join(out, "notes.md"), notes);
-  say(`smoke test passed: installer, signature, kolux --version and --help, and the manifest all say ${version}`);
+  say(`smoke test passed: installer, signature, kolux --version, --help and the old-profile migration, and the manifest all say ${version}`);
   if (o.noPublish) {
     say(`built ${version}, not published; the files are in ${out}`);
     return { version, sha, notes, out, published: false };
