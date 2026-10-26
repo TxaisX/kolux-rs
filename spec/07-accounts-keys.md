@@ -44,11 +44,11 @@ Rules: Kolux runs Claude Code's own long-lived-token setup out of sight, picks t
   connection it wins over any managed-account choice for new Claude panes; only one key setup can be
   in progress; a second request during one is turned down.
 Acceptance:
-  - [ ] On a fresh profile, connect Claude and approve in the browser → the card shows connected
-        with a renewal month roughly a year ahead.
-  - [ ] Backdate the stored key's creation to 340 days ago → the card shows the expiry warning and
-        Renew.
-  - [ ] Open a new Claude pane in key mode → it starts already signed in, with no browser prompt.
+  - [x] On a fresh profile, connect Claude and approve in the browser → the card shows connected
+        with a renewal month roughly a year ahead. (cards; evidence/cards-ACCT-004.txt)
+  - [x] Backdate the stored key's creation to 340 days ago → the card shows the expiry warning and
+        Renew. (cards; evidence/cards-ACCT-004.txt)
+  - [x] Open a new Claude pane in key mode → it starts already signed in, with no browser prompt. (cards; evidence/cards-ACCT-004.txt)
 Compat: Claude Code takes the key from its own published OAuth-token environment variable; the
   creation date and the connection mode carry over from an older profile, the key itself needs
   re-entry (COMPAT.md 5.4).
@@ -77,11 +77,11 @@ Rules: every account gets a private Claude configuration folder of its own, Kolu
   PLAN.md. Until then this build keeps the credentials file in the account's folder on every
   platform.)
 Acceptance:
-  - [ ] Add a Claude account → the browser opens, and after sign-in the row shows email and
-        organisation within a few seconds.
-  - [ ] Cancel partway through sign-in → no row is added and the active account stays the same.
-  - [ ] Make a re-authentication fail → the row keeps its earlier credentials and is not shown as
-        signed out.
+  - [x] Add a Claude account → the browser opens, and after sign-in the row shows email and
+        organisation within a few seconds. (cards; evidence/cards-ACCT-005.txt)
+  - [x] Cancel partway through sign-in → no row is added and the active account stays the same. (cards; evidence/cards-ACCT-005.txt)
+  - [x] Make a re-authentication fail → the row keeps its earlier credentials and is not shown as
+        signed out. (cards; evidence/cards-ACCT-005.txt)
 Compat: Managed Claude accounts (email, organisation, where each runs, last sign-in time) and the
   choice of active account carry over from an older profile.
 Source: D-07-005
@@ -128,10 +128,10 @@ Rules: the device-code route lets the browser part happen on a different machine
   ChatGPT sign-in, as an API key with a custom provider, or as signed out; the device-code view
   keeps waiting until it has both the link and the code.
 Acceptance:
-  - [ ] Connect Codex with a code → the card shows a code; entering it on another device turns the
-        card connected.
-  - [ ] Add a second Codex account → every file in the user's usual Codex folder is byte-for-byte
-        unchanged.
+  - [x] Connect Codex with a code → the card shows a code; entering it on another device turns the
+        card connected. (cards; evidence/cards-ACCT-007.txt)
+  - [x] Add a second Codex account → every file in the user's usual Codex folder is byte-for-byte
+        unchanged. (cards; evidence/cards-ACCT-007.txt)
 Compat: —
 Source: D-07-007
 
@@ -146,9 +146,9 @@ Rules: it appears only for an active managed Claude account whose sign-in is sta
   Claude Code is left to handle its own sign-in (ACCT-006); it stays hidden until settings have
   loaded, so it never flickers at startup.
 Acceptance:
-  - [ ] Mark the active managed Claude account stale → the notice shows its label; Sign in again
-        starts re-authentication.
-  - [ ] Turn on the setting that lets Claude Code handle its own sign-in → the notice goes away.
+  - [x] Mark the active managed Claude account stale → the notice shows its label; Sign in again
+        starts re-authentication. (cards; evidence/cards-ACCT-012.txt)
+  - [x] Turn on the setting that lets Claude Code handle its own sign-in → the notice goes away. (cards; evidence/cards-ACCT-012.txt)
 Compat: —
 Source: D-07-012
 
@@ -167,7 +167,7 @@ Rules: possible reasons: browser blocked, sign-in refused, plan does not cover t
   reasons and other agents leave the card as it is.
 Acceptance:
   - [ ] Let the Claude key run out → the card shows key expired with Renew.
-  - [ ] Reach a Claude usage limit → the card shows the reset time and no fix button.
+  - [x] Reach a Claude usage limit → the card shows the reset time and no fix button. (cards; evidence/cards-ACCT-013.txt)
 Compat: —
 Source: D-07-013
 
