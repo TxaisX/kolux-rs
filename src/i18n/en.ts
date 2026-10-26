@@ -22,6 +22,7 @@ export const EN = {
   "inbox.bell.needs.many": "Inbox, {count} need you",
   "connect.claude": "Connect opens Claude's sign-in page in your browser once and keeps a key that lasts a year.",
   "connect.codex": "Connect adds a ChatGPT account in a Codex home of Kolux's own; your Codex folder stays as it is.",
+  "onboarding.connect.wait": "Connect an AI above to continue, or choose “I’ll do this later”.",
 } as const;
 
 export type TextKey = keyof typeof EN;

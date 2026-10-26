@@ -1246,6 +1246,7 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .onb-body { flex: 1; min-height: 0; overflow: auto; }
 .onb-foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-subtle); }
 .onb-gap { flex: 1; }
+.onb-why { min-width: 0; font-size: 12px; color: var(--fg-muted); text-align: right; }
 .onb-chord { margin-left: 8px; padding: 1px 5px; font-size: 10px; border: 1px solid currentColor; border-radius: 4px; opacity: 0.7; }
 .onb-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .onb-tile { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; padding: 14px; background: var(--chip-bg); border: 1px solid var(--line-subtle); border-radius: 8px; }

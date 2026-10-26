@@ -24,6 +24,7 @@ const pack = {
   "inbox.bell.needs.many": "收件箱，{count} 项需要你处理",
   "connect.claude": "点击“连接”会在浏览器中打开一次 Claude 的登录页面，并保存一个有效期为一年的密钥。",
   "connect.codex": "点击“连接”会在 Kolux 专属的 Codex 目录中添加一个 ChatGPT 账户；你的 Codex 文件夹保持不变。",
+  "onboarding.connect.wait": "请先在上方连接一个 AI 才能继续，或用左侧的按钮稍后再设置。",
 } satisfies Record<TextKey, string>;
 
 export default pack;
