@@ -48,8 +48,8 @@ User sees: one list with sections for open tabs, worktrees, projects and project
 Rules: the View menu shows the chord as a label only; the window itself handles the key press;
   archived worktrees are left out; a pasted query over the size limit is refused.
 Acceptance:
-  - [ ] Type part of a branch name → that worktree is in the list; Enter switches to it.
-  - [ ] Type a settings page name → a row that opens that page.
+  - [x] Type part of a branch name → that worktree is in the list; Enter switches to it. (cards; evidence/cards-VIEW-037.txt)
+  - [x] Type a settings page name → a row that opens that page. (cards; evidence/cards-VIEW-037.txt)
 Compat: keybinding id worktree.palette
 Source: D-05-037
 
@@ -83,7 +83,7 @@ Rules: a stale working reading is never shown as working; an unreachable host sh
 Acceptance:
   - [ ] Kill the agent's process without a done signal → label leaves working within the staleness
         window.
-  - [ ] A preset that was never launched → its label reads not started.
+  - [x] A preset that was never launched → its label reads not started. (cards; evidence/cards-VIEW-017.txt)
 Compat: —
 Source: D-05-017
 
@@ -99,9 +99,9 @@ Rules: a stale working signal never shows Working; a plain shell terminal gets n
   newest one wins and the link carries its full path; a working card shows how long it has been
   working and its current step in plain words.
 Acceptance:
-  - [ ] Agent stopped by usage limit → card in a stopped state, chip says Stopped.
-  - [ ] Agent finished → chip shows first line of its last message.
-  - [ ] Agent writes file A, then file B, then finishes → the card links to file B.
+  - [x] Agent stopped by usage limit → card in a stopped state, chip says Stopped. (cards; evidence/cards-VIEW-023.txt)
+  - [x] Agent finished → chip shows first line of its last message. (cards; evidence/cards-VIEW-023.txt)
+  - [x] Agent writes file A, then file B, then finishes → the card links to file B. (cards; evidence/cards-VIEW-023.txt)
 Compat: —
   (Kolux RS, T-028-a: built; Setup needed and Can't reach wait for the chooser and remote work;
   the file link is the file's name with the full path as tooltip until an editor exists.)
@@ -130,8 +130,8 @@ Rules: permission beats unread, unread beats freshly done; ages switch from hour
   days; no status work happens while the palette is closed; ages read in minutes until a full hour
   has passed.
 Acceptance:
-  - [ ] Agent waiting on approval with unread output → row shows the permission mark.
-  - [ ] Agent finished 50 minutes ago → age reads 50m; one finished three days ago → 3d.
+  - [x] Agent waiting on approval with unread output → row shows the permission mark. (cards; evidence/cards-VIEW-040.txt)
+  - [x] Agent finished 50 minutes ago → age reads 50m; one finished three days ago → 3d. (cards; evidence/cards-VIEW-040.txt)
 Compat: —
   (Kolux RS, T-029 deferred: waits for the palette, T-098.)
 Source: D-05-040
@@ -142,8 +142,8 @@ User does: presses Mod+Shift+J (Mac) or Mod+J (Windows, Linux).
 User sees: focus moves to the next pane waiting on the user.
 Rules: its default chord is the palette's chord swapped per platform.
 Acceptance:
-  - [ ] Two panes waiting → pressing twice visits both.
-  - [ ] No pane is waiting → focus stays where it is.
+  - [x] Two panes waiting → pressing twice visits both. (cards; evidence/cards-VIEW-047.txt)
+  - [x] No pane is waiting → focus stays where it is. (cards; evidence/cards-VIEW-047.txt)
 Compat: a keybinding command; its exact command id is held back pending the allowlist (area 04
   carries the same command).
 Source: D-05-047
@@ -176,8 +176,8 @@ Rules: follows the user's used-or-remaining display preference; never prints a n
   (Kolux RS, T-040-b: the line is the Agents rail's footer, "Claude 38% used · resets today 15:00",
   in the reset words the Codex pill uses; a broken provider value reads 0.)
 Acceptance:
-  - [ ] Claude at 37.6 % used, preference used → shows 38 % and a local reset time.
-  - [ ] Provider with no 5-hour window → the usage line stays empty.
+  - [x] Claude at 37.6 % used, preference used → shows 38 % and a local reset time. (cards; evidence/cards-VIEW-018.txt)
+  - [x] Provider with no 5-hour window → the usage line stays empty. (cards; evidence/cards-VIEW-018.txt)
 Compat: —
 Source: D-05-018
 
@@ -211,8 +211,8 @@ Rules: the order follows the left-to-right order of the labels in the top-bar sw
 Acceptance:
   - [ ] New look, on Agents, press the chord three times → Board, Terminals, Agents.
   - [ ] Classic look, press the chord → nothing changes.
-  - [ ] Switch to Board with the mouse, open the menu → Board is checked.
-  - [ ] Turn the new look off → the submenu is gone.
+  - [x] Switch to Board with the mouse, open the menu → Board is checked. (cards; evidence/cards-VIEW-002.txt)
+  - [x] Turn the new look off → the submenu is gone. (cards; evidence/cards-VIEW-002.txt)
 Compat: the cycle command is a keybinding command with default Mod+Alt+V; its exact command id is
   held back pending the allowlist.
 Source: D-05-002
@@ -227,7 +227,7 @@ Rules: classic chrome keeps a sidebar-width title header and no top bar; the top
   the native window controls on Windows.
 Acceptance:
   - [ ] Click the search hint → the worktree palette opens with focus in its input.
-  - [ ] Click the bell → the Inbox page opens.
+  - [x] Click the bell → the Inbox page opens. (cards; evidence/cards-VIEW-003.txt)
 Compat: —
 Source: D-05-003
 
@@ -260,9 +260,9 @@ Rules: plain shell terminals are never listed; on first open the first agent wit
   launcher gave the session, else its folder's name; the task-text and raw-prompt fallbacks for an
   orchestrator session without a title come with T-050-b.)
 Acceptance:
-  - [ ] One saved agent with two sessions plus one unmatched Codex session → two groups; the
-        unmatched one sits under Other sessions.
-  - [ ] Select a session, switch screens and back → same session selected.
+  - [x] One saved agent with two sessions plus one unmatched Codex session → two groups; the
+        unmatched one sits under Other sessions. (cards; evidence/cards-VIEW-015.txt)
+  - [x] Select a session, switch screens and back → same session selected. (cards; evidence/cards-VIEW-015.txt)
 Compat: —
 Source: D-05-015
 
@@ -282,9 +282,9 @@ Rules: chat shows for supported agents even when the global chat experiment is o
   thread, the composer and the Show terminal switch wait for the transcript and chat tasks, T-050-b,
   so every session shows its terminal until then.)
 Acceptance:
-  - [ ] Select a Claude session → chat body; flip Show terminal → raw terminal.
-  - [ ] Select a plain shell → terminal body, no switch.
-  - [ ] Send a line from the composer → it appears as the agent's next input.
+  - [x] Select a Claude session → chat body; flip Show terminal → raw terminal. (cards; evidence/cards-VIEW-019.txt)
+  - [x] Select a plain shell → terminal body, no switch. (cards; evidence/cards-VIEW-019.txt)
+  - [x] Send a line from the composer → it appears as the agent's next input. (cards; evidence/cards-VIEW-019.txt)
 Compat: —
 Source: D-05-019
 
@@ -297,8 +297,8 @@ Rules: the preset waits for the user to pick and start it.
   (Kolux RS, T-050: + adds a chooser pane with that agent already in its seat; the user picks the
   model and presses Start; the empty state's button opens Settings > Agents.)
 Acceptance:
-  - [ ] Click + under an agent → a not-started row appears and is selected.
-  - [ ] Fresh profile with no saved agents → an empty state shows instead of a blank rail.
+  - [x] Click + under an agent → a not-started row appears and is selected. (cards; evidence/cards-VIEW-021.txt)
+  - [x] Fresh profile with no saved agents → an empty state shows instead of a blank rail. (cards; evidence/cards-VIEW-021.txt)
 Compat: —
 Source: D-05-021
 
@@ -312,8 +312,8 @@ Rules: editor and browser tabs never become cards; a background tab's pane is no
   (Kolux RS, T-050: the Board's lanes and empty state count terminal panes only; pane headers, on
   the Board and in the grid, show the saved agent's name in place of the program word.)
 Acceptance:
-  - [ ] Two tabs, one split into two panes → three cards in tab order.
-  - [ ] Open an editor tab and a browser tab → neither gets a card.
+  - [x] Two tabs, one split into two panes → three cards in tab order. (cards; evidence/cards-VIEW-024.txt)
+  - [x] Open an editor tab and a browser tab → neither gets a card. (cards; evidence/cards-VIEW-024.txt)
 Compat: —
 Source: D-05-024
 
@@ -326,7 +326,7 @@ Rules: saved widths are clamped into range; invalid saved widths fall back to th
   never overlaps the back button.
 Acceptance:
   - [ ] Close with Mod+B → first tab still fully visible.
-  - [ ] Drag past the maximum → width stops at the limit.
+  - [x] Drag past the maximum → width stops at the limit. (cards; evidence/cards-VIEW-050.txt)
 Compat: keybinding id sidebar.left.toggle; the focus-the-list command is a keybinding command whose
   exact id is held back pending the allowlist.
 Source: D-05-050
@@ -342,8 +342,8 @@ Rules: live session counts ignore dead tabs; worktrees with none show no count; 
   and reconnect; in a split tab each pane's row carries that pane's own conversation name; clicking
   one pane never renames its sibling, and a pane with no live title borrows none.
 Acceptance:
-  - [ ] A Cursor pane and a Gemini pane → both listed, neither labelled Claude.
-  - [ ] Close a tab → its worktree's count drops.
+  - [x] A Cursor pane and a Gemini pane → both listed, neither labelled Claude. (cards; evidence/cards-VIEW-051.txt)
+  - [x] Close a tab → its worktree's count drops. (cards; evidence/cards-VIEW-051.txt)
 Compat: —
 Source: D-05-051
 
@@ -371,7 +371,7 @@ User sees: on relaunch every workspace and tab returns; unsaved editor changes b
 Rules: a failed save is retried, then falls back to a durable-only save; restored workspaces rebuild
   their tab layouts in session order in one pass.
 Acceptance:
-  - [ ] Quit with three tabs → relaunch shows the three tabs.
+  - [x] Quit with three tabs → relaunch shows the three tabs. (cards; evidence/cards-VIEW-107.txt)
   - [ ] Quit with an unsaved editor buffer → prompt, no silent loss.
 Compat: —
 Source: D-05-107
@@ -384,8 +384,8 @@ User sees: a short list of other chat-capable agents' sessions, the last viewed 
 Rules: the target list is capped; whatever the user already typed in the target composer is kept;
   file paths with spaces are quoted.
 Acceptance:
-  - [ ] Two other chat sessions exist, one viewed last → it is listed first.
-  - [ ] Result path contains a space → it arrives quoted.
+  - [x] Two other chat sessions exist, one viewed last → it is listed first. (cards; evidence/cards-VIEW-020.txt)
+  - [x] Result path contains a space → it arrives quoted. (cards; evidence/cards-VIEW-020.txt)
 Compat: —
 Source: D-05-020
 
@@ -399,9 +399,9 @@ Rules: Search matches titles only and requires every typed word to appear; an em
   search with no matches show different messages; sizes read in B, KB or MB with one decimal; each
   preview gets a stable page identity so reopening the same artifact reuses it.
 Acceptance:
-  - [ ] Add two files → newest is on top.
-  - [ ] Search two words where only one matches a title → that item is hidden.
-  - [ ] Remove the selected item → it leaves the list and the preview closes.
+  - [x] Add two files → newest is on top. (cards; evidence/cards-VIEW-012.txt)
+  - [x] Search two words where only one matches a title → that item is hidden. (cards; evidence/cards-VIEW-012.txt)
+  - [x] Remove the selected item → it leaves the list and the preview closes. (cards; evidence/cards-VIEW-012.txt)
 Compat: —
 Source: D-05-012
 

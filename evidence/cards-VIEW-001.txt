@@ -1,0 +1,2 @@
+command: for v in $(env | grep -o "^KOLUX_[A-Za-z0-9_]*"); do unset $v; done; pnpm exec vitest run --reporter=verbose src/chrome/__cards__/VIEW-001.test.ts src/chrome/__cards__/VIEW-002.test.ts src/chrome/__cards__/VIEW-003.test.ts  (Test Files 3 passed, Tests 5 passed)
+supporting only (no box ticked): src/chrome/__cards__/VIEW-001.test.ts — each label click selects exactly that label; Classic has no switch — pass (✓ 328ms)

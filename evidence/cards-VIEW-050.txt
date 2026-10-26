@@ -1,0 +1,3 @@
+command: pnpm exec vitest run --reporter=verbose src/chrome/__cards__/VIEW-050.test.ts src/chrome/RightSidebar.test.ts (10-file slot run: Test Files 10 passed / Tests 62 passed)
+box 2: src/chrome/__cards__/VIEW-050.test.ts::box 2: dragging the left edge past the maximum stops the width at the limit, shown while dragging and saved — pass (real Grip pointer handlers with useRef stand-in; 1200 px raw -> 480 = LEFT_MAX shown and saved; below min -> 220); src/chrome/RightSidebar.test.ts::VIEW-050: the left sidebar width is clamped into range... — pass
+MIRROR src/App.tsx:2767-2770 (onWidth handler), :518 (leftWidth = dragLeft ?? readLeft(settings))
