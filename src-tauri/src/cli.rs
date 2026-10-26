@@ -2928,7 +2928,7 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let v = m.once(retry, |m| {
                 let mut v = m.post(&p, a, &dispatches, &peers, now_ms())?;
                 // ORCH-015: the worker's own done report settles its task with the mail.
-                let settled = crate::orchestration::report(&mut tasks, &mut dispatches, &p, a, now_ms())?;
+                let settled = crate::orchestration::report(&mut tasks, &mut dispatches, &p, a, now_ms(), &|t| crate::orchestration::process_generation(ctx.terminals, t))?;
                 if !settled.is_null() {
                     v["settled"] = settled;
                 }
@@ -4691,7 +4691,11 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let mut dispatches = load_list(&store, DISPATCHES_KEY);
-        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "pass": pass, "retryOf": text("retryOf") })));
+        let mut row = worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "pass": pass, "retryOf": text("retryOf") }));
+        if let Some(g) = terminal.and_then(|t| crate::orchestration::process_generation(ctx.terminals, t)) {
+            row[crate::orchestration::PASS_GENERATION] = json!(g);
+        }
+        dispatches.push(row);
         save_list(&store, DISPATCHES_KEY, &dispatches)?;
     }
     if ready {
