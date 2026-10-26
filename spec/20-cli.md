@@ -25,8 +25,9 @@ User sees: a new isolated checkout shows up in Kolux; when an agent was named, t
   terminal starts that agent and gives it the prompt. The worktree is made in the background unless
   `--activate` asks for it to be shown.
 Rules: when `--repo` is left out, the repo comes from the worktree the command was run inside;
-  `--agent` must name an agent Kolux knows; a prompt with no agent is refused, and so is an empty
-  agent, prompt or setup value; `--setup` takes run, skip or inherit to decide whether the repo's
+  `--agent` must name an agent Kolux knows; a prompt with no agent goes to the default agent
+  (DT-CLI-018); an empty agent, prompt or setup value is refused; `--setup` takes run, skip or
+  inherit to decide whether the repo's
   setup scripts run; setup flags that contradict each other are refused; `--run-hooks` opts in to
   both setup and activation scripts; the starting branch is the repo's default base unless
   `--base-branch` says otherwise; lineage: the parent is the worktree the command was called from,
@@ -42,7 +43,8 @@ Acceptance:
         with A as its parent, Claude starts in b's first terminal with the prompt, and focus stays
         where it was.
   - [ ] The same command with `--activate` → b is brought into view.
-  - [ ] `kolux worktree create --name b --prompt hi` → refused, because a prompt needs an agent.
+  - [x] `kolux worktree create --name b --prompt hi` → accepted, not refused: b is made and the
+        default agent is picked to receive the prompt (DT-CLI-018). (cards; evidence/cards-CLI-018.txt)
 Compat: worktree create with `--repo`, `--name`, `--agent`, `--prompt`, `--base-branch`, `--issue`,
   `--comment`, `--setup`, `--parent-worktree`, `--no-parent`, `--run-hooks` and `--activate`.
 Source: D-20-018

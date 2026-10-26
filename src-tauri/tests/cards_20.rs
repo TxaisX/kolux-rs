@@ -1,5 +1,5 @@
 //! spec/20 P0 boxes (the command line): CLI-012, CLI-011, CLI-030, CLI-031, CLI-032, CLI-033, CLI-034, CLI-035, CLI-036,
-//! plus a measurement for CLI-018 box 3.
+//! plus CLI-018 box 3 (DT-CLI-018).
 //! Safety: every child is `kolux-dev` with every inherited KOLUX_* variable removed and KOLUX_APP_DIR set to a folder under the
 //! scratch root, so it can only reach the stand-in app a test starts there on an ephemeral 127.0.0.1 port. Nothing connects to a
 //! real Kolux; the stand-in answers newline-delimited JSON the way `call_within` expects (cli.rs:926-945).
@@ -231,15 +231,65 @@ fn cli011_box1_app_closed_open_launches_it_and_exits_zero_once_ready() {
     assert!(said(&out).contains("Kolux started and is ready"), "{}", said(&out));
 }
 
-// ---------------------------------------------------------------- CLI-018 box 3 (measurement only; the box stays open)
+// ---------------------------------------------------------------- CLI-018 box 3 (DT-CLI-018: the prompt falls back to the default agent)
+
+/// Quiet git in a scratch repo: no global or system config, an identity passed on the command line.
+fn quiet_git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["-c", "user.name=cards", "-c", "user.email=cards@example.invalid", "-c", "commit.gpgsign=false"])
+        .args(args)
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
 
 #[test]
-fn cli018_box3_measured_a_prompt_without_an_agent_is_not_refused_by_the_command_line() {
-    // CLI-018 says refused; PROJ-038's Kolux RS note (T-014-b-fix) says a prompt falls back to the default agent.
-    let p = parse(&words("worktree create --name b --prompt hi")).1;
-    let parsed = p.expect("parse accepts it").expect("a command");
-    assert_eq!(parsed.args["prompt"], "hi");
-    assert!(parsed.args.get("agent").is_none());
+fn cli018_box3_a_prompt_without_an_agent_goes_to_the_default_agent() {
+    use kolux_rs_lib::{agents::agent_list, projects};
+    let dir = scratch("cli018-b3");
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    quiet_git(&repo, &["init", "-q", "-b", "main"]);
+    quiet_git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    let git = Git::detect().unwrap();
+    let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+    projects::add_project(&git, &store.lock().unwrap(), &repo).unwrap();
+
+    // The default agent is the last installed one in menu order, so the pick cannot be the first-installed fallback by luck.
+    let installed: Vec<String> = agent_list().into_iter().filter(|a| a.installed).map(|a| a.id).collect();
+    let default = installed.last().cloned().expect("an agent is installed on the test machine");
+    {
+        let s = store.lock().unwrap();
+        let mut settings = s.settings();
+        settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+        settings["branchPrefix"] = json!("none");
+        settings["defaultAgent"] = json!(default);
+        s.save_settings(&settings).unwrap();
+    }
+
+    let events = Mutex::new(Vec::<Value>::new());
+    let notify = |v: Value| events.lock().unwrap().push(v);
+    let terminals = Terminals::default();
+    let ctx = Ctx { claude_config: dir.join("claude.json"), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+    let (command, args) = typed("worktree create --name b --prompt hi");
+    assert!(args.get("agent").is_none(), "the line names no agent");
+    let req = Request { id: "r".into(), token: String::new(), command, cwd: repo.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+
+    let made = dispatch(&ctx, &req).unwrap_or_else(|f| panic!("refused: {} {}", f.code, f.message));
+    let path = PathBuf::from(made["path"].as_str().unwrap());
+    assert!(path.join(".git").exists(), "worktree b exists on disk: {}", path.display());
+    assert_eq!(made["branch"], "b");
+    assert_eq!(made["agent"], json!(default), "the answer names the default agent");
+
+    let events = events.lock().unwrap();
+    let created: Vec<&Value> = events.iter().filter(|e| e["kind"] == "created").collect();
+    assert_eq!(created.len(), 1, "{events:?}");
+    assert_eq!(created[0]["agent"], json!(default), "the window is told to start the default agent");
+    assert_eq!(created[0]["prompt"], "hi");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------- the mail stand-in (run-create, send, check, ask)
