@@ -240,9 +240,9 @@ Rules: the four roles are builder, reviewer, scout and tester, each with its own
   itself when no task was typed;
   the whole lineup is visible for review before anything starts.
 Acceptance:
-  - [ ] Pick Swarm → five seats labelled scout, builder, builder, tester, reviewer.
-  - [ ] Pick Workbench, then change the count to 2 → the shape reads Custom.
-  - [ ] Launch Pair with a task → each session's first prompt begins with its role brief, then the task.
+  - [x] Pick Swarm → five seats labelled scout, builder, builder, tester, reviewer. (cards; evidence/cards-SESS-012.txt)
+  - [x] Pick Workbench, then change the count to 2 → the shape reads Custom. (cards; evidence/cards-SESS-012.txt)
+  - [x] Launch Pair with a task → each session's first prompt begins with its role brief, then the task. (cards; evidence/cards-SESS-012.txt)
 Compat: —
 Source: D-02-012
 
