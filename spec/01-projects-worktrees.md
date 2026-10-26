@@ -25,7 +25,7 @@ User sees: the selection moves on the same click; every workspace keeps its own 
 Rules: removing a workspace clears its tabs, open files and browser tabs.
 Acceptance:
   - [ ] Switch from A to B and back → A's terminals and tabs are as they were.
-  - [ ] Delete a workspace → none of its tabs remain anywhere.
+  - [x] Delete a workspace → none of its tabs remain anywhere. (cards; evidence/cards-PROJ-066.txt)
 Compat: —
 Source: D-01-066
 
@@ -41,7 +41,7 @@ Rules: several folders can be chosen in one go and each becomes a separate proje
   case; a freshly added project goes to the top of the Recent order.
 Acceptance:
   - [ ] Choose two sibling repositories together → exactly two new projects appear and nothing else.
-  - [ ] Choose a folder that is registered already → no second row appears.
+  - [x] Choose a folder that is registered already → no second row appears. (cards; evidence/cards-PROJ-001.txt)
 Compat: —
 Source: D-01-001
 
@@ -55,9 +55,9 @@ Rules: the main checkout is chosen on purpose, never simply whichever worktree i
   worktree list is fully re-read before the hand-off; scratch worktrees that coding tools make for
   their own sub-agents stay out of sight.
 Acceptance:
-  - [ ] Add a repository with three worktrees where the main checkout is not first alphabetically →
-        the main checkout is the active workspace.
-  - [ ] Add a repository that holds a coding tool's scratch worktree → that worktree is not listed.
+  - [x] Add a repository with three worktrees where the main checkout is not first alphabetically →
+        the main checkout is the active workspace. (cards; evidence/cards-PROJ-007.txt)
+  - [x] Add a repository that holds a coding tool's scratch worktree → that worktree is not listed. (cards; evidence/cards-PROJ-007.txt)
 Compat: —
 Source: D-01-007
 
@@ -94,8 +94,8 @@ Rules: spaces turn into hyphens, repeated separators merge, characters Git does 
   remote, a number is added; with no display name typed, the branch name is shown without its refs
   prefix.
 Acceptance:
-  - [ ] Create "Fix login 🔥" → the branch reads like fix-login-fire and the shown name is
-        unchanged.
+  - [x] Create "Fix login 🔥" → the branch reads like fix-login-fire and the shown name is
+        unchanged. (cards; evidence/cards-PROJ-021.txt)
   - [ ] Create a name made only of characters Git rejects → refused with a message.
 Compat: —
   (Kolux RS, T-013-fix-b: emoji outside the short-word table become their Unicode name in words,

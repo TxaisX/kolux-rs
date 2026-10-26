@@ -1,0 +1,86 @@
+//! PROJ-001: choosing folders adds exactly those as projects; an already-registered folder adds no row.
+//! Needs `git`, `projects` and `state` public (evidence/cards-PROJ-001-lib.patch).
+
+use kolux_rs_lib::git::Git;
+use kolux_rs_lib::projects::{add_project, load_projects};
+use kolux_rs_lib::state::Store;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn scratch(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("kolux-rs-cards01-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn repo_in(parent: &Path, name: &str) -> PathBuf {
+    let dir = parent.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    for args in [vec!["init", "-q"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]] {
+        let ok = Command::new("git").args(&args).current_dir(&dir).status().unwrap().success();
+        assert!(ok, "git {args:?}");
+    }
+    dir
+}
+
+fn paths(store: &Store) -> Vec<String> {
+    load_projects(store).into_iter().map(|p| p.path).collect()
+}
+
+fn same(a: &str, b: &Path) -> bool {
+    a.replace('\\', "/").trim_end_matches('/').eq_ignore_ascii_case(b.to_string_lossy().replace('\\', "/").trim_end_matches('/'))
+}
+
+#[test]
+fn two_chosen_sibling_repositories_become_exactly_two_projects_and_nothing_else() {
+    let git = Git::detect().unwrap();
+    let profile = scratch("profile1");
+    let store = Store::open(&profile).unwrap();
+    let parent = scratch("siblings");
+    let a = repo_in(&parent, "alpha");
+    let b = repo_in(&parent, "beta");
+    // Not chosen, and must stay out: a third repository beside them, and one inside a chosen folder.
+    let _other = repo_in(&parent, "gamma");
+    let _inner = repo_in(&a, "inner-repo");
+    assert!(load_projects(&store).is_empty());
+    for chosen in [&a, &b] {
+        add_project(&git, &store, chosen).unwrap();
+    }
+    let got = paths(&store);
+    assert_eq!(got.len(), 2, "exactly two projects: {got:?}");
+    assert!(same(&got[0], &b) && same(&got[1], &a), "newest first, only the two chosen: {got:?}");
+    assert!(!got.iter().any(|p| p.to_lowercase().contains("gamma") || p.to_lowercase().contains("inner-repo")));
+    drop(store);
+    for d in [profile, parent] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn choosing_a_folder_that_is_registered_already_adds_no_second_row() {
+    let git = Git::detect().unwrap();
+    let profile = scratch("profile2");
+    let store = Store::open(&profile).unwrap();
+    let parent = scratch("dup");
+    let a = repo_in(&parent, "alpha");
+    let first = add_project(&git, &store, &a).unwrap();
+    assert_eq!(paths(&store).len(), 1);
+    let again = add_project(&git, &store, &a).unwrap();
+    assert_eq!(again, first, "the same project comes back");
+    assert_eq!(paths(&store).len(), 1, "no second row after choosing it again");
+    // The same folder spelled another way (trailing separator) is the same project too.
+    let spelled = PathBuf::from(format!("{}{}", a.display(), std::path::MAIN_SEPARATOR));
+    assert_eq!(add_project(&git, &store, &spelled).unwrap(), first);
+    // On Windows the comparison ignores letter case.
+    #[cfg(windows)]
+    {
+        let shout = PathBuf::from(a.to_string_lossy().to_uppercase());
+        assert_eq!(add_project(&git, &store, &shout).unwrap(), first);
+    }
+    assert_eq!(paths(&store).len(), 1);
+    drop(store);
+    for d in [profile, parent] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
