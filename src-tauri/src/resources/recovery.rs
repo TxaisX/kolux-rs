@@ -673,7 +673,8 @@ static LAUNCH_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// In `run`, once per window config before the builder starts: the window's arguments, remembered
 /// for later webviews.
 pub fn launch_browser_args(current: Option<&str>, safe: bool) -> String {
-    let s = browser_args(current, safe);
+    // T-324-b (APP-022): the interface's memory ceiling rides in the same string.
+    let s = super::renderer_heap::apply_here(&browser_args(current, safe));
     let _ = LAUNCH_ARGS.set(s.clone());
     s
 }

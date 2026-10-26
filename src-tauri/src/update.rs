@@ -221,7 +221,13 @@ fn now_ms() -> u64 {
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
     let feed = this_feed()?;
-    let url = feed.endpoint.parse().map_err(|e| format!("bad update address: {e}"))?;
+    let url: tauri::Url = feed.endpoint.parse().map_err(|e| format!("bad update address: {e}"))?;
+    // T-324-b (APP-032): the saved proxy; a setting that cannot be used stops the check, never goes around it.
+    let route = {
+        let store = app.state::<Mutex<Store>>();
+        let store = store.lock().map_err(|e| e.to_string())?;
+        crate::resources::app_proxy::route_from_store(&store, &url)?
+    };
     // T-199 (APP-031): checks are numbered; a late answer from an earlier one stores nothing.
     let round = app.state::<Updates>().rounds.begin();
     let compat = compat_on(&app);
@@ -233,6 +239,11 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
         .pubkey(feed.pubkey)
         .timeout(CHECK_TIMEOUT)
         .on_before_exit(installer_hook(move || end_for_installer(&ends), move || cleans.cleanup_before_exit()));
+    builder = match route {
+        crate::resources::app_proxy::Route::Default => builder,
+        crate::resources::app_proxy::Route::Direct => builder.no_proxy(),
+        crate::resources::app_proxy::Route::Via(p) => builder.proxy(p),
+    };
     if compat {
         builder = builder.configure_client(|c| c.http1_only());
     }
@@ -505,5 +516,16 @@ mod tests {
         assert_eq!(clean_notes(None), Vec::<String>::new());
         // The release job's hidden source marker never shows as a note.
         assert_eq!(clean_notes(Some("- Ship it\n<!-- kolux-rs-source: abc123 -->\n")), vec!["Ship it"]);
+    }
+
+    #[test]
+    fn app032_the_update_check_takes_the_saved_proxy_and_stops_when_it_is_unusable() {
+        let src = include_str!("update.rs");
+        let body = &src[src.find("pub async fn update_check").unwrap()..src.find("pub async fn update_download").unwrap()];
+        let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("update_check lost {needle}"));
+        // the route is read (and its error returned with ?) before the client is built, and applied to it
+        assert!(at("route_from_store(&store, &url)?") < at(".build()"));
+        assert!(at("Route::Direct => builder.no_proxy()") < at(".build()"));
+        assert!(at("Route::Via(p) => builder.proxy(p)") < at(".build()"));
     }
 }
