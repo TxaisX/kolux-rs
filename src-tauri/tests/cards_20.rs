@@ -260,13 +260,13 @@ fn cli018_box3_a_prompt_without_an_agent_goes_to_the_default_agent() {
 
     // The default agent is the last installed one in menu order, so the pick cannot be the first-installed fallback by luck.
     let installed: Vec<String> = agent_list().into_iter().filter(|a| a.installed).map(|a| a.id).collect();
-    let default = installed.last().cloned().expect("an agent is installed on the test machine");
+    let default = installed.last().cloned();
     {
         let s = store.lock().unwrap();
         let mut settings = s.settings();
         settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
         settings["branchPrefix"] = json!("none");
-        settings["defaultAgent"] = json!(default);
+        settings["defaultAgent"] = json!(default.clone().unwrap_or_else(|| "claude".into()));
         s.save_settings(&settings).unwrap();
     }
 
@@ -278,6 +278,17 @@ fn cli018_box3_a_prompt_without_an_agent_goes_to_the_default_agent() {
     assert!(args.get("agent").is_none(), "the line names no agent");
     let req = Request { id: "r".into(), token: String::new(), command, cwd: repo.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
 
+    // Branches on the machine: with no agent installed the same line is refused before any checkout is made.
+    let Some(default) = default else {
+        let f = dispatch(&ctx, &req).expect_err("no agent is installed, so the prompt has nowhere to go");
+        assert!(f.message.contains("no agent is installed to take the prompt"), "{} {}", f.code, f.message);
+        assert!(!dir.join("ws").join("b").exists() && std::fs::read_dir(dir.join("ws")).map_or(true, |mut d| d.next().is_none()), "no checkout was made");
+        let branches = Command::new("git").current_dir(&repo).args(["branch", "--list", "b"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&branches.stdout).trim().is_empty(), "no branch b was made");
+        assert!(events.lock().unwrap().is_empty(), "no created event was sent");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    };
     let made = dispatch(&ctx, &req).unwrap_or_else(|f| panic!("refused: {} {}", f.code, f.message));
     let path = PathBuf::from(made["path"].as_str().unwrap());
     assert!(path.join(".git").exists(), "worktree b exists on disk: {}", path.display());
