@@ -125,7 +125,7 @@ Rules: Cmd+V on macOS; Ctrl+V, Ctrl+Shift+V and Shift+Insert on Windows/Linux; t
   starting prompt is still being typed waits for it, so the two never interleave; a brief loss of
   focus during the clipboard read, with focus returning to the same pane, does not cancel the paste.
 Acceptance:
-  - [ ] Pasting with a split focused on pane B never types into pane A.
+  - [x] Pasting with a split focused on pane B never types into pane A. (cards; evidence/cards-TERM-068.txt)
   - [ ] Switching to another pane while the clipboard is still being read cancels the paste instead
       of typing into the new pane.
 Compat: keybinding id terminal.paste.
@@ -141,8 +141,8 @@ Rules: the dot has an accessible label naming its state; a plain shell shows a g
   label and glyph; the session name falls back to the tab title, or to a generated title when that
   option is on.
 Acceptance:
-  - [ ] A plain shell pane reads as a terminal with a neutral status.
-  - [ ] Screen readers announce the dot state.
+  - [x] A plain shell pane reads as a terminal with a neutral status. (cards; evidence/cards-TERM-020.txt)
+  - [x] Screen readers announce the dot state. (cards; evidence/cards-TERM-020.txt)
 Compat: —
 Source: D-03-020
 
@@ -154,8 +154,8 @@ Rules: working or monitoring shows the working tone; waiting, permission or bloc
   attention tone and marks the pane as needing the user; Done shows the done tone; anything else is
   neutral.
 Acceptance:
-  - [ ] A permission prompt flips the word to the attention tone within one status update.
-  - [ ] A finished agent shows the done tone; an idle plain shell shows the neutral tone.
+  - [x] A permission prompt flips the word to the attention tone within one status update. (cards; evidence/cards-TERM-021.txt)
+  - [x] A finished agent shows the done tone; an idle plain shell shows the neutral tone. (cards; evidence/cards-TERM-021.txt)
 Compat: —
 Source: D-03-021
 
@@ -167,8 +167,8 @@ Rules: the age reads just now in the first minute, then minutes ago; it refreshe
   glow clears once the pane is focused; the glow is static (no animation) to avoid constant
   repaints; age uses the same finish time as the Board and sidebar.
 Acceptance:
-  - [ ] A pane that finished 3 minutes ago, unseen, shows Done with 3m and a glow.
-  - [ ] Clicking into it removes the glow.
+  - [x] A pane that finished 3 minutes ago, unseen, shows Done with 3m and a glow. (cards; evidence/cards-TERM-023.txt)
+  - [x] Clicking into it removes the glow. (cards; evidence/cards-TERM-023.txt)
 Compat: —
 Source: D-03-023
 
@@ -179,7 +179,7 @@ User sees: focus jumps to the next pane waiting on the user.
 Rules: Cmd+Shift+J on macOS, Ctrl+J on Windows/Linux; repeated presses cycle through all waiting
   sessions.
 Acceptance:
-  - [ ] With two waiting sessions, two presses visit both.
+  - [x] With two waiting sessions, two presses visit both. (cards; evidence/cards-TERM-030.txt)
   - [ ] On Windows Ctrl+J, and on macOS Cmd+Shift+J, moves focus to the waiting session.
 Compat: keybinding command for jumping to the next waiting session (exact id held back until
   allowlisted).
@@ -196,8 +196,8 @@ Rules: badge priority: working first, permission second, unread third, done last
   check, waiting for permission shows a question mark, an unvisited completion keeps a bell, and an
   idle shell shows only its identity icon.
 Acceptance:
-  - [ ] A background tab whose agent finishes shows an unread badge until viewed.
-  - [ ] An idle shell tab shows only its identity icon and no badge.
+  - [x] A background tab whose agent finishes shows an unread badge until viewed. (cards; evidence/cards-TERM-055.txt)
+  - [x] An idle shell tab shows only its identity icon and no badge. (cards; evidence/cards-TERM-055.txt)
 Compat: —
 Source: D-03-055
 
