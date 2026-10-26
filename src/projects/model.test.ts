@@ -34,6 +34,16 @@ test("the preview sentence explains the branch and folder, or the refusal", () =
   expect(previewSentence("x", { branch: "x", folder: "" }, null)).toBe("Add a project first.");
 });
 
+test("the composer shows no refusal while Git has not yet answered for the prefilled name", () => {
+  const project = { id: "app-1", name: "app", path: "C:\src\app" };
+  // audit flow 4: a valid prefilled name read "nothing usable" until the first answer arrived
+  expect(previewSentence("dusky-puffin", null, project, true)).not.toMatch(/nothing usable/);
+  expect(previewSentence("dusky-puffin", null, project, true)).toMatch(/Working out/);
+  // an answered refusal for a typed name still shows (PROJ-021 / SESS-036 untouched)
+  expect(previewSentence("???", null, project, false)).toMatch(/nothing usable/);
+  expect(previewSentence("???", null, project)).toMatch(/nothing usable/);
+});
+
 // PROJ-047: child workspaces nest under their parent.
 const p: Worktree = { path: "C:\ws\app\p", branch: "p", head: "e1", isMain: false };
 const child: Worktree = { path: "C:\ws\app\child", branch: "child", head: "e2", isMain: false, parent: p.path };

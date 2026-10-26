@@ -36,9 +36,9 @@ Rules: pane count is clamped to 1..12; growing adds empty (unstarted) panes; it 
   active tab, and closing a group's last tab removes the group and moves focus to a neighbouring
   group.
 Acceptance:
-  - [ ] Going from 4 to 6 panes adds 2 empty panes and leaves the 4 running sessions untouched.
-  - [ ] Going from 6 to 4 with 2 unstarted panes removes those 2 without any prompt.
-  - [ ] Asking for 13 panes yields 12.
+  - [x] Going from 4 to 6 panes adds 2 empty panes and leaves the 4 running sessions untouched. (cards; evidence/cards-TERM-001.txt)
+  - [x] Going from 6 to 4 with 2 unstarted panes removes those 2 without any prompt. (cards; evidence/cards-TERM-001.txt)
+  - [x] Asking for 13 panes yields 12. (cards; evidence/cards-TERM-001.txt)
 Compat: —
 Source: D-03-001
 
@@ -53,7 +53,7 @@ Rules: every existing pane survives a re-arrangement, in its original order; row
 Acceptance:
   - [ ] Applying the 4-pane preset to 4 running sessions keeps the same 4 sessions with the same
       output.
-  - [ ] After any re-arrangement every pane is still present, in its original order.
+  - [x] After any re-arrangement every pane is still present, in its original order. (cards; evidence/cards-TERM-004.txt)
 Compat: —
 Source: D-03-004
 
@@ -67,7 +67,7 @@ Rules: split right: macOS uses Cmd+D, while Windows and Linux use Ctrl+Shift+D; 
   it was split from; the header split button splits side by side.
 Acceptance:
   - [ ] Splitting a pane in folder X opens a shell whose working folder is X.
-  - [ ] Pressing Ctrl+D in a Linux shell pane sends end-of-input rather than splitting.
+  - [x] Pressing Ctrl+D in a Linux shell pane sends end-of-input rather than splitting. (cards; evidence/cards-TERM-006.txt)
 Compat: keybinding commands for split right and split down (exact ids held back until allowlisted).
 Source: D-03-006
 
@@ -79,8 +79,8 @@ Rules: close applies to the focused pane only, not its siblings; a pane running 
   (see running-process confirmation); the layout stays consistent after closing (no gaps or ghost
   panes); closing a pane ends its program, forcing it if it does not exit.
 Acceptance:
-  - [ ] Closing the middle of three panes leaves two panes filling the area.
-  - [ ] Closing the only pane in a tab closes that tab.
+  - [x] Closing the middle of three panes leaves two panes filling the area. (cards; evidence/cards-TERM-014.txt)
+  - [x] Closing the only pane in a tab closes that tab. (cards; evidence/cards-TERM-014.txt)
 Compat: keybinding command for closing the focused pane (exact id held back until allowlisted).
 Source: D-03-014
 
@@ -95,7 +95,7 @@ Rules: new terminal: Cmd/Ctrl+T; new browser: Cmd/Ctrl+Shift+B; new markdown: Cm
   an existing folder outside the workspace is kept.
 Acceptance:
   - [ ] Cmd/Ctrl+T opens a shell in the workspace folder with the cursor ready.
-  - [ ] Asking for a start folder that does not exist opens the terminal in the workspace folder.
+  - [x] Asking for a start folder that does not exist opens the terminal in the workspace folder. (cards; evidence/cards-TERM-040.txt)
 Compat: keybinding commands for new terminal, new browser, new markdown and open markdown tabs
   (exact ids held back until allowlisted).
 Source: D-03-040
@@ -108,8 +108,8 @@ Rules: new default agent: Cmd+Alt+T on macOS; each installed agent also gets its
   unbound by default.
 Acceptance:
   - [ ] Choosing Claude from the menu opens a tab whose header shows Claude starting.
-  - [ ] Each installed agent has its own command for a new tab, with no key until the user assigns
-      one.
+  - [x] Each installed agent has its own command for a new tab, with no key until the user assigns
+      one. (cards; evidence/cards-TERM-041.txt)
 Compat: keybinding command for a new tab with the default agent, plus one command per installed
   agent formed from that command and the agent's own id (exact ids held back until allowlisted).
 Source: D-03-041
@@ -125,7 +125,7 @@ Rules: Cmd+V on macOS; Ctrl+V, Ctrl+Shift+V and Shift+Insert on Windows/Linux; t
   starting prompt is still being typed waits for it, so the two never interleave; a brief loss of
   focus during the clipboard read, with focus returning to the same pane, does not cancel the paste.
 Acceptance:
-  - [ ] Pasting with a split focused on pane B never types into pane A.
+  - [x] Pasting with a split focused on pane B never types into pane A. (cards; evidence/cards-TERM-068.txt)
   - [ ] Switching to another pane while the clipboard is still being read cancels the paste instead
       of typing into the new pane.
 Compat: keybinding id terminal.paste.
@@ -141,8 +141,8 @@ Rules: the dot has an accessible label naming its state; a plain shell shows a g
   label and glyph; the session name falls back to the tab title, or to a generated title when that
   option is on.
 Acceptance:
-  - [ ] A plain shell pane reads as a terminal with a neutral status.
-  - [ ] Screen readers announce the dot state.
+  - [x] A plain shell pane reads as a terminal with a neutral status. (cards; evidence/cards-TERM-020.txt)
+  - [x] Screen readers announce the dot state. (cards; evidence/cards-TERM-020.txt)
 Compat: —
 Source: D-03-020
 
@@ -154,8 +154,8 @@ Rules: working or monitoring shows the working tone; waiting, permission or bloc
   attention tone and marks the pane as needing the user; Done shows the done tone; anything else is
   neutral.
 Acceptance:
-  - [ ] A permission prompt flips the word to the attention tone within one status update.
-  - [ ] A finished agent shows the done tone; an idle plain shell shows the neutral tone.
+  - [x] A permission prompt flips the word to the attention tone within one status update. (cards; evidence/cards-TERM-021.txt)
+  - [x] A finished agent shows the done tone; an idle plain shell shows the neutral tone. (cards; evidence/cards-TERM-021.txt)
 Compat: —
 Source: D-03-021
 
@@ -168,7 +168,7 @@ Rules: the age reads just now in the first minute, then minutes ago; it refreshe
   repaints; age uses the same finish time as the Board and sidebar.
 Acceptance:
   - [ ] A pane that finished 3 minutes ago, unseen, shows Done with 3m and a glow.
-  - [ ] Clicking into it removes the glow.
+  - [x] Clicking into it removes the glow. (cards; evidence/cards-TERM-023.txt)
 Compat: —
 Source: D-03-023
 
@@ -179,7 +179,7 @@ User sees: focus jumps to the next pane waiting on the user.
 Rules: Cmd+Shift+J on macOS, Ctrl+J on Windows/Linux; repeated presses cycle through all waiting
   sessions.
 Acceptance:
-  - [ ] With two waiting sessions, two presses visit both.
+  - [x] With two waiting sessions, two presses visit both. (cards; evidence/cards-TERM-030.txt)
   - [ ] On Windows Ctrl+J, and on macOS Cmd+Shift+J, moves focus to the waiting session.
 Compat: keybinding command for jumping to the next waiting session (exact id held back until
   allowlisted).
@@ -196,8 +196,8 @@ Rules: badge priority: working first, permission second, unread third, done last
   check, waiting for permission shows a question mark, an unvisited completion keeps a bell, and an
   idle shell shows only its identity icon.
 Acceptance:
-  - [ ] A background tab whose agent finishes shows an unread badge until viewed.
-  - [ ] An idle shell tab shows only its identity icon and no badge.
+  - [x] A background tab whose agent finishes shows an unread badge until viewed. (cards; evidence/cards-TERM-055.txt)
+  - [x] An idle shell tab shows only its identity icon and no badge. (cards; evidence/cards-TERM-055.txt)
 Compat: —
 Source: D-03-055
 
@@ -209,8 +209,8 @@ Rules: no unread mark for the pane being looked at; hidden tabs and hidden split
   unread; with Kolux in the background, the selected worktree is marked unread; late or stale finish
   events are dropped; notification settings gate what is sent.
 Acceptance:
-  - [ ] An agent finishing in a hidden tab sends one notification and marks the tab unread.
-  - [ ] An agent finishing in the focused pane that is on screen adds no unread mark.
+  - [x] An agent finishing in a hidden tab sends one notification and marks the tab unread. (cards; evidence/cards-TERM-118.txt)
+  - [x] An agent finishing in the focused pane that is on screen adds no unread mark. (cards; evidence/cards-TERM-118.txt)
 Compat: —
 Source: D-03-118
 
@@ -224,8 +224,8 @@ Rules: Kolux checks for running child processes first; an idle shell closes with
   once per pane; keyboard and mouse close follow the same policy; a setting turns the confirmation
   off; the confirmation names the tab being closed, so closing a background tab is never ambiguous.
 Acceptance:
-  - [ ] Closing a tab running a dev server asks; closing an idle shell does not.
-  - [ ] Closing a split tab with two busy panes shows one confirmation, not two.
+  - [x] Closing a tab running a dev server asks; closing an idle shell does not. (cards; evidence/cards-TERM-045.txt)
+  - [x] Closing a split tab with two busy panes shows one confirmation, not two. (cards; evidence/cards-TERM-045.txt)
 Compat: —
 Source: D-03-045
 
@@ -251,8 +251,8 @@ User sees: a header row on every pane shows who is running, the session name and
 Rules: shown on every pane, single or split, since 2026-10-05; the usage meter shows context use
   against the session cap; never drawn over hidden content.
 Acceptance:
-  - [ ] A single-pane grid still shows the header.
-  - [ ] In a split tab each pane carries its own header with its own usage percentage.
+  - [x] A single-pane grid still shows the header. (cards; evidence/cards-TERM-019.txt)
+  - [x] In a split tab each pane carries its own header with its own usage percentage. (cards; evidence/cards-TERM-019.txt)
 Compat: —
 Source: D-03-019
 
@@ -262,9 +262,9 @@ User does: works in a git worktree.
 User sees: a small chip with the branch name; detached checkouts show a short commit id.
 Rules: no chip for a plain folder workspace; hovering the chip shows the full branch name.
 Acceptance:
-  - [ ] A pane in branch feature/x shows that branch; a folder outside git shows no chip.
-  - [ ] Hovering a truncated branch chip shows the whole branch name; a detached checkout shows a
-      short commit id.
+  - [x] A pane in branch feature/x shows that branch; a folder outside git shows no chip. (cards; evidence/cards-TERM-022.txt)
+  - [x] Hovering a truncated branch chip shows the whole branch name; a detached checkout shows a
+      short commit id. (cards; evidence/cards-TERM-022.txt)
 Compat: —
 Source: D-03-022
 
@@ -276,8 +276,8 @@ Rules: close is always shown; expand is disabled for a lone pane in the classic 
   look it expands the session window; the split button stays transparent on hover (no flash);
   right-clicking the header opens the same pane menu.
 Acceptance:
-  - [ ] The four buttons appear in the same order on every pane.
-  - [ ] Right-clicking the header opens the same menu as the more button.
+  - [x] The four buttons appear in the same order on every pane. (cards; evidence/cards-TERM-025.txt)
+  - [x] Right-clicking the header opens the same menu as the more button. (cards; evidence/cards-TERM-025.txt)
 Compat: —
 Source: D-03-025
 
@@ -290,7 +290,7 @@ Rules: rounded corners around 14 px with about 8 px gaps; a group with a single 
   strip; the full (classic) look keeps the older chrome; new installs land on the clean look;
   existing profiles keep what they had.
 Acceptance:
-  - [ ] A new install shows rounded session windows with gaps.
+  - [x] A new install shows rounded session windows with gaps. (cards; evidence/cards-TERM-028.txt)
   - [ ] In the clean look, a session group holding one tab shows no tab strip.
 Compat: —
 Source: D-03-028
@@ -305,7 +305,7 @@ Rules: a split, move or preset never respawns an existing session; output from o
   or move re-parents the existing terminal host instead of remounting it; nothing respawns.)
 Acceptance:
   - [ ] After 10 random splits and moves, each pane still shows its own session.
-  - [ ] Text printed in one pane never shows up in any other pane after splits and moves.
+  - [x] Text printed in one pane never shows up in any other pane after splits and moves. (cards; evidence/cards-TERM-017.txt)
 Compat: —
 Source: D-03-017
 
@@ -320,9 +320,9 @@ Rules: Copy: Cmd+C on macOS; Ctrl+Shift+C on Windows/Linux, and Ctrl+C when text
   (Kolux RS, T-067: Ctrl+C with nothing selected is the interrupt and reaches the program; a refused
   clipboard shows one notice per 5 s in the pane header and keeps the selection; focus returns to the pane.)
 Acceptance:
-  - [ ] With the clipboard locked by another app, copying shows a failure notice and the selection
-      remains.
-  - [ ] Copying with nothing selected never shows a success notice.
+  - [x] With the clipboard locked by another app, copying shows a failure notice and the selection
+      remains. (cards; evidence/cards-TERM-065.txt)
+  - [x] Copying with nothing selected never shows a success notice. (cards; evidence/cards-TERM-065.txt)
 Compat: keybinding command for copying the selection (exact id held back until allowlisted).
 Source: D-03-065
 
@@ -357,7 +357,7 @@ Rules: a background host keeps sessions alive while the app is closed; scrollbac
   (Kolux RS, DT-C27 as changed 2026-10-20: Txais chose that terminals keep running after quit. The
   background host is built (T-075-b); the window routing its panes through it is T-184-b.)
 Acceptance:
-  - [ ] Quit with a build running; reopen; the build output continues in the same pane.
+  - [x] Quit with a build running; reopen; the build output continues in the same pane. (cards; evidence/cards-TERM-105.txt)
   - [ ] Restored panes accept typing at once and the pane that had focus before quitting has it
       again.
 Compat: —
@@ -384,7 +384,7 @@ Rules: saved history is written safely so a crash leaves a usable copy; large hi
   are kept to one piece, 256 KB on disk and the newest 128 KB replayed.)
 Acceptance:
   - [ ] After killing the host, reopened panes show their earlier output above a new prompt.
-  - [ ] A tab the user closed on purpose before the crash does not come back.
+  - [x] A tab the user closed on purpose before the crash does not come back. (cards; evidence/cards-TERM-106.txt)
 Compat: —
 Source: D-03-106
 
@@ -403,7 +403,7 @@ Rules: list shows terminals and can narrow to one worktree, cap how many are ret
   or every terminal of a worktree; a terminal created from the command line without focus starts in
   the background, stays alive and is listed.
 Acceptance:
-  - [ ] kolux terminal send --enter types text and submits it.
+  - [x] kolux terminal send --enter types text and submits it. (cards; evidence/cards-TERM-125.txt)
   - [ ] kolux terminal close --worktree X --all closes every terminal there.
 Compat: CLI group kolux terminal with the subcommands list, show, read, send, wait, create, switch
   (also focus), rename, split and close. Flags, alphabetically: --all, --command, --cursor,

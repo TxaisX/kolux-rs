@@ -19,6 +19,8 @@ input { font: inherit; }
 .app { display: flex; flex-direction: column; height: 100%; }
 
 /* icon buttons: 24 px hit target around a 14 px glyph */
+.ib.bell { position: relative; }
+.bell-count { position: absolute; top: -3px; right: -4px; min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: 7px; background: var(--working-icon); color: var(--app-bg); font: 700 10px/14px var(--ui-font); text-align: center; pointer-events: none; }
 .ib { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; color: var(--fg-muted); flex: none; }
 .ib:hover:not(:disabled) { background: var(--row-selected); color: var(--fg); }
 .ib:disabled { color: var(--fg-disabled); }
@@ -1244,6 +1246,7 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .onb-body { flex: 1; min-height: 0; overflow: auto; }
 .onb-foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-subtle); }
 .onb-gap { flex: 1; }
+.onb-why { min-width: 0; font-size: 12px; color: var(--fg-muted); text-align: right; }
 .onb-chord { margin-left: 8px; padding: 1px 5px; font-size: 10px; border: 1px solid currentColor; border-radius: 4px; opacity: 0.7; }
 .onb-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .onb-tile { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; padding: 14px; background: var(--chip-bg); border: 1px solid var(--line-subtle); border-radius: 8px; }
@@ -1355,7 +1358,7 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .guide-head { display: flex; align-items: center; gap: 10px; padding: 0 6px 10px; }
 .guide-head h2 { margin: 0; font-size: 15px; }
 .guide-head p { margin: 2px 0 0; font-size: 12px; color: var(--fg-muted); }
-.guide-head .spacer, .guide-panel .spacer, .explore-main .spacer, .tip .spacer { flex: 1; }
+.guide-head .spacer, .guide-panel .spacer, .explore-main .spacer, .tip-card .spacer { flex: 1; }
 .guide-ring { flex: none; }
 .guide-ring circle { fill: none; stroke-width: 3; }
 .guide-ring .track { stroke: var(--line-subtle); }
@@ -1388,13 +1391,15 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .explore-stops .chip.on { background: var(--row-selected); border-color: var(--line-focus); }
 .explore-main .btn-row { margin-top: auto; align-items: center; }
 .explore-main .hint { font-size: 11px; color: var(--fg-faint); }
-.tip { position: relative; width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+/* Non-modal: a corner card, never a backdrop over the workspace. */
+.tip-dock { position: fixed; right: 16px; bottom: 40px; z-index: 60; max-width: calc(100vw - 32px); }
+.tip-card { position: relative; width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 .tip-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; background: var(--chip-bg); font-size: 11px; color: var(--fg-muted); }
-.tip h3 { margin: 10px 0 8px; font-size: 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tip ul { margin: 0 0 12px; padding-left: 18px; line-height: 1.6; color: var(--fg-muted); }
-.tip p { margin: 0 0 12px; line-height: 1.5; color: var(--fg-muted); }
-.tip .tip-warn { color: var(--warn); }
-.tip .btn-row { justify-content: flex-end; }
+.tip-card h3 { margin: 10px 0 8px; font-size: 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tip-card ul { margin: 0 0 12px; padding-left: 18px; line-height: 1.6; color: var(--fg-muted); }
+.tip-card p { margin: 0 0 12px; line-height: 1.5; color: var(--fg-muted); }
+.tip-card .tip-warn { color: var(--warn); }
+.tip-card .btn-row { justify-content: flex-end; }
 .menu-hint-inline { margin-left: auto; font-size: 11px; color: var(--fg-faint); }
 @media (max-width: 640px) { .guide, .explore { flex-direction: column; height: 85vh; } .guide-side, .explore-rail { flex: none; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--line-subtle); } }
 

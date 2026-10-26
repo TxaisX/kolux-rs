@@ -1,0 +1,5 @@
+box 1: NOT PROVEN (LIVE): reopened panes showing the saved output ABOVE a new prompt is an xterm display result (TerminalPane.tsx replay + history.ts restoreTail/placeNote). Pieces that pass: src/terminal/history.test.ts; terminal.rs term_106_saved_output_keeps_the_newest_lines_within_the_cap_and_prunes_only_known_keys.
+box 2: src/terminal/__cards__/TERM-106.test.ts — pnpm exec vitest run src/terminal/__cards__/TERM-106.test.ts — Test Files 1 passed (1), Tests 1 passed (1)
+  asserts: layoutWriter writes the three-tab layout, then (after the user closes tab 3) the two-tab layout; restoreLayout of the written copy has keys [1,2], activeTab {1:1,2:2}, focused 2, and no key 3 anywhere.
+  MIRROR: App.tsx:2041 (setPanes filter on close) and App.tsx:1568 (layoutOf of live panes -> layoutWriter.set) are rebuilt in the test around the real layoutOf / layoutWriter / restoreLayout. The write is debounced 400 ms (layoutSave.ts), so a crash within 400 ms of a close would still bring the tab back (not asserted either way).
+gates: pnpm exec tsc --noEmit rc=0

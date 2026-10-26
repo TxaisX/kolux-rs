@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { VOCAB, ageLabel, branchChip, foundAgent, headerOf, nextNeedsYou, takesInband, titleState, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
+import { VOCAB, ageLabel, branchChip, foundAgent, headerOf, needsYouCount, nextNeedsYou, takesInband, titleState, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
 
 test("a plain shell reads as a terminal with a neutral status; an agent's word is tinted (TERM-020, TERM-021)", () => {
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ word: "Ready", tone: "", needsYou: false });
@@ -148,4 +148,10 @@ test("an in-band status moves the dot only in an agent pane, never in a plain sh
   expect(takesInband("codex", "codex", null)).toBe(true);
   expect(takesInband("shell", "gemini", null)).toBe(true);
   expect(takesInband("shell", null, "claude")).toBe(true);
+});
+
+test("the global needs-you count is the panes waiting that are still open (ux fix 2)", () => {
+  expect(needsYouCount([1, 2, 3], new Set([1, 3]))).toBe(2);
+  expect(needsYouCount([1, 2, 3], new Set([9]))).toBe(0);
+  expect(needsYouCount([], new Set())).toBe(0);
 });

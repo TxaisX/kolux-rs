@@ -31,10 +31,16 @@ impl Store {
 
     /// Row 785: a settings file that lacks the look or the mode gets them, once, as the page
     /// would (SET-037, T-418: Classic for a profile that had settings, New for an empty one, Dark).
-    /// Called once at startup, before the window, so it never waits on the page's first read, which a
-    /// slow start abandons and leaves for the next launch. A file that has both is not written; no file or an unreadable one is left alone.
+    /// Row 785-b: a profile with no file at all is an empty one and gets the file. Called once at
+    /// startup, before the window, so it never waits on the page's first read, which a slow start
+    /// abandons and leaves for the next launch. A file that has both is not written; an unreadable
+    /// one, a last good copy and a missing file that leaves a .bak behind are left alone.
     pub fn stamp_look(&self) {
-        let Ok(Read::File(_, now)) = self.read_file() else { return };
+        let now = match self.read_file() {
+            Ok(Read::File(_, now)) => now,
+            Ok(Read::None) if !self.bak_path().exists() => serde_json::json!({}),
+            _ => return,
+        };
         let Some(obj) = now.as_object() else { return };
         let has = |key: &str, ok: &[&str]| obj.get(key).and_then(|v| v.as_str()).is_some_and(|v| ok.contains(&v));
         let mut set = serde_json::Map::new();
@@ -519,15 +525,60 @@ mod tests {
     }
 
     #[test]
-    fn row785_no_file_and_a_corrupt_file_are_left_alone() {
-        let dir = temp_dir("r785-none");
-        let s = Store::open(&dir).unwrap();
-        s.stamp_look();
-        assert!(!dir.join("settings.json").exists(), "a fresh profile gets no file at startup");
-        done(dir, s);
+    fn row785_a_corrupt_file_is_left_alone() {
         let (dir, s) = open_over("r785-corrupt", b"{ half a file");
         assert_eq!(fs::read(dir.join("settings.json")).unwrap(), b"{ half a file", "never overwritten");
         assert!(!dir.join("settings.json.bak").exists());
+        done(dir, s);
+    }
+
+    #[test]
+    fn row785_a_file_read_from_its_last_good_copy_is_left_alone() {
+        let dir = temp_dir("r785-bak");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("settings.json"), b"{ half a file").unwrap();
+        fs::write(dir.join("settings.json.bak"), br#"{"theme":"mine"}"#).unwrap();
+        let s = Store::open(&dir).unwrap();
+        s.stamp_look();
+        assert_eq!(fs::read(dir.join("settings.json")).unwrap(), b"{ half a file");
+        assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), br#"{"theme":"mine"}"#);
+        assert_eq!(fs::read_dir(&dir).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().contains("corrupt")).count(), 0, "nothing set aside");
+        done(dir, s);
+    }
+
+    #[test]
+    fn row785b_a_profile_with_no_file_gets_one_with_look_and_mode_and_a_second_start_keeps_its_bytes() {
+        let dir = temp_dir("r785b-none");
+        let s = Store::open(&dir).unwrap();
+        assert!(!dir.join("settings.json").exists());
+        s.stamp_look();
+        let first = fs::read(dir.join("settings.json")).expect("the file is there after the stamp");
+        let now: serde_json::Value = serde_json::from_slice(&first).unwrap();
+        assert_eq!(now, serde_json::json!({ "uiLook": "new", "appearanceMode": "dark" }));
+        let names = |d: &Path| {
+            let mut v: Vec<_> = fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name()).collect();
+            v.sort();
+            v
+        };
+        let listing = names(&dir);
+        s.stamp_look();
+        drop(s);
+        let s = Store::open(&dir).unwrap();
+        s.stamp_look();
+        assert_eq!(fs::read(dir.join("settings.json")).unwrap(), first, "later starts rewrite nothing");
+        assert_eq!(names(&dir), listing, "and add no file beside it");
+        done(dir, s);
+    }
+
+    #[test]
+    fn row785b_a_missing_file_with_a_last_good_copy_beside_it_is_left_alone() {
+        let dir = temp_dir("r785b-bak-only");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("settings.json.bak"), br#"{"theme":"mine"}"#).unwrap();
+        let s = Store::open(&dir).unwrap();
+        s.stamp_look();
+        assert!(!dir.join("settings.json").exists(), "the only copy of someone's settings is not buried under a new file");
+        assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), br#"{"theme":"mine"}"#);
         done(dir, s);
     }
 }

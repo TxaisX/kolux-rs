@@ -376,9 +376,14 @@ function StartupTip() {
   }, []);
   if (!tip) return null;
   const close = () => (setTip(null), setSetup(false));
+  return <TipView tip={tip} cli={cli} setup={setup} onSetup={() => setSetup(true)} onClose={close} />;
+}
+
+/** The tip's markup, apart from the launch timing above. */
+export function TipView({ tip, cli, setup, onSetup, onClose: close }: { tip: TipId; cli: CliStatus | null; setup: boolean; onSetup: () => void; onClose: () => void }) {
   return (
-    <div className="ask-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className="tip" role="dialog" aria-modal="true" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
+    <div className="tip-dock">
+      <div className="tip-card" role="dialog" aria-modal="false" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
         <span className="tip-badge">Tip</span>
         {tip !== "cli" && tip !== "palette" ? (
           <>
@@ -386,7 +391,7 @@ function StartupTip() {
             <p>{MOVED.find((m) => m.id === tip)?.text}</p>
             <div className="btn-row">
               <span className="spacer" />
-              <button className="btn primary" onClick={close} autoFocus>
+              <button className="btn primary" onClick={close}>
                 Got it
               </button>
             </div>
@@ -402,11 +407,11 @@ function StartupTip() {
             {cli?.installed && !cli.onPath && <p className="tip-warn">Needs attention: the kolux command is installed, but terminals outside Kolux cannot find it.</p>}
             {setup && <TipSetup />}
             <div className="btn-row">
-              <button className="btn" onClick={close} autoFocus>
+              <button className="btn" onClick={close}>
                 {setup ? "Close" : "Not now"}
               </button>
               {!setup && (
-                <button className="btn primary" onClick={() => setSetup(true)}>
+                <button className="btn primary" onClick={onSetup}>
                   Install CLI &amp; Skills
                 </button>
               )}
@@ -421,7 +426,7 @@ function StartupTip() {
             <p>Type part of a name to switch, or a new name to create a workspace. Change the keys in Settings › Shortcuts.</p>
             <div className="btn-row">
               <span className="spacer" />
-              <button className="btn primary" onClick={close} autoFocus>
+              <button className="btn primary" onClick={close}>
                 Got it
               </button>
             </div>

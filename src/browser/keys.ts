@@ -3,14 +3,18 @@
 // `browser-key` event; the pane then replays it on the window after its split takes focus, so the
 // app's normal key handling runs, customised bindings included. Chords a page needs for its own
 // editing stay with the page whatever the keymap says.
-import { type Keymap, parseChord } from "../keys/keymap";
+import { type Keymap, matchEvent, parseChord } from "../keys/keymap";
 
 /** One chord as the page matches it: modifiers as flags, the key as the keymap names it; `i` for
- * the tab-number chord, which takes any digit 1-9. */
-export type PageKey = { c?: 1; m?: 1; a?: 1; s?: 1; k: string; i?: 1 };
+ * the tab-number chord, which takes any digit 1-9; `n` for a chord the page keeps while text is selected. */
+export type PageKey = { c?: 1; m?: 1; a?: 1; s?: 1; k: string; i?: 1; n?: 1 };
 
-/** Editing chords the page keeps, whatever the keymap binds them to (browser.grabElement is Mod+C). */
+/** Editing chords the page keeps, whatever the keymap binds them to. The one exception is the chord bound
+ * to browser.grabElement (Mod+C): it goes to the app only while no text is selected (T-240, BROW-035). */
 export const PAGE_RESERVED = new Set(["Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Z", "Mod+Shift+Z", "Mod+Y", "Mod+Shift+V", "Mod+Insert", "Shift+Insert"]);
+
+/** The command that grabs a page element. */
+const GRAB_ID = "browser.grabElement";
 
 /** The scopes whose chords a page forwards: the tab strip, the browser pane's own and the global ones. */
 const SCOPES = new Set(["tabs", "browser", "global"]);
@@ -23,7 +27,9 @@ export function pageKeys(map: Keymap): PageKey[] {
   for (const b of map.bindings.values()) {
     if (!SCOPES.has(b.action.scope) || b.dropped) continue;
     for (const chord of b.chords) {
-      if (PAGE_RESERVED.has(chord)) continue;
+      const reserved = PAGE_RESERVED.has(chord);
+      const grab = b.action.id === GRAB_ID;
+      if (reserved && !grab) continue;
       const c = parseChord(chord);
       if ("error" in c) continue;
       const d: PageKey = { k: c.key };
@@ -32,6 +38,7 @@ export function pageKeys(map: Keymap): PageKey[] {
       if (c.alt) d.a = 1;
       if (c.shift) d.s = 1;
       if (b.action.index) d.i = 1;
+      if (reserved && grab) d.n = 1;
       // a chord with no modifier would take plain typing from the page
       if (!d.c && !d.m && !d.a) continue;
       const key = JSON.stringify(d);
@@ -50,4 +57,11 @@ export type KeyEvent = { id: number; k: string; c: string; m: string };
 export function keyEventInit(p: KeyEvent): KeyboardEventInit {
   const m = p.m ?? "";
   return { key: p.k ?? "", code: p.c ?? "", ctrlKey: m.includes("c"), metaKey: m.includes("m"), altKey: m.includes("a"), shiftKey: m.includes("s"), modifierAltGraph: m.includes("g"), bubbles: true, cancelable: true };
+}
+
+/** Whether a key press the page forwarded is the chord bound to grabbing an element. */
+export function startsGrab(map: Keymap, p: KeyEvent): boolean {
+  const m = p.m ?? "";
+  const e = { key: p.k ?? "", code: p.c ?? "", ctrlKey: m.includes("c"), metaKey: m.includes("m"), altKey: m.includes("a"), shiftKey: m.includes("s"), getModifierState: (k: string) => k === "AltGraph" && m.includes("g") };
+  return matchEvent(map, e, ["browser"])?.id === GRAB_ID;
 }

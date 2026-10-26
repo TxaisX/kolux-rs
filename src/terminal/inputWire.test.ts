@@ -107,3 +107,16 @@ test("SET-022: applying the settings replaces what the panes read", () => {
   applyInput(null, "linux");
   expect(currentInput().hidePointer).toBe(false);
 });
+
+test("ux-fix-1: nine panes mounting probe the GPU once and give the probe's context back (no 'Too many active WebGL contexts')", () => {
+  let made = 0;
+  let lost = 0;
+  const gl = {
+    getExtension: (n: string) => (n === "WEBGL_lose_context" ? { loseContext: () => lost++ } : { UNMASKED_RENDERER_WEBGL: 1 }),
+    getParameter: () => "NVIDIA GeForce RTX 4070",
+  };
+  const doc = { createElement: () => ({ getContext: () => (made++, gl) }) } as never;
+  for (let i = 0; i < 9; i++) expect(probeGpu(doc)).toEqual({ webgl2: true, software: false });
+  expect(made).toBe(1);
+  expect(lost).toBe(1);
+});
