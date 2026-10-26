@@ -75,6 +75,7 @@ Rules: searches go to the chosen engine, one of Google, Duck Duck Go, Bing or Ka
   (Kolux RS, T-012-b-fix: inside the page a script of ours takes the chord and hands it to the
   app as a cancelled `kolux-chord:` navigation; the split the page sits in becomes the focused
   one as the chord arrives.)
+  (Kolux RS: a pasted file path is shown through the preview chip, BROW-039; tabs never load file: because they carry the IPC script.)
 Acceptance:
   - [x] Type rust ownership and press Enter → results from the configured search engine. (cards; evidence/cards-BROW-003.txt)
   - [x] Type example.com → the HTTPS site loads; type localhost:3000 → it loads over HTTP. (cards; evidence/cards-BROW-003.txt)
@@ -124,9 +125,9 @@ Rules: the endpoint responds only under a secret path, and the bare host and por
   headers, a foreign Host or no token gets 404 and an empty body, an HTTP line on the CLI port gets
   nothing back.)
 Acceptance:
-  - [ ] From a page in any browser, try to reach the endpoint → refused.
-  - [ ] Connect to the bare port → refused; connect with the address Kolux handed the agent →
-        works.
+  - [x] From a page in any browser, try to reach the endpoint → refused. (cards; evidence/cards-BROW-051.txt)
+  - [x] Connect to the bare port → refused; connect with the address Kolux handed the agent →
+        works. (cards; evidence/cards-BROW-051.txt)
 Compat: —
 Source: D-13-051
 
@@ -162,7 +163,7 @@ Rules: the number of recovery attempts is limited; a rebuild that hangs is retri
   mismatched page is turned away.
 Acceptance:
   - [ ] Kill the process behind a tab → the tab returns to its page with no action from the user.
-  - [ ] Force recovery to fail → an error shows; retry from the toolbar → the page is back.
+  - [x] Force recovery to fail → an error shows; retry from the toolbar → the page is back. (cards; evidence/cards-BROW-009.txt)
 Compat: —
 Source: D-13-009
 
