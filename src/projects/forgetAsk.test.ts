@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "project_list") return Promise.resolve([{ id: "p1", name: "app", path: "C:/w/app" }]);
     if (cmd === "workspace_scan") return Promise.resolve({ list: h.wt, unseen: [] });
     if (cmd === "workspaces_place_get") return Promise.resolve({ dir: "", flat: false, used: [], fromEnv: false });
+    if (cmd === "scm_prs_poll") return Promise.resolve({ prs: [], limitedUntil: null });
     if (cmd === "setup_suggestion") return Promise.resolve({ kind: "none" });
     if (cmd === "groups_get" || cmd === "activity_get" || cmd === "project_icons_list") return Promise.resolve({});
     return Promise.resolve(null);
