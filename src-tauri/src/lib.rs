@@ -55,7 +55,7 @@ mod names;
 mod newproject;
 mod notifications;
 mod onboarding;
-mod orchestration;
+pub mod orchestration;
 mod foreground;
 pub mod procs;
 mod protected;
