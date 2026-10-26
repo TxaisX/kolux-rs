@@ -152,10 +152,12 @@ export function overtakenBy(running: PendingCreate[], next: PendingCreate): numb
   return running.filter((p) => p.ticket !== next.ticket && !p.more).map((p) => p.ticket);
 }
 
-/** The sentence under the name field: where the branch and folder will go, or why it is refused. */
-export function previewSentence(typed: string, preview: Preview | null, project: Project | null): string {
+/** The sentence under the name field: where the branch and folder will go, or why it is refused.
+ * `pending`: Git has not answered for this name yet, so a missing preview is not a refusal. */
+export function previewSentence(typed: string, preview: Preview | null, project: Project | null, pending = false): string {
   if (!project) return "Add a project first.";
   if (typed.trim() === "") return "Type a name; its branch and folder are shown here.";
+  if (preview === null && pending) return "Working out the branch and folder…";
   if (preview === null) return "That name leaves nothing usable for a branch; use some letters or digits.";
   return `branch ${preview.branch} · folder ${preview.folder}`;
 }
