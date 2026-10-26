@@ -17,6 +17,15 @@ export const freshKeys = (c: Checked): string[] => c.report.notice.filter((k) =>
  * not again in the same session (`shownThisSession`), whether it was dismissed or opened. */
 export const noticeShown = (c: Checked | null, settingsLoaded: boolean, shownThisSession: boolean): boolean => !!c && settingsLoaded && !shownThisSession && c.report.available > 0 && freshKeys(c).length > 0;
 
+let claimed = false;
+/** After-list row 62: true the first time the notice may show this session; the window and the Skills page share the one claim. */
+export function claimNotice(c: Checked | null, settingsLoaded: boolean): boolean {
+  if (!noticeShown(c, settingsLoaded, claimed)) return false;
+  claimed = true;
+  return true;
+}
+export const resetNoticeClaim = () => void (claimed = false);
+
 export const noticeText = (n: number): string => (n === 1 ? "1 Kolux skill has an update." : `${n} Kolux skills have updates.`);
 
 /** Names the notice offers: skills with a qualifying copy. */

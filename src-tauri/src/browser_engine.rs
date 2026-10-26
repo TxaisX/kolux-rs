@@ -21,6 +21,8 @@
 //!   in native mode (`profiles::firefox_at` decides).
 //! - T-272-b (BROW-032): a page's permission requests are answered by `permissions::answer`; a
 //!   refusal is told to its pane (PERMISSION_EVENT) with the permission named.
+//! - After-list 285 (BROW-040): a preview is denied every permission request, and its embedded
+//!   frames load only from its own folder (`preview::frame_may_load`, per frame start).
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Webview};
@@ -30,11 +32,12 @@ mod imp {
     use crate::browser::certs;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use std::sync::mpsc::Sender;
-    use crate::browser::{crash, holder, permissions, profiles};
-    use tauri::Emitter;
+    use crate::browser::{cookies, crash, holder, permissions, preview, profiles};
+    use cookies::Entry;
+    use tauri::webview::cookie::SameSite;
     use std::path::PathBuf;
-    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, NavigationStartingEventHandler, PermissionRequestedEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
-    use windows::core::{w, Interface, HSTRING, PWSTR};
+    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, GetCookiesCompletedHandler, NavigationStartingEventHandler, PermissionRequestedEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
+    use windows::core::{w, Interface, BOOL, HSTRING, PWSTR};
     use windows::Win32::System::Com::CoTaskMemFree;
 
     /// A string the engine hands over in memory the caller frees; empty when it hands none.
@@ -72,6 +75,20 @@ mod imp {
         }
         // SAFETY: CoreWebView2 hands back the page's engine object.
         let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        // After-list 285 (BROW-040): while this tab shows a preview, an embedded frame may load
+        // only from the preview's own folder; `preview::frame_may_load` decides, per frame start.
+        let frames = NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            // SAFETY: Uri writes a CoTaskMem string `take` frees; SetCancel only records the answer.
+            let uri = unsafe { take(|p| args.Uri(p)) };
+            if !preview::frame_may_load(id, &uri) {
+                unsafe { args.SetCancel(true) }?;
+            }
+            Ok(())
+        }));
+        let mut frame_token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_FrameNavigationStarting(&frames, &mut frame_token) };
         if let Ok(core14) = core.cast::<ICoreWebView2_14>() {
             let handler = ServerCertificateErrorDetectedEventHandler::create(Box::new(move |_sender, args| {
                 let Some(args) = args else { return Ok(()) };
@@ -227,9 +244,13 @@ mod imp {
             let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
             // SAFETY: PermissionKind only writes a plain value; SetState only records the answer.
             unsafe { args.PermissionKind(&mut kind) }?;
-            if let permissions::Answer::Deny(text) = permissions::answer(kind.0) {
-                unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?;
-                let _ = app.emit(crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }));
+            match permissions::answer_for(kind.0, preview::is_preview(id)) {
+                permissions::Answer::Engine => {}
+                permissions::Answer::DenyQuiet => unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?,
+                permissions::Answer::Deny(text) => {
+                    unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?;
+                    crate::browser::notices::send(&app, id, crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }), Some(text.to_string()));
+                }
             }
             Ok(())
         }));
@@ -272,6 +293,99 @@ mod imp {
         if let Err(e) = start() {
             let _ = fail.send(Err(e.message()));
         }
+    }
+
+    fn cookie_manager(controller: &ICoreWebView2Controller) -> windows::core::Result<ICoreWebView2CookieManager> {
+        // SAFETY: CoreWebView2 and CookieManager hand back the page's engine objects.
+        unsafe { controller.CoreWebView2() }?.cast::<ICoreWebView2_2>().and_then(|c| unsafe { c.CookieManager() })
+    }
+
+    /// An engine cookie with its domain exactly as stored (leading dot kept; the cookie crate drops it).
+    fn entry_of(c: &ICoreWebView2Cookie) -> windows::core::Result<Entry> {
+        let mut same = COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX;
+        let (mut http_only, mut secure, mut session) = (BOOL::default(), BOOL::default(), BOOL::default());
+        let mut expires = 0.0;
+        // SAFETY: the getters write plain values, or CoTaskMem strings `take` frees.
+        unsafe {
+            c.SameSite(&mut same)?;
+            c.IsHttpOnly(&mut http_only)?;
+            c.IsSecure(&mut secure)?;
+            c.IsSession(&mut session)?;
+            c.Expires(&mut expires)?;
+        }
+        let same_site = match same {
+            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT => Some(SameSite::Strict),
+            COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE => Some(SameSite::None),
+            _ => Some(SameSite::Lax),
+        };
+        Ok(Entry {
+            // SAFETY: Name, Value, Domain and Path write CoTaskMem strings `take` frees.
+            name: unsafe { take(|p| c.Name(p)) },
+            value: unsafe { take(|p| c.Value(p)) },
+            domain: unsafe { take(|p| c.Domain(p)) },
+            path: unsafe { take(|p| c.Path(p)) },
+            secure: secure.as_bool(),
+            http_only: http_only.as_bool(),
+            same_site,
+            expires: if session.as_bool() || expires < 0.0 { None } else { Some(expires as i64) },
+        })
+    }
+
+    fn cookie_to_engine(m: &ICoreWebView2CookieManager, e: &Entry) -> windows::core::Result<ICoreWebView2Cookie> {
+        // SAFETY: the strings outlive the call; CreateCookie hands back a new engine cookie.
+        let c = unsafe { m.CreateCookie(&HSTRING::from(e.name.as_str()), &HSTRING::from(e.value.as_str()), &HSTRING::from(cookies::engine_domain(e)), &HSTRING::from(e.path.as_str())) }?;
+        // SAFETY: the setters only record plain values on the cookie object.
+        unsafe {
+            if let Some(at) = e.expires {
+                c.SetExpires(at as f64)?;
+            }
+            c.SetIsHttpOnly(e.http_only)?;
+            c.SetIsSecure(e.secure)?;
+            if let Some(s) = e.same_site {
+                c.SetSameSite(match s {
+                    SameSite::Strict => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
+                    SameSite::None => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE,
+                    SameSite::Lax => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX,
+                })?;
+            }
+        }
+        Ok(c)
+    }
+
+    /// Every cookie of the page's profile with its domain kept as stored; the list goes to `tx`.
+    pub fn cookies(controller: &ICoreWebView2Controller, tx: Sender<Result<Vec<Entry>, String>>) {
+        let fail = tx.clone();
+        let start = move || -> windows::core::Result<()> {
+            let m = cookie_manager(controller)?;
+            let done = GetCookiesCompletedHandler::create(Box::new(move |r, list| {
+                let read = || -> windows::core::Result<Vec<Entry>> {
+                    r?;
+                    let Some(list) = list else { return Ok(Vec::new()) };
+                    let mut n = 0;
+                    // SAFETY: Count and GetValueAtIndex only read the engine's list.
+                    unsafe { list.Count(&mut n) }?;
+                    Ok((0..n).filter_map(|i| unsafe { list.GetValueAtIndex(i) }.ok().and_then(|c| entry_of(&c).ok())).collect())
+                };
+                let _ = tx.send(read().map_err(|e| e.message()));
+                Ok(())
+            }));
+            // SAFETY: a null address asks for every cookie; the engine keeps the handler until it runs.
+            unsafe { m.GetCookies(windows::core::PCWSTR::null(), &done) }
+        };
+        if let Err(e) = start() {
+            let _ = fail.send(Err(e.message()));
+        }
+    }
+
+    /// Adds or replaces one cookie in the page's profile (`delete`: removes it), scope kept exactly.
+    pub fn put_cookie(controller: &ICoreWebView2Controller, e: &Entry, delete: bool, tx: Sender<Result<(), String>>) {
+        let run = || -> windows::core::Result<()> {
+            let m = cookie_manager(controller)?;
+            let c = cookie_to_engine(&m, e)?;
+            // SAFETY: the engine takes its own cookie object back.
+            unsafe { if delete { m.DeleteCookie(&c) } else { m.AddOrUpdateCookie(&c) } }
+        };
+        let _ = tx.send(run().map_err(|e| e.message()));
     }
 }
 
@@ -366,6 +480,46 @@ pub fn print_pdf(v: &Webview, path: &str, wait: Duration) -> Result<bool, String
     {
         let _ = (v, path, wait);
         Err("printing needs WebView2 (Windows)".into())
+    }
+}
+
+/// After-list 612: the page profile's cookies with each domain as stored, leading dot kept (the
+/// cookie crate's getter drops it, so host-only and domain cookies could not be told apart).
+pub fn cookies(v: &Webview, wait: Duration) -> Result<Vec<super::cookies::Entry>, String> {
+    #[cfg(windows)]
+    {
+        on_engine(v, wait, imp::cookies)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (v, wait);
+        Err("cookies need WebView2 (Windows)".into())
+    }
+}
+
+/// After-list 612: adds or replaces one cookie, host-only or for subdomains as its domain says.
+pub fn set_cookie(v: &Webview, e: super::cookies::Entry, wait: Duration) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        on_engine(v, wait, move |c, tx| imp::put_cookie(c, &e, false, tx))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (v, e, wait);
+        Err("cookies need WebView2 (Windows)".into())
+    }
+}
+
+/// After-list 612: removes the cookie of that name, domain (dot kept) and path.
+pub fn delete_cookie(v: &Webview, e: super::cookies::Entry, wait: Duration) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        on_engine(v, wait, move |c, tx| imp::put_cookie(c, &e, true, tx))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (v, e, wait);
+        Err("cookies need WebView2 (Windows)".into())
     }
 }
 

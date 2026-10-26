@@ -311,7 +311,7 @@ pub fn task_update(tasks: &mut [Value], dispatches: &mut [Value], id: &str, to: 
 /// waiting on it, failed fails it. From any other pane, or for a worker terminal of an earlier
 /// start, it settles nothing and says why. A report that cannot be shown to settle its task fails.
 /// Anything else is Null.
-pub fn report(tasks: &mut [Value], dispatches: &mut [Value], from: &str, a: &Value, now: u64) -> Result<Value, Fail> {
+pub fn report(tasks: &mut [Value], dispatches: &mut [Value], from: &str, a: &Value, now: u64, generation_of: &dyn Fn(u32) -> Option<u64>) -> Result<Value, Fail> {
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty());
     let kind = text("type").unwrap_or("status");
     let (true, Some(id)) = (kind == "worker_done" || kind == "heartbeat", text("dispatchId")) else {
@@ -328,6 +328,10 @@ pub fn report(tasks: &mut [Value], dispatches: &mut [Value], from: &str, a: &Val
     // ORCH-067: a dispatch with a pass settles only on reports that carry it; the mail still went.
     if let Some(why) = pass_refusal(&dispatches[i], a) {
         return Ok(json!({ "dispatchId": id, "settles": false, "why": format!("{why}, so this report is mail only and {} is unchanged", dispatches[i]["taskId"].as_str().unwrap_or("its task")) }));
+    }
+    // Row 211: a pass minted for an earlier process of this pane is dead though the handle still matches.
+    if let Some(why) = stale_pass(&dispatches[i], generation_of) {
+        return Ok(json!({ "dispatchId": id, "settles": false, "code": "stale_pass", "why": format!("{why}, so this report is mail only and {} is unchanged", dispatches[i]["taskId"].as_str().unwrap_or("its task")) }));
     }
     if kind == "heartbeat" {
         dispatches[i]["lastBeatAt"] = json!(now);
@@ -662,6 +666,25 @@ pub fn pass_refusal(d: &Value, a: &Value) -> Option<String> {
         Some(_) => Some(format!("the {PASS_OPTION} given is not {id}'s pass (another worker's, another dispatch's, or an earlier process's); use the one in {id}'s brief")),
         None => Some(format!("{id} reports with its dispatch pass: add {PASS_OPTION} <pass> from the ready-made commands in its brief")),
     }
+}
+
+/// Row 211: the field a dispatch stores the pane's process generation in when its pass is minted.
+pub const PASS_GENERATION: &str = "passGeneration";
+
+/// Row 211 seam: how many processes terminal `terminal` has had in its pane (bumps on every
+/// spawn/respawn), or None for a terminal Kolux does not know.
+pub fn process_generation(terminals: &crate::terminal::Terminals, terminal: u32) -> Option<u64> {
+    terminals.process_generation(terminal)
+}
+
+/// Why dispatch `d`'s pass is dead: it was minted for an earlier process of the pane than the one
+/// running there now (`generation_of` reads the current one). A dispatch without a stamp, or a
+/// pane that cannot say, is not turned away: not knowing is no evidence of a restart.
+pub fn stale_pass(d: &Value, generation_of: &dyn Fn(u32) -> Option<u64>) -> Option<String> {
+    let minted = d[PASS_GENERATION].as_u64()?;
+    let now = generation_of(d["terminal"].as_u64()? as u32)?;
+    let id = d["id"].as_str().unwrap_or("this dispatch");
+    (now != minted).then(|| format!("{id}'s pass was minted for an earlier process in this pane (process {minted}; the pane now runs process {now}), so it is no longer valid; ask the coordinator to dispatch the work again"))
 }
 
 /// Every pass on record, for the reads that must hide them.
@@ -2269,7 +2292,7 @@ mod tests {
             // ORCH-015: another pane's report is delivered as mail, but it settles nothing.
             let (mut t, mut dd) = (vec![json!({ "id": "task-1", "runId": run, "status": "dispatched", "dispatchId": "dispatch-1" })], d.clone());
             assert!(m.send("term-3", &a, &d, &live, 2).is_ok());
-            let no = report(&mut t, &mut dd, "term-3", &a, 2).unwrap();
+            let no = report(&mut t, &mut dd, "term-3", &a, 2, &|_| None).unwrap();
             assert_eq!(no["settles"], false, "{no}");
             assert!(no["why"].as_str().unwrap().contains("term-2"), "{no}");
             assert_eq!((t[0]["status"].as_str(), dd[0].get("lastBeatAt")), (Some("dispatched"), None));
@@ -2279,7 +2302,7 @@ mod tests {
         let mut old = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": u64::from(std::process::id()) + 1 })];
         let a = json!({ "to": to, "subject": "done", "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1" });
         let mut t = vec![json!({ "id": "task-1", "runId": run, "status": "dispatched", "dispatchId": "dispatch-1" })];
-        assert!(report(&mut t, &mut old, "term-2", &a, 4).unwrap()["why"].as_str().unwrap().contains("earlier start"));
+        assert!(report(&mut t, &mut old, "term-2", &a, 4, &|_| None).unwrap()["why"].as_str().unwrap().contains("earlier start"));
         assert_eq!(t[0]["status"], "dispatched");
     }
 
@@ -2299,17 +2322,17 @@ mod tests {
         let to = format!("run:{run}");
         // A heartbeat from the worker's own terminal is stamped with when Kolux got it.
         let beat = json!({ "to": to, "subject": "working", "type": "heartbeat", "dispatchId": "dispatch-1" });
-        assert_eq!(report(&mut tasks, &mut d, "term-2", &beat, 50).unwrap()["lastBeatAt"], 50);
+        assert_eq!(report(&mut tasks, &mut d, "term-2", &beat, 50, &|_| None).unwrap()["lastBeatAt"], 50);
         assert_eq!(d[0]["lastBeatAt"], 50);
         let rows = worker_list(&tasks, &d, Some(&run), "named", None, None, 50, &live).unwrap();
         assert_eq!(rows["workers"].as_array().unwrap().iter().find(|w| w["dispatchId"] == "dispatch-1").unwrap()["lastBeatAt"], 50);
         // The coordinator writing one on the worker's behalf: delivered as mail, settles nothing.
         let done = json!({ "to": to, "subject": "task-1 done", "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1", "filesModified": "a.rs" });
         assert!(m.send("term-1", &done, &d, &live, 60).is_ok());
-        assert_eq!(report(&mut tasks, &mut d, "term-1", &done, 60).unwrap()["settles"], false);
+        assert_eq!(report(&mut tasks, &mut d, "term-1", &done, 60, &|_| None).unwrap()["settles"], false);
         assert_eq!((tasks[0]["status"].as_str(), d[0]["status"].as_str(), tasks[1]["status"].as_str()), (Some("dispatched"), Some("running"), Some("pending")));
         // The worker's own succeeded report completes the task and frees the one waiting on it.
-        let own = report(&mut tasks, &mut d, "term-2", &done, 70).unwrap();
+        let own = report(&mut tasks, &mut d, "term-2", &done, 70, &|_| None).unwrap();
         assert_eq!((own["status"].as_str(), own["dispatchStatus"].as_str()), (Some("completed"), Some("completed")), "{own}");
         assert_eq!((tasks[0]["status"].as_str(), tasks[0]["result"].as_str(), tasks[1]["status"].as_str()), (Some("completed"), Some("task-1 done"), Some("ready")));
         // Once settled, a replayed report or a late heartbeat is turned away and changes nothing.
@@ -2321,13 +2344,13 @@ mod tests {
         // is not taken, never read as success.
         let failed = json!({ "to": to, "subject": "tests red", "body": "two tests fail", "type": "worker_done", "outcome": "failed", "dispatchId": "dispatch-2" });
         tasks[2]["dispatchId"] = json!("dispatch-9");
-        assert_eq!(report(&mut tasks, &mut d, "term-3", &failed, 90).unwrap_err().code, "outcome_unknown");
+        assert_eq!(report(&mut tasks, &mut d, "term-3", &failed, 90, &|_| None).unwrap_err().code, "outcome_unknown");
         tasks[2]["dispatchId"] = json!("dispatch-2");
-        report(&mut tasks, &mut d, "term-3", &failed, 91).unwrap();
+        report(&mut tasks, &mut d, "term-3", &failed, 91, &|_| None).unwrap();
         assert_eq!((tasks[2]["status"].as_str(), tasks[2]["result"].as_str(), d[1]["status"].as_str()), (Some("failed"), Some("two tests fail"), Some("failed")));
         // Ordinary mail, and a report naming no dispatch, settle nothing.
-        assert!(report(&mut tasks, &mut d, "term-2", &json!({ "subject": "hi" }), 92).unwrap().is_null());
-        assert!(report(&mut tasks, &mut d, "term-2", &json!({ "subject": "x", "type": "worker_done", "outcome": "succeeded" }), 92).unwrap().is_null());
+        assert!(report(&mut tasks, &mut d, "term-2", &json!({ "subject": "hi" }), 92, &|_| None).unwrap().is_null());
+        assert!(report(&mut tasks, &mut d, "term-2", &json!({ "subject": "x", "type": "worker_done", "outcome": "succeeded" }), 92, &|_| None).unwrap().is_null());
     }
 
     #[test]
@@ -3038,24 +3061,58 @@ mod tests {
             let (mut t, mut dd) = (tasks(), d.clone());
             // The mail still goes; the task does not move; the reply names the option.
             assert!(m.send("term-2", &a, &d, &live, 2).is_ok());
-            let no = report(&mut t, &mut dd, "term-2", &a, 2).unwrap();
+            let no = report(&mut t, &mut dd, "term-2", &a, 2, &|_| None).unwrap();
             assert_eq!(no["settles"], false, "{no}");
             assert!(no["why"].as_str().unwrap().contains(PASS_OPTION), "{no}");
             assert_eq!(t[0]["status"], "dispatched");
         }
         let beat = json!({ "to": to, "subject": "b", "type": "heartbeat", "dispatchId": "dispatch-1" });
         let (mut t, mut dd) = (tasks(), d.clone());
-        assert_eq!(report(&mut t, &mut dd, "term-2", &beat, 3).unwrap()["settles"], false);
+        assert_eq!(report(&mut t, &mut dd, "term-2", &beat, 3, &|_| None).unwrap()["settles"], false);
         assert!(dd[0].get("lastBeatAt").is_none());
         let ok = json!({ "to": to, "subject": "task-1 done", "type": "worker_done", "outcome": "succeeded", "taskId": "task-1", "dispatchId": "dispatch-1", "dispatchCapability": "secret-1" });
         let (mut t, mut dd) = (tasks(), d.clone());
-        let yes = report(&mut t, &mut dd, "term-2", &ok, 4).unwrap();
+        let yes = report(&mut t, &mut dd, "term-2", &ok, 4, &|_| None).unwrap();
         assert_eq!(t[0]["status"], "completed", "{yes}");
         // A dispatch without a pass (the low-level dispatch command) is tied to its pane as before.
         let mut plain = d.clone();
         plain[0].as_object_mut().unwrap().remove("pass");
         let (mut t, mut dd) = (tasks(), plain);
-        report(&mut t, &mut dd, "term-2", &json!({ "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1", "subject": "s" }), 5).unwrap();
+        report(&mut t, &mut dd, "term-2", &json!({ "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1", "subject": "s" }), 5, &|_| None).unwrap();
+        assert_eq!(t[0]["status"], "completed");
+    }
+
+    /// Row 211: an agent restarted in the same pane keeps the handle but is a new process; the old pass is dead.
+    #[test]
+    fn orch067_e_a_pass_minted_for_an_earlier_process_of_the_pane_settles_nothing() {
+        let run = "run-1";
+        let fresh = || vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": std::process::id(), "pass": "secret-1", PASS_GENERATION: 3 })];
+        let mut d = fresh();
+        let tasks = || vec![json!({ "id": "task-1", "runId": run, "status": "dispatched", "dispatchId": "dispatch-1" })];
+        let done = json!({ "type": "worker_done", "outcome": "succeeded", "taskId": "task-1", "dispatchId": "dispatch-1", "subject": "s", "dispatchCapability": "secret-1" });
+        // The pane has restarted its process (generation 4): the right pass is refused, nothing moves.
+        let mut t = tasks();
+        let no = report(&mut t, &mut d, "term-2", &done, 2, &|term| (term == 2).then_some(4)).unwrap();
+        assert_eq!((no["settles"].clone(), no["code"].clone()), (json!(false), json!("stale_pass")), "{no}");
+        let why = no["why"].as_str().unwrap();
+        assert!(why.contains("earlier process") && why.contains("dispatch-1"), "{why}");
+        assert_eq!(t[0]["status"], "dispatched");
+        let beat = json!({ "type": "heartbeat", "dispatchId": "dispatch-1", "subject": "b", "dispatchCapability": "secret-1" });
+        assert_eq!(report(&mut t, &mut d, "term-2", &beat, 3, &|_| Some(4)).unwrap()["code"], "stale_pass");
+        assert!(d[0].get("lastBeatAt").is_none());
+        // The same process still runs: the pass settles.
+        let mut t = tasks();
+        let mut d = fresh();
+        report(&mut t, &mut d, "term-2", &done, 4, &|_| Some(3)).unwrap();
+        assert_eq!(t[0]["status"], "completed");
+        // A pane that cannot say (or a dispatch from before the stamp) is not turned away.
+        let (mut t, mut d) = (tasks(), fresh());
+        report(&mut t, &mut d, "term-2", &done, 5,&|_| None).unwrap();
+        assert_eq!(t[0]["status"], "completed");
+        let mut d = fresh();
+        d[0].as_object_mut().unwrap().remove(PASS_GENERATION);
+        let mut t = tasks();
+        report(&mut t, &mut d, "term-2", &done, 6, &|_| Some(9)).unwrap();
         assert_eq!(t[0]["status"], "completed");
     }
 

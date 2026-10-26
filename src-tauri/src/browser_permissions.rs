@@ -14,6 +14,8 @@ pub enum Answer {
     Engine,
     /// Refused; the pane shows this notice.
     Deny(String),
+    /// Refused with no notice (autoplay and downloads have their own).
+    DenyQuiet,
 }
 
 /// The engine's permission kinds, as numbered by WebView2.
@@ -46,6 +48,15 @@ pub fn answer(kind: i32) -> Answer {
     }
 }
 
+/// After-list 285 (BROW-040): a preview is denied every request, the kinds the engine would
+/// handle itself included; anything else is `answer`.
+pub fn answer_for(kind: i32, preview: bool) -> Answer {
+    match (answer(kind), preview) {
+        (Answer::Engine, true) => Answer::DenyQuiet,
+        (a, _) => a,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +83,27 @@ mod tests {
         // every named kind but those two is refused with a notice
         for k in 0..=12 {
             assert_eq!(matches!(answer(k), Answer::Deny(_)), k != 7 && k != 9, "kind {k}");
+        }
+    }
+
+    #[test]
+    fn after285_every_request_from_a_preview_is_denied() {
+        for k in 0..=12 {
+            assert_ne!(answer_for(k, true), Answer::Engine, "kind {k}");
+        }
+        assert_eq!(answer_for(2, true), Answer::Deny("camera access was denied".into()));
+        assert_eq!(answer_for(3, true), Answer::Deny("location access was denied".into()));
+        assert_eq!(answer_for(4, true), Answer::Deny("notifications access was denied".into()));
+        // autoplay and downloads have their own notices (or none); no second one here
+        assert_eq!(answer_for(9, true), Answer::DenyQuiet);
+        assert_eq!(answer_for(7, true), Answer::DenyQuiet);
+        assert_eq!(answer_for(77, true), Answer::Deny("permission 77 access was denied".into()));
+    }
+
+    #[test]
+    fn after285_a_page_that_is_not_a_preview_is_answered_as_before() {
+        for k in [-1, 0, 1, 2, 3, 4, 7, 9, 12, 42] {
+            assert_eq!(answer_for(k, false), answer(k), "kind {k}");
         }
     }
 }

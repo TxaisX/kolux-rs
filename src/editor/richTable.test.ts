@@ -13,6 +13,7 @@ import {
   delimLine,
   isDelimiterRow,
   registerTable,
+  respellRow,
   rowLine,
   splitRow,
   TABLE,
@@ -66,6 +67,40 @@ describe("table text", () => {
     caret(ed, 1, 1);
     run(ed, () => $tableAt()!.cell.append($createTextNode("z")));
     expect(out(ed)).toBe("| a | b |\n| --- | --- |\n| 1 | z |");
+  });
+
+  it("row 194: an edited row keeps the file's spelling of the cells that did not change", () => {
+    const md = "|Name|Age|City|\n|---|:-:|--:|\n|Ann   |  31 |Oslo|\n|Bo|7|Rome  |";
+    const edit = (r: number, c: number, text: string) => {
+      const ed = mk(md);
+      caret(ed, r, c);
+      run(ed, () => {
+        const cell = $tableAt()!.cell;
+        cell.clear();
+        cell.append($createTextNode(text));
+      });
+      return out(ed);
+    };
+    // Unchanged cells keep their padding; the edited cell keeps its own padding style.
+    expect(edit(2, 2, "Paris")).toBe("|Name|Age|City|\n|---|:-:|--:|\n|Ann   |  31 |Oslo|\n|Bo|7|Paris |");
+    expect(edit(1, 1, "32")).toBe("|Name|Age|City|\n|---|:-:|--:|\n|Ann   |  32 |Oslo|\n|Bo|7|Rome  |");
+    expect(edit(1, 0, "Annabel")).toBe("|Name|Age|City|\n|---|:-:|--:|\n|Annabel |  31 |Oslo|\n|Bo|7|Rome  |");
+    expect(edit(0, 0, "Who")).toBe("|Who|Age|City|\n|---|:-:|--:|\n|Ann   |  31 |Oslo|\n|Bo|7|Rome  |");
+    // A cell written back to what it was gives the row back byte for byte.
+    expect(edit(2, 0, "Bo")).toBe(md);
+  });
+
+  it("row 194: respellRow keeps indent, an unclosed row end and escaped pipes, and gives up on a changed shape", () => {
+    expect(respellRow("  a | b\\| c  ", ["a", "b\\| c"], ["x", "b\\| c"])).toBe("  x | b\\| c  ");
+    expect(respellRow("|a|b|", ["a", "b"], ["a", "b", "c"])).toBeNull();
+    expect(respellRow("|a|b|", ["a", "q"], ["a", "b"])).toBeNull();
+  });
+
+  it("row 194: a row of a different shape (a column added) is written canonically", () => {
+    const ed = mk("|a|b|\n|---|---|\n|1  |2|");
+    caret(ed, 1, 0);
+    run(ed, () => $addColumn("right"));
+    expect(out(ed).split("\n")[2]).toBe("| 1 |  | 2 |");
   });
 
   it("a table in a note no longer sends the rich view to source, and a pipe in plain text stays text", () => {

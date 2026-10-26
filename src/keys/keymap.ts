@@ -131,6 +131,7 @@ export function resolve(file: unknown, platform: Platform, ignore: readonly stri
   }
   const clashes: Clash[] = [];
   dropConflicts(bindings, errors, platform, new Set(ignore), clashes);
+  yieldToUser(bindings, new Set(ignore), warnings);
   return { platform, bindings, errors, warnings, clashes };
 }
 
@@ -194,7 +195,8 @@ function dropConflicts(bindings: Map<string, Binding>, errors: string[], platfor
     }
     const dropped = new Set<Binding>();
     for (const [key, group] of seen) {
-      if (group.length < 2 || !group.some((b) => b.custom)) continue;
+      // A lone custom chord beats the defaults on it (yieldToUser); only user against user drops.
+      if (group.filter((b) => b.custom).length < 2) continue;
       for (const b of group) if (b.custom) dropped.add(b);
       const chord = key.slice(key.indexOf("|") + 1);
       const ids = group.map((b) => b.action.id);
@@ -204,6 +206,27 @@ function dropConflicts(bindings: Map<string, Binding>, errors: string[], platfor
     const names = [...dropped].map((b) => b.action.title).sort();
     errors.push(`These custom shortcuts clash with another in the same place and were dropped, their defaults stay: ${names.join(", ")}.`);
     for (const b of dropped) bindings.set(b.action.id, { action: b.action, chords: defaultsFor(b.action, platform), custom: false, dropped: true });
+  }
+}
+
+/** A chord the user bound takes it from the built-in defaults that held it in the same place
+ *  (coordinator default; Txais may overrule): the default loses that chord and a warning says so. */
+function yieldToUser(bindings: Map<string, Binding>, ignore: Set<string>, warnings: string[]) {
+  const owner = new Map<string, Binding>();
+  for (const b of bindings.values()) {
+    if (!b.custom || ignore.has(b.action.id)) continue;
+    for (const chord of b.chords) for (const bucket of buckets(b.action)) owner.set(`${bucket}|${chord}`, b);
+  }
+  if (owner.size === 0) return;
+  for (const b of [...bindings.values()]) {
+    if (b.custom || ignore.has(b.action.id)) continue;
+    const lost = b.chords.filter((chord) => buckets(b.action).some((bucket) => owner.has(`${bucket}|${chord}`)));
+    if (lost.length === 0) continue;
+    bindings.set(b.action.id, { ...b, chords: b.chords.filter((c) => !lost.includes(c)) });
+    for (const chord of lost) {
+      const user = buckets(b.action).map((bucket) => owner.get(`${bucket}|${chord}`)).find((x) => x);
+      warnings.push(`"${user?.action.title}" uses ${chord} from your shortcuts file, so "${b.action.title}" no longer has it.`);
+    }
   }
 }
 

@@ -77,6 +77,17 @@ describe("BROW-008: a page that fails to load", () => {
       expect(m.openExternally).toBe(false);
       expect(m.switchHttps).toBeNull();
     });
+    it("Open Externally also needs an outside handler: hidden when the system has none, kept when unknown", () => {
+      const cert = overlayModel({ kind: "failed", url: "https://expired.example/" }, { kind: "certificate", local: false, https: null }, false);
+      expect(cert.openExternally).toBe(false);
+      for (const known of [true, null] as const) {
+        expect(overlayModel({ kind: "failed", url: "https://expired.example/" }, { kind: "certificate", local: false, https: null }, known).openExternally).toBe(true);
+      }
+      expect(overlayModel({ kind: "crashed", url: "http://localhost:3000/" }, null, false).openExternally).toBe(false);
+      expect(overlayModel({ kind: "crashed", url: "http://localhost:3000/" }, null, true).openExternally).toBe(true);
+      // a handler never makes an unreachable address openable
+      expect(overlayModel({ kind: "failed", url: "http://no.such.host.invalid/" }, { kind: "unknown-host", local: false, https: null }, true).openExternally).toBe(false);
+    });
     it("a failure out of crash recovery leaves out the network troubleshooting text", () => {
       const m = overlayModel({ kind: "crashed", url: "http://localhost:3000/" }, { kind: "refused", local: true, https: null });
       expect(m.title).toMatch(/stopped responding/i);
@@ -147,7 +158,7 @@ describe("BROW-009: a crashed page", () => {
   it("the user's own Retry or a typed address gives the page its one automatic recovery back", () => {
     const crashed = run([...loaded(), ...dead()], run(dead(), run(loaded()).h).h).h;
     const [afterRetry, action] = step(crashed, { t: "retry" });
-    expect(action).toBe("reload");
+    expect(action).toBe("rebuild"); // the dead page cannot reload; BROW-009 builds it again
     expect(afterRetry.recoveries).toBe(0);
     const [afterNav] = step(crashed, { t: "navigate" });
     expect(afterNav.recoveries).toBe(0);
@@ -188,5 +199,29 @@ describe("BROW-024 trusting a local dev server's certificate", () => {
     expect(trustLabel({ offer: false, trusted: true, site: "localhost:8443" })).toBeNull();
     expect(trustLabel({ offer: true, trusted: false, site: null })).toBeNull();
     expect(trustLabel({ offer: true, trusted: false, site: "localhost:8443" })).toBe("Trust This Certificate On localhost:8443 For This Run");
+  });
+});
+
+describe("BROW-009: Retry rebuilds a page a reload cannot bring back", () => {
+  const url = "https://example.com/";
+
+  it("a first-time Retry (a page that only failed to load) still just reloads", () => {
+    const failed = run([{ t: "started", url }, { t: "finished", url }, { t: "probe", answer: "error-page" }]).h;
+    expect(failed.phase).toBe("failed");
+    expect(step(failed, { t: "retry" })[1]).toBe("reload");
+  });
+
+  it("Retry on a page that stayed dead after its one automatic reload rebuilds it", () => {
+    const afterReload = run(dead(), run(loaded()).h).h;
+    expect(afterReload.phase).toBe("recovering");
+    const crashed = run(dead(), afterReload).h;
+    expect(crashed.phase).toBe("crashed");
+    expect(step(crashed, { t: "retry" })[1]).toBe("rebuild");
+  });
+
+  it("an automatic reload that lands on the error page is a crash too, and Retry rebuilds", () => {
+    const h = run([{ t: "probe", answer: "error-page" }], run(dead(), run(loaded()).h).h).h;
+    expect(h.phase).toBe("crashed");
+    expect(step(h, { t: "retry" })[1]).toBe("rebuild");
   });
 });

@@ -486,6 +486,20 @@ fn icon_present(app: &tauri::AppHandle) -> bool {
     }
 }
 
+/// T-324-b (APP-007, review a8c1d430 AFTER 5): should Settings show the close-to-tray switch? Only
+/// where closing can hide the window (Windows) and an icon exists to bring it back; otherwise the
+/// switch would promise something the app cannot do.
+pub fn close_switch_available(os: Os, icon_present: bool) -> bool {
+    matches!(os, Os::Windows) && icon_present
+}
+
+/// The Notifications page asks before it draws the close-to-tray switch.
+/// Registered by `evidence/fix-other-fix-T-324-b-lib.rs.patch`.
+#[tauri::command]
+pub fn tray_close_switch_available(app: tauri::AppHandle) -> bool {
+    close_switch_available(Os::current(), icon_present(&app))
+}
+
 /// Is the first-time explanation still owed? `stored` is the CLOSE_EXPLAINED_KEY value.
 pub fn explain_due(stored: Option<&str>) -> bool {
     matches!(stored, None | Some(""))
@@ -725,6 +739,15 @@ mod tests {
         let (three, ..) = paint_badge("99+");
         assert!(three.chunks(4).any(|p| p == WHITE), "three glyphs still fit the disc");
         assert_eq!(three.len(), px.len());
+    }
+
+    #[test]
+    fn app_007_the_close_to_tray_switch_is_offered_only_on_windows_with_an_icon() {
+        assert!(close_switch_available(Os::Windows, true));
+        assert!(!close_switch_available(Os::Windows, false), "no icon: nothing could bring the window back");
+        assert!(!close_switch_available(Os::Mac, true), "closing hides the window on Windows only");
+        assert!(!close_switch_available(Os::Linux, true));
+        assert!(!close_switch_available(Os::Linux, false));
     }
 
     #[test]

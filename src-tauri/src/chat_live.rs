@@ -61,8 +61,7 @@ pub fn seen_since(id: u32, agent: &'static str, now: SystemTime) -> SystemTime {
 
 /// What the foreground poll saw change in front of terminal `id` (the exact moment, ahead of the
 /// chat's first look): an agent starts its clock, nothing in front forgets it. Called by
-/// `foreground::poll` once evidence/chat-T-050-c-foreground.rs.patch is applied.
-#[allow(dead_code)]
+/// `foreground::poll` on every change it sees.
 pub fn noted(id: u32, agent: Option<&'static str>, now: SystemTime) {
     let mut guard = SEEN.lock().unwrap_or_else(|p| p.into_inner());
     let map = guard.get_or_insert_with(HashMap::new);

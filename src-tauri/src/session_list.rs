@@ -204,6 +204,10 @@ fn slice(path: &Path, from: u64, cap: u64) -> Option<String> {
 /// [`TAIL_CAP`] bytes for a title written late (Claude).
 pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     let mut s = Summary::default();
+    #[cfg(test)]
+    if path.file_name().is_some_and(|n| n.to_string_lossy().contains("stall")) {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
     let Some(head) = slice(path, 0, HEAD_CAP) else {
         s.unreadable = true;
         return s;
@@ -231,13 +235,18 @@ pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     s
 }
 
-fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64, report: &mut Report) -> Summary {
+fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64, report: &mut Report, budget: &Budget) -> Summary {
     if let Some((m, l, s)) = cache.get(path) {
         if *m == modified && *l == len {
             return s.clone();
         }
     }
-    let s = summarize(agent, path, len);
+    // The read runs apart so a hung disk cannot hold the scan past its budget; the file counts as skipped.
+    let (a, p) = (agent.to_string(), path.to_path_buf());
+    let s = budget.run(move || summarize(&a, &p, len)).unwrap_or_else(|| {
+        report.cut_short = true;
+        Summary { unreadable: true, ..Summary::default() }
+    });
     if s.unreadable {
         return s;
     }
@@ -301,7 +310,7 @@ fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &
                     report.skipped += 1;
                     continue;
                 };
-                let s = summary_for(cache, "claude", &path, modified, len, report);
+                let s = summary_for(cache, "claude", &path, modified, len, report, budget);
                 if s.unreadable {
                     report.skipped += 1;
                     continue;
@@ -355,7 +364,7 @@ fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &B
                 report.skipped += 1;
                 continue;
             };
-            let s = summary_for(cache, "codex", &path, modified, len, report);
+            let s = summary_for(cache, "codex", &path, modified, len, report, budget);
             if s.unreadable {
                 report.skipped += 1;
                 continue;
@@ -431,7 +440,7 @@ pub fn roots_for(settings: &Value, process_env: impl Fn(&str) -> Option<String>,
     Roots { claude, codex }
 }
 
-fn live_roots(settings: &Value) -> Roots {
+pub(super) fn live_roots(settings: &Value) -> Roots {
     roots_for(settings, env_text, user_home())
 }
 
@@ -533,13 +542,40 @@ pub struct ResumePlan {
     pub copy: String,
 }
 
-/// The transcript file of session `id` and its Codex home, searched in every root.
-pub fn find_session(roots: &Roots, agent: &str, id: &str) -> Option<(PathBuf, Option<PathBuf>)> {
-    match agent {
-        "claude" | "openclaude" => roots.claude.iter().find_map(|c| fs::read_dir(c.join("projects")).ok()?.flatten().map(|e| e.path().join(format!("{id}.jsonl"))).find(|p| p.is_file()).map(|p| (p, None))),
-        "codex" => roots.codex.iter().find_map(|h| codex_files(h).into_iter().find(|f| f.file_stem().is_some_and(|s| s.to_string_lossy().ends_with(id))).map(|f| (f, Some(h.clone())))),
-        _ => None,
+/// The id a Codex rollout file stem (`rollout-<timestamp>-<id>`) carries: a trailing UUID, else the last dash-part.
+fn rollout_id(stem: &str) -> Option<&str> {
+    let tail = stem.strip_prefix("rollout-")?;
+    let uuid_shaped = |u: &str| u.len() == 36 && u.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() });
+    let at = tail.len().checked_sub(36).filter(|&at| tail.is_char_boundary(at));
+    match at.map(|at| (at, &tail[at..])) {
+        Some((0, u)) if uuid_shaped(u) => Some(u),
+        Some((at, u)) if uuid_shaped(u) && tail.as_bytes()[at - 1] == b'-' => Some(u),
+        _ => tail.rsplit('-').next().filter(|id| !id.is_empty()),
     }
+}
+
+/// The one transcript file of session `id` and its Codex home, or why there is not exactly one.
+/// A Claude session is `<id>.jsonl`; a Codex rollout matches only when its whole id equals `id`.
+pub fn find_session_exact(roots: &Roots, agent: &str, id: &str) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let gone = || "That session is no longer on this computer.".to_string();
+    match agent {
+        "claude" | "openclaude" => roots.claude.iter().find_map(|c| fs::read_dir(c.join("projects")).ok()?.flatten().map(|e| e.path().join(format!("{id}.jsonl"))).find(|p| p.is_file()).map(|p| (p, None))).ok_or_else(gone),
+        "codex" => {
+            let mut hits: Vec<(PathBuf, Option<PathBuf>)> = roots.codex.iter().flat_map(|h| codex_files(h).into_iter().filter(|f| f.file_stem().is_some_and(|s| rollout_id(&s.to_string_lossy()) == Some(id))).map(|f| (f, Some(h.clone()))).collect::<Vec<_>>()).collect();
+            match hits.len() {
+                0 => Err(gone()),
+                1 => Ok(hits.remove(0)),
+                _ => Err("More than one session file has this id, so Kolux will not pick one.".into()),
+            }
+        }
+        _ => Err(gone()),
+    }
+}
+
+/// The transcript file of session `id` and its Codex home, searched in every root. An id that
+/// names no file, or more than one, finds nothing.
+pub fn find_session(roots: &Roots, agent: &str, id: &str) -> Option<(PathBuf, Option<PathBuf>)> {
+    find_session_exact(roots, agent, id).ok()
 }
 
 /// The resume plan for session `id` of `agent`, or the plain reason it cannot be resumed.
@@ -550,7 +586,7 @@ pub fn plan(settings: &Value, roots: &Roots, agent: &str, id: &str, workspace: O
     if crate::agents::resume_args(agent, Some(id)).is_empty() {
         return Err(format!("Kolux does not know how to resume {agent} sessions yet."));
     }
-    let (file, home) = find_session(roots, agent, id).ok_or("That session is no longer on this computer.")?;
+    let (file, home) = find_session_exact(roots, agent, id)?;
     let len = stat(&file).map_or(0, |(_, l)| l);
     let s = summarize(agent, &file, len);
     if s.turns == 0 {
@@ -813,5 +849,39 @@ mod tests {
         let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
         assert_eq!(keys, ["agent", "bytes", "dir", "id", "modifiedMs", "title", "turns"]);
+    }
+
+    #[test]
+    fn view089_codex_lookup_matches_the_whole_id_not_a_tail() {
+        let home = tmp("exactid");
+        let day = home.join("sessions/2026/10/01");
+        let (long, short) = (day.join("rollout-2026-10-01T00-00-00-ab01.jsonl"), day.join("rollout-2026-10-01T00-00-01-b01.jsonl"));
+        codex_session(&long, "ab01", r"C:\w", Value::Null, Some("long"));
+        codex_session(&short, "b01", r"C:\w", Value::Null, Some("short"));
+        let uuid = "019a0000-0000-7000-8000-000000000009";
+        let by_uuid = day.join(format!("rollout-2026-10-01T00-00-02-{uuid}.jsonl"));
+        codex_session(&by_uuid, uuid, r"C:\w", Value::Null, Some("uuid"));
+        let roots = Roots { claude: vec![], codex: vec![home.clone()] };
+        assert_eq!(find_session(&roots, "codex", "b01").map(|f| f.0), Some(short));
+        assert_eq!(find_session(&roots, "codex", "ab01").map(|f| f.0), Some(long));
+        assert!(find_session(&roots, "codex", "01").is_none(), "a tail of an id is not an id");
+        assert!(find_session(&roots, "codex", "0000-7000-8000-000000000009").is_none(), "nor is the tail of a UUID");
+        assert_eq!(find_session(&roots, "codex", uuid).map(|f| f.0), Some(by_uuid));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn view089_two_codex_files_with_one_id_are_an_error_not_a_pick() {
+        let home = tmp("dupid");
+        for (d, t) in [("sessions/2026/10/01", "2026-10-01T00-00-00"), ("archived_sessions", "2026-10-02T00-00-00")] {
+            codex_session(&home.join(d).join(format!("rollout-{t}-dup1.jsonl")), "dup1", r"C:\w", Value::Null, Some("x"));
+        }
+        let roots = Roots { claude: vec![], codex: vec![home.clone()] };
+        assert!(find_session(&roots, "codex", "dup1").is_none());
+        let err = find_session_exact(&roots, "codex", "dup1").unwrap_err();
+        assert!(err.contains("More than one"), "{err}");
+        let err = plan(&json!({}), &roots, "codex", "dup1", None, Shell::Pwsh).unwrap_err();
+        assert!(err.contains("More than one"), "resume refuses too: {err}");
+        let _ = fs::remove_dir_all(&home);
     }
 }

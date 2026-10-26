@@ -28,6 +28,9 @@ pub mod profiles;
 pub mod preview;
 #[path = "browser_ports.rs"]
 pub mod ports;
+// After-list 21 (BROW-008): whether the system has a program for a link, so Open Externally can hide.
+#[path = "browser_handler.rs"]
+pub mod handler;
 // T-240: BROW-028 cookies brought in from a file (BROW-029 keeps Google sign-ins out).
 #[path = "browser_cookies.rs"]
 pub mod cookies;
@@ -65,6 +68,12 @@ pub mod lease;
 // T-272-b (BROW-032): how a page's permission requests are answered.
 #[path = "browser_permissions.rs"]
 pub mod permissions;
+// after-list 719 (T-272-b): notices held for a pane that is still being built.
+#[path = "browser_notices.rs"]
+pub mod notices;
+// T-241 (BROW-038), T-240 (BROW-035): the page's picture for drawing on and for grabbing an element.
+#[path = "browser_picture.rs"]
+pub mod picture;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -982,6 +991,7 @@ fn err(e: tauri::Error) -> String {
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>) -> Result<(), String> {
     let url = parse(&url)?;
+    notices::opening(id); // after-list 719: its notices wait for the pane's browser_pane_ready
     families().join(id, url.as_str(), Instant::now()); // T-272-c
     let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
     wake::watch(&app); // T-283 (BROW-010)
@@ -1389,6 +1399,7 @@ pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
     families().leave(id); // T-272-c
+    notices::closed(id); // after-list 719
     holder::forget(id); // T-272-d
     certs::closed(id); // T-158: a closed tab's waiting certificate challenge goes with it
     forget_tab(id);
@@ -1406,7 +1417,9 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     session::forget(id); // T-179: a closed tab does not come back after a restart
     preview::forget(id); // T-159
     popup::close_for(&app, id); // T-158 (BROW-015): a tab's popups close with it
-    view(&app, id)?.close().map_err(err)
+    let closed = view(&app, id).and_then(|v| v.close().map_err(err));
+    profiles::page_closed(id); // after-list 153: the profile's folder can go once its last page is closed
+    closed
 }
 
 /// T-074 (BROW-008, BROW-009): the probe the pane runs about four times a second while a page is
@@ -1588,7 +1601,7 @@ pub enum Act<'a> {
     /// or went) and set its zoom (the emulated scale).
     Relayout(u32, Option<f64>),
     /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
-    SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
+    SetCookie(u32, cookies::Entry),
     /// T-251 (CLI-047): one DevTools call on the page's engine (a picture of the page).
     DevTools(u32, &'a str, String),
     /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
@@ -1682,7 +1695,7 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             Ok(serde_json::Value::Null)
         }
         Act::SetCookie(id, c) => {
-            view(app, id)?.set_cookie(c).map_err(err)?;
+            engine::set_cookie(&view(app, id)?, c, cookies::COOKIE_WAIT)?;
             Ok(serde_json::Value::Null)
         }
         Act::DevTools(id, method, params) => {
@@ -1767,7 +1780,10 @@ fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>,
     let _ = profiles::save(&root, &store);
     let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
-        Some(dir) => (b.data_directory(dir), spoof),
+        Some(dir) => {
+            profiles::page_opened(id, &p); // after-list 153: a deleted profile's folder waits for its last page
+            (b.data_directory(dir), spoof)
+        }
         None => (b, spoof),
     }
 }
@@ -1786,7 +1802,7 @@ pub fn navigate_to(id: u32, url: &str) -> Result<String, String> {
 
 /// `kolux cookie set --httpOnly`: the engine's cookie store takes it (blocking; never called from
 /// the main thread, the command line's requests run on their own).
-pub fn set_cookie(id: u32, c: tauri::webview::cookie::Cookie<'static>) -> Result<(), String> {
+pub fn set_cookie(id: u32, c: cookies::Entry) -> Result<(), String> {
     driver()?(Act::SetCookie(id, c)).map(|_| ())
 }
 

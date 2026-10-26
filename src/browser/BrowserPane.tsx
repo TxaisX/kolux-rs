@@ -6,7 +6,8 @@
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop, Target } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
@@ -21,14 +22,20 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
+import { namesPane, openPage, type ProfileEvent, reopenPage } from "./reopen";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
 import { CHROME_STEPS, type CookieReport, cookieReportText, type CookieSource, dismissHint, GOOGLE_NOTE, hintDismissed, importHintText, IMPORT_SOURCES, pickerFor } from "./cookies";
 import { chipCommit } from "./preview";
+import { documentPathOf, dropVerdict, openSource, openWithSystemApp, overPane, previewAddress } from "./previewActions";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
+import { DrawCanvas } from "./DrawCanvas";
+import { type Grab, grabElement } from "./grabFlow";
+import { GrabSheet } from "./GrabSheet";
+import { capturePage, type Picture } from "./picture";
 import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
@@ -63,11 +70,11 @@ function startBridge() {
   });
 }
 
-type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; trust: string | null; busy: boolean; connecting: boolean; onRetry: () => void; onTrust: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
+type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; handler: boolean | null; trust: string | null; busy: boolean; connecting: boolean; onRetry: () => void; onTrust: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
 
 /** T-074 (BROW-008, BROW-009): what the user sees over a page that failed or crashed. */
-function LoadOverlay({ overlay, diag, trust, busy, connecting, onRetry, onTrust, onHttps, onOpen }: OverlayProps) {
-  const m = overlayModel(overlay, diag);
+function LoadOverlay({ overlay, diag, handler, trust, busy, connecting, onRetry, onTrust, onHttps, onOpen }: OverlayProps) {
+  const m = overlayModel(overlay, diag, handler);
   return (
     <div className="load-overlay" role="alert" data-kind={overlay.kind}>
       <h2>{m.title}</h2>
@@ -153,6 +160,12 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [draft, setDraft] = useState<Pick | null>(null);
   const [sendMenu, setSendMenu] = useState<SendTarget[] | null>(null);
   const draftBox = useRef<HTMLTextAreaElement>(null);
+  // T-241 (BROW-038): the page's picture while the drawing canvas covers the page.
+  const [drawing, setDrawing] = useState<Picture | null>(null);
+  // T-240 (BROW-035): grab mode: the picker runs and its next pick opens the details sheet (`grab`) instead of a note.
+  const [grabMode, setGrabMode] = useState(false);
+  const [grab, setGrab] = useState<Grab | null>(null);
+  const grabbing = useRef(false);
   const focusMe = useRef(onFocus);
   focusMe.current = onFocus;
   const closeMe = useRef(onClose);
@@ -175,12 +188,24 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const health = useRef<Health>(freshHealth());
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [diag, setDiag] = useState<Diagnosis | null>(null);
+  // After-list 21: whether the system has a program for the address (null until known).
+  const [handler, setHandler] = useState<boolean | null>(null);
   // T-158 (BROW-024): whether the engine's certificate challenge for this local site waits here.
   const [cert, setCert] = useState<CertState | null>(null);
   // While an overlay action runs all its buttons are disabled together; the connecting indicator
   // waits a moment so a quick retry does not flicker.
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  // BROW-009 / T-241: close the page and open it again at the pane's spot and colour, for a page
+  // that cannot reload and for a tab whose profile changed (`profile` names the new one).
+  const reopen = (to: string, profile?: string) => {
+    const body = host.current;
+    if (!body) return setBusy(false);
+    reopenPage(invoke, id, { url: to || BLANK, spot: spot(body), background: backgroundBehind(body), shown: body.clientWidth > 0 && body.clientHeight > 0, profile }).catch((err) => {
+      setBusy(false);
+      setNote(String(err));
+    });
+  };
   const feed = (e: LoadEvent) => {
     const [h, action] = step(health.current, e);
     health.current = h;
@@ -188,11 +213,17 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (e.t === "started") {
       setBusy(false);
       setDiag(null);
+      setHandler(null);
       setCert(null);
     }
     if (action === "reload") invoke("browser_go", { id, what: "reload" }).catch(() => {});
+    if (action === "rebuild") reopen(h.url);
     if (action === "overlay") {
       setBusy(false);
+      const at = h.url;
+      invoke<boolean | null>("browser_external_handler", { url: at })
+        .then((v) => health.current.url === at && setHandler(v))
+        .catch(() => {});
       if (h.phase === "failed") {
         const { url } = h;
         invoke<Diagnosis>("browser_diagnose", { url })
@@ -332,15 +363,25 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           if (e.payload.action === "close") closeMe.current?.();
         }),
       );
+      // T-241 (BROW-045): a profile change (or a deleted profile) names this pane; its page opens again in the new profile.
+      unlisteners.push(
+        await listen<ProfileEvent>("browser-profile", (e) => {
+          if (namesPane(e.payload, id)) reopen(at.current, e.payload.profile);
+        }),
+      );
       startBridge();
       if (!alive) return;
       try {
-        const first = url ? resolveAddress(url) : null;
+        // T-241 (BROW-039): a tab the app opens on a document's path previews it (the loopback address is never shown).
+        const doc = documentPathOf(url);
+        const shownDoc = doc ? await previewAddress(doc, invoke) : null;
+        if (shownDoc && "error" in shownDoc) setNote(shownDoc.error);
+        const first = shownDoc && "url" in shownDoc ? { url: shownDoc.url } : url && !doc ? resolveAddress(url) : null;
         // A tab opened behind (its section hidden, so no size) starts off screen: its page may not
         // open tabs or send chords until it is shown (council FIX-2).
         const body = host.current!;
         const shown = body.clientWidth > 0 && body.clientHeight > 0;
-        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
+        await openPage(invoke, id, { url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
         opened.current = true;
         if (alive) {
           setOpen(true);
@@ -365,7 +406,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     const el = host.current!;
     const send = (theme = false) => {
       // T-074: while the recovery overlay shows, the page is hidden so the overlay can cover it.
-      const shown = !hidden && !overlay && el.clientWidth > 0 && el.clientHeight > 0;
+      const shown = !hidden && !overlay && !drawing && !grab && el.clientWidth > 0 && el.clientHeight > 0;
       const background = theme ? backgroundBehind(el) : undefined;
       invoke("browser_bounds", { id, spot: shown ? spot(el) : { x: 0, y: 0, w: 0, h: 0 }, shown, background }).catch(() => {});
     };
@@ -389,7 +430,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       themed.disconnect();
       window.removeEventListener("resize", resized);
     };
-  }, [id, open, hidden, overlay]);
+  }, [id, open, hidden, overlay, drawing, grab]);
 
   // T-074: the probe, about four times a second while the page is on screen (BROW-008), paused
   // while the tab is hidden or the overlay covers the page. One probe in flight at a time.
@@ -444,7 +485,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         const r = readPicks(await invoke("browser_annotate", { id, what: "poll" }));
         if (!r.active) await invoke("browser_annotate", { id, what: "start" });
         if (r.escape) setPicking(false);
-        if (r.picks.length) setDraft((d) => d ?? r.picks[0]);
+        if (r.picks.length) {
+          if (grabbing.current) grabPicked(r.picks[0]);
+          else setDraft((d) => d ?? r.picks[0]);
+        }
       } catch {
         setPicking(false);
       } finally {
@@ -456,6 +500,35 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   useEffect(() => {
     if (draft) draftBox.current?.focus();
   }, [draft]);
+  // T-240 (BROW-035): Grab ends with the picker (a pick, Esc in the page, or the Annotate button).
+  useEffect(() => {
+    if (!picking) {
+      grabbing.current = false;
+      setGrabMode(false);
+    }
+  }, [picking]);
+  // The pick ends picking, then the element is cut out of the page's picture and the sheet covers the page.
+  const grabPicked = (pick: Pick) => {
+    grabbing.current = false;
+    setPicking(false);
+    grabElement(invoke, id, pick)
+      .then(setGrab)
+      .catch((err) => setNote(err instanceof Error ? err.message : String(err)));
+  };
+  const startGrab = () => {
+    if (grabMode) return stopPicking();
+    setNote(null);
+    grabbing.current = true;
+    setGrabMode(true);
+    if (picking) return;
+    invoke("browser_annotate", { id, what: "start" })
+      .then(() => setPicking(true))
+      .catch((err) => {
+        grabbing.current = false;
+        setGrabMode(false);
+        setNote(String(err));
+      });
+  };
   const stopPicking = () => {
     setPicking(false);
     invoke("browser_annotate", { id, what: "stop" }).catch(() => {});
@@ -467,6 +540,21 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     invoke("browser_annotate", { id, what: "start" })
       .then(() => setPicking(true))
       .catch((err) => setNote(String(err)));
+  };
+  // T-241 (BROW-038): Draw takes the page's picture (the page picker's outline would be in it, so picking
+  // ends first) and the canvas covers the page; Close brings the page back.
+  const startDraw = async () => {
+    if (drawing) return;
+    setNote(null);
+    try {
+      if (picking) {
+        setPicking(false);
+        await invoke("browser_annotate", { id, what: "stop" });
+      }
+      setDrawing(await capturePage(invoke, id));
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    }
   };
   // Enter keeps the note (Shift+Enter is a new line); Escape drops only this pick, picking stays on.
   const keepDraft = () => {
@@ -528,6 +616,37 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     feed({ t: "navigate" }); // a new address gets its own recovery allowance (BROW-009)
     invoke("browser_navigate", { id, url }).catch((err) => setNote(String(err)));
   };
+  // BROW-039: the chip's other actions; the front end says why when one cannot run.
+  const sayIf = (p: Promise<string | null>) => void p.then((m) => m && setNote(m));
+  // BROW-039: an HTML document dropped on this tab becomes its preview. The webview's drag events carry
+  // physical pixels; the hit test needs the pointer inside this pane's box and on nothing laid over it.
+  const dropped = useRef<(paths: string[]) => void>(() => {});
+  dropped.current = (paths) => {
+    const v = dropVerdict(paths);
+    if (v.kind === "say") return setNote(v.text);
+    void previewAddress(v.path, invoke).then((r) => ("url" in r ? navigateTo(r.url) : setNote(r.error)));
+  };
+  useEffect(() => {
+    if (hidden) return;
+    let live = true;
+    let stop: UnlistenFn | undefined;
+    getCurrentWebview()
+      .onDragDropEvent(({ payload: p }) => {
+        if (p.type !== "drop") return;
+        const el = host.current?.closest(".pane");
+        if (!el) return;
+        const scale = window.devicePixelRatio || 1;
+        const x = p.position.x / scale;
+        const y = p.position.y / scale;
+        const under = document.elementFromPoint(x, y);
+        if (overPane(x, y, el.getBoundingClientRect()) && under !== null && el.contains(under)) dropped.current(p.paths);
+      })
+      .then((u) => (live ? (stop = u) : u()), () => {});
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, [hidden]);
   // T-319-b (BROW-041): Enter in the chip: a web address turns this tab into that page (Back returns
   // to the preview, Forward goes to the page again); another document swaps the preview; the same
   // document does nothing. Escape or leaving the field puts the chip back unchanged.
@@ -721,6 +840,12 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
               <button type="button" className="ib preview-copy" title="Copy the file's path" aria-label="Copy path" onClick={() => void navigator.clipboard?.writeText(preview.path).catch(() => {})}>
                 copy
               </button>
+              <button type="button" className="ib preview-copy" title="Open the file in an editor tab" aria-label="Open source in the editor" onClick={() => sayIf(openSource(preview.path, cwd, emit))}>
+                source
+              </button>
+              <button type="button" className="ib preview-copy" title="Open the file in the system's default app" aria-label="Open with the system app" onClick={() => sayIf(openWithSystemApp(preview.path, invoke))}>
+                open
+              </button>
               {!preview.granted && (
                 // T-159 (BROW-040): until allowed, the preview reads only its own document.
                 <button
@@ -821,6 +946,14 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           {/* BROW-037: pick elements in the page and write notes on them for an agent. */}
           <button className={`ib${picking ? " on" : ""}`} data-go="annotate" onClick={togglePicking} title={picking ? "Stop picking elements" : "Annotate: pick elements and write notes for an agent"} aria-label="Annotate" aria-pressed={picking}>
             <Target size={12} />
+          </button>
+          {/* T-241 (BROW-038): draw boxes, arrows and text on a picture of the page and send it to an agent. */}
+          <button className="ib txt" data-go="draw" onClick={startDraw} disabled={!open || !!overlay || !!drawing} title="Draw on a picture of the page and send it to an agent" aria-label="Draw on the page">
+            Draw
+          </button>
+          {/* T-240 (BROW-035): grab one element: pick it, then see its details and picture and copy or send them. */}
+          <button className={`ib txt${grabMode ? " on" : ""}`} data-go="grab" onClick={startGrab} disabled={!open || !!overlay || !!drawing || !!grab} title={grabMode ? "Stop picking an element" : "Grab an element: pick it to see its details and picture"} aria-label="Grab an element" aria-pressed={grabMode}>
+            Grab
           </button>
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
@@ -1025,7 +1158,33 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         </div>
       )}
       <div ref={host} className="pane-body">
-        {overlay && <LoadOverlay overlay={overlay} diag={diag} trust={trustLabel(cert)} busy={busy} connecting={connecting} onRetry={retry} onTrust={trustCert} onHttps={switchHttps} onOpen={openExternally} />}
+        {drawing && (
+          <DrawCanvas
+            picture={drawing}
+            title={title ?? ""}
+            url={at.current}
+            targets={targets}
+            onSend={onSend}
+            onClose={(done) => {
+              setDrawing(null);
+              if (done) setNote(done);
+            }}
+          />
+        )}
+        {grab && (
+          <GrabSheet
+            grab={grab}
+            title={title ?? ""}
+            url={at.current}
+            targets={targets}
+            onSend={onSend}
+            onClose={(done) => {
+              setGrab(null);
+              if (done) setNote(done);
+            }}
+          />
+        )}
+        {overlay && <LoadOverlay overlay={overlay} diag={diag} handler={handler} trust={trustLabel(cert)} busy={busy} connecting={connecting} onRetry={retry} onTrust={trustCert} onHttps={switchHttps} onOpen={openExternally} />}
       </div>
     </section>
   );

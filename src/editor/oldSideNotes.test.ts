@@ -52,3 +52,39 @@ test("GIT-040: only a line the old side has can take a note, and a saved note ke
   // editing keeps the side
   expect({ ...made, text: "t2", sent: undefined }.side).toBe("old");
 });
+
+// Row 25: an old-side note is drawn in the unified layout too, where the old text exists only as the
+// deleted chunks above the new lines.
+import { Chunk } from "@codemirror/merge";
+import { unifiedSpot } from "./oldSide";
+
+test("row 25: an old-side note in a deleted chunk hangs under that chunk's deleted lines, before the new text", () => {
+  const a = Text.of(["one", "two", "three", "four", "five"]);
+  const b = Text.of(["one", "four", "five"]); // two and three deleted
+  const chunks = Chunk.build(a, b);
+  const spot = unifiedSpot(chunks, a, b, 3)!;
+  expect(spot.pos).toBe(b.line(2).from); // the chunk starts where "four" is
+  expect(spot.side).toBeLessThan(0);
+  expect(spot.side).toBeGreaterThan(-1); // after the deleted-lines widget (side -1)
+  expect(unifiedSpot(chunks, a, b, 2)).toEqual(spot);
+});
+
+test("row 25: an old-side note on an unchanged line follows the line to where it is now, after a new-side card there", () => {
+  const a = Text.of(["one", "two", "three", "four", "five"]);
+  const b = Text.of(["one", "four", "five"]);
+  const chunks = Chunk.build(a, b);
+  const spot = unifiedSpot(chunks, a, b, 5)!; // "five" is line 3 now
+  expect(spot.pos).toBe(b.line(3).to);
+  expect(spot.side).toBeGreaterThan(1); // new-side cards use side 1
+  expect(unifiedSpot(chunks, a, b, 1)!.pos).toBe(b.line(1).to); // before any change
+  // lines added above push an old line down
+  const c = Text.of(["new", "new2", "one", "two"]);
+  expect(unifiedSpot(Chunk.build(Text.of(["one", "two"]), c), Text.of(["one", "two"]), c, 2)!.pos).toBe(c.line(4).to);
+});
+
+test("row 25: a line past the old text is cut to its last line, and a file with no old side has no spot", () => {
+  const a = Text.of(["one", "two"]);
+  const b = Text.of(["zero", "one", "two"]);
+  expect(unifiedSpot(Chunk.build(a, b), a, b, 9)!.pos).toBe(b.line(3).to);
+  expect(unifiedSpot(Chunk.build(Text.of([""]), b), Text.of([""]), b, 1)).toBeNull();
+});

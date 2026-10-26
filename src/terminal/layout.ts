@@ -8,7 +8,7 @@
 import type { Agent } from "../chrome/VendorMark";
 import { focusIn, panesIn } from "../workspaces";
 import { resumeId, uniqueOwners } from "../sessions/ownership";
-import { sessionOrder } from "../sessions/restoreOrder";
+import { isTabColor, type TabColors } from "./tabColor";
 
 export const LAYOUT_FIELD = "savedLayout";
 
@@ -38,8 +38,21 @@ export type SavedPane = {
   kind?: PaneKind;
   path?: string;
   staged?: boolean;
+  /** after-list #100: a pinned tab and its Tab Color come back after a restart. */
+  pinned?: boolean;
+  color?: string;
 };
 export type SavedLayout = { panes: SavedPane[]; activeTab: Record<number, number>; focused: number; activeDir: string | null; stacked: Record<string, boolean> };
+
+/** The window state a tab carries besides its program: which tabs are pinned and each tab's colour. */
+export type Marks = { pinned: ReadonlySet<number>; colors: TabColors };
+
+/** The pinned tabs and colours the saved panes carry, as App's window state. */
+export function marksOf(panes: SavedPane[]): { pinned: Set<number>; colors: TabColors } {
+  const colors: TabColors = {};
+  for (const p of panes) if (p.color !== undefined) colors[p.key] = p.color;
+  return { pinned: new Set(panes.filter((p) => p.pinned).map((p) => p.key)), colors };
+}
 
 /** A live pane as App keeps it; the fields beyond SavedPane are what a restart cannot rebuild. */
 type LivePane = Omit<SavedPane, "env"> & { seats?: unknown[]; env?: unknown; typed?: string; task?: string };
@@ -47,7 +60,7 @@ type LivePane = Omit<SavedPane, "env"> & { seats?: unknown[]; env?: unknown; typ
 /** What to write down: every started tab, stripped to what a restart can rebuild. A chooser that
  *  was never started is no tab yet; an agent comes back at its prompt (its arguments carried the
  *  one-off opening prompt and environment). */
-export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, focused: number, activeDir: string | null, stacked: Record<string, boolean>): SavedLayout {
+export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, focused: number, activeDir: string | null, stacked: Record<string, boolean>, marks?: Marks): SavedLayout {
   const kept: SavedPane[] = [];
   for (const p of panes) {
     if (p.seats && p.program === null && !p.kind) continue;
@@ -61,6 +74,9 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
     if (p.kind !== undefined) s.kind = p.kind;
     if (p.path !== undefined) s.path = p.path;
     if (p.staged !== undefined) s.staged = p.staged;
+    if (marks?.pinned.has(p.key)) s.pinned = true;
+    const color = marks?.colors[p.key];
+    if (isTabColor(color)) s.color = color;
     kept.push(s);
   }
   return tidy(kept, activeTab, focused, activeDir, stacked);
@@ -99,6 +115,8 @@ function readPane(v: unknown): SavedPane | null {
   if (num(o.group)) p.group = o.group;
   if (str(o.path)) p.path = o.path;
   if (typeof o.staged === "boolean") p.staged = o.staged;
+  if (o.pinned === true) p.pinned = true;
+  if (isTabColor(o.color)) p.color = o.color;
   return p;
 }
 
@@ -126,8 +144,9 @@ export function restoreLayout(value: unknown): SavedLayout | null {
   if (o.stacked && typeof o.stacked === "object") {
     for (const [d, s] of Object.entries(o.stacked as Record<string, unknown>)) if (typeof s === "boolean") stacked[d] = s;
   }
-  // VIEW-107 (T-069-c): the tabs come back in session order, in this one pass.
-  return tidy(uniqueOwners(sessionOrder(panes)), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
+  // after-list #723: the panes keep the order they were saved in (a split-in pane sits before an older one, so key order is not screen order);
+  // VIEW-107 (T-069-c): main.tsx asks the start lines in session (key) order instead.
+  return tidy(uniqueOwners(panes), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
 }
 
 /** Drops the tabs whose folder is gone; the active workspace and tab come back only while they exist. */

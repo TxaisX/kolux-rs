@@ -24,3 +24,12 @@ export function parentDropTarget(all: Worktree[], dragged: string, target: strin
   if (!w || w.isMain) return null;
   return parentChoices(all, w).find((x) => same(x.path, target)) ?? null;
 }
+
+/** T-186-b: a middle drop of several workspaces (the Board's selection): each one that may nest under `target`, by the path the back end knows it by. */
+export function parentDropMoves(all: Worktree[], dragged: string[], target: string, band: DropBand): { path: string; parent: string }[] {
+  return dragged.flatMap((d) => {
+    const into = parentDropTarget(all, d, target, band);
+    const w = into && all.find((x) => same(x.path, d));
+    return into && w ? [{ path: w.path, parent: into.path }] : [];
+  });
+}

@@ -15,7 +15,7 @@ import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending
 import { useTurnPreview } from "../terminal/turnRead";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { readModel } from "./controls";
-import { keepPosition, loadLabel, visibleRows } from "./page";
+import { FIRST_LINES, hiddenCount, keepPosition, loadLabel, visibleRows } from "./page";
 import { chatZoom, setChatZoom, stepZoom, zoomChord } from "./zoom";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
@@ -54,6 +54,7 @@ export type HandNote = { text: string; forResult: string };
 export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand, open: opener, hidden: hiddenProp, onTerminal }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand; open?: ChatOpen; /** CHAT-009: true while the screen hides the chat; it reads nothing then. */ hidden?: boolean; /** CHAT-024: shows the session's own terminal (Codex's model picker lives there). */ onTerminal?: () => void }) {
   // CHAT-009 (T-330): what the transcript last said, kept per pane while the chat is hidden (reading.ts).
   const [seen, setSeen] = useState<Seen>(NOTHING);
+  const readerRef = useRef<ChatReader | null>(null);
   const { items, state, error, open } = seen;
   const [extras, setExtras] = useState<Extra[]>([]);
   // CHAT-022 (council FIX-1): the box sends only while Kolux can see the agent is not asking in its
@@ -105,12 +106,18 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       session,
       hidden: paused,
       // T-050-c: the terminal and the pane's folder serve a transcript Kolux did not start.
-      read: () => invoke<ChatRead>("chat_read", { paneKey: key, terminal: session, cwd: pane.cwd }),
+      read: () => invoke<ChatRead>("chat_read", { paneKey: key, terminal: session, cwd: pane.cwd, limit: FIRST_LINES }),
+      // CHAT-008: older lines come from the backend on demand, never the whole transcript at once.
+      readEarlier: (cursor, limit) => invoke<ChatRead>("chat_read", { paneKey: key, terminal: session, cwd: pane.cwd, cursor, limit }),
       close: () => invoke("chat_close", { paneKey: key }).catch(() => {}),
       onChange: setSeen,
     });
+    readerRef.current = reader;
     setSeen(reader.seen);
-    return () => reader.hide();
+    return () => {
+      if (readerRef.current === reader) readerRef.current = null;
+      reader.hide();
+    };
   }, [key, session, paused]);
   // Council FIX-2: a reading from the pane's earlier terminal does not count (FS4).
   const held = holdReading(key, hookState, stateOf !== undefined, terminalOf(key));
@@ -236,12 +243,17 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const shownRows = useMemo(() => visibleRows(rows, pages), [rows, pages]);
   const views = useMemo(() => fold(shownRows, open, pane.cwd), [shownRows, open, pane.cwd]);
   const loadEarlier = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
-  const earlierLabel = loadLabel(rows.length, pages);
+  const earlierLabel = loadLabel(rows.length, pages, seen.older ?? 0);
   const more = () => {
-    const el = list.current;
-    if (el) loadEarlier.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
-    stick.current = false;
-    setPages((p) => p + 1);
+    const showMore = () => {
+      const el = list.current;
+      if (el) loadEarlier.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+      stick.current = false;
+      setPages((p) => p + 1);
+    };
+    // Rows already read come first; once all are shown, the next older page is fetched from the backend.
+    if (hiddenCount(rows.length, pages) > 0) return showMore();
+    void readerRef.current?.loadEarlier(showMore);
   };
   useLayoutEffect(() => {
     const el = list.current;

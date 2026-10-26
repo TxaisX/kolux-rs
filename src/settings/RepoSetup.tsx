@@ -1,6 +1,7 @@
 // SET-033 / PROJ-035: the setup part of a repository's page: the setup script kept in Kolux (shown,
 // edited, removed), the repository's kolux.yaml script, which of them run, and whether the agent waits.
 import { useCallback, useEffect, useState } from "react";
+import { useLeaveSave } from "./leave";
 import { invoke } from "@tauri-apps/api/core";
 import { choiceOptions, choiceSave, runsNote, scriptSave, trustNote, type RepoSetup } from "./setupChoice";
 
@@ -25,6 +26,7 @@ export function RepoSetupView({ setup, notice, actions }: { setup: RepoSetup; no
     setHint(s.kind === "empty" ? "To take the saved setup away, use Remove." : "");
     if (s.kind === "empty") setDraft(setup.local ?? ""); // the box shows what is still saved, not an empty box
   };
+  useLeaveSave(() => draft !== (setup.local ?? "") && commit()); // SET-036: changing page or closing keeps what was typed
   const trust = trustNote(setup);
   return (
     <section className="conn-card" data-section="repo-setup">

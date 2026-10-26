@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   DEFAULT_VIEW,
   arrangeRows,
+  childrenFirst,
   needsSizes,
   sizeText,
   type CleanupView,
@@ -22,10 +23,10 @@ import {
   shownRows,
   tickedPaths,
   ticksAfterScan,
-  type Cleaned,
   type KeptItem,
   type Scan,
 } from "./cleanup";
+import { canStart, finished, lossKinds, namedList, removeOne, runBulk, summary, unchecked, type Item } from "./bulkRemove";
 
 type Props = {
   project: { id: string; name: string };
@@ -34,9 +35,11 @@ type Props = {
   onRemoved: (paths: string[]) => void;
   /** Branches left behind by removed workspaces opened on an existing branch (PROJ-073). */
   onKept: (items: KeptItem[]) => void;
+  /** T-149: a workspace's parent by path, so children are removed before their parents. */
+  parentOf?: (path: string) => string | null | undefined;
 };
 
-export default function CleanupDialog({ project, onClose, onRemoved, onKept }: Props) {
+export default function CleanupDialog({ project, onClose, onRemoved, onKept, parentOf }: Props) {
   // The previous result shows straight away while the new scan runs.
   const [scan, setScan] = useState<Scan | null>(() => lastScan(project.id));
   const [ticks, setTicks] = useState<Record<string, boolean>>(() => {
@@ -47,6 +50,10 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
   const [scanning, setScanning] = useState(true);
   const [removing, setRemoving] = useState(false);
   const [said, setSaid] = useState<string[]>([]);
+  // PROJ-082: the question first, then progress while the removals run in the background.
+  const [confirming, setConfirming] = useState(false);
+  const [agreed, setAgreed] = useState(false);
+  const [progress, setProgress] = useState<Item[]>([]);
   // PROJ-081: filters, search and sort; sizes are read only once a size filter or sort needs them.
   const [view, setView] = useState<CleanupView>(DEFAULT_VIEW);
   const [sizes, setSizes] = useState<Sizes>({});
@@ -75,7 +82,7 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
   const listed = scan ? shownRows(scan, showAll) : [];
   const rows = arrangeRows(listed, view, sizes);
   const shownSet = new Set(rows.map((r) => r.path));
-  const chosen = scan ? tickedPaths(ticks, scan, showAll).filter((p) => shownSet.has(p)) : [];
+  const chosen = scan ? childrenFirst(tickedPaths(ticks, scan, showAll).filter((p) => shownSet.has(p)), parentOf) : [];
   const unread = needsSizes(view) ? listed.map((r) => r.path).filter((p) => !(p in sizes)) : [];
   useEffect(() => {
     if (unread.length === 0) return;
@@ -88,17 +95,23 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
     };
   }, [unread.join("\n")]);
   const pick = <K extends keyof CleanupView>(k: K, v: CleanupView[K]) => setView((old) => ({ ...old, [k]: v }));
+  const chosenRows = scan ? scan.rows.filter((r) => chosen.includes(r.path)) : [];
   const remove = async () => {
+    if (!canStart(chosenRows, agreed)) return;
+    setConfirming(false);
     setRemoving(true);
     try {
-      const out = await invoke<Cleaned>("cleanup_remove", { projectId: project.id, paths: chosen });
-      if (out.removed.length > 0) onRemoved(out.removed);
-      if (out.kept.length > 0) onKept(out.kept.map((k) => ({ ...k, projectId: project.id })));
-      setSaid(out.left.map((l) => `${l.path}: ${l.why}`));
+      const kept: KeptItem[] = [];
+      const done = await runBulk(chosen, parentOf ?? (() => null), removeOne(project.id, (k) => kept.push(...k.map((b) => ({ ...b, projectId: project.id })))), { onProgress: setProgress });
+      const gone = done.filter((i) => i.state === "removed").map((i) => i.path);
+      if (gone.length > 0) onRemoved(gone);
+      if (kept.length > 0) onKept(kept);
+      setSaid(done.filter((i) => i.state === "left" || i.state === "skipped").map((i) => `${i.path}: ${i.why}`));
     } catch (err) {
       setSaid([String(err)]);
     } finally {
       setRemoving(false);
+      setAgreed(false);
     }
     await rescan();
   };
@@ -175,8 +188,50 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
           {line}
         </span>
       ))}
+      {confirming && (
+        <div data-cleanup-confirm role="alertdialog" aria-label="Confirm removal">
+          <span>
+            Removing {chosenRows.length} {chosenRows.length === 1 ? "workspace" : "workspaces"} deletes, for good:
+          </span>
+          <ul>
+            {lossKinds(chosenRows).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <span className="hint">
+            {namedList(chosenRows).names.join(", ")}
+            {namedList(chosenRows).more > 0 ? ` and ${namedList(chosenRows).more} more` : ""}
+          </span>
+          {unchecked(chosenRows).length > 0 && (
+            <label className="check">
+              <input type="checkbox" aria-label="remove the ones that could not be checked" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+              {unchecked(chosenRows).length} could not be checked for changes; remove them anyway
+            </label>
+          )}
+          <div className="btn-row">
+            <button className="btn danger" onClick={() => void remove()} disabled={!canStart(chosenRows, agreed)}>
+              Remove for good
+            </button>
+            <button className="btn" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {progress.length > 0 && (removing || said.length > 0) && (
+        <span aria-live="polite" data-cleanup-progress-count>
+          {summary(progress)} ({finished(progress)} of {progress.length} done)
+        </span>
+      )}
       <div className="btn-row">
-        <button className="btn danger" onClick={() => void remove()} disabled={removing || chosen.length === 0} title="Removes the ticked workspaces; one with changes, a lock or a running terminal is left in place and listed">
+        <button
+          className="btn danger"
+          onClick={() => {
+            setAgreed(false);
+            setConfirming(true);
+          }}
+          disabled={removing || confirming || chosen.length === 0}
+          title="Removes the ticked workspaces; one with changes, a lock or a running terminal is left in place and listed">
           {removing ? "Removing…" : `Remove ${chosen.length || ""} ticked`.replace("  ", " ")}
         </button>
         <button className="btn" onClick={() => void rescan()} disabled={scanning || removing}>

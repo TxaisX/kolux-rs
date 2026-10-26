@@ -221,7 +221,13 @@ fn now_ms() -> u64 {
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
     let feed = this_feed()?;
-    let url = feed.endpoint.parse().map_err(|e| format!("bad update address: {e}"))?;
+    let url: tauri::Url = feed.endpoint.parse().map_err(|e| format!("bad update address: {e}"))?;
+    // T-324-b (APP-032): the saved proxy; a setting that cannot be used stops the check, never goes around it.
+    let route = {
+        let store = app.state::<Mutex<Store>>();
+        let store = store.lock().map_err(|e| e.to_string())?;
+        crate::resources::app_proxy::route_from_store(&store, &url)?
+    };
     // T-199 (APP-031): checks are numbered; a late answer from an earlier one stores nothing.
     let round = app.state::<Updates>().rounds.begin();
     let compat = compat_on(&app);
@@ -233,6 +239,11 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
         .pubkey(feed.pubkey)
         .timeout(CHECK_TIMEOUT)
         .on_before_exit(installer_hook(move || end_for_installer(&ends), move || cleans.cleanup_before_exit()));
+    builder = match route {
+        crate::resources::app_proxy::Route::Default => builder,
+        crate::resources::app_proxy::Route::Direct => builder.no_proxy(),
+        crate::resources::app_proxy::Route::Via(p) => builder.proxy(p),
+    };
     if compat {
         builder = builder.configure_client(|c| c.http1_only());
     }
@@ -266,9 +277,9 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
     let mut found = found;
     if let Ok(store) = app.state::<Mutex<Store>>().lock() {
         let _ = store.set(KEY_LAST_CHECK, &now_ms().to_string());
-        // T-293 (APP-030): a version refused for its Windows signature is never offered again.
+        // T-293 (APP-030): an installer refused for its Windows signature is never offered again (known by the feed's signature).
         let refused = store.get(guard::KEY_REFUSED).ok().flatten();
-        if found.as_ref().is_some_and(|u| guard::refused_has(refused.as_deref(), &u.version)) {
+        if found.as_ref().is_some_and(|u| guard::refused_has(refused.as_deref(), None, &u.signature)) {
             found = None;
         }
     }
@@ -320,18 +331,27 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
     let (checked, version) = (bytes.clone(), update.version.clone());
     let verdict = tauri::async_runtime::spawn_blocking(move || {
         let dir = std::env::temp_dir().join("kolux-rs-update-check");
-        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::PINNED_PUBLISHER, guard::check_file)
+        guard::vet(&checked, &dir, &version, &guard::running_state(), guard::PINNED_PUBLISHER, guard::SIGNED_BUILD || guard::PINNED_PUBLISHER.is_some(), guard::check_file)
     })
     .await
     .map_err(|e| e.to_string())?;
-    if let guard::Verdict::Stop(why) = verdict {
-        if let Ok(store) = app.state::<Mutex<Store>>().lock() {
-            let list = store.get(guard::KEY_REFUSED).ok().flatten();
-            let _ = store.set(guard::KEY_REFUSED, &guard::refused_add(list.as_deref(), &update.version));
+    let (why, remember) = match verdict {
+        guard::Verdict::Install => (None, false),
+        guard::Verdict::Stop(why) => (Some(why), true),
+        // An unclear signature answer stops this download only; the next check offers it again.
+        guard::Verdict::Retry(why) => (Some(why), false),
+    };
+    if let Some(why) = why {
+        if remember {
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                let list = store.get(guard::KEY_REFUSED).ok().flatten();
+                let entry = guard::Refused { sha256: guard::sha256_hex(&bytes), signature: update.signature.clone(), version: update.version.clone() };
+                let _ = store.set(guard::KEY_REFUSED, &guard::refused_add(list.as_deref(), entry));
+            }
         }
         *updates.pending.lock().map_err(|e| e.to_string())? = None;
         if let Ok(dir) = app.path().app_data_dir() {
-            crate::diag::write(&dir, &format!("update {} refused: {why} (APP-030)", update.version));
+            crate::diag::write(&dir, &format!("update {} {}: {why} (APP-030)", update.version, if remember { "refused" } else { "stopped once" }));
         }
         return Err(format!("{}{why}", guard::REFUSED_MARK));
     }
@@ -407,7 +427,9 @@ fn installer_hook(end_terminals: impl Fn() + Send + Sync + 'static, cleanup: imp
 /// Every terminal ends and the end is written down as Kolux's own (T-286-b, APP-040), right
 /// before the installer takes over.
 fn end_for_installer(app: &AppHandle) {
-    app.state::<Terminals>().kill_all();
+    // AFTER-696: the background terminal service runs from the program the installer replaces, so
+    // it and the shells it holds end too, not only the panes this window runs.
+    app.state::<Terminals>().end_for_update();
     crate::resources::recovery::note_self_end(app, "installer starts (APP-029)");
 }
 
@@ -415,6 +437,7 @@ fn end_for_installer(app: &AppHandle) {
 pub fn install_on_quit(app: &AppHandle) {
     let ready = app.state::<Updates>().ready.lock().ok().and_then(|mut r| r.take());
     if let Some((update, bytes)) = ready {
+        app.state::<Terminals>().end_for_update();
         record_attempt(app, &update);
         let _ = update.restart_after_install(false).install(&bytes);
     }
@@ -502,5 +525,16 @@ mod tests {
         assert_eq!(clean_notes(None), Vec::<String>::new());
         // The release job's hidden source marker never shows as a note.
         assert_eq!(clean_notes(Some("- Ship it\n<!-- kolux-rs-source: abc123 -->\n")), vec!["Ship it"]);
+    }
+
+    #[test]
+    fn app032_the_update_check_takes_the_saved_proxy_and_stops_when_it_is_unusable() {
+        let src = include_str!("update.rs");
+        let body = &src[src.find("pub async fn update_check").unwrap()..src.find("pub async fn update_download").unwrap()];
+        let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("update_check lost {needle}"));
+        // the route is read (and its error returned with ?) before the client is built, and applied to it
+        assert!(at("route_from_store(&store, &url)?") < at(".build()"));
+        assert!(at("Route::Direct => builder.no_proxy()") < at(".build()"));
+        assert!(at("Route::Via(p) => builder.proxy(p)") < at(".build()"));
     }
 }

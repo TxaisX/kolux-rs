@@ -7,7 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 type Store<'a> = tauri::State<'a, Mutex<crate::state::Store>>;
 
@@ -164,6 +165,65 @@ pub fn editor_draft_rename(store: Store<'_>, worktree: String, from: String, to:
     })
 }
 
+/// After-list row 199: the window writes every unsaved tab's draft when asked, and says so.
+pub const FLUSH_EVENT: &str = "editor-flush-request";
+/// How long a reload waits for the window's answer; a window that is hung cannot answer, and the
+/// reload is the cure for that, so it goes ahead after this.
+const FLUSH_WAIT: Duration = Duration::from_millis(1500);
+
+/// Requests made and answered, with the cue for the one waiting.
+struct Flush {
+    state: Mutex<(u64, u64)>,
+    cue: Condvar,
+}
+
+impl Flush {
+    const fn new() -> Self {
+        Self { state: Mutex::new((0, 0)), cue: Condvar::new() }
+    }
+
+    /// Makes a request (`ask` gets its token) and waits for its answer; false when none came in time.
+    fn ask_and_wait(&self, ask: impl FnOnce(u64), wait: Duration) -> bool {
+        let token = {
+            let mut s = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.0 += 1;
+            s.0
+        };
+        ask(token);
+        let s = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (s, _) = self.cue.wait_timeout_while(s, wait, |s| s.1 < token).unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.1 >= token
+    }
+
+    fn answer(&self, token: u64) {
+        let mut s = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.1 = s.1.max(token);
+        self.cue.notify_all();
+    }
+}
+
+static FLUSH: Flush = Flush::new();
+
+/// Asks the window to write every unsaved tab's draft and waits for it (row 199); the interface
+/// reload calls this first. Blocks up to the wait: call it off the main thread.
+#[allow(dead_code)] // called by the recovery watch once evidence/editor-fix-199-recovery.rs.patch is applied
+pub fn flush_before_reload(app: &tauri::AppHandle) -> bool {
+    use tauri::Emitter;
+    FLUSH.ask_and_wait(
+        |token| {
+            let _ = app.emit(FLUSH_EVENT, token);
+        },
+        FLUSH_WAIT,
+    )
+}
+
+/// The window's answer: every unsaved tab's draft is written.
+#[allow(dead_code)] // registered by evidence/editor-fix-199-lib.rs.patch
+#[tauri::command]
+pub fn editor_flush_ack(token: u64) {
+    FLUSH.answer(token);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +335,32 @@ mod tests {
         // A draft inside the worktree being renamed in stays under that worktree.
         rename(&mut all, "C:/w", "C:/w/b.md", "C:/w/deep/b.md");
         assert_eq!(all["c:/w"]["c:/w/deep/b.md"].text, "b");
+    }
+
+    #[test]
+    fn row199_a_reload_waits_for_the_windows_answer_and_goes_ahead_when_none_comes() {
+        let flush = std::sync::Arc::new(Flush::new());
+        // The window answers a moment after being asked: the wait ends with a yes.
+        let f = flush.clone();
+        assert!(flush.ask_and_wait(
+            move |token| {
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(30));
+                    f.answer(token);
+                });
+            },
+            Duration::from_secs(5)
+        ));
+        // A hung window never answers: the wait runs out and says so.
+        let t = std::time::Instant::now();
+        assert!(!flush.ask_and_wait(|_| (), Duration::from_millis(60)));
+        assert!(t.elapsed() >= Duration::from_millis(60));
+        // An answer that came before the wait began still counts (the window was quick).
+        let f = flush.clone();
+        assert!(flush.ask_and_wait(move |token| f.answer(token), Duration::from_millis(10)));
+        // An old answer does not satisfy a newer request.
+        let f = flush.clone();
+        assert!(!flush.ask_and_wait(move |token| f.answer(token - 1), Duration::from_millis(20)));
     }
 
     #[test]

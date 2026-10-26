@@ -18,7 +18,7 @@ export type Act =
   | { t: "facts"; facts: FeedbackFacts }
   | { t: "type"; draft: string }
   | { t: "anon"; on: boolean }
-  | { t: "sent"; trimmed: boolean }
+  | { t: "sent"; trimmed: boolean; extra?: string }
   | { t: "fail"; error: string }
   | { t: "close" };
 
@@ -79,7 +79,7 @@ export function reduce(s: State, a: Act): State {
     case "anon":
       return { ...s, anonymous: a.on, draft: s.facts ? withBlock(s.draft, s.facts, a.on) : s.draft };
     case "sent":
-      return { ...s, open: false, draft: "", error: "", note: a.trimmed ? `${SENT} Your report was long, so it was ${TRIM_NOTE}.` : SENT };
+      return { ...s, open: false, draft: "", error: "", note: (a.trimmed ? `${SENT} Your report was long, so it was ${TRIM_NOTE}.` : SENT) + (a.extra ? ` ${a.extra}` : "") };
     case "fail":
       return { ...s, error: a.error };
     case "close":

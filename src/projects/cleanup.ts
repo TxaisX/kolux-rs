@@ -63,7 +63,27 @@ export function ticksAfterScan(before: Record<string, boolean> | null, scan: Sca
   return out;
 }
 
-export const tickedPaths = (ticks: Record<string, boolean>, scan: Scan, showAll: boolean): string[] => shownRows(scan, showAll).filter((r) => ticks[r.path]).map((r) => r.path);
+const pathKey = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/** T-149: the ticked paths with every child ahead of its parent (deepest first, scan order among equals), so a parent is never tried while its child still stands. */
+export function childrenFirst(paths: string[], parentOf?: (path: string) => string | null | undefined): string[] {
+  if (!parentOf) return paths;
+  const depth = (p: string) => {
+    const seen = new Set([pathKey(p)]);
+    let n = 0;
+    for (let up = parentOf(p); up && !seen.has(pathKey(up)); up = parentOf(up)) {
+      seen.add(pathKey(up));
+      n++;
+    }
+    return n;
+  };
+  return paths
+    .map((path, i) => ({ path, i, d: depth(path) }))
+    .sort((a, b) => b.d - a.d || a.i - b.i)
+    .map((x) => x.path);
+}
+
+export const tickedPaths =(ticks: Record<string, boolean>, scan: Scan, showAll: boolean): string[] => shownRows(scan, showAll).filter((r) => ticks[r.path]).map((r) => r.path);
 
 // The previous result shows straight away while a new scan runs, and the filter stays as it was.
 const lastScans = new Map<string, Scan>();

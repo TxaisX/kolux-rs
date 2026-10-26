@@ -4,10 +4,14 @@
 // newest first, ten entries); this file adds what that file leaves to the caller: the record shape, the
 // "does this folder exist" answer, and the order against closed browser pages (one Mod+Shift+T
 // undoes the newest close of either kind). Browser pages keep their own ring in src/browser/pages.ts.
+import { invoke } from "@tauri-apps/api/core";
 import type { Pane } from "../App";
 import { CLOSED_MAX, pathForms, remember, reopen } from "../terminal/closedTabs";
 import { cellsOf, groupOf, MAX_PANES } from "../terminal/grid";
 import { panesIn, sameDir } from "../workspaces";
+
+/** The folder check Reopen uses. Plain path_kind answers "outside" for a folder under no project, so such a tab always fell back to the shown workspace (after-list 383); folderOnly makes it say dir or missing. */
+export const folderKind = (path: string): Promise<string> => invoke<string>("path_kind", { path, folderOnly: true });
 
 /** What a closed terminal or agent tab needs to start again: where, and what it ran. */
 export type ClosedPane = Pick<Pane, "branch" | "agent" | "agentId" | "program" | "args" | "env" | "title" | "word"> & {

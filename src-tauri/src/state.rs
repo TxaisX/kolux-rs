@@ -12,6 +12,9 @@ pub struct Store {
     /// T-441-b: the last read of settings.json failed and fell back to defaults, so a save built
     /// on what that read returned would wipe the file. Saves refuse until a read succeeds again.
     read_failed: AtomicBool,
+    /// after-list #39: set once per run when a read fell back to settings.json.bak; the window takes it and says so.
+    fallback_notice: std::sync::Mutex<Option<String>>,
+    fallback_told: AtomicBool,
 }
 
 impl Store {
@@ -23,7 +26,7 @@ impl Store {
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
-        Ok(Store { conn, settings_path: dir.join("settings.json"), read_failed: AtomicBool::new(false) })
+        Ok(Store { conn, settings_path: dir.join("settings.json"), read_failed: AtomicBool::new(false), fallback_notice: std::sync::Mutex::new(None), fallback_told: AtomicBool::new(false) })
     }
 
     /// The profile folder the store lives in.
@@ -73,6 +76,11 @@ impl Store {
         (0..).map(|n| self.settings_path.with_extension(if n == 0 { format!("json.corrupt-{ms}") } else { format!("json.corrupt-{ms}-{n}") })).find(|p| !p.exists()).unwrap_or_default()
     }
 
+    /// after-list #39: what the window tells the user when settings came from the last good copy; handed out once.
+    pub fn take_fallback_notice(&self) -> Option<String> {
+        self.fallback_notice.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    }
+
     fn bak_path(&self) -> PathBuf {
         self.settings_path.with_extension("json.bak")
     }
@@ -86,6 +94,9 @@ impl Store {
             Err(e) => match Self::read_json(&self.bak_path()) {
                 Ok(Some((_, v))) => {
                     eprintln!("kolux: {} could not be read ({e}); using the last good copy {}", self.settings_path.display(), self.bak_path().display());
+                    if !self.fallback_told.swap(true, Ordering::SeqCst) {
+                        *self.fallback_notice.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!("Kolux could not read your settings file ({e}), so it is using the last good copy, {}. A change made since that copy may be missing.", self.bak_path().display()));
+                    }
                     Ok(Read::Backup(v))
                 }
                 _ => Err(e),
@@ -255,6 +266,23 @@ mod tests {
             assert_eq!(fs::read(dir.join("settings.json")).unwrap(), planted, "the planted file is untouched");
             assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), b"{ not json", "the backup is untouched too");
         }
+        drop(s);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn after39_a_read_that_fell_back_to_the_backup_leaves_one_notice_for_the_window() {
+        let dir = temp_dir("after39");
+        let s = Store::open(&dir).unwrap();
+        s.save_settings(&serde_json::json!({ "theme": "classic" })).unwrap();
+        s.patch_settings(&serde_json::Map::from_iter([("theme".into(), serde_json::json!("new"))]), &[]).unwrap();
+        assert_eq!(s.take_fallback_notice(), None, "a healthy file says nothing");
+        fs::write(dir.join("settings.json"), b"{ half").unwrap();
+        assert_eq!(s.settings()["theme"], "classic");
+        let notice = s.take_fallback_notice().expect("the fallback is told");
+        assert!(notice.contains("settings.json.bak"), "{notice}");
+        assert_eq!(s.settings()["theme"], "classic");
+        assert_eq!(s.take_fallback_notice(), None, "told once");
         drop(s);
         fs::remove_dir_all(&dir).unwrap();
     }

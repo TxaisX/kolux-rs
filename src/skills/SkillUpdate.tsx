@@ -1,23 +1,18 @@
-// SKILL-024: the notice that some Kolux skills installed outside Kolux are out of date.
+// SKILL-024: the page-level note that some Kolux skills installed outside Kolux are out of date (the one-time notice is SkillUpdateNotice, mounted by the window).
 // SKILL-026: the background update dialog: what qualifies, why the rest is kept (with a reinstall
 // command), Update, Stop, the per-skill result, and Show log with the installer's output.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Close } from "../chrome/icons";
 import SkillInstall from "./SkillInstall";
 import { skillBar, SKILLS_SHOW_EVENT } from "./skillBarStore";
 import type { Load } from "./skillBar";
-import { STOP_LABEL, UPDATE_LABEL, UPDATING_LABEL, chipTone, freshKeys, noticeShown, noticeText, sumUpRun, updatable, type Checked } from "./updateNotice";
+import { STOP_LABEL, UPDATE_LABEL, UPDATING_LABEL, chipTone, noticeText, sumUpRun, updatable, type Checked } from "./updateNotice";
 
-/** One notice per session, dismissed or not. */
-let shownThisSession = false;
+type Props = { workspace: string | null; onChanged?: () => void; /** The Kolux skills the Install panel offers. */ bundled?: string[]; /** Types a command into the inline terminal without running it (T-244-b). */ onType?: (line: string) => void; /** SKILL-025: what the last check found, for the freshness pills. */ onFreshness?: (load: Load, checked: Checked | null) => void };
 
-type Props = { workspace: string | null; settingsLoaded?: boolean; onChanged?: () => void; /** The Kolux skills the Install panel offers. */ bundled?: string[]; /** Types a command into the inline terminal without running it (T-244-b). */ onType?: (line: string) => void; /** SKILL-025: what the last check found, for the freshness pills. */ onFreshness?: (load: Load, checked: Checked | null) => void };
-
-export default function SkillUpdate({ workspace, settingsLoaded = true, onChanged, bundled = [], onType, onFreshness }: Props) {
+export default function SkillUpdate({ workspace, onChanged, bundled = [], onType, onFreshness }: Props) {
   const [checked, setChecked] = useState<Checked | null>(null);
   const [open, setOpen] = useState(false);
-  const [notice, setNotice] = useState(false);
   // SKILL-027: the run itself lives in the store, so it goes on (and the status bar shows it) with the dialog closed.
   const view = useSyncExternalStore(skillBar.subscribe, skillBar.get);
   const status = view.status;
@@ -36,7 +31,7 @@ export default function SkillUpdate({ workspace, settingsLoaded = true, onChange
   useEffect(() => {
     skillBar.sync();
     if (skillBar.takeWanted()) setOpen(true);
-    const show = () => (skillBar.takeWanted(), setOpen(true), setNotice(false));
+    const show = () => (skillBar.takeWanted(), setOpen(true));
     window.addEventListener(SKILLS_SHOW_EVENT, show);
     return () => window.removeEventListener(SKILLS_SHOW_EVENT, show);
   }, []);
@@ -50,17 +45,7 @@ export default function SkillUpdate({ workspace, settingsLoaded = true, onChange
     }
     lastState.current = status?.state;
   }, [status?.state]);
-  useEffect(() => {
-    if (!shownThisSession && noticeShown(checked, settingsLoaded, false)) {
-      shownThisSession = true;
-      setNotice(true);
-    }
-  }, [checked, settingsLoaded]);
 
-  const dismiss = () => {
-    setNotice(false);
-    if (checked) invoke("skills_update_dismiss", { keys: freshKeys(checked) }).catch(() => undefined);
-  };
   const busy = status?.state === "running" || status?.state === "stopping";
   const start = () => {
     if (!checked) return;
@@ -81,18 +66,7 @@ export default function SkillUpdate({ workspace, settingsLoaded = true, onChange
   const rows = checked?.report.rows ?? [];
   return (
     <>
-      {notice && !open && (
-        <div className="skills-note" role="status">
-          {noticeText(checked?.report.available ?? 0)}{" "}
-          <button className="btn" onClick={() => (setOpen(true), setNotice(false))}>
-            Review
-          </button>{" "}
-          <button className="btn" aria-label="Dismiss" onClick={dismiss}>
-            <Close />
-          </button>
-        </div>
-      )}
-      {!notice && !open && (checked?.report.available ?? 0) > 0 && (
+      {!open && (checked?.report.available ?? 0) > 0 && (
         <div className="skills-note" role="status">
           {noticeText(checked?.report.available ?? 0)}{" "}
           <button className="btn" onClick={() => setOpen(true)}>

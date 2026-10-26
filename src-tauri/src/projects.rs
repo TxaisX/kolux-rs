@@ -80,6 +80,9 @@ const ORIGINS_KEY: &str = "workspaceOrigins";
 const SEEN_KEY: &str = "worktreesSeen";
 /// Worktrees the user hid from the sidebar (PROJ-042), keyed like the names.
 const HIDDEN_KEY: &str = "worktreesHidden";
+/// PROJ-068: each linked worktree's own Git folder (`.git/worktrees/<id>`, as `name_key` writes it)
+/// to the folder it was last seen in; the Git folder stays put when the worktree is moved or renamed.
+const ADMIN_KEY: &str = "workspaceGitDirs";
 pub(crate) const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 /// "nested" (the default) or "flat" (PROJ-025).
 const LAYOUT_SETTING: &str = "workspacesLayout";
@@ -173,6 +176,13 @@ pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(),
 /// clean: its typed name, its parent and its origin.
 pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
     retire_workspace_names(store, path)?;
+    // PROJ-068: Git can give a later worktree the same Git folder; it must not inherit this one's records.
+    let mut admins = load_map(store, ADMIN_KEY);
+    let before = admins.len();
+    admins.retain(|_, v| v.as_str() != Some(name_key(path).as_str()));
+    if admins.len() != before {
+        store.set(ADMIN_KEY, &serde_json::Value::Object(admins).to_string()).map_err(|e| e.to_string())?;
+    }
     set_name(store, path, None)?;
     set_parent(store, path, None)?;
     // EDIT-040: a later workspace in the same folder starts with an empty note.
@@ -304,7 +314,11 @@ pub fn unseen(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktre
 
 /// `unseen` over a worktree list already scanned, so the scan can run without the store (T-442).
 pub fn unseen_of(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
-    let list = decorate(store, project, all)?;
+    unseen_in(store, project, decorate(store, project, all)?)
+}
+
+/// `unseen_of` over a list already decorated, so one scan can give both answers (T-442-c).
+fn unseen_in(store: &Store, project: &Project, list: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
     let keys: Vec<String> = list.iter().map(|w| name_key(&w.path)).collect();
     let Some(seen) = seen_of(store, project) else {
         save_seen(store, project, &keys)?;
@@ -462,11 +476,73 @@ pub fn workspace_set_parent(git: State<'_, Git>, store: StoreState<'_>, project_
 }
 
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
-    decorate(store, project, git.worktrees(Path::new(&project.path))?)
+    let repo = Path::new(&project.path);
+    let mut all = git.worktrees(repo)?;
+    if repair_moved(git, repo, &all) {
+        all = git.worktrees(repo)?;
+    }
+    decorate(store, project, all)
+}
+
+/// PROJ-068: the Git folder a linked worktree points at from its `.git` file; None for the main
+/// checkout (its `.git` is a folder) and for a folder that is gone.
+fn admin_dir(worktree: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(worktree.join(".git")).ok()?;
+    Some(text.trim().strip_prefix("gitdir:")?.trim().to_string())
+}
+
+/// PROJ-068: a workspace whose folder moved (renamed outside Kolux, or `git worktree move`) keeps
+/// what Kolux keeps about it: Kolux knows each worktree by its Git folder and rekeys the records
+/// from the old path to the new one.
+fn carry_over(store: &Store, project: &Project, all: &[Worktree]) -> Result<(), String> {
+    let mut known = load_map(store, ADMIN_KEY);
+    let mut moved: Vec<(String, String)> = Vec::new(); // (old key, new path)
+    let mut changed = false;
+    for w in all.iter().filter(|w| !w.is_main) {
+        let Some(admin) = admin_dir(Path::new(&w.path)) else { continue };
+        let (admin, now) = (name_key(&admin), name_key(&w.path));
+        match known.get(&admin).and_then(|v| v.as_str()) {
+            Some(old) if old == now => continue,
+            Some(old) => moved.push((old.to_string(), w.path.clone())),
+            None => {}
+        }
+        known.insert(admin, now.into());
+        changed = true;
+    }
+    if changed {
+        store.set(ADMIN_KEY, &serde_json::Value::Object(known).to_string()).map_err(|e| e.to_string())?;
+    }
+    for (old, new) in &moved {
+        rekey_workspace(store, project, old, new)?;
+    }
+    Ok(())
+}
+
+/// PROJ-068: a workspace folder renamed by hand leaves Git pointing at the old place. Its folder is
+/// looked for beside where it was (its `.git` file still names the worktree's Git folder, whose
+/// record still names the old place) and Git is told where it went. True when one was repaired.
+// ponytail: only the old folder's siblings are searched; a workspace moved elsewhere stays listed as
+// missing until `git worktree repair <new folder>` is run.
+fn repair_moved(git: &Git, repo: &Path, all: &[Worktree]) -> bool {
+    let mut fixed = false;
+    for w in all.iter().filter(|w| !w.is_main && !Path::new(&w.path).exists()) {
+        let Some(Ok(entries)) = Path::new(&w.path).parent().map(std::fs::read_dir) else { continue };
+        let was = name_key(&Path::new(&w.path).join(".git").to_string_lossy());
+        for dir in entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+            let Some(admin) = admin_dir(&dir) else { continue };
+            let points = std::fs::read_to_string(Path::new(&admin).join("gitdir")).map(|s| name_key(s.trim())).unwrap_or_default();
+            if points == was && git.worktree_repair(repo, &dir).is_ok() {
+                fixed = true;
+                break;
+            }
+        }
+    }
+    fixed
 }
 
 /// A repo's scanned worktrees with what Kolux keeps about them: visibility, names and parents.
 pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
+    carry_over(store, project, &all)?;
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let hidden = load_map(store, HIDDEN_KEY);
@@ -1478,6 +1554,27 @@ pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> 
 pub async fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
     let (project, all) = scan(&git, &store, &project_id)?;
     unseen_of(&*store.lock().map_err(|e| e.to_string())?, &project, all)
+}
+
+/// A project's workspaces and the ones made outside Kolux that were not seen yet (T-442-c).
+#[derive(Debug, serde::Serialize)]
+pub struct Scanned {
+    pub list: Vec<Worktree>,
+    pub unseen: Vec<Worktree>,
+}
+
+/// Both answers of `workspace_list` and `workspace_unseen` from one scan of one project.
+pub fn scanned_of(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Scanned, String> {
+    let list = decorate(store, project, all)?;
+    let unseen = unseen_in(store, project, list.clone())?;
+    Ok(Scanned { list, unseen })
+}
+
+/// The sidebar's poll: one `git worktree list` per project instead of one per command.
+#[tauri::command]
+pub async fn workspace_scan(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Scanned, String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    scanned_of(&*store.lock().map_err(|e| e.to_string())?, &project, all)
 }
 
 #[tauri::command]
@@ -3642,6 +3739,31 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         }
     }
 
+    // T-442-c: the sidebar's one call gives what workspace_list and workspace_unseen gave in two.
+    #[test]
+    fn one_scan_gives_the_list_and_the_unseen_alike() {
+        let git = Git::detect().unwrap();
+        let profile = temp("scanned");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("scanned-r");
+        let side = temp("scanned-side");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let first = scanned_of(&store, &project, git.worktrees(Path::new(&project.path)).unwrap()).unwrap();
+        assert!(first.unseen.is_empty(), "the first scan takes what is there as seen");
+        assert_eq!(first.list.len(), 1);
+        git_in(&repo, &["worktree", "add", "-q", "-b", "outside", &side.join("outside").to_string_lossy()]);
+        crate::visibility::set_choice(&store, None, "other", Some(true)).unwrap();
+        let all = git.worktrees(Path::new(&project.path)).unwrap();
+        let both = scanned_of(&store, &project, all.clone()).unwrap();
+        assert_eq!(both.list, decorate(&store, &project, all).unwrap());
+        let fresh: Vec<_> = both.unseen.iter().map(|w| w.branch.clone().unwrap()).collect();
+        assert_eq!(fresh, ["outside"]);
+        assert_eq!(both.list.len(), 2);
+        for d in [profile, repo, side] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
     #[test]
     fn worktrees_made_outside_kolux_are_noticed_once_and_can_be_hidden() {
         let git = Git::detect().unwrap();
@@ -4469,6 +4591,64 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert!(good.is_dir() && info.flat && info.dir == good.display().to_string() && info.used == vec![good.display().to_string()]);
         drop(store);
         let _ = fs::remove_dir_all(profile); // Windows may still hold the store file for a moment; the folder is throwaway
+    }
+
+    #[test]
+    fn proj068_records_follow_a_workspace_moved_outside_kolux_and_a_quiet_refresh_keeps_the_order() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile068");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("repo068");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&temp("ws068"));
+        let a = create_workspace(&git, &place, &project, "alpha", None).unwrap().worktree.path;
+        let b = create_workspace(&git, &place, &project, "beta", None).unwrap().worktree.path;
+        let c = create_workspace(&git, &place, &project, "gamma", None).unwrap().worktree.path;
+        set_name(&store, &b, Some("Beta work")).unwrap();
+        reparent(&git, &store, &project, &b, Some(&a)).unwrap();
+        reparent(&git, &store, &project, &c, Some(&b)).unwrap();
+        save_workspace_note(&store, &b, "half done").unwrap();
+        note_seen(&store, &project, &b).unwrap(); // what the create commands record: made by Kolux
+        assert!(unseen(&git, &store, &project).unwrap().is_empty());
+        let key = |p: &Path| name_key(&p.to_string_lossy());
+        let paths = |l: &[Worktree]| l.iter().map(|w| name_key(&w.path)).collect::<Vec<_>>();
+        let find = |l: &[Worktree], p: &Path| l.iter().find(|w| name_key(&w.path) == key(p)).cloned();
+        let parent_of = |l: &[Worktree], p: &Path| find(l, p).and_then(|w| w.parent).map(|x| name_key(&x));
+        // refresh twice with nothing changed: the same rows in the same order
+        let first = list_workspaces(&git, &store, &project).unwrap();
+        assert_eq!(paths(&first), paths(&list_workspaces(&git, &store, &project).unwrap()));
+        // moved from a terminal with git worktree move: name, parent, note, origin and children follow
+        let moved = Path::new(&b).with_file_name("beta-moved");
+        git.worktree_move(&repo, Path::new(&b), &moved).unwrap();
+        let after = list_workspaces(&git, &store, &project).unwrap();
+        let m = find(&after, &moved).expect("the moved workspace is listed");
+        assert_eq!(m.name.as_deref(), Some("Beta work"));
+        assert_eq!(m.kind, "managed");
+        assert_eq!(parent_of(&after, &moved), Some(name_key(&a)));
+        assert_eq!(parent_of(&after, Path::new(&c)), Some(key(&moved)));
+        assert_eq!(workspace_note(&store, &m.path).text, "half done");
+        assert!(unseen(&git, &store, &project).unwrap().is_empty(), "a moved workspace is not offered as new");
+        // renamed by hand (Explorer, mv): Git is told where it went and the records follow again
+        let by_hand = Path::new(&b).with_file_name("beta-by-hand");
+        fs::rename(&moved, &by_hand).unwrap();
+        let after = list_workspaces(&git, &store, &project).unwrap();
+        assert!(find(&after, &moved).is_none());
+        let h = find(&after, &by_hand).expect("the renamed workspace is listed");
+        assert_eq!(h.name.as_deref(), Some("Beta work"));
+        assert_eq!(parent_of(&after, &by_hand), Some(name_key(&a)));
+        assert_eq!(parent_of(&after, Path::new(&c)), Some(key(&by_hand)));
+        assert_eq!(workspace_note(&store, &h.path).text, "half done");
+        // adding the project again hands back the same one, records intact
+        assert_eq!(add_project(&git, &store, &repo).unwrap().id, project.id);
+        assert_eq!(find(&list_workspaces(&git, &store, &project).unwrap(), &by_hand).unwrap().name.as_deref(), Some("Beta work"));
+        // a removed workspace's Git folder is forgotten, so a later worktree reusing its id inherits nothing
+        remove_workspace(&git, &project, &h.path, true).unwrap();
+        forget_workspace(&store, &h.path).unwrap();
+        assert!(!load_map(&store, ADMIN_KEY).values().any(|v| v.as_str() == Some(key(&by_hand).as_str())));
+        drop(store);
+        for d in [profile, repo, place.root] {
+            let _ = fs::remove_dir_all(d);
+        }
     }
 
     #[test]

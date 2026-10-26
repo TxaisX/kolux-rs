@@ -15,6 +15,9 @@ pub mod list;
 /// VIEW-090 / VIEW-092 (T-276): scan reports, the on-disk summary cache, scan budgets and WSL rules.
 #[path = "session_scan.rs"]
 pub mod scan;
+/// VIEW 089 (T-153-d): delete, reveal or open a past session's files.
+#[path = "session_files.rs"]
+pub mod files;
 
 use serde::Serialize;
 use std::fs;

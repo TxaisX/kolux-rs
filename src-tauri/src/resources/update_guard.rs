@@ -7,24 +7,36 @@
 //! program's own signature, or with the publisher pinned into the build (`KOLUX_RS_PUBLISHER` at
 //! build time). The rules, in `decide`:
 //!
-//! - A damaged, untrusted or unreadable installer signature is always refused.
+//! - An installer whose contents do not match its signature (`HashMismatch`) is always refused.
 //! - A signed copy (or a build with a pinned publisher) takes only an installer validly signed by
-//!   that same publisher. An unsigned installer, another publisher, or a signature that could not
-//!   be checked is refused. Publishers are compared by certificate subject, so a renewed
-//!   certificate of the same publisher still updates.
+//!   that same publisher. An unsigned installer or another publisher is refused. Publishers are
+//!   compared by certificate subject, so a renewed certificate of the same publisher still updates.
 //! - An unsigned copy (today's releases and development copies) takes an unsigned installer or a
-//!   validly signed one: the minisign key has already vouched for it. A copy whose own signature is
-//!   damaged, or whose own signature could not be read, refuses every installer.
+//!   validly signed one: the minisign key has already vouched for it.
+//! - An unclear answer (the tool failed, timed out, or reported a status that is not a definite
+//!   verdict) stops that one download and is not remembered, so the next check tries again (FIX-2).
+//!   A copy built signed (`KOLUX_RS_SIGNED_BUILD=1`) that cannot read its own signature updates
+//!   nothing; a copy not built signed treats an unreadable own signature as unsigned.
 //!
-//! There is no setting, variable or argument that skips this. A refused version is written to the
-//! store and never offered again (`update_check` filters it).
+//! There is no setting, variable or argument that skips this. A refused installer is written to the
+//! store by its SHA-256 and update signature, never by version, and is not offered again
+//! (`update_check` filters it by signature).
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-/// The store key holding refused versions, newest last.
-pub const KEY_REFUSED: &str = "update.refusedVersions";
-/// The refused list keeps this many versions.
+/// The store key holding refused installers (JSON, newest last). The earlier version-keyed
+/// `update.refusedVersions` list is never read.
+pub const KEY_REFUSED: &str = "update.refusedInstallers";
+/// The refused list keeps this many installers.
 const REFUSED_KEEP: usize = 20;
+/// The release job builds this in as `1` when it signs the copy (FIX-2 FS1).
+pub const SIGNED_BUILD: bool = match option_env!("KOLUX_RS_SIGNED_BUILD") {
+    Some(v) => v.len() == 1 && v.as_bytes()[0] == b'1',
+    None => false,
+};
+/// A signature read that has not answered by then is given up (FIX-2 AFTER 1).
+pub const SIGNATURE_LIMIT: Duration = Duration::from_secs(20);
 /// The publisher pinned into a signed release build, if the release job set it.
 pub const PINNED_PUBLISHER: Option<&str> = option_env!("KOLUX_RS_PUBLISHER");
 /// The marker the page reads to show the security stop card (no install button).
@@ -37,7 +49,7 @@ pub enum SignState {
     Signed { subject: String, thumbprint: String },
     /// No signature at all.
     Unsigned,
-    /// A signature is there but is not valid (hash mismatch, untrusted, unknown error...).
+    /// The installer's contents do not match its signature: a definite refusal.
     Broken(String),
     /// The signature could not be read (the system tool failed or was missing).
     Unknown(String),
@@ -46,7 +58,10 @@ pub enum SignState {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verdict {
     Install,
+    /// A definite refusal: the installer is remembered and not offered again.
     Stop(String),
+    /// An unclear answer: this download is stopped, nothing is remembered, the next check tries again.
+    Retry(String),
 }
 
 /// Reads `Get-AuthenticodeSignature`'s answer, printed as `{"status":..,"subject":..,"thumbprint":..}`.
@@ -71,8 +86,9 @@ pub fn parse_report(json: &str) -> SignState {
             }
         }
         "NotSigned" => SignState::Unsigned,
+        "HashMismatch" => SignState::Broken("HashMismatch".into()),
         "" => SignState::Unknown("the signature check gave no status".into()),
-        other => SignState::Broken(other.to_string()),
+        other => SignState::Unknown(format!("Windows could not confirm the signature: {other}")),
     }
 }
 
@@ -97,22 +113,32 @@ fn stop(why: String) -> Verdict {
     Verdict::Stop(format!("Kolux RS refused this update: {why} It will not be offered again. Your current version keeps working."))
 }
 
-/// The decision: may this installer replace the running copy?
-pub fn decide(running: &SignState, installer: &SignState, pinned: Option<&str>) -> Verdict {
+fn retry(why: String) -> Verdict {
+    Verdict::Retry(format!("Kolux RS did not install this update: {why} It will try again next time. Your current version keeps working."))
+}
+
+/// The decision: may this installer replace the running copy? `signed_build` is `SIGNED_BUILD`.
+pub fn decide(running: &SignState, installer: &SignState, pinned: Option<&str>, signed_build: bool) -> Verdict {
     if let SignState::Broken(s) = installer {
-        return stop(format!("the installer's Windows signature is not valid ({s})."));
+        return stop(format!("the installer's contents do not match its Windows signature ({s})."));
     }
-    let expected: Option<String> = match (pinned.map(str::trim).filter(|p| !p.is_empty()), running) {
+    let pin = pinned.map(str::trim).filter(|p| !p.is_empty());
+    let expected: Option<String> = match (pin, running) {
         (Some(p), _) => Some(p.to_string()),
         (None, SignState::Signed { subject, .. }) => Some(subject.clone()),
         (None, SignState::Unsigned) => None,
         (None, SignState::Broken(s)) => {
-            return stop(format!("this copy's own Windows signature is damaged ({s}), so no publisher can be trusted. Reinstall Kolux RS from its releases page."));
+            return retry(format!("this copy's own Windows signature is damaged ({s}), so no publisher can be trusted. Reinstall Kolux RS from its releases page."));
         }
-        (None, SignState::Unknown(why)) => {
-            return stop(format!("this copy's own Windows signature could not be checked ({why})."));
+        (None, SignState::Unknown(why)) if signed_build => {
+            return retry(format!("this copy's own Windows signature could not be checked ({why})."));
         }
+        // A copy not built signed that cannot read its own signature counts as unsigned.
+        (None, SignState::Unknown(_)) => None,
     };
+    if let SignState::Unknown(why) = installer {
+        return retry(format!("the installer's Windows signature could not be checked ({why})."));
+    }
     match (expected, installer) {
         (Some(want), SignState::Signed { subject, .. }) if same_publisher(&want, subject) => Verdict::Install,
         (Some(want), SignState::Signed { subject, .. }) => stop(format!(
@@ -121,16 +147,14 @@ pub fn decide(running: &SignState, installer: &SignState, pinned: Option<&str>) 
             publisher_name(&want)
         )),
         (Some(want), SignState::Unsigned) => stop(format!("the installer is not signed, but Kolux RS is signed by {}.", publisher_name(&want))),
-        (Some(_), SignState::Unknown(why)) => stop(format!("the installer's Windows signature could not be checked ({why}).")),
         (None, SignState::Signed { .. }) | (None, SignState::Unsigned) => Verdict::Install,
-        (None, SignState::Unknown(why)) => stop(format!("the installer's Windows signature could not be checked ({why}).")),
-        (_, SignState::Broken(_)) => unreachable!("handled above"),
+        (_, SignState::Broken(_) | SignState::Unknown(_)) => unreachable!("handled above"),
     }
 }
 
 /// Writes the downloaded installer to `dir`, checks it with `check` against the running copy's
 /// signature, and removes the file again. The installer itself is never started here.
-pub fn vet(bytes: &[u8], dir: &Path, version: &str, running: &SignState, pinned: Option<&str>, check: impl Fn(&Path) -> SignState) -> Verdict {
+pub fn vet(bytes: &[u8], dir: &Path, version: &str, running: &SignState, pinned: Option<&str>, signed_build: bool, check: impl Fn(&Path) -> SignState) -> Verdict {
     let safe: String = version.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
     let file = dir.join(format!("kolux-rs-update-{safe}-{}.exe", std::process::id()));
     let installer = match std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, bytes)) {
@@ -138,19 +162,86 @@ pub fn vet(bytes: &[u8], dir: &Path, version: &str, running: &SignState, pinned:
         Err(e) => SignState::Unknown(format!("the download could not be written for the check: {}", e.kind())),
     };
     let _ = std::fs::remove_file(&file);
-    decide(running, &installer, pinned)
+    decide(running, &installer, pinned, signed_build)
 }
 
-/// Adds a refused version to the stored list (no repeats, newest kept).
-pub fn refused_add(list: Option<&str>, version: &str) -> String {
-    let mut v: Vec<&str> = list.unwrap_or("").split('\n').map(str::trim).filter(|s| !s.is_empty() && *s != version).collect();
-    v.push(version);
-    let start = v.len().saturating_sub(REFUSED_KEEP);
-    v[start..].join("\n")
+/// One installer stopped for its publisher. It is known by its own bytes (SHA-256) and by the update
+/// signature the feed gave with it, never by the version string, so a stale installer served under
+/// a new version number cannot block the real release (FIX-2 FS2).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Refused {
+    pub sha256: String,
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default)]
+    pub version: String,
 }
 
-pub fn refused_has(list: Option<&str>, version: &str) -> bool {
-    list.unwrap_or("").split('\n').any(|s| s.trim() == version)
+fn refused_list(list: Option<&str>) -> Vec<Refused> {
+    // A damaged list reads as empty.
+    list.and_then(|l| serde_json::from_str::<Vec<Refused>>(l).ok()).unwrap_or_default()
+}
+
+/// The SHA-256 of an installer, as lower-case hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Adds a refused installer to the stored list (no repeats by SHA-256, newest kept).
+pub fn refused_add(list: Option<&str>, entry: Refused) -> String {
+    let mut v = refused_list(list);
+    v.retain(|r| !r.sha256.eq_ignore_ascii_case(&entry.sha256));
+    v.push(entry);
+    let over = v.len().saturating_sub(REFUSED_KEEP);
+    v.drain(..over);
+    serde_json::to_string(&v).unwrap_or_else(|_| "[]".into())
+}
+
+/// Whether this installer (by its bytes, once downloaded) or this update signature (at check time,
+/// before any download) was refused before.
+pub fn refused_has(list: Option<&str>, sha256: Option<&str>, signature: &str) -> bool {
+    let signature = signature.trim();
+    refused_list(list).iter().any(|r| sha256.is_some_and(|h| h.eq_ignore_ascii_case(&r.sha256)) || (!signature.is_empty() && r.signature.trim() == signature))
+}
+
+/// Runs `cmd` and gives its standard output, or `None` when it fails to start, exits with an
+/// error, or is still running after `limit` (it is then ended).
+pub fn bounded_output(mut cmd: std::process::Command, limit: Duration) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut child = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+    // The answer is one short line; reading it on its own thread keeps a full pipe from stalling the wait.
+    let mut out = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        buf
+    });
+    let until = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let buf = reader.join().ok()?;
+    status.success().then_some(buf)
+}
+
+/// Windows' own System32 folder, asked of Windows rather than read from an environment variable
+/// the caller could have changed (FIX-2 AFTER 2).
+#[cfg(windows)]
+pub fn system_dir() -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let mut buf = vec![0u16; 520];
+    // SAFETY: the buffer is valid for `buf.len()` UTF-16 units and Windows writes at most that many.
+    let n = unsafe { windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    (n > 0 && n < buf.len()).then(|| std::ffi::OsString::from_wide(&buf[..n]).into())
 }
 
 /// Reads one file's signature with Windows' own tool. The path travels in an environment
@@ -159,20 +250,16 @@ pub fn refused_has(list: Option<&str>, version: &str) -> bool {
 pub fn check_file(path: &Path) -> SignState {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    let ps = Path::new(&root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let Some(sys) = system_dir() else { return SignState::Unknown("Windows' system folder could not be found".into()) };
+    let ps = sys.join(r"WindowsPowerShell\v1.0\powershell.exe");
     let script = "$ErrorActionPreference='Stop'; $s = Get-AuthenticodeSignature -LiteralPath $env:KOLUX_RS_SIG_FILE; \
         $c = $s.SignerCertificate; \
         [pscustomobject]@{ status = [string]$s.Status; subject = $(if ($c) { $c.Subject } else { '' }); thumbprint = $(if ($c) { $c.Thumbprint } else { '' }) } | ConvertTo-Json -Compress";
-    match std::process::Command::new(ps)
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
-        .env("KOLUX_RS_SIG_FILE", path)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-    {
-        Ok(o) if o.status.success() => parse_report(&String::from_utf8_lossy(&o.stdout)),
-        Ok(_) => SignState::Unknown("the Windows signature check failed".into()),
-        Err(e) => SignState::Unknown(format!("the Windows signature check could not start: {}", e.kind())),
+    let mut cmd = std::process::Command::new(ps);
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).env("KOLUX_RS_SIG_FILE", path).creation_flags(CREATE_NO_WINDOW);
+    match bounded_output(cmd, SIGNATURE_LIMIT) {
+        Some(out) => parse_report(&String::from_utf8_lossy(&out)),
+        None => SignState::Unknown("the Windows signature check failed or took too long".into()),
     }
 }
 
@@ -201,8 +288,17 @@ mod tests {
     fn stopped(v: Verdict) -> String {
         match v {
             Verdict::Stop(why) => why,
-            Verdict::Install => panic!("expected a stop"),
+            other => panic!("expected a stop, got {other:?}"),
         }
+    }
+    fn retried(v: Verdict) -> String {
+        match v {
+            Verdict::Retry(why) => why,
+            other => panic!("expected a one-time stop, got {other:?}"),
+        }
+    }
+    fn unknown() -> SignState {
+        SignState::Unknown("tool failed".into())
     }
 
     #[test]
@@ -210,7 +306,10 @@ mod tests {
         assert_eq!(parse_report(r#"{"status":"Valid","subject":"CN=Acme Tools Ltd","thumbprint":"AB12"}"#), signed("CN=Acme Tools Ltd", "AB12"));
         assert_eq!(parse_report(r#"{"status":"NotSigned","subject":"","thumbprint":""}"#), SignState::Unsigned);
         assert_eq!(parse_report(r#"{"status":"HashMismatch","subject":"CN=Acme Tools Ltd","thumbprint":"AB12"}"#), SignState::Broken("HashMismatch".into()));
-        assert_eq!(parse_report(r#"{"status":"NotTrusted","subject":"CN=Self","thumbprint":"CD"}"#), SignState::Broken("NotTrusted".into()));
+        // FIX-2 FB1: anything that is not a definite verdict is unclear, not a refusal.
+        for status in ["NotTrusted", "UnknownError", "Incompatible", "NotSupportedFileFormat"] {
+            assert!(matches!(parse_report(&format!(r#"{{"status":"{status}","subject":"CN=Self","thumbprint":"CD"}}"#)), SignState::Unknown(_)), "{status}");
+        }
         assert!(matches!(parse_report(r#"{"status":"Valid","subject":" ","thumbprint":"AB"}"#), SignState::Broken(_)));
         assert!(matches!(parse_report("garbage"), SignState::Unknown(_)));
         assert!(matches!(parse_report("{}"), SignState::Unknown(_)));
@@ -219,41 +318,57 @@ mod tests {
     #[test]
     fn a_signed_copy_takes_only_its_own_publisher() {
         let running = signed(ACME, "OLD1");
-        // A renewed certificate (new thumbprint, same subject, other spacing and case) still updates.
-        assert_eq!(decide(&running, &signed("cn=Acme Tools Ltd,O=Acme Tools Ltd, L=Leeds,  C=GB", "NEW2"), None), Verdict::Install);
-        let why = stopped(decide(&running, &signed("CN=Mallory Software, O=Mallory", "EV1"), None));
-        assert!(why.contains("Mallory Software") && why.contains("Acme Tools Ltd"), "{why}");
-        assert!(why.contains("not be offered again"), "{why}");
-        let why = stopped(decide(&running, &SignState::Unsigned, None));
-        assert!(why.contains("not signed"), "{why}");
-        assert!(stopped(decide(&running, &SignState::Unknown("tool failed".into()), None)).contains("could not be checked"));
-        assert!(stopped(decide(&running, &SignState::Broken("HashMismatch".into()), None)).contains("HashMismatch"));
+        for build in [false, true] {
+            // A renewed certificate (new thumbprint, same subject, other spacing and case) still updates.
+            assert_eq!(decide(&running, &signed("cn=Acme Tools Ltd,O=Acme Tools Ltd, L=Leeds,  C=GB", "NEW2"), None, build), Verdict::Install);
+            let why = stopped(decide(&running, &signed("CN=Mallory Software, O=Mallory", "EV1"), None, build));
+            assert!(why.contains("Mallory Software") && why.contains("Acme Tools Ltd"), "{why}");
+            assert!(why.contains("not be offered again"), "{why}");
+            assert!(stopped(decide(&running, &SignState::Unsigned, None, build)).contains("not signed"));
+            assert!(stopped(decide(&running, &SignState::Broken("HashMismatch".into()), None, build)).contains("HashMismatch"));
+        }
+    }
+
+    // FIX-2 FB1: an unclear answer stops this one download and is not a refusal to remember.
+    #[test]
+    fn an_unclear_signature_answer_stops_one_download_only() {
+        let running = signed(ACME, "OLD1");
+        for build in [false, true] {
+            let why = retried(decide(&running, &unknown(), None, build));
+            assert!(why.contains("could not be checked") && why.contains("try again next time"), "{why}");
+            assert!(!why.contains("not be offered again"), "{why}");
+            retried(decide(&SignState::Unsigned, &unknown(), None, build));
+            retried(decide(&SignState::Unsigned, &unknown(), Some(ACME), build));
+        }
     }
 
     #[test]
     fn a_pinned_publisher_wins_over_the_running_signature() {
         // Pinned build: the installer must carry the pinned publisher, whatever the copy reports.
-        assert_eq!(decide(&SignState::Unsigned, &signed(ACME, "X"), Some(ACME)), Verdict::Install);
-        assert!(matches!(decide(&SignState::Unsigned, &SignState::Unsigned, Some(ACME)), Verdict::Stop(_)));
-        assert!(matches!(decide(&signed("CN=Other", "Y"), &signed("CN=Other", "Y"), Some(ACME)), Verdict::Stop(_)));
-        assert_eq!(decide(&SignState::Unknown("x".into()), &signed(ACME, "X"), Some(ACME)), Verdict::Install);
+        assert_eq!(decide(&SignState::Unsigned, &signed(ACME, "X"), Some(ACME), false), Verdict::Install);
+        assert!(matches!(decide(&SignState::Unsigned, &SignState::Unsigned, Some(ACME), false), Verdict::Stop(_)));
+        assert!(matches!(decide(&signed("CN=Other", "Y"), &signed("CN=Other", "Y"), Some(ACME), false), Verdict::Stop(_)));
+        assert_eq!(decide(&unknown(), &signed(ACME, "X"), Some(ACME), true), Verdict::Install);
         // An empty pin counts as no pin.
-        assert_eq!(decide(&SignState::Unsigned, &SignState::Unsigned, Some("  ")), Verdict::Install);
+        assert_eq!(decide(&SignState::Unsigned, &SignState::Unsigned, Some("  "), false), Verdict::Install);
     }
 
     #[test]
-    fn an_unsigned_copy_never_takes_a_broken_signature() {
-        assert_eq!(decide(&SignState::Unsigned, &SignState::Unsigned, None), Verdict::Install);
-        assert_eq!(decide(&SignState::Unsigned, &signed(ACME, "X"), None), Verdict::Install);
-        assert!(matches!(decide(&SignState::Unsigned, &SignState::Broken("NotTrusted".into()), None), Verdict::Stop(_)));
-        assert!(matches!(decide(&SignState::Unsigned, &SignState::Unknown("x".into()), None), Verdict::Stop(_)));
+    fn an_unsigned_copy_takes_clear_answers_and_stops_a_mismatch() {
+        assert_eq!(decide(&SignState::Unsigned, &SignState::Unsigned, None, false), Verdict::Install);
+        assert_eq!(decide(&SignState::Unsigned, &signed(ACME, "X"), None, false), Verdict::Install);
+        assert!(matches!(decide(&SignState::Unsigned, &SignState::Broken("HashMismatch".into()), None, false), Verdict::Stop(_)));
     }
 
+    // FIX-2 FS1: only a copy built signed is stopped by an unreadable own signature.
     #[test]
-    fn a_copy_that_cannot_vouch_for_itself_refuses_everything() {
+    fn a_copy_built_signed_never_updates_when_it_cannot_read_its_own_signature() {
         for installer in [signed(ACME, "X"), SignState::Unsigned] {
-            assert!(stopped(decide(&SignState::Broken("HashMismatch".into()), &installer, None)).contains("Reinstall"));
-            assert!(matches!(decide(&SignState::Unknown("x".into()), &installer, None), Verdict::Stop(_)));
+            retried(decide(&unknown(), &installer, None, true));
+            // not built signed: the unreadable own signature counts as unsigned, the update key vouches
+            assert_eq!(decide(&unknown(), &installer, None, false), Verdict::Install);
+            // a damaged own signature is never trusted either way, and is not remembered against the installer
+            assert!(retried(decide(&SignState::Broken("HashMismatch".into()), &installer, None, false)).contains("Reinstall"));
         }
     }
 
@@ -261,7 +376,7 @@ mod tests {
     fn vet_checks_a_temporary_copy_and_removes_it() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-t293-{}-{}", std::process::id(), line!()));
         let seen = std::cell::RefCell::new(None);
-        let v = vet(b"MZ fake installer", &dir, "1.2.3", &signed(ACME, "A"), None, |p| {
+        let v = vet(b"MZ fake installer", &dir, "1.2.3", &signed(ACME, "A"), None, false, |p| {
             *seen.borrow_mut() = Some((p.to_path_buf(), std::fs::read(p).unwrap()));
             signed("CN=Mallory", "B")
         });
@@ -271,7 +386,7 @@ mod tests {
         assert!(path.file_name().unwrap().to_string_lossy().starts_with("kolux-rs-update-1.2.3-"));
         assert!(!path.exists(), "the checked copy is removed");
         // An odd version string never escapes the folder.
-        let v = vet(b"x", &dir, "../../evil", &SignState::Unsigned, None, |p| {
+        let v = vet(b"x", &dir, "../../evil", &SignState::Unsigned, None, false, |p| {
             assert_eq!(p.parent().unwrap(), dir.as_path());
             SignState::Unsigned
         });
@@ -279,20 +394,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn entry(bytes: &[u8], signature: &str, version: &str) -> Refused {
+        Refused { sha256: sha256_hex(bytes), signature: signature.into(), version: version.into() }
+    }
+
+    // FIX-2 FS2: a refused installer is known by its bytes and update signature, not its version.
     #[test]
-    fn refused_versions_are_remembered_once_and_capped() {
-        let l = refused_add(None, "1.0.0");
-        let l = refused_add(Some(&l), "1.1.0");
-        let l = refused_add(Some(&l), "1.0.0");
-        assert_eq!(l, "1.1.0\n1.0.0");
-        assert!(refused_has(Some(&l), "1.0.0") && refused_has(Some(&l), "1.1.0"));
-        assert!(!refused_has(Some(&l), "1.2.0") && !refused_has(None, "1.0.0"));
+    fn a_refused_installer_is_known_by_its_bytes_not_its_version() {
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let l = refused_add(None, entry(b"stale installer", "SIG-OLD", "1.1.0"));
+        assert!(refused_has(Some(&l), Some(&sha256_hex(b"stale installer")), "other-sig"), "same bytes under another version are still refused");
+        assert!(refused_has(Some(&l), None, " SIG-OLD "), "the feed's signature is known before any download");
+        // the real release under the same version number is a different file and is offered
+        assert!(!refused_has(Some(&l), Some(&sha256_hex(b"the real release")), "SIG-NEW"));
+        assert!(!refused_has(Some(&l), None, "") && !refused_has(None, Some("x"), "x"));
+        // the earlier version-keyed list, or a damaged one, forgets nothing and refuses nothing
+        assert!(!refused_has(Some("1.0.0\n1.1.0"), None, "1.1.0") && !refused_has(Some("{"), None, "SIG-OLD"));
+    }
+
+    #[test]
+    fn the_refused_list_keeps_each_installer_once_and_only_the_newest_twenty() {
+        let l = refused_add(None, entry(b"a", "s1", "1.0.0"));
+        let l = refused_add(Some(&l), entry(b"b", "s2", "1.1.0"));
+        let l = refused_add(Some(&l), entry(b"a", "s1", "1.0.0"));
+        assert_eq!(refused_list(Some(&l)).iter().map(|r| r.signature.as_str()).collect::<Vec<_>>(), ["s2", "s1"]);
         let mut l = String::new();
         for i in 0..30 {
-            l = refused_add(Some(&l), &format!("0.{i}.0"));
+            l = refused_add(Some(&l), entry(format!("file {i}").as_bytes(), &format!("sig{i}"), "0.0.1"));
         }
-        assert_eq!(l.lines().count(), REFUSED_KEEP);
-        assert!(refused_has(Some(&l), "0.29.0") && !refused_has(Some(&l), "0.0.0"));
+        assert_eq!(refused_list(Some(&l)).len(), REFUSED_KEEP);
+        assert!(refused_has(Some(&l), None, "sig29") && !refused_has(Some(&l), None, "sig0"));
+    }
+
+    // FIX-2 AFTER 1: a read that never answers is ended and reported as unclear.
+    #[test]
+    fn a_signature_read_that_hangs_is_given_up() {
+        #[cfg(windows)]
+        let mk = |secs: u32| {
+            let mut c = std::process::Command::new("ping");
+            c.args(["-n", &secs.to_string(), "127.0.0.1"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mk = |secs: u32| {
+            let mut c = std::process::Command::new("sleep");
+            c.arg(secs.to_string());
+            c
+        };
+        let started = Instant::now();
+        assert_eq!(bounded_output(mk(30), Duration::from_millis(300)), None);
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        assert!(bounded_output(mk(1), Duration::from_secs(20)).is_some(), "a quick answer is returned");
+        assert_eq!(bounded_output(std::process::Command::new("kolux-rs-no-such-program-fix2"), Duration::from_secs(1)), None);
+        assert_eq!(SIGNATURE_LIMIT, Duration::from_secs(20));
+    }
+
+    // FIX-2 AFTER 2: PowerShell comes from the folder Windows reports, not from an environment variable.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_comes_from_windows_own_folder() {
+        let dir = system_dir().expect("Windows reports its system folder");
+        assert!(dir.join("WindowsPowerShell").join("v1.0").join("powershell.exe").is_file(), "{dir:?}");
+        assert!(dir.is_absolute());
     }
 
     #[test]
@@ -300,6 +463,11 @@ mod tests {
         assert_eq!(publisher_name(ACME), "Acme Tools Ltd");
         assert_eq!(publisher_name("O=No Common Name"), "O=No Common Name");
         assert!(!same_publisher("", ""));
+    }
+
+    #[test]
+    fn the_signed_build_flag_is_off_unless_the_release_job_sets_it() {
+        assert!(!SIGNED_BUILD || option_env!("KOLUX_RS_SIGNED_BUILD") == Some("1"));
     }
 
     // The real Windows tool on a file that is certainly unsigned (a fresh text file). This reads a
@@ -313,6 +481,6 @@ mod tests {
         std::fs::write(&f, "not signed").unwrap();
         let s = check_file(&f);
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(matches!(s, SignState::Unsigned | SignState::Broken(_)), "{s:?}");
+        assert!(!matches!(s, SignState::Signed { .. }), "{s:?}");
     }
 }

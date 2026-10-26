@@ -33,6 +33,9 @@ pub struct Status {
     /// None while HEAD is detached.
     pub branch: Option<String>,
     pub upstream: Option<String>,
+    /// The remote the upstream sits on, as Git names it (the name may hold a slash, so `upstream`
+    /// alone cannot say); None without an upstream or when the upstream is a local branch.
+    pub upstream_remote: Option<String>,
     pub ahead: u32,
     pub behind: u32,
     /// GIT-006: the branch differs from its upstream only by commits whose patches it already
@@ -222,6 +225,9 @@ fn read_status(worktree: &Path) -> Result<Status, String> {
     // GIT-070: a short read, so it takes the worktree's turn and has a time limit.
     let out = output(&["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"], Some(worktree))?;
     let mut st = parse_status(&String::from_utf8_lossy(&out));
+    if let (Some(branch), Some(_)) = (st.branch.as_deref(), st.upstream.as_deref()) {
+        st.upstream_remote = run(&["config", "--get", &format!("branch.{branch}.remote")], Some(worktree)).ok().map(|t| t.trim().to_string()).filter(|r| !r.is_empty() && r != ".");
+    }
     if st.upstream.is_some() && st.behind > 0 {
         // Every upstream-only commit marked `-` has an identical patch in HEAD.
         st.rewritten = run(&["cherry", "HEAD", "@{upstream}"], Some(worktree)).is_ok_and(|t| !t.is_empty() && t.lines().all(|l| l.starts_with('-')));
@@ -3687,6 +3693,28 @@ mod tests {
         assert_eq!(remote(&dir, "nope").unwrap_err(), "unknown remote action nope");
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&other);
+        let _ = fs::remove_dir_all(&bare);
+    }
+
+    #[test]
+    fn the_upstream_remote_is_named_whole_when_its_name_holds_a_slash() {
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-slashremote-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let bare_url = bare.to_string_lossy().replace('\\', "/");
+        let dir = temp_repo("slashremote");
+        run(&["remote", "add", "team/fork", &bare_url], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "team/fork", "main"], Some(&dir)).unwrap();
+        let st = status(&dir).unwrap();
+        assert_eq!((st.upstream.as_deref(), st.upstream_remote.as_deref()), (Some("team/fork/main"), Some("team/fork")));
+        // A branch tracking a local branch has an upstream and no remote.
+        run(&["branch", "side", "main"], Some(&dir)).unwrap();
+        run(&["checkout", "-q", "side"], Some(&dir)).unwrap();
+        run(&["branch", "-q", "--set-upstream-to=main"], Some(&dir)).unwrap();
+        let st = status(&dir).unwrap();
+        assert_eq!((st.upstream.as_deref(), st.upstream_remote.as_deref()), (Some("main"), None));
+        let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&bare);
     }
 

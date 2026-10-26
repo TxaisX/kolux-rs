@@ -249,6 +249,12 @@ impl Parser {
         Parser { format, line_no: 0, items: Vec::new(), index: HashMap::new(), open: false, turn: 0, parts: HashMap::new() }
     }
 
+    /// A parser for a page read from the middle of a transcript: its line and turn numbers start high,
+    /// so the ids it makes (`plan-turn-N`, `notice-N`) never meet those of the newest window.
+    fn based(format: Format, base: u64) -> Self {
+        Parser { line_no: base, turn: base as u32, ..Parser::new(format) }
+    }
+
     pub fn items(&self) -> &[Item] {
         &self.items
     }
@@ -610,6 +616,101 @@ pub struct Tail {
     cap: u64,
     /// The read started inside a line (past the cap): drop bytes up to the first line end.
     skip_to_line: bool,
+    /// CHAT-008: the first read takes only this many of the newest lines (None: as much as the cap allows).
+    first_lines: Option<usize>,
+    /// Where the first read began (a line start); 0 when it began at the top. Older lines lie before it.
+    pub first_start: u64,
+}
+
+/// The most of a transcript one older page takes in.
+const PAGE_BYTES: u64 = 4 * 1024 * 1024;
+/// How far back one block of a backward scan reads.
+const SCAN_BLOCK: u64 = 64 * 1024;
+
+/// Offsets of the newline bytes below `end`, last first, read a block at a time so a long file is never held whole.
+struct NewlinesBack<'a> {
+    file: &'a mut fs::File,
+    block_start: u64,
+    block: Vec<u8>,
+    at: usize,
+}
+
+impl<'a> NewlinesBack<'a> {
+    fn new(file: &'a mut fs::File, end: u64) -> Self {
+        NewlinesBack { file, block_start: end, block: Vec::new(), at: 0 }
+    }
+
+    fn next_offset(&mut self) -> std::io::Result<Option<u64>> {
+        loop {
+            if self.at > 0 {
+                self.at -= 1;
+                if self.block[self.at] == b'\n' {
+                    return Ok(Some(self.block_start + self.at as u64));
+                }
+                continue;
+            }
+            if self.block_start == 0 {
+                return Ok(None);
+            }
+            let from = self.block_start.saturating_sub(SCAN_BLOCK);
+            self.file.seek(SeekFrom::Start(from))?;
+            self.block.resize((self.block_start - from) as usize, 0);
+            self.file.read_exact(&mut self.block)?;
+            self.block_start = from;
+            self.at = self.block.len();
+        }
+    }
+}
+
+/// The offset just after the last line end below `len` (0 when there is none): a line still being written lies past it.
+fn last_line_end(file: &mut fs::File, len: u64) -> std::io::Result<u64> {
+    Ok(NewlinesBack::new(file, len).next_offset()?.map_or(0, |at| at + 1))
+}
+
+/// The start of the newest `lines` whole lines that end at `end` (a line start or the file's end), found by
+/// reading backwards; it also stops, with at least one line taken, once `max_bytes` are covered. 0 = the top.
+fn lines_start(file: &mut fs::File, end: u64, lines: usize, max_bytes: u64) -> std::io::Result<u64> {
+    if end == 0 {
+        return Ok(0);
+    }
+    let mut scan = NewlinesBack::new(file, end);
+    // The first newline is the last line's own end; each one after it is the start of the line before.
+    let mut taken = 0usize;
+    scan.next_offset()?;
+    while let Some(at) = scan.next_offset()? {
+        taken += 1;
+        let start = at + 1;
+        if taken >= lines.max(1) || end - start >= max_bytes {
+            return Ok(start);
+        }
+    }
+    Ok(0)
+}
+
+/// CHAT-008: one older page. `end` is the cursor an earlier read gave (the start of the lines already held).
+/// Returns the whole lines before it, at most `lines` of them (fewer when `PAGE_BYTES` is reached first), and where
+/// the page begins (0: the top of the file). Only that part of the file is read.
+pub fn page_before(path: &Path, end: u64, lines: usize) -> std::io::Result<(Vec<String>, u64)> {
+    let mut f = fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    let misplaced = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "the cursor does not sit on a line start of this file");
+    if end > len {
+        return Err(misplaced());
+    }
+    if end > 0 {
+        f.seek(SeekFrom::Start(end - 1))?;
+        let mut b = [0u8; 1];
+        f.read_exact(&mut b)?;
+        if b[0] != b'\n' {
+            return Err(misplaced());
+        }
+    }
+    let start = lines_start(&mut f, end, lines, PAGE_BYTES)?;
+    let mut buf = vec![0u8; (end - start) as usize];
+    f.seek(SeekFrom::Start(start))?;
+    f.read_exact(&mut buf)?;
+    let out = String::from_utf8_lossy(&buf).split('\n').map(|l| l.trim_end_matches('\r')).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+    Ok((out, start))
 }
 
 impl Tail {
@@ -618,7 +719,12 @@ impl Tail {
     }
 
     pub fn with_cap(path: PathBuf, cap: u64) -> Self {
-        Tail { path, offset: 0, partial: Vec::new(), created: None, cap, skip_to_line: false }
+        Tail { path, offset: 0, partial: Vec::new(), created: None, cap, skip_to_line: false, first_lines: None, first_start: 0 }
+    }
+
+    /// A follower whose first read takes only the newest `lines` lines (CHAT-008); older ones come by `page_before`.
+    pub fn with_first_lines(path: PathBuf, lines: usize) -> Self {
+        Tail { first_lines: Some(lines), ..Tail::new(path) }
     }
 
     /// The complete lines added since the last read, and whether the file was replaced (rotated,
@@ -635,10 +741,19 @@ impl Tail {
         self.created = created;
         // A read from the start of a file longer than the cap takes only its newest `cap` bytes,
         // from the first whole line in them.
-        if self.offset == 0 && meta.len() > self.cap {
-            self.offset = meta.len() - self.cap;
-            self.skip_to_line = true;
+        if self.offset == 0 {
+            self.first_start = 0;
+            if let Some(n) = self.first_lines {
+                let mut f = fs::File::open(&self.path)?;
+                let end = last_line_end(&mut f, meta.len())?;
+                self.offset = lines_start(&mut f, end, n, self.cap)?;
+                self.first_start = self.offset;
+            } else if meta.len() > self.cap {
+                self.offset = meta.len() - self.cap;
+                self.skip_to_line = true;
+            }
         }
+        let from = self.offset;
         let mut buf = Vec::new();
         if meta.len() > self.offset {
             let mut f = fs::File::open(&self.path)?;
@@ -651,6 +766,7 @@ impl Tail {
                 Some(i) => {
                     buf.drain(..=i);
                     self.skip_to_line = false;
+                    self.first_start = from + i as u64 + 1;
                 }
                 None => buf.clear(),
             }
@@ -808,6 +924,13 @@ pub struct ChatRead {
     pub error: Option<String>,
     /// When to look again.
     pub retry_ms: u64,
+    /// CHAT-008: where the lines before the first one read begin (a byte cursor for `chat_read`'s `cursor`); on a
+    /// `reset` read only, and absent when the read reached the top of the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub older: Option<u64>,
+    /// CHAT-008: these items are an older page, to go before what the view holds (`older` is the next cursor).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub earlier: bool,
 }
 
 /// One chat view's hold on a transcript.
@@ -824,6 +947,8 @@ pub struct Follow {
     sent_first: bool,
     /// T-050-c: a session Kolux did not start; its transcript may sit under another folder.
     loose: bool,
+    /// CHAT-008: the first read takes only this many of the newest lines (set before the first look).
+    first_lines: Option<usize>,
 }
 
 impl Follow {
@@ -833,7 +958,7 @@ impl Follow {
             "omp" => Format::Omp,
             _ => Format::Claude,
         };
-        Follow { agent, cwd, homes, since, tail: None, parser: Parser::new(format), opened: now, attempts: 0, next_try: now, sent_first: false, loose: false }
+        Follow { agent, cwd, homes, since, tail: None, parser: Parser::new(format), opened: now, attempts: 0, next_try: now, sent_first: false, loose: false, first_lines: None }
     }
 
     /// T-050-c: a follower for an agent detected in the pane rather than started by Kolux: the
@@ -855,6 +980,8 @@ impl Follow {
             open: false,
             error: late.then(|| "This session's conversation could not be found on this computer yet. The terminal still shows everything.".to_string()),
             retry_ms: wait.as_millis() as u64,
+            older: None,
+            earlier: false,
         }
     }
 
@@ -869,7 +996,7 @@ impl Follow {
         }
         if self.tail.is_none() {
             if now < self.next_try && self.attempts > 0 {
-                return ChatRead { state: "loading", reset: false, items: Vec::new(), open: false, error: None, retry_ms: self.next_try.duration_since(now).as_millis() as u64 };
+                return ChatRead { state: "loading", reset: false, items: Vec::new(), open: false, error: None, retry_ms: self.next_try.duration_since(now).as_millis() as u64, older: None, earlier: false };
             }
             let found = if self.loose { live::find_loose(self.agent, &self.homes, &self.cwd, self.since) } else { find(self.agent, &self.homes, &self.cwd, self.since) };
             match found {
@@ -887,6 +1014,7 @@ impl Follow {
                 return self.missing(now, working);
             }
         };
+        let tail_start = Some(tail.first_start);
         if replaced {
             self.parser = Parser::new(self.parser.format);
         }
@@ -908,11 +1036,28 @@ impl Follow {
             open: self.parser.open && alive,
             error: None,
             retry_ms: ATTACHED_POLL_MS,
+            older: if reset { tail_start.filter(|s| *s > 0) } else { None },
+            earlier: false,
         }
     }
 
+    /// CHAT-008: the page of lines before `cursor` (a cursor an earlier read gave), parsed on its own; only that
+    /// part of the transcript is read. The next cursor comes back in `older` (absent at the top of the file).
+    pub fn older_page(&self, cursor: u64, lines: usize) -> Result<ChatRead, String> {
+        let Some(tail) = self.tail.as_ref() else { return Err("The conversation is not open.".to_string()) };
+        let (page, start) = page_before(&tail.path, cursor, lines).map_err(|e| e.to_string())?;
+        let mut parser = Parser::based(self.parser.format, (1u64 << 32) + start);
+        for line in &page {
+            parser.feed(line);
+        }
+        Ok(ChatRead { state: "ready", reset: false, items: parser.items().to_vec(), open: false, error: None, retry_ms: ATTACHED_POLL_MS, older: Some(start).filter(|s| *s > 0), earlier: true })
+    }
+
     fn attach(&mut self, path: PathBuf) {
-        self.tail = Some(Tail::new(path));
+        self.tail = Some(match self.first_lines {
+            Some(n) => Tail::with_first_lines(path, n),
+            None => Tail::new(path),
+        });
         self.parser = Parser::new(self.parser.format);
         self.sent_first = false;
     }
@@ -959,16 +1104,29 @@ pub async fn chat_support(terminals: tauri::State<'_, crate::terminal::Terminals
     off_main(move || support_of(run, detected)).await
 }
 
+/// CHAT-008: how much of the transcript a look takes. Neither field set is the whole-window look every earlier
+/// caller gets. `limit` alone: the newest `limit` lines open the chat (honoured when the pane's follower is new).
+/// `cursor`: an older page of at most `limit` lines before that byte cursor, for the earlier-messages control.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Page {
+    pub cursor: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+/// Lines in one older page when the caller names none.
+pub const OLDER_LINES: usize = 800;
+
 /// CHAT-006: one look at the pane's transcript; the window calls it again after `retryMs`.
 /// T-050-c: `terminal` and `cwd` (the pane's folder) serve a session Kolux did not start.
+/// CHAT-008: `limit` / `cursor` page the transcript (see [`Page`]).
 #[tauri::command]
-pub async fn chat_read(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, terminal: Option<u32>, cwd: Option<String>) -> Result<ChatRead, String> {
+pub async fn chat_read(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, terminal: Option<u32>, cwd: Option<String>, cursor: Option<u64>, limit: Option<usize>) -> Result<ChatRead, String> {
     let run = terminals.of_pane(pane_key);
     let detected = terminal.and_then(crate::foreground::found);
     if run.is_none() && detected.is_none() {
         return Err("This pane is not running an agent.".to_string());
     }
-    off_main(move || read_pane(pane_key, run, detected, terminal.unwrap_or(0), cwd)).await?
+    off_main(move || read_pane(pane_key, run, detected, terminal.unwrap_or(0), cwd, Page { cursor, limit })).await?
 }
 
 /// The pane's follower: the one it has when it follows `agent` the same way, else a new one from
@@ -986,7 +1144,7 @@ fn follow_for(pane_key: u32, agent: &'static str, loose: bool, make: impl FnOnce
     Arc::clone(&map[&pane_key])
 }
 
-fn read_pane(pane_key: u32, run: Option<crate::terminal::PaneRun>, detected: Option<&'static str>, terminal: u32, pane_cwd: Option<String>) -> Result<ChatRead, String> {
+fn read_pane(pane_key: u32, run: Option<crate::terminal::PaneRun>, detected: Option<&'static str>, terminal: u32, pane_cwd: Option<String>, page: Page) -> Result<ChatRead, String> {
     let launched = run.as_ref().and_then(|r| r.agent);
     let front = detected.map_or(crate::foreground::Front::Shell, crate::foreground::Front::Agent);
     let agent = chat_agent(live::decide(front, launched)).ok_or("This pane's program cannot be shown as chat.")?;
@@ -1015,6 +1173,12 @@ fn read_pane(pane_key: u32, run: Option<crate::terminal::PaneRun>, detected: Opt
         (follow, run.alive)
     };
     let mut follow = follow.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(cursor) = page.cursor {
+        return follow.older_page(cursor, page.limit.unwrap_or(OLDER_LINES));
+    }
+    if !follow.sent_first && follow.tail.is_none() {
+        follow.first_lines = page.limit;
+    }
     Ok(follow.poll(now, hint, alive, working))
 }
 
@@ -1504,5 +1668,174 @@ mod tests {
         fs::write(bucket.join("2026-10-20_abc.jsonl"), header("c:/work/") + &omp_msg("u1", json!({ "role": "user", "content": "hi" })).to_string() + "\n").unwrap();
         let r = f.poll(Instant::now(), None, true, false);
         assert_eq!((r.state, r.items.len(), r.open), ("ready", 1, true));
+    }
+
+    // CHAT-008 (after-list row 392): paging a long transcript from its end, reading only the part asked for.
+
+    /// `n` Claude lines: a prompt, then its reply, each with its own id; every 50th reply is big.
+    fn long_transcript(n: usize) -> (String, Vec<String>) {
+        let mut text = String::new();
+        let mut lines = Vec::new();
+        for i in 0..n {
+            let line = if i % 2 == 0 {
+                user(&format!("u{i}"), json!(format!("question {i}")))
+            } else {
+                let pad = if i % 50 == 1 { "x".repeat(90_000) } else { String::new() };
+                reply(&format!("m{i}"), &format!("a{i}"), json!({ "type": "text", "text": format!("answer {i} {pad}") }), Some("end_turn"))
+            }
+            .to_string();
+            text.push_str(&line);
+            text.push('\n');
+            lines.push(line);
+        }
+        (text, lines)
+    }
+
+    #[test]
+    fn row392_the_first_page_is_the_newest_lines_and_older_pages_walk_back_to_the_start_without_gap_or_overlap() {
+        let d = temp("chat-page-walk");
+        let f = d.join("t.jsonl");
+        let (text, all) = long_transcript(3000);
+        fs::write(&f, &text).unwrap();
+        let mut t = Tail::with_first_lines(f.clone(), 500);
+        let (newest, reset) = t.read().unwrap();
+        assert!(!reset);
+        assert_eq!(newest, all[2500..], "the newest 500 whole lines, in order");
+        assert!(t.first_start > 0);
+        let mut pages = vec![newest];
+        let mut cursor = t.first_start;
+        let mut hops = 0;
+        while cursor > 0 {
+            let (page, start) = page_before(&f, cursor, 800).unwrap();
+            assert!(!page.is_empty() && page.len() <= 800, "a page holds 1..=800 lines");
+            assert!(start < cursor);
+            pages.insert(0, page);
+            cursor = start;
+            hops += 1;
+        }
+        assert_eq!(hops, 4, "2500 older lines at 800 a page, less the pages the byte budget cut short");
+        assert_eq!(pages.concat(), all, "every line once, none missing");
+        // Following goes on from the end as before.
+        fs::OpenOptions::new().append(true).open(&f).unwrap().write_all(b"{\"n\":1}\n").unwrap();
+        assert_eq!(t.read().unwrap(), (vec!["{\"n\":1}".to_string()], false));
+    }
+
+    #[test]
+    fn row392_an_empty_transcript_and_a_short_one_have_nothing_older() {
+        let d = temp("chat-page-short");
+        let f = d.join("t.jsonl");
+        fs::write(&f, "").unwrap();
+        let mut t = Tail::with_first_lines(f.clone(), 100);
+        assert_eq!(t.read().unwrap(), (vec![], false));
+        assert_eq!(t.first_start, 0);
+        assert_eq!(page_before(&f, 0, 100).unwrap(), (vec![], 0));
+        fs::write(&f, "{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n").unwrap();
+        let mut t = Tail::with_first_lines(f.clone(), 100);
+        assert_eq!(t.read().unwrap().0.len(), 3);
+        assert_eq!(t.first_start, 0, "everything fit in the first page");
+        assert_eq!(page_before(&f, 0, 100).unwrap(), (vec![], 0));
+    }
+
+    #[test]
+    fn row392_the_cursor_at_a_boundary_is_exact_and_one_that_is_not_a_line_start_is_refused() {
+        let d = temp("chat-page-edge");
+        let f = d.join("t.jsonl");
+        fs::write(&f, "{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n").unwrap(); // 8 bytes a line
+        let len = fs::metadata(&f).unwrap().len();
+        assert_eq!(page_before(&f, len, 2).unwrap(), (vec!["{\"a\":2}".to_string(), "{\"a\":3}".to_string()], 8), "the end of the file is a boundary");
+        assert_eq!(page_before(&f, 8, 5).unwrap(), (vec!["{\"a\":1}".to_string()], 0), "asking for more than is left ends at the top");
+        assert_eq!(page_before(&f, 16, 1).unwrap(), (vec!["{\"a\":2}".to_string()], 8), "exactly the lines asked for");
+        assert!(page_before(&f, 5, 1).is_err(), "inside a line");
+        assert!(page_before(&f, len + 1, 1).is_err(), "past the end (the file was replaced by a shorter one)");
+    }
+
+    #[test]
+    fn row392_a_line_still_being_written_is_not_in_the_first_page_and_arrives_whole_later() {
+        let d = temp("chat-page-torn");
+        let f = d.join("t.jsonl");
+        fs::write(&f, "{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n{\"a\":").unwrap();
+        let mut t = Tail::with_first_lines(f.clone(), 2);
+        assert_eq!(t.read().unwrap().0, vec!["{\"a\":2}".to_string(), "{\"a\":3}".to_string()]);
+        assert_eq!(t.first_start, 8, "the cursor sits on a line start");
+        fs::OpenOptions::new().append(true).open(&f).unwrap().write_all(b"4}\n").unwrap();
+        assert_eq!(t.read().unwrap().0, vec!["{\"a\":4}".to_string()]);
+    }
+
+    #[test]
+    fn row392_a_page_stops_at_the_byte_budget_but_always_takes_a_line() {
+        let d = temp("chat-page-bytes");
+        let f = d.join("t.jsonl");
+        let (text, all) = long_transcript(200); // a 90 KB line comes every 50th
+        fs::write(&f, &text).unwrap();
+        let mut file = fs::File::open(&f).unwrap();
+        let end = last_line_end(&mut file, fs::metadata(&f).unwrap().len()).unwrap();
+        let start = lines_start(&mut file, end, 1000, 1).unwrap();
+        assert_eq!(end - start, all.last().unwrap().len() as u64 + 1, "a budget of 1 byte still takes the newest whole line");
+        let mid = lines_start(&mut file, end, 1000, 100_000).unwrap();
+        assert!(mid > 0 && end - mid >= 100_000, "stopped once the budget was covered");
+        assert_eq!(lines_start(&mut file, end, 1000, u64::MAX).unwrap(), 0, "with room for all of it the scan reaches the top");
+    }
+
+    #[test]
+    fn row392_a_follower_opens_on_the_newest_page_and_older_pages_join_it_without_clashing_ids() {
+        let d = temp("chat-page-follow");
+        let f = d.join("t.jsonl");
+        let (text, all) = long_transcript(3000);
+        fs::write(&f, &text).unwrap();
+        let mut full = Parser::new(Format::Claude);
+        for l in &all {
+            full.feed(l);
+        }
+        let now = Instant::now();
+        let mut follow = Follow::new("claude", "c:/w".into(), vec![], SystemTime::now(), now);
+        follow.first_lines = Some(300);
+        let first = follow.poll(now, Some(f.clone()), true, false);
+        assert_eq!((first.state, first.reset, first.earlier), ("ready", true, false));
+        assert_eq!(first.items.len(), 300);
+        assert_eq!(first.items.last().map(|i| i.id.clone()), full.items().last().map(|i| i.id.clone()));
+        let mut cursor = first.older.expect("older lines exist");
+        let mut ids: Vec<String> = first.items.iter().map(|i| i.id.clone()).collect();
+        loop {
+            let page = follow.older_page(cursor, 800).unwrap();
+            assert!(page.earlier && !page.reset);
+            ids.splice(0..0, page.items.iter().map(|i| i.id.clone()));
+            match page.older {
+                Some(c) => cursor = c,
+                None => break,
+            }
+        }
+        assert_eq!(ids, full.items().iter().map(|i| i.id.clone()).collect::<Vec<_>>(), "the whole conversation, in order, no id twice");
+        // The next poll is incremental and carries no cursor.
+        let next = follow.poll(now, Some(f), true, false);
+        assert_eq!((next.reset, next.items.len(), next.older), (false, 0, None));
+    }
+
+    #[test]
+    fn row392_a_look_with_no_limit_is_unchanged_and_a_replaced_file_hands_out_a_fresh_cursor() {
+        let d = temp("chat-page-compat");
+        let f = d.join("t.jsonl");
+        let (text, _) = long_transcript(40);
+        fs::write(&f, &text).unwrap();
+        let now = Instant::now();
+        let mut follow = Follow::new("claude", "c:/w".into(), vec![], SystemTime::now(), now);
+        let r = follow.poll(now, Some(f.clone()), true, false);
+        assert_eq!((r.reset, r.items.len(), r.older), (true, 40, None), "no limit: the whole file, nothing older");
+        // A follower that pages, then the file is replaced by a shorter one: the reset read carries a cursor for the new file.
+        let (text2, _) = long_transcript(300);
+        let mut paged = Follow::new("claude", "c:/w".into(), vec![], SystemTime::now(), now);
+        paged.first_lines = Some(30);
+        fs::write(&f, &text2).unwrap();
+        let a = paged.poll(now, Some(f.clone()), true, false);
+        assert_eq!(a.older, Some(page_start_of(&text2, 30)));
+        fs::write(&f, &text).unwrap();
+        let b = paged.poll(now, Some(f.clone()), true, false);
+        assert!(b.reset);
+        assert_eq!(b.older, Some(page_start_of(&text, 30)), "recomputed for the new file");
+    }
+
+    /// Where the newest `n` lines of `text` begin (byte offset), by the plain method.
+    fn page_start_of(text: &str, n: usize) -> u64 {
+        let lines: Vec<&str> = text.split_inclusive('\n').collect();
+        lines[..lines.len() - n].iter().map(|l| l.len() as u64).sum()
     }
 }

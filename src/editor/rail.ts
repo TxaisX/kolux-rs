@@ -1,5 +1,6 @@
 // EDIT-020 (T-132-b): the margin rail beside a rich Markdown note. A review note sits beside the text
 // it quotes; notes that would overlap are pushed down so each one stays readable, in source order.
+import { editedText } from "./diffNotes";
 import type { Note } from "./notes";
 
 /** One rail card: where its quoted text sits (px from the top of the document) and its height. */
@@ -50,12 +51,21 @@ export function quoteTop(host: HTMLElement, quote: string): number | null {
 }
 
 /** Rail items for a list of notes given where each one's text is; a note whose text is gone goes
- * below the last placed one. */
-export function railItems(notes: Note[], tops: (number | null)[], height: number): RailItem[] {
+ * below the last placed one. `height` is one card height for all, or each card's own (a card grows
+ * to fit its text); a card with no height given counts as 0. */
+export function railItems(notes: Note[], tops: (number | null)[], height: number | number[]): RailItem[] {
   let last = 0;
   return notes.map((n, i) => {
     const top = tops[i] ?? last;
     last = Math.max(last, top);
-    return { id: `${n.time}:${i}`, top, height };
+    return { id: `${n.time}:${i}`, top, height: typeof height === "number" ? height : (height[i] ?? 0) };
   });
+}
+
+/** What leaving a card's edit does: nothing when the text is unchanged, a refusal when it is empty
+ * (an empty note is removed with the x, not saved), else the trimmed text to save. */
+export function railEdit(draft: string, current: string): { save: string } | { same: true } | { refused: true } {
+  const text = editedText(draft);
+  if (text === null) return { refused: true };
+  return text === current.trim() ? { same: true } : { save: text };
 }

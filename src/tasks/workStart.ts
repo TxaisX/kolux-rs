@@ -28,3 +28,12 @@ export const workLabel = (existing: string | null, task: Pick<Task, "kind">): st
 /** Which repository a workspace list belongs to: host and owner/name, without case. The same name on
  * two hosts is two repositories, so a row never resumes the other host's workspace (review AFTER 5). */
 export const linkKey = (host: string, repo: string): string => `${host}/${repo}`.toLowerCase();
+
+/** The picker rows whose workspaces to list: the chosen ones, plus the row of each open or pasted
+ * address's repository when it is not chosen but Kolux has a project for it (after-list 477), so
+ * resume is offered for any repository Kolux knows. */
+export function linkedRows<R extends { key: string; host: string; repo: string; checking: boolean }>(chosen: R[], all: R[], targets: { host: string; repo: string }[]): R[] {
+  const have = new Set(chosen.map((r) => r.key));
+  const wanted = new Set(targets.map((t) => linkKey(t.host, t.repo)));
+  return [...chosen, ...all.filter((r) => !have.has(r.key) && !r.checking && wanted.has(linkKey(r.host, r.repo)))];
+}

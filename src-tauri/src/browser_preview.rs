@@ -114,6 +114,17 @@ pub fn grant(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// APP-015: allowances last until the main page is rebuilt (a reload); a folder allowed before it asks again.
+pub fn clear_grants() {
+    if let Ok(mut p) = PREVIEWS.lock() {
+        revoke_all(&mut p);
+    }
+}
+
+fn revoke_all(previews: &mut [Preview]) {
+    previews.iter_mut().for_each(|p| p.granted = false);
+}
+
 /// The folder path a request's rest names, or why it may not: a parent step (`..`, in either
 /// slash), a root (`/x`, `\x`), a drive or `\\?\` prefix, or a NUL. The rest is already decoded.
 /// Pure; `respond` canonicalizes the result and checks it again against the real folder, so a
@@ -367,6 +378,25 @@ pub fn navigating(id: u32, url: &str) -> Option<Verdict> {
     Some(v)
 }
 
+/// Pure (after-list 285): an embedded frame of a preview may load only a blank page or an address
+/// inside its own preview; a tab that shows no preview is not fenced.
+pub fn frame_allowed(page: Option<&Page>, url: &str, port: u16) -> bool {
+    let Some(page) = page else { return true };
+    matches!(url, "about:blank" | "about:srcdoc") || split(url, port).is_some_and(|(t, _)| t == page.token)
+}
+
+/// An embedded frame of tab `id` starts loading `url`: whether the fence lets it.
+pub fn frame_may_load(id: u32, url: &str) -> bool {
+    let Some(port) = PORT.get() else { return true };
+    let Ok(pages) = PAGES.lock() else { return true };
+    frame_allowed(pages.iter().find(|p| p.id == id), url, *port)
+}
+
+/// Whether tab `id` shows a preview now.
+pub fn is_preview(id: u32) -> bool {
+    PAGES.lock().is_ok_and(|p| p.iter().any(|p| p.id == id))
+}
+
 /// A download asked for from tab `id`: `None` when the tab is not a preview; `Some(true)` when
 /// it is and this refusal gets a notice, `Some(false)` when the notice went out this burst.
 pub fn download_refused(id: u32) -> Option<bool> {
@@ -430,6 +460,18 @@ mod tests {
         p[0].granted = true;
         assert_eq!(respond(&p, "/t1/css/a.css").0, 200);
         assert_eq!(respond(&p, "/t1/a%20b.html").0, 200);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app015_a_rebuilt_window_forgets_every_allowed_folder_but_keeps_the_documents_opened() {
+        let dir = site("revoke");
+        let mut p = vec![open(&dir, true)];
+        assert_eq!(respond(&p, "/t1/css/a.css").0, 200);
+        revoke_all(&mut p);
+        assert!(!p[0].granted);
+        assert_eq!(respond(&p, "/t1/css/a.css").0, 403, "the folder must be allowed again");
+        assert_eq!(respond(&p, "/t1/index.html").0, 200, "the opened document still reads");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -555,5 +597,19 @@ mod tests {
         assert_eq!(v2["url"].as_str().unwrap().rsplit_once('/').unwrap().0, url.rsplit_once('/').unwrap().0);
         assert!(v2["url"].as_str().unwrap().ends_with("/a%20b.html"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn after285_a_preview_frame_loads_only_from_its_own_folder() {
+        let page = Page { id: 1, token: "t1".into(), rendered: true, offered: false, noticed: None };
+        let f = |url: &str| frame_allowed(Some(&page), url, 4000);
+        assert!(f("http://127.0.0.1:4000/t1/css/a.css"), "inside the preview");
+        assert!(f("http://127.0.0.1:4000/t1/"));
+        assert!(f("about:blank"));
+        assert!(f("about:srcdoc"));
+        for out in ["https://example.com/", "http://127.0.0.1:4000/t2/x.html", "http://127.0.0.1:4001/t1/x.html", "http://127.0.0.1:4000@evil.test/t1/x", "http://localhost:4000/t1/x", "file:///C:/x.html", "data:text/html,x", "javascript:alert(1)", "http://127.0.0.1:4000/", ""] {
+            assert!(!f(out), "{out}");
+        }
+        assert!(frame_allowed(None, "https://example.com/", 4000), "a tab that shows no preview is not fenced");
     }
 }

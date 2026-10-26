@@ -6,7 +6,7 @@
 //! file in it is read: its settings file (`settings.json`, or the same name under the former product's
 //! name), never through a link and never past a size cap. Each saved setting takes the current name
 //! through the renaming rule (`nightshiftX` becomes `koluxX`, the `nightshift.` interface prefix becomes
-//! `kolux.`) and carries only when that name is on [`CARRIED`], its value has the listed shape, and
+//! `kolux.`) and carries only when that name is on [`carried`], its value has the listed shape, and
 //! neither its name nor its value looks like a secret. A value already saved here wins; nothing is
 //! ever copied raw, no file of the former folder is copied, and every other item there (hook scripts,
 //! key vault, cookies, transcripts, caches) is counted as skipped without being opened (COMPAT 5.2,
@@ -60,48 +60,49 @@ pub enum Shape {
     Words,
 }
 
+/// The settings registry: the one file (`src/carry/settingsRegistry.json`) naming what the importer
+/// carries and what it knowingly leaves off. The front end's own test (`settingsRegistry.test.ts`)
+/// keeps it in step with the settings fields in `src/**` (T-213, after-list row 651).
+const REGISTRY: &str = include_str!("../../src/carry/settingsRegistry.json");
+
+/// The registry, read once. A file that does not parse carries nothing (fail closed); a test pins that it parses.
+pub struct Registry {
+    pub carried: Vec<(String, Shape)>,
+    /// Settings left off on purpose; read by the tests, which keep it in step with the front end.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub not_carried: Vec<String>,
+}
+
+fn parse_registry(text: &str) -> Option<Registry> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let carried = v.get("carried")?.as_array()?.iter().map(|e| {
+        let shape = match e.get("shape")?.as_str()? {
+            "bool" => Shape::Bool,
+            "number" => Shape::Number,
+            "word" => Shape::Word,
+            "words" => Shape::Words,
+            _ => return None,
+        };
+        Some((e.get("name")?.as_str()?.to_owned(), shape))
+    });
+    let not_carried = v.get("notCarried")?.as_array()?.iter().map(|e| e.as_str().map(str::to_owned));
+    Some(Registry { carried: carried.collect::<Option<_>>()?, not_carried: not_carried.collect::<Option<_>>()? })
+}
+
+pub fn registry() -> &'static Registry {
+    static CELL: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| parse_registry(REGISTRY).unwrap_or(Registry { carried: Vec::new(), not_carried: Vec::new() }))
+}
+
 /// OD-19: the settings the importer carries, by their name in this rebuild (each checked against the
-/// field the settings pages read). A former setting carries only when its name, after the renaming
-/// rule, is one of these, exactly. Everything else is dropped, not guessed (COMPAT 5.2 row 1). Left
-/// off on purpose: anything that can hold a secret, a command, a path or free text (proxy address,
-/// commit-writer command and instructions, kit inputs, review notes, agent options and environment,
-/// custom sound file, shell path).
-pub const CARRIED: &[(&str, Shape)] = &[
-    ("language", Shape::Word),
-    ("uiLook", Shape::Word),
-    ("firstScreen", Shape::Word),
-    ("appIcon", Shape::Word),
-    ("paneHeaderDensity", Shape::Word),
-    ("sessionListView", Shape::Word),
-    ("sessionListScope", Shape::Word),
-    ("scmView", Shape::Word),
-    ("defaultAgent", Shape::Word),
-    ("notificationSound", Shape::Word),
-    ("disabledAgents", Shape::Words),
-    ("leftSidebarWidth", Shape::Number),
-    ("defaultPaneCount", Shape::Number),
-    ("notificationVolume", Shape::Number),
-    ("quietMinutes", Shape::Number),
-    ("notifyOnFinish", Shape::Bool),
-    ("notificationsOn", Shape::Bool),
-    ("notifySuppressFocused", Shape::Bool),
-    ("needsStrip", Shape::Bool),
-    ("keepAwake", Shape::Bool),
-    ("renameBranches", Shape::Bool),
-    ("renameFolders", Shape::Bool),
-    ("confirmCloseRunning", Shape::Bool),
-    ("confirmWorkspaceDelete", Shape::Bool),
-    ("confirmAutomationDelete", Shape::Bool),
-    ("generatedTabTitles", Shape::Bool),
-    ("pinnedTabsAsk", Shape::Bool),
-    ("linksOpenInKolux", Shape::Bool),
-    ("markdownReviewNotes", Shape::Bool),
-    ("scmDiffSplit", Shape::Bool),
-    ("allChangesSideBySide", Shape::Bool),
-    ("allChangesTree", Shape::Bool),
-    ("allChangesWhitespace", Shape::Bool),
-    ("allChangesWrap", Shape::Bool),
-];
+/// field the settings pages read), with the shape each value must have. A former setting carries only
+/// when its name, after the renaming rule, is one of these, exactly. Everything else is dropped, not
+/// guessed (COMPAT 5.2 row 1). Left off on purpose: anything that can hold a secret, a command, a
+/// path or free text (proxy address, commit-writer command and instructions, kit inputs, review
+/// notes, agent options and environment, custom sound file, shell path).
+pub fn carried() -> &'static [(String, Shape)] {
+    &registry().carried
+}
 
 /// Parts of a setting name that mark a secret or something never carried (hook configs, prompts,
 /// transcripts), matched in any letter case anywhere in the name. Checked before the allow-list, so
@@ -116,7 +117,7 @@ const SECRET_STARTS: &[&str] = &["sk-", "ghp_", "gho_", "ghu_", "ghs_", "github_
 /// Why a former item did not carry. Counts only: never a name or a value.
 #[derive(Debug, Default, PartialEq, Serialize, Clone)]
 pub struct Skipped {
-    /// Settings whose (renamed) name is not on [`CARRIED`], retired ones included.
+    /// Settings whose (renamed) name is not on [`carried`], retired ones included.
     pub not_listed: usize,
     /// Settings whose name or value looks like a secret, a hook, a prompt or a transcript.
     pub secret_like: usize,
@@ -222,7 +223,7 @@ fn carried_name(key: &str) -> (String, bool) {
 }
 
 fn listed(name: &str) -> Option<Shape> {
-    CARRIED.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+    carried().iter().find(|(n, _)| n == name).map(|(_, s)| *s)
 }
 
 /// Whether a setting name marks a secret or something never carried.
@@ -662,16 +663,39 @@ mod tests {
 
     #[test]
     fn t213_the_allow_list_holds_no_secret_retired_or_secret_store_name() {
-        for (name, _) in CARRIED {
+        for (name, _) in carried() {
             assert!(!secret_name(name), "{name} looks secret");
             assert!(!is_retired(name), "{name} is retired");
-            assert!(!crate::secrets::SECRET_SETTINGS.contains(name), "{name} is a secret setting");
+            assert!(!crate::secrets::SECRET_SETTINGS.contains(&name.as_str()), "{name} is a secret setting");
             assert!(name.chars().all(|c| c.is_ascii_alphanumeric()) && name.starts_with(|c: char| c.is_ascii_lowercase()), "{name}");
         }
         for name in crate::secrets::SECRET_SETTINGS {
             assert!(secret_name(name), "{name} must read as secret");
         }
-        assert_eq!(CARRIED.iter().map(|(n, _)| n).collect::<std::collections::HashSet<_>>().len(), CARRIED.len(), "no name twice");
+        assert_eq!(carried().iter().map(|(n, _)| n).collect::<std::collections::HashSet<_>>().len(), carried().len(), "no name twice");
+    }
+
+    #[test]
+    fn t213_the_registry_parses_and_a_name_is_carried_or_left_off_never_both() {
+        let r = parse_registry(REGISTRY).expect("settingsRegistry.json parses");
+        assert!(!r.carried.is_empty() && !r.not_carried.is_empty());
+        assert_eq!(registry().carried, r.carried, "the shipped registry is the one parsed");
+        for name in &r.not_carried {
+            assert!(!r.carried.iter().any(|(n, _)| n == name), "{name} is both carried and left off");
+        }
+        assert_eq!(r.not_carried.iter().collect::<std::collections::HashSet<_>>().len(), r.not_carried.len(), "no left-off name twice");
+        for name in crate::secrets::SECRET_SETTINGS {
+            assert!(!r.carried.iter().any(|(n, _)| n == name), "{name} is a secret setting and must not be carried");
+        }
+    }
+
+    #[test]
+    fn t213_a_registry_with_an_unknown_shape_or_a_missing_list_carries_nothing() {
+        assert!(parse_registry(r#"{"carried":[{"name":"language","shape":"blob"}],"notCarried":[]}"#).is_none());
+        assert!(parse_registry(r#"{"carried":[{"name":"language","shape":"word"}]}"#).is_none());
+        assert!(parse_registry("not json").is_none());
+        let ok = parse_registry(r#"{"carried":[{"name":"language","shape":"word"},{"name":"keepAwake","shape":"bool"}],"notCarried":["xaiApiKey"]}"#).unwrap();
+        assert_eq!(ok.carried, vec![("language".to_string(), Shape::Word), ("keepAwake".to_string(), Shape::Bool)]);
     }
 
     #[test]

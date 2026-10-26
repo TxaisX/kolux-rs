@@ -3,6 +3,7 @@
 // cursor, with a live sample. SET-025: history, scrolling and the clipboard. SET-026: the default
 // shell on Windows. TERM-099 / TERM-100: bring in Ghostty settings and Warp themes.
 import { useEffect, useRef, useState } from "react";
+import { useLeaveSave } from "./leave";
 import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -63,6 +64,7 @@ function NumberField({ label, value, min, max, step = 1, buttons = false, onSave
     setTyped(String(n));
     if (n !== value) onSave(n);
   };
+  useLeaveSave(() => typed !== String(value) && commit(typed)); // SET-036: changing page or closing keeps what was typed
   return (
     <label className="num-field">
       <span>{label}</span>

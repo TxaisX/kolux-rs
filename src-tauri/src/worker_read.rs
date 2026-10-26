@@ -274,6 +274,12 @@ pub fn own_transcript(terminal: u32) -> Option<PathBuf> {
     crate::status::panes_of(terminal).into_iter().filter_map(crate::status::transcript_of).map(PathBuf::from).find(|p| p.is_file())
 }
 
+/// Row 625: the transcript kept on the dispatch row while the pane's hooks still reported it; what
+/// worker-read falls back to once the terminal has ended and its hook sessions are gone.
+pub fn kept_transcript(d: &Value) -> Option<PathBuf> {
+    d["transcript"].as_str().map(PathBuf::from).filter(|p| p.is_file())
+}
+
 /// The turns of `path`, read with the chat reader for `agent`'s format (Claude, Codex, omp). An
 /// agent with no transcript reader (Gemini; Grok until its reader exists) gives none, so the read
 /// falls back to the terminal.

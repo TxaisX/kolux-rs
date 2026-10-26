@@ -26,7 +26,7 @@ import { itemOfTarget, pasteLine, pastedWork, rowForNumber } from "./pasteWork";
 import { parseGitHubUrl, type Target } from "./prModel";
 import TaskDialog from "./TaskDialog";
 import { startFromItem } from "../agentstart/host";
-import { existingWorkspace, linkKey, workItem, type WorkItem, workLabel } from "./workStart";
+import { existingWorkspace, linkKey, linkedRows, workItem, type WorkItem, workLabel } from "./workStart";
 import "./tasks.css";
 
 /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
@@ -232,17 +232,20 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
   useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab, groupsKey]);
   // GIT-049: the workspaces already made for the chosen repositories' checkouts, so an item that
   // has one offers resume instead of start.
+  // An opened or pasted address adds its own repository when the picker has not chosen it (after-list 477).
+  const asked = [pr, pastedItem?.target].filter((t): t is Target => !!t);
+  const askedKey = asked.map((t) => linkKey(t.host, t.repo)).join(",");
   const loadLinked = () => {
-    const all = chosen.flatMap((r) => r.projects.map((p) => ({ repo: linkKey(r.host, r.repo), id: p.id })));
+    const all = linkedRows(chosen, rows, asked).flatMap((r) => r.projects.map((p) => ({ repo: linkKey(r.host, r.repo), id: p.id })));
     void Promise.all(all.map((x) => invoke<Worktree[]>("workspace_list", { projectId: x.id }).then((w) => [x.repo, w] as const, () => [x.repo, [] as Worktree[]] as const))).then((got) => {
       const next: Record<string, Worktree[]> = {};
       for (const [r, w] of got) next[r] = [...(next[r] ?? []), ...w];
       setLinked(next);
     });
   };
-  useEffect(loadLinked, [groupsKey, result]);
+  useEffect(loadLinked, [groupsKey, result, askedKey, askedKey === "" ? "" : rows.length]);
   const resumeDir = (t: Task) => existingWorkspace(linked[linkKey(t.host ?? gh?.host ?? "", t.repo)] ?? [], t.number);
-  /** The workspace already made for a pasted address (only known for the repositories chosen above). */
+  /** The workspace already made for a pasted or opened address, for any repository Kolux has a project for. */
   const resumeTarget = (x: Target) => existingWorkspace(linked[linkKey(x.host, x.repo)] ?? [], x.number);
   const workOn = (dir: string | null, item: WorkItem | null, repo: string, number: number) => {
     if (dir) return onResume ? onResume(dir) : setNote(`Workspace already made for #${number}: ${dir}`);

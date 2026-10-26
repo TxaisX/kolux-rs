@@ -22,8 +22,9 @@ export type Event =
   | { t: "navigate" }
   /** T-283 (BROW-010): the computer woke from sleep; every pane hears the one signal. */
   | { t: "woke" };
-/** `reload`: the pane reloads the page. `overlay`: a recovery overlay goes up (see `overlayOf`). */
-export type Action = "none" | "reload" | "overlay";
+/** `reload`: the pane reloads the page. `rebuild`: a reload cannot work, so the pane closes the page
+ *  and opens it again (BROW-009). `overlay`: a recovery overlay goes up (see `overlayOf`). */
+export type Action = "none" | "reload" | "rebuild" | "overlay";
 
 /** Unanswered probes in a row before a page counts as dead (BROW-009): a page running a long
  *  script misses one or two; three at a quarter-second apart is most of a second of silence. */
@@ -45,7 +46,9 @@ export function step(h: Health, e: Event): [Health, Action] {
       if (h.phase === "loading") return [{ ...h, phase: h.recovery ? "recovering" : "ok", url: e.url, misses: 0, recovery: false }, "none"];
       return [h, "none"];
     case "retry":
-      return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "reload"];
+      // A crashed page already got its one automatic reload and did not come back: the page
+      // behind the overlay is dead, so Retry builds it again instead of reloading it.
+      return [{ ...h, misses: 0, recoveries: 0, recovery: false }, h.phase === "crashed" ? "rebuild" : "reload"];
     case "navigate":
       return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "none"];
     case "woke":
@@ -103,7 +106,7 @@ export type OverlayModel = {
   advice: string | null;
   switchHttps: string | null;
   /** Hidden while the address cannot be reached from this computer (the system browser would fail
-   *  the same way) and until the diagnosis is in. */
+   *  the same way), until the diagnosis is in, and when the system has no program for the link. */
   openExternally: boolean;
 };
 
@@ -116,13 +119,15 @@ const where = (url: string) => {
   }
 };
 
-/** The overlay's words and buttons (BROW-008). `diag` is null until `browser_diagnose` answers. */
-export function overlayModel(overlay: NonNullable<Overlay>, diag: Diagnosis | null): OverlayModel {
+/** The overlay's words and buttons (BROW-008). `diag` is null until `browser_diagnose` answers;
+ *  `handler` is `browser_external_handler`'s answer (false = the system has no program for the
+ *  address, so Open Externally hides; null = not known, the button stays as it was). */
+export function overlayModel(overlay: NonNullable<Overlay>, diag: Diagnosis | null, handler: boolean | null = null): OverlayModel {
   const host = where(overlay.url);
   if (overlay.kind === "crashed") {
     // BROW-009: the page's process died (or stopped answering) and the one automatic reload did not
     // bring it back; no network troubleshooting here.
-    return { title: "This page stopped responding", text: "Kolux reloaded it once and it did not come back.", advice: null, switchHttps: null, openExternally: /^https?:/i.test(overlay.url) };
+    return { title: "This page stopped responding", text: "Kolux reloaded it once and it did not come back.", advice: null, switchHttps: null, openExternally: /^https?:/i.test(overlay.url) && handler !== false };
   }
   if (!diag) return { title: "This page could not load", text: `${host} did not give Kolux a page.`, advice: null, switchHttps: null, openExternally: false };
   const reachable = diag.kind === "certificate" || diag.kind === "unknown";
@@ -136,5 +141,5 @@ export function overlayModel(overlay: NonNullable<Overlay>, diag: Diagnosis | nu
     certificate: `${host} showed a certificate Kolux does not trust, so the page stays blocked. Certificate checking stays strict.`,
     unknown: `${host} did not give Kolux a page.`,
   }[diag.kind];
-  return { title: "This page could not load", text, advice: diag.kind === "certificate" ? null : local, switchHttps, openExternally: reachable };
+  return { title: "This page could not load", text, advice: diag.kind === "certificate" ? null : local, switchHttps, openExternally: reachable && handler !== false };
 }

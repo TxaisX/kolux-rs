@@ -727,13 +727,28 @@ pub fn dir_ignored(path: String, fence: tauri::State<'_, crate::fence::Fence>, s
 /// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not
 /// in a project, or out through a link; EDIT-045), else following links "dir", "file" or "missing".
 #[tauri::command]
-pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String) -> &'static str {
+pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String, folder_only: Option<bool>) -> &'static str {
     let roots = crate::links::roots(&store);
     match crate::links::fence(&path, &roots, &grants.snapshot(), true) {
         Ok(p) => kind_of(&p),
         Err(_) if crate::links::host_path(&path, &roots) => "remote",
+        Err(_) if folder_only == Some(true) => folder_probe(&path, &roots),
         Err(_) => "outside",
     }
+}
+
+/// after-list 383: with `folder_only`, a folder under no project answers "dir" or "missing" (never "file"
+/// or "outside"), so Reopen Closed Tab can tell that a terminal's old folder is still there. A share,
+/// a relative path or a `..` step is never looked up.
+pub fn folder_probe(path: &str, roots: &[String]) -> &'static str {
+    let p = Path::new(path);
+    if crate::links::host_path(path, roots) {
+        return "remote";
+    }
+    if crate::links::refuse_host(path, roots).is_err() || !p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return "missing";
+    }
+    if p.is_dir() { "dir" } else { "missing" }
 }
 
 pub fn kind_of(path: &Path) -> &'static str {
@@ -771,6 +786,21 @@ mod tests {
         let mut got = ignored_in(&d);
         got.sort();
         assert_eq!(got, vec!["build".to_string(), "run.log".to_string()]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn row383_a_folder_under_no_project_is_found_as_a_folder_and_nothing_else_is_looked_up() {
+        let d = temp_dir("probe");
+        fs::write(d.join("a.txt"), "x").unwrap();
+        let (dir, file) = (d.to_string_lossy().into_owned(), d.join("a.txt").to_string_lossy().into_owned());
+        let roots: Vec<String> = Vec::new(); // the folder is under no project
+        assert_eq!(folder_probe(&dir, &roots), "dir");
+        assert_eq!(folder_probe(&file, &roots), "missing", "a file is never reported");
+        assert_eq!(folder_probe(&d.join("gone").to_string_lossy(), &roots), "missing");
+        assert_eq!(folder_probe("relative/dir", &roots), "missing");
+        assert_eq!(folder_probe(&format!("{dir}{}..", std::path::MAIN_SEPARATOR), &roots), "missing");
+        assert_eq!(folder_probe(r"\\server\share\x", &roots), "remote");
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -1324,6 +1354,41 @@ pub fn find_program(program: &str, path_var: Option<std::ffi::OsString>) -> Opti
     dirs.iter().flat_map(|d| exts.iter().map(move |e| d.join(format!("{program}{e}")))).find(|p| p.is_file())
 }
 
+/// after-list 781: file types Explorer (or a link/script host behind it) would run rather than show.
+const EXPLORER_REFUSED: [&str; 22] = [
+    "bat", "cmd", "exe", "com", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msi", "msc", "scr", "lnk", "url", "hta", "cpl", "reg", "pif", "appref-ms",
+];
+
+/// True when the launch command is Windows Explorer, which runs (not just shows) a file it is handed.
+fn is_explorer(name: &str, program: &Path) -> bool {
+    let stem = |p: &Path| p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("explorer"));
+    stem(Path::new(name)) || stem(program)
+}
+
+/// True for a file name Explorer must not be handed: a trailing dot or space (Windows drops them, so
+/// `RUN.BAT.` is `RUN.BAT`), a stream suffix, or a program/script/link extension, in any letter case.
+fn explorer_refuses_name(name: &str) -> bool {
+    let trimmed = name.trim_end_matches(['.', ' ']);
+    name.contains(':') || Path::new(trimmed).extension().and_then(|e| e.to_str()).is_some_and(|e| EXPLORER_REFUSED.iter().any(|r| r.eq_ignore_ascii_case(e)))
+}
+
+/// after-list 781: what Explorer is handed. A folder opens as it is; a file is only revealed
+/// (`/select,`), which never runs it, and a program, script or link is refused outright. The path is
+/// resolved first (`..`, links, 8.3 short names, trailing dots), so the check sees the real name.
+pub fn explorer_target(target: &Path) -> Result<std::ffi::OsString, String> {
+    let real = plain_disk_path(target.canonicalize().map_err(|e| format!("{}: {e}", target.display()))?);
+    if real.is_dir() {
+        return Ok(real.into_os_string());
+    }
+    let name = real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    if !real.is_file() || explorer_refuses_name(&name) {
+        return Err(format!("{name} is a program, script or link, so Explorer was not asked to open it"));
+    }
+    let mut select = std::ffi::OsString::from("/select,");
+    select.push(real);
+    Ok(select)
+}
+
 /// Starts `command` with `dir` as its last argument, without a console window. Batch launchers
 /// (VS Code's `code` is one) get the standard library's batch-argument escaping, which refuses an
 /// argument it cannot pass safely instead of handing it to the shell.
@@ -1331,8 +1396,9 @@ pub fn launch_in(dir: &Path, command: &str, path_var: Option<std::ffi::OsString>
     let parts = split_command(command);
     let Some(name) = parts.first() else { return Err("the launch command is empty".into()) };
     let program = find_program(name, path_var).ok_or_else(|| format!("{name} was not found; check the app's launch command in General settings"))?;
+    let target = if is_explorer(name, &program) { explorer_target(dir)? } else { dir.as_os_str().to_owned() };
     let mut cmd = std::process::Command::new(program);
-    cmd.args(&parts[1..]).arg(dir).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.args(&parts[1..]).arg(target).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1341,11 +1407,31 @@ pub fn launch_in(dir: &Path, command: &str, path_var: Option<std::ffi::OsString>
     cmd.spawn().map(|_| ()).map_err(|e| format!("{name} did not start: {e}"))
 }
 
-/// EDIT-043: the window may only run VS Code's command or one saved under General settings
+/// after-list 435: the presets of General settings > Open in (src/settings/openIn.ts). They are the list
+/// before anything is saved, and a preset row saved with an id sends the preset's command, so all of them run.
+const PRESET_COMMANDS: [&str; 8] = ["explorer", "code", "cursor", "windsurf", "zed", "subl", "idea", "wt -d"];
+
+/// EDIT-043: the window may only run a preset's command or one saved under General settings
 /// (openInApps). This keeps a stray or mistyped command out; it is not a wall against the window
 /// itself, which can also write openInApps through the settings patch (the window is trusted code).
 pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
-    cmd == "code" || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+    PRESET_COMMANDS.contains(&cmd) || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+}
+
+/// after-list 499: the file variant of open_in for a file the fence does not cover (the shortcuts file in
+/// the user's home): `file` opens in `command` (a preset or a saved app) and nothing else is run.
+pub fn open_file_in(file: &Path, command: &str, settings: &serde_json::Value, path_var: Option<std::ffi::OsString>) -> Result<(), String> {
+    let command = command.trim();
+    if !saved_command(settings, command) {
+        return Err(format!("{command} is not one of the apps under General settings, so it was not run"));
+    }
+    if !file.exists() {
+        return Err(format!("{} does not exist", file.display()));
+    }
+    if !file.is_file() {
+        return Err(format!("{} is not a file, so it was not opened", file.display()));
+    }
+    launch_in(file, command, path_var)
 }
 
 /// T-317 (EDIT-048): the branches of the repository a worktree belongs to (local ones, then remote ones
@@ -1360,6 +1446,64 @@ pub fn worktree_branches(path: String, fence: tauri::State<'_, crate::fence::Fen
 #[cfg(test)]
 mod open_in_tests {
     use super::*;
+
+    // after-list 781: the explorer preset must never be handed a program, script or link.
+    #[test]
+    fn fix781_explorer_refuses_programs_scripts_and_links_but_takes_folders() {
+        let base = std::env::temp_dir().join(format!("kolux-fix781-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        for bad in ["run.bat", "RUN.BAT", "a.exe", "b.cmd", "c.ps1", "d.lnk", "e.Vbs", "f.hta", "g.url", "h.msi"] {
+            let f = base.join(bad);
+            std::fs::write(&f, "x").unwrap();
+            assert!(explorer_target(&f).unwrap_err().contains("not asked to open"), "{bad}");
+        }
+        assert!(explorer_target(&base).unwrap().to_string_lossy().ends_with(base.file_name().unwrap().to_str().unwrap()));
+        let note = base.join("notes.txt");
+        std::fs::write(&note, "x").unwrap();
+        let shown = explorer_target(&note).unwrap().to_string_lossy().to_string();
+        assert!(shown.starts_with("/select,") && shown.ends_with("notes.txt"), "{shown}");
+        assert!(explorer_target(&base.join("gone.txt")).is_err());
+        // `..` is resolved before the name is judged
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        assert!(explorer_target(&base.join("sub").join("..").join("run.bat")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix781_a_trailing_dot_or_space_or_stream_does_not_hide_the_extension() {
+        for bad in ["RUN.BAT.", "run.bat ", "run.bat. .", "x.txt:evil.bat", "x.exe::$DATA"] {
+            assert!(explorer_refuses_name(bad), "{bad:?}");
+        }
+        assert!(!explorer_refuses_name("notes.txt") && !explorer_refuses_name("README"));
+        assert!(is_explorer("explorer", Path::new(r"C:\Windows\explorer.exe")) && is_explorer("EXPLORER.EXE", Path::new("x")));
+        assert!(!is_explorer("code", Path::new(r"C:\bin\code.cmd")));
+    }
+
+    // The refusal sits in launch_in, so scm_open_with, open_in and open_file_in all get it; it fires before a spawn.
+    #[cfg(windows)]
+    #[test]
+    fn fix781_launch_in_refuses_a_script_for_explorer_before_starting_anything() {
+        let base = std::env::temp_dir().join(format!("kolux-fix781launch-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("explorer.exe"), "").unwrap();
+        let bat = base.join("Run.Bat");
+        std::fs::write(&bat, "@echo off\r\n").unwrap();
+        let path = Some(std::env::join_paths([base.clone()]).unwrap());
+        let err = launch_in(&bat, "explorer", path).unwrap_err();
+        assert!(err.contains("not asked to open"), "{err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fix781_windows_resolves_a_trailing_dot_to_the_real_script_name() {
+        let base = std::env::temp_dir().join(format!("kolux-fix781dot-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("run.bat"), "x").unwrap();
+        let spelled = format!("{}\\RUN.BAT.", base.display());
+        assert!(explorer_target(Path::new(&spelled)).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn edit043_relative_or_missing_paths_are_refused() {
@@ -1523,6 +1667,35 @@ mod open_in_tests {
         let saved = serde_json::json!({ "openInApps": [{ "label": "Zed", "command": " zed " }] });
         assert!(saved_command(&saved, "zed"));
         assert!(!saved_command(&saved, "zed --evil"));
+    }
+
+    #[test]
+    fn row435_the_apps_listed_before_anything_is_saved_are_allowed_and_a_made_up_command_still_is_not() {
+        let none = serde_json::json!({});
+        for preset in ["explorer", "code", "cursor", "windsurf", "zed", "subl", "idea", "wt -d"] {
+            assert!(saved_command(&none, preset), "{preset}");
+        }
+        let custom = serde_json::json!({ "openInApps": [{ "name": "Mine", "command": "myedit" }] });
+        assert!(saved_command(&custom, "myedit") && saved_command(&custom, "zed"));
+        assert!(!saved_command(&custom, "explorer /e,") && !saved_command(&none, "powershell"));
+    }
+
+    #[test]
+    fn row499_a_single_file_opens_only_in_an_allowed_app_and_only_when_it_is_a_file() {
+        let d = temp_dir("openfile");
+        fs::write(d.join("keys.json"), "{}").unwrap();
+        let file = d.join("keys.json");
+        let none = serde_json::json!({});
+        let refused = open_file_in(&file, "cmd /c calc", &none, None).unwrap_err();
+        assert!(refused.contains("not one of the apps"), "{refused}");
+        let folder = open_file_in(&d, "zed", &none, None).unwrap_err();
+        assert!(folder.contains("not a file"), "{folder}");
+        let gone = open_file_in(&d.join("gone.json"), "zed", &none, None).unwrap_err();
+        assert!(gone.contains("does not exist"), "{gone}");
+        // allowed and a file: the launch itself is tried, and this machine has no such app on an empty PATH
+        let tried = open_file_in(&file, "zed", &none, None).unwrap_err();
+        assert!(tried.contains("zed was not found"), "{tried}");
+        let _ = fs::remove_dir_all(&d);
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

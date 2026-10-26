@@ -154,7 +154,7 @@ pub fn keybindings_reload(app: tauri::AppHandle) {
 /// SET-012: the file in the system's default app (`reveal` false) or selected in the file
 /// manager. A missing file is created first, so there is always something to open.
 #[tauri::command]
-pub fn keybindings_show(app: tauri::AppHandle, reveal: bool) -> Result<(), String> {
+pub fn keybindings_show(app: tauri::AppHandle, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, reveal: bool, command: Option<String>) -> Result<(), String> {
     let home = home(&app)?;
     let path = path_under(&home);
     if !path.exists() {
@@ -162,6 +162,11 @@ pub fn keybindings_show(app: tauri::AppHandle, reveal: bool) -> Result<(), Strin
         if !path.exists() {
             return Err(made.error.unwrap_or_else(|| "The shortcuts file could not be created".into()));
         }
+    }
+    // after-list 499: with a command the file opens in that Open in app instead of the system's default
+    if let Some(c) = command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        let settings = store.lock().map_err(|e| e.to_string())?.settings();
+        return crate::files::open_file_in(&path, c, &settings, std::env::var_os("PATH"));
     }
     show_command(&path, reveal).spawn().map(|_| ()).map_err(|e| format!("Could not open {}: {e}", path.display()))
 }

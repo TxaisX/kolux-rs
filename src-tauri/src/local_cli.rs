@@ -179,7 +179,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("tab release", "Give a page placement back and close the pages opened under it."),
     ("tab leases", "List the page placements held and their pages."),
     ("tab profile", "Show the profile the browser tab runs in."),
-    ("tab profile set", "Move the browser tab to a profile (from its next open)."),
+    ("tab profile set", "Move the browser tab to a profile (its page reopens in the new profile at once)."),
     ("tab profile use-default", "Move the browser tab back to the default profile."),
     ("tab profile clone", "Copy the browser tab's profile and move the tab to the copy."),
     ("profiles list", "List the browser profiles."),
