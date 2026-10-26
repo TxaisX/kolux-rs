@@ -1,0 +1,13 @@
+{
+  "restarted": {
+    "claudeResumeAfterLimit": true
+  },
+  "signedIn": {
+    "state": "signed-in",
+    "email": "sam@example.com"
+  },
+  "signedOut": {
+    "state": "signed-out",
+    "email": null
+  }
+}

@@ -31,8 +31,8 @@ Rules: Enter keeps the typed folder and Escape puts the previous one back; text 
   disk, and extra root folders the user adds, where a newly added root starts hidden), and changing
   the global choice never overwrites a repository's own choice.
 Acceptance:
-  - [ ] Browse to D:/wt → the next worktree is created at D:/wt/<repo>/<name>.
-  - [ ] Launch with KOLUX_WORKSPACES_DIR pointing at a folder → new worktrees appear in that folder.
+  - [x] Browse to D:/wt → the next worktree is created at D:/wt/<repo>/<name>. (cards; evidence/cards-SET-032.txt)
+  - [x] Launch with KOLUX_WORKSPACES_DIR pointing at a folder → new worktrees appear in that folder. (cards; evidence/cards-SET-032.txt)
 Compat: KOLUX_WORKSPACES_DIR keeps its meaning; the saved workspaces folder and the nest-per-repository
   choice carry over as they are.
 Source: D-17-032
@@ -61,10 +61,10 @@ Rules: switching off the agent that is the default leaves no default; Refresh lo
   that in-terminal sign-in needs an open workspace, and with none, or when the launch fails, Settings
   stays open and nothing else changes.
 Acceptance:
-  - [ ] Switch off the agent that is the default → the page shows no default; a new session asks, or
-        takes the first agent available.
-  - [ ] Remove every agent CLI and press Refresh → the saved default is still recorded, and it is used
-        again once one CLI is reinstalled.
+  - [x] Switch off the agent that is the default → the page shows no default; a new session asks, or
+        takes the first agent available. (cards; evidence/cards-SET-027.txt)
+  - [x] Remove every agent CLI and press Refresh → the saved default is still recorded, and it is used
+        again once one CLI is reinstalled. (cards; evidence/cards-SET-027.txt)
 Compat: the saved default agent, the list of switched-off agents, and each agent's command override,
   default arguments and default environment variables all import.
 Source: D-17-027
@@ -82,8 +82,8 @@ Rules: Claude and Codex each have warnings of their own; Codex also warns when i
   (Kolux RS, T-041-b: one active Claude account serves the whole window, so the limit figures on
   screen are always that account's; there is no per-view account to filter by.)
 Acceptance:
-  - [ ] Sign Claude out from its own CLI → the page shows Claude's sign-in warning.
-  - [ ] Turn auto-resume on and restart → it is still on.
+  - [x] Sign Claude out from its own CLI → the page shows Claude's sign-in warning. (cards; evidence/cards-SET-030.txt)
+  - [x] Turn auto-resume on and restart → it is still on. (cards; evidence/cards-SET-030.txt)
 Compat: —
 Source: D-17-030
 
