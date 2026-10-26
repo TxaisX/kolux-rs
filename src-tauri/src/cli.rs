@@ -3495,14 +3495,14 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 crate::terminal::screen_open(&request);
                 (ctx.notify)(json!({ "emit": crate::terminal::SCREEN_EVENT, "payload": { "id": id, "request": request } }));
                 if let Some(rows) = crate::terminal::screen_wait(&request) {
-                    return Ok(hidden(ctx, json!({ "terminal": handle, "screen": true, "rows": rows })));
+                    return hidden(ctx, json!({ "terminal": handle, "screen": true, "rows": rows }));
                 }
                 let r = ctx.terminals.read(id, None, limit).ok_or_else(gone)?;
                 let mut out = serde_json::to_value(r).unwrap_or_default();
                 out["terminal"] = json!(handle);
                 out["screen"] = json!(false);
                 out["warnings"] = json!([format!("the window did not supply {handle}'s screen; this is its output stream, not a screen")]);
-                return Ok(hidden(ctx, out));
+                return hidden(ctx, out);
             }
             let r = ctx.terminals.read(id, cursor, limit).ok_or_else(gone)?;
             let mut warnings = Vec::new();
@@ -3519,7 +3519,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             out["terminal"] = json!(handle);
             out["screen"] = json!(false);
             out["warnings"] = json!(warnings);
-            Ok(hidden(ctx, out))
+            hidden(ctx, out)
         }
         "terminal.send" => {
             let body = text("text");
@@ -4381,10 +4381,13 @@ fn claim_task(tasks: &[Value], dispatches: &mut [Value], i: usize, retry_of: Opt
 /// are missing, so a cut-short archive is never taken for the whole output.
 /// ORCH-067 (T-155-b): a read of a terminal never shows a dispatch pass, echoed in a command line
 /// or sitting typed but unsubmitted in the input box; a warning says when one was hidden.
-fn hidden(ctx: &Ctx, mut out: Value) -> Value {
-    let passes = ctx.store.lock().ok().and_then(|s| load_list(&s, DISPATCHES_KEY).ok()).map(|d| crate::orchestration::passes(&d)).unwrap_or_default();
-    crate::orchestration::redact_read(&mut out, &passes);
-    out
+/// Fails closed: when the dispatches cannot be loaded the passes are unknown, so the read is refused and no output is returned.
+fn hidden(ctx: &Ctx, mut out: Value) -> Result<Value, Fail> {
+    let refused = |why: &str| Fail::new("failed", format!("can't check for secrets to hide; read refused ({why})"));
+    let store = ctx.store.lock().map_err(|_| refused("the store is busy"))?;
+    let dispatches = load_list(&store, DISPATCHES_KEY).map_err(|e| refused(&e.message))?;
+    crate::orchestration::redact_read(&mut out, &crate::orchestration::passes(&dispatches));
+    Ok(out)
 }
 
 fn archive_lines(r: crate::terminal::Read) -> Vec<String> {
@@ -5456,6 +5459,32 @@ mod tests {
         let s = store.lock().unwrap();
         assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "reads left the mail blob alone");
         drop(s);
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hidden_fails_closed_when_the_dispatch_passes_cannot_be_loaded() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-hidden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        terminals.fake_session(41, &dir.display().to_string(), None);
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.read".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-41" }), pane: None, cli: String::new(), arrived: None };
+        // Readable dispatches: the read answers.
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[json!({ "id": "d-1", "pass": "pass-SECRET-123" })]).unwrap();
+        assert!(dispatch(&ctx, &req).is_ok());
+        // A list that cannot be read or kept aside: the passes are unknown, so the read is refused (no output).
+        let broken = "[{\"id\": \"d-1\", \"pass\": \"pass-SECRET-123\"}, tru";
+        store.lock().unwrap().set(DISPATCHES_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let err = dispatch(&ctx, &req).unwrap_err();
+        assert!(err.message.contains("can't check for secrets to hide; read refused") && err.message.contains(DISPATCHES_KEY), "{}", err.message);
+        assert!(!err.message.contains("pass-SECRET-123") && !err.data.to_string().contains("pass-SECRET-123"), "the error never carries a pass");
+        assert_eq!(store.lock().unwrap().get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
