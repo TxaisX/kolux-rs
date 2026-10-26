@@ -9,6 +9,8 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import CrashReportDialog from "./CrashReportDialog";
+import RecoveryNotes from "./RecoveryNotes";
+import { loadRecoveryNotes } from "./startupNotes";
 import { repaint, WOKE_EVENT } from "./hidden";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 import { afterBurst, HEARTBEAT_MS, launchPrompt, updateNotice, type GraphicsPrompt, type LastAttempt } from "./model";
@@ -16,8 +18,10 @@ import { afterBurst, HEARTBEAT_MS, launchPrompt, updateNotice, type GraphicsProm
 export default function RecoveryMount() {
   const [g, setG] = useState<GraphicsPrompt>(null);
   const [upd, setUpd] = useState<ReturnType<typeof updateNotice>>(null);
+  const [recovered, setRecovered] = useState<string[]>([]); // row 789: startup repairs, told once
 
   useEffect(() => {
+    void loadRecoveryNotes(() => invoke<string[]>("startup_recovery_notes")).then(setRecovered);
     invoke<LastAttempt>("update_last_attempt").then((a) => setUpd(updateNotice(a)), () => {});
   }, []);
 
@@ -60,6 +64,7 @@ export default function RecoveryMount() {
   if (!g) return (
     <>
       <CrashReportDialog />
+      <RecoveryNotes notes={recovered} onDismiss={() => setRecovered([])} />
       {updNotice}
     </>
   );
@@ -67,6 +72,7 @@ export default function RecoveryMount() {
   return (
     <>
       <CrashReportDialog />
+      <RecoveryNotes notes={recovered} onDismiss={() => setRecovered([])} />
       {updNotice}
       <div className="notice" role="alertdialog" aria-label="Graphics" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {g.kind === "burst" ? (

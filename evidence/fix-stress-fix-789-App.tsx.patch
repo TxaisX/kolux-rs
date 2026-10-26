@@ -1,0 +1,14 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index f694ee2a..fdb661c5 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -413,8 +413,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           setSettingsRead(true);
+           applyAppearance(readAppearance(s));
+           applyWindowBlur(s);
+-          // after-list #39: said once when the settings came from the last good copy
+-          void invoke<string | null>("settings_fallback_notice").then((m) => m && setNotice(m), () => {});
++          // after-list #39 / row 789: the fallback sentence is told by RecoveryMount now (its own notice, not the single slot the shortcuts file overwrote)
+         })
+         .catch(() => setSettings({}));
+     readSettings();

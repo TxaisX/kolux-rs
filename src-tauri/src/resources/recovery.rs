@@ -339,6 +339,45 @@ pub fn install_dir() -> Option<PathBuf> {
     std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf))
 }
 
+/// Managed: what startup recovery did, as sentences for the user, handed to the page once.
+pub struct StartupNotes(pub Mutex<Vec<String>>);
+
+/// APP-049 / APP-021 (after-list row 789): the sentences the page shows for what startup repaired or
+/// set aside, naming each file and where it went. Quiet when nothing was damaged.
+pub fn startup_notes(prep: &StatePrep, perms: &PermReport) -> Vec<String> {
+    let mut out = Vec::new();
+    match &prep.outcome {
+        StateOutcome::Restored { aside } => out.push(format!("Your saved data file ({STATE_FILE}) was damaged. Kolux restored the last good copy and kept the damaged file at {}.", aside.display())),
+        StateOutcome::Fresh { aside } => out.push(format!("Your saved data file ({STATE_FILE}) was damaged and there was no good copy, so Kolux started with fresh data. The damaged file is kept at {}.", aside.display())),
+        StateOutcome::Frozen { reason } => out.push(format!("Your saved data file ({STATE_FILE}) is damaged and could not be set aside ({reason}), so Kolux left it alone and will not save changes this session.")),
+        StateOutcome::Fine | StateOutcome::Missing => {}
+    }
+    if !perms.repaired.is_empty() {
+        let paths: Vec<String> = perms.repaired.iter().map(|p| p.display().to_string()).collect();
+        out.push(format!("Kolux repaired its access to {}.", paths.join(", ")));
+    }
+    if let Some(problem) = perms.problem() {
+        out.push(format!("Kolux found {problem}."));
+    }
+    out
+}
+
+/// What the page tells the user once at start: the settings file read from its last good copy (the
+/// damaged file stays in place until the next save sets it aside) and the startup recovery above.
+pub fn take_recovery_notes(store: &crate::state::Store, notes: &StartupNotes) -> Vec<String> {
+    let _ = store.try_settings(); // the read is what notices a damaged file
+    let mut out: Vec<String> = store.take_fallback_notice().into_iter().collect();
+    if let Ok(mut held) = notes.0.lock() {
+        out.append(&mut held);
+    }
+    out
+}
+
+#[tauri::command]
+pub fn startup_recovery_notes(store: tauri::State<'_, Mutex<crate::state::Store>>, notes: tauri::State<'_, StartupNotes>) -> Vec<String> {
+    store.lock().map(|s| take_recovery_notes(&s, &notes)).unwrap_or_default()
+}
+
 /// Managed: what the startup check found, for the recovery prompt and the graphics rule.
 pub struct Perms(pub PermReport);
 
@@ -1442,6 +1481,49 @@ mod tests {
         assert_eq!(prep.open_dir, dir, "the store opens in the profile");
         assert!(prep.backup_worthwhile());
         assert_eq!(read_layout(&dir).as_deref(), Some("two panes"), "the earlier setup is back");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // After-list row 789: startup recovery reaches the page as sentences naming the file and where it went.
+    #[test]
+    fn row789_a_restored_or_fresh_state_file_is_named_for_the_user_with_where_it_went() {
+        let dir = temp("notes789");
+        seeded(&dir);
+        backup_state(&dir).unwrap();
+        let none = PermReport { profile_writable: true, own_install: true, unreadable: vec![], repaired: vec![] };
+        assert!(startup_notes(&prepare_state(&dir, &dir.join("scratch")), &none).is_empty(), "a healthy start says nothing");
+        fs::write(dir.join(STATE_FILE), b"this is not a database at all, it is what a torn write leaves behind, padded out to look real........").unwrap();
+        let prep = prepare_state(&dir, &dir.join("scratch"));
+        let StateOutcome::Restored { aside } = &prep.outcome else { panic!("{:?}", prep.outcome) };
+        let said = startup_notes(&prep, &none);
+        assert_eq!(said.len(), 1);
+        assert!(said[0].contains("state.db") && said[0].contains("damaged") && said[0].contains("restored the last good copy"), "{said:?}");
+        assert!(said[0].contains(&aside.display().to_string()), "names where the bad copy is kept: {said:?}");
+        let fresh = StatePrep { open_dir: dir.clone(), outcome: StateOutcome::Fresh { aside: dir.join("state.db.damaged-1") }, notes: vec![] };
+        assert!(startup_notes(&fresh, &none)[0].contains("started with fresh data"));
+        let frozen = StatePrep { open_dir: dir.clone(), outcome: StateOutcome::Frozen { reason: "locked".into() }, notes: vec![] };
+        assert!(startup_notes(&frozen, &none)[0].contains("will not save changes this session"));
+        let perms = PermReport { profile_writable: false, own_install: true, unreadable: vec![], repaired: vec![dir.join("profile")] };
+        let said = startup_notes(&prep, &perms);
+        assert!(said.iter().any(|n| n.starts_with("Kolux repaired its access to") && n.contains("profile")), "{said:?}");
+        assert!(said.iter().any(|n| n.contains("the profile folder cannot be written")), "{said:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row789_a_truncated_settings_file_and_the_startup_notes_both_reach_the_page_once() {
+        let dir = temp("page789");
+        let store = crate::state::Store::open(&dir).unwrap();
+        store.save_settings(&serde_json::json!({ "stressMarker": 1 })).unwrap();
+        store.save_settings(&serde_json::json!({ "stressMarker": 2 })).unwrap(); // the second save makes settings.json.bak
+        let whole = fs::read(dir.join("settings.json")).unwrap();
+        fs::write(dir.join("settings.json"), &whole[..whole.len() / 2]).unwrap();
+        let notes = StartupNotes(Mutex::new(vec!["state note".to_string()]));
+        let got = take_recovery_notes(&store, &notes);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got[0].contains("could not read your settings file") && got[0].contains("settings.json.bak"), "{got:?}");
+        assert_eq!(got[1], "state note");
+        assert!(take_recovery_notes(&store, &notes).is_empty(), "said once");
         let _ = fs::remove_dir_all(&dir);
     }
 
