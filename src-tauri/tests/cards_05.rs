@@ -70,3 +70,105 @@ fn view025_a_card_answer_types_the_agents_own_keys_and_the_pane_leaves_needs_you
     // The payload shape the TypeScript side is fed.
     assert_eq!(json!({"state": asked.state, "tool": asked.tool}), json!({"state": "permission", "tool": "Bash"}));
 }
+
+// ---- VIEW-005 / VIEW-107: the real settings Store and the saved window state ----
+use kolux_rs_lib::state::Store;
+
+fn store_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("kolux-rs-cards05-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+#[test]
+fn view005_box1_the_open_page_and_the_screen_left_survive_a_restart_of_the_store() {
+    let dir = store_dir("restart");
+    let s = Store::open(&dir).unwrap();
+    let set = serde_json::Map::from_iter([("openPage".to_string(), json!("tasks")), ("lastScreen".to_string(), json!("terminals"))]);
+    s.patch_settings(&set, &[]).unwrap();
+    drop(s);
+    // the next start reads the same file: both keys come back as written (neither is a retired setting)
+    let again = Store::open(&dir).unwrap();
+    let read = again.settings();
+    assert_eq!((read["openPage"].as_str(), read["lastScreen"].as_str()), (Some("tasks"), Some("terminals")));
+    drop(again);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn view005_box2_a_corrupt_settings_file_reads_as_defaults_and_raises_no_notice() {
+    let dir = store_dir("corrupt");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("settings.json"), b"{ \"lastScreen\": \"tas").unwrap();
+    let s = Store::open(&dir).unwrap();
+    // no good copy to fall back to: the read does not fail, it gives defaults (no openPage, no lastScreen)
+    let read = s.settings();
+    assert_eq!(read, json!({}));
+    assert_eq!(s.take_fallback_notice(), None, "no good copy: nothing to tell, no dialog");
+    drop(s);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn view005_box2_with_a_good_copy_a_corrupt_file_reads_from_that_copy_not_from_defaults() {
+    let dir = store_dir("corrupt-bak");
+    let s = Store::open(&dir).unwrap();
+    s.save_settings(&json!({ "lastScreen": "artifacts" })).unwrap();
+    s.save_settings(&json!({ "lastScreen": "inbox" })).unwrap();
+    std::fs::write(dir.join("settings.json"), b"{ half").unwrap();
+    // T-075 / APP-048: the previous good copy wins, so the screen is the one before the last save
+    assert_eq!(s.settings()["lastScreen"], "artifacts");
+    assert!(s.take_fallback_notice().is_some());
+    drop(s);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn view107_box1_three_saved_tabs_are_read_back_whole_after_the_store_is_reopened() {
+    let dir = store_dir("three-tabs");
+    let pane = |k: u32, agent: &str| json!({ "key": k, "cwd": "C:/w/app", "branch": "main", "agent": agent, "program": null, "args": [] });
+    let layout = json!({ "panes": [pane(1, "claude"), pane(2, "codex"), pane(3, "shell")], "activeTab": { "0": 2 }, "focused": 2, "activeDir": "C:/w/app", "stacked": {} });
+    let s = Store::open(&dir).unwrap();
+    s.patch_settings(&serde_json::Map::from_iter([("savedLayout".to_string(), layout.clone())]), &[]).unwrap();
+    drop(s);
+    let read = Store::open(&dir).unwrap().settings();
+    assert_eq!(read["savedLayout"], layout, "the three tabs, their order and the active tab come back byte for byte");
+    assert_eq!(read["savedLayout"]["panes"].as_array().unwrap().len(), 3);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ---- VIEW-012: the Artifacts library behind the page ----
+use kolux_rs_lib::artifacts::{Library, Origin};
+
+#[test]
+fn view012_box1_add_two_files_and_the_newest_is_listed_first() {
+    let root = store_dir("artifacts");
+    let site = root.join("site");
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(site.join("first.html"), "<title>First page</title><p>one</p>").unwrap();
+    std::fs::write(site.join("second.html"), "<title>Second page</title><p>two</p>").unwrap();
+    let lib = Library::new(root.join("lib"));
+    lib.add(&site.join("first.html"), Origin::hand(&site.join("first.html")), &|_| None).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    lib.add(&site.join("second.html"), Origin::hand(&site.join("second.html")), &|_| None).unwrap();
+    let titles: Vec<String> = lib.list().into_iter().map(|l| serde_json::to_value(l).unwrap()["title"].as_str().unwrap().to_string()).collect();
+    assert_eq!(titles, ["Second page", "First page"]);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn view012_box3_removing_an_entry_takes_it_out_of_the_list_and_deletes_its_stored_folder() {
+    let root = store_dir("artifacts-rm");
+    let site = root.join("site");
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(site.join("a.html"), "<title>A</title>").unwrap();
+    std::fs::write(site.join("b.html"), "<title>B</title>").unwrap();
+    let lib = Library::new(root.join("lib"));
+    let a = lib.add(&site.join("a.html"), Origin::hand(&site.join("a.html")), &|_| None).unwrap();
+    lib.add(&site.join("b.html"), Origin::hand(&site.join("b.html")), &|_| None).unwrap();
+    lib.remove(&a.id).unwrap();
+    let titles: Vec<String> = lib.list().into_iter().map(|l| serde_json::to_value(l).unwrap()["title"].as_str().unwrap().to_string()).collect();
+    assert_eq!(titles, ["B"]);
+    assert!(!root.join("lib").join(&a.id).exists());
+    std::fs::remove_dir_all(&root).unwrap();
+}

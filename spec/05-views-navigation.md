@@ -342,8 +342,8 @@ Rules: live session counts ignore dead tabs; worktrees with none show no count; 
   and reconnect; in a split tab each pane's row carries that pane's own conversation name; clicking
   one pane never renames its sibling, and a pane with no live title borrows none.
 Acceptance:
-  - [ ] A Cursor pane and a Gemini pane → both listed, neither labelled Claude.
-  - [ ] Close a tab → its worktree's count drops.
+  - [x] A Cursor pane and a Gemini pane → both listed, neither labelled Claude. (cards; evidence/cards-VIEW-051.txt)
+  - [x] Close a tab → its worktree's count drops. (cards; evidence/cards-VIEW-051.txt)
 Compat: —
 Source: D-05-051
 
@@ -371,7 +371,7 @@ User sees: on relaunch every workspace and tab returns; unsaved editor changes b
 Rules: a failed save is retried, then falls back to a durable-only save; restored workspaces rebuild
   their tab layouts in session order in one pass.
 Acceptance:
-  - [ ] Quit with three tabs → relaunch shows the three tabs.
+  - [x] Quit with three tabs → relaunch shows the three tabs. (cards; evidence/cards-VIEW-107.txt)
   - [ ] Quit with an unsaved editor buffer → prompt, no silent loss.
 Compat: —
 Source: D-05-107
@@ -384,8 +384,8 @@ User sees: a short list of other chat-capable agents' sessions, the last viewed 
 Rules: the target list is capped; whatever the user already typed in the target composer is kept;
   file paths with spaces are quoted.
 Acceptance:
-  - [ ] Two other chat sessions exist, one viewed last → it is listed first.
-  - [ ] Result path contains a space → it arrives quoted.
+  - [x] Two other chat sessions exist, one viewed last → it is listed first. (cards; evidence/cards-VIEW-020.txt)
+  - [x] Result path contains a space → it arrives quoted. (cards; evidence/cards-VIEW-020.txt)
 Compat: —
 Source: D-05-020
 
@@ -399,9 +399,9 @@ Rules: Search matches titles only and requires every typed word to appear; an em
   search with no matches show different messages; sizes read in B, KB or MB with one decimal; each
   preview gets a stable page identity so reopening the same artifact reuses it.
 Acceptance:
-  - [ ] Add two files → newest is on top.
-  - [ ] Search two words where only one matches a title → that item is hidden.
-  - [ ] Remove the selected item → it leaves the list and the preview closes.
+  - [x] Add two files → newest is on top. (cards; evidence/cards-VIEW-012.txt)
+  - [x] Search two words where only one matches a title → that item is hidden. (cards; evidence/cards-VIEW-012.txt)
+  - [x] Remove the selected item → it leaves the list and the preview closes. (cards; evidence/cards-VIEW-012.txt)
 Compat: —
 Source: D-05-012
 
