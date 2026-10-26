@@ -22,8 +22,9 @@ export type Event =
   | { t: "navigate" }
   /** T-283 (BROW-010): the computer woke from sleep; every pane hears the one signal. */
   | { t: "woke" };
-/** `reload`: the pane reloads the page. `overlay`: a recovery overlay goes up (see `overlayOf`). */
-export type Action = "none" | "reload" | "overlay";
+/** `reload`: the pane reloads the page. `rebuild`: a reload cannot work, so the pane closes the page
+ *  and opens it again (BROW-009). `overlay`: a recovery overlay goes up (see `overlayOf`). */
+export type Action = "none" | "reload" | "rebuild" | "overlay";
 
 /** Unanswered probes in a row before a page counts as dead (BROW-009): a page running a long
  *  script misses one or two; three at a quarter-second apart is most of a second of silence. */
@@ -45,7 +46,9 @@ export function step(h: Health, e: Event): [Health, Action] {
       if (h.phase === "loading") return [{ ...h, phase: h.recovery ? "recovering" : "ok", url: e.url, misses: 0, recovery: false }, "none"];
       return [h, "none"];
     case "retry":
-      return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "reload"];
+      // A crashed page already got its one automatic reload and did not come back: the page
+      // behind the overlay is dead, so Retry builds it again instead of reloading it.
+      return [{ ...h, misses: 0, recoveries: 0, recovery: false }, h.phase === "crashed" ? "rebuild" : "reload"];
     case "navigate":
       return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "none"];
     case "woke":
