@@ -766,8 +766,13 @@ mod tests {
         let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
         let script = concat!(
             "$e=[char]27; $q = \"$e]11;?$e\\\" + \"$e]10;?$e\\\" + \"$e]4;1;?$e\\\" + \"$e[?996n\" + \"$e[?2031h\"; ",
-            "[Console]::Out.Write($q); [Console]::Out.Flush(); $t=(Get-Date).AddMilliseconds(2500); $s=''; ",
-            "while((Get-Date) -lt $t){ if([Console]::KeyAvailable){ $s += [Console]::ReadKey($true).KeyChar } else { Start-Sleep -Milliseconds 20 } }; ",
+            // Reads until the light/dark answer (the last reply) is in plus half a second for a stray
+            // cursor report; the 20 s cap is only for a reply that never comes (a loaded PC read
+            // 13 characters of the palette reply in the old fixed 2.5 s and cut it short).
+            "[Console]::Out.Write($q); [Console]::Out.Flush(); $t=(Get-Date).AddSeconds(20); $s=''; $z=$null; ",
+            "while((Get-Date) -lt $t){ if([Console]::KeyAvailable){ $s += [Console]::ReadKey($true).KeyChar } else { Start-Sleep -Milliseconds 20 }; ",
+            "if(-not $z -and $s.Contains(\"$e[?997;1n\")){ $z=(Get-Date).AddMilliseconds(500) }; ",
+            "if($z -and (Get-Date) -gt $z -and -not [Console]::KeyAvailable){ break } }; ",
             "'GOT:' + (($s.ToCharArray() | % { [int]$_ }) -join ',') + ':END'"
         );
         let args = vec!["-NoLogo".to_string(), "-NoProfile".to_string(), "-Command".to_string(), script.to_string()];
@@ -793,12 +798,12 @@ mod tests {
         ];
         let mut answered = [0usize; 5];
         let mut seen = String::new();
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + Duration::from_secs(60);
         let code = loop {
             if let Ok(code) = exit_rx.try_recv() {
                 break code;
             }
-            assert!(Instant::now() < deadline, "the program did not end within 30s; saw:\n{seen:?}");
+            assert!(Instant::now() < deadline, "the program did not end within 60s; saw:\n{seen:?}");
             if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
                 seen.push_str(&String::from_utf8_lossy(&chunk));
             }
