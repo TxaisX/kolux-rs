@@ -34,9 +34,9 @@ Rules: numbering is per automation, starts at 1 and only goes up; skipped runs, 
   live terminal only while that terminal still belongs to the run, never a pane that now shows
   something else.
 Acceptance:
-  - [ ] Delete a run's worktree → View run shows the saved output with a note that it is a snapshot.
-  - [ ] A run fails → Rerun shows; delete the automation → Rerun is gone.
-  - [ ] Make history fail to load → an error with a recovery action, not an empty list.
+  - [x] Delete a run's worktree → View run shows the saved output with a note that it is a snapshot. (cards; evidence/cards-AUTO-013.txt)
+  - [x] A run fails → Rerun shows; delete the automation → Rerun is gone. (cards; evidence/cards-AUTO-013.txt)
+  - [x] Make history fail to load → an error with a recovery action, not an empty list. (cards; evidence/cards-AUTO-013.txt)
 Compat: —
 Source: D-09-013
 
@@ -52,11 +52,11 @@ Rules: a finish reported at a session boundary, an old idle state, or a ready pr
   reconnect, and any that cannot be found are closed after a short settling period; the same refusal
   repeated for the same due time collapses into one entry with a counter.
 Acceptance:
-  - [ ] Kill the agent before it starts working → the run reads failed, not completed.
-  - [ ] Restart Kolux while a run is still going → tracking continues and the run completes when the
-        agent finishes.
-  - [ ] An every-five-minutes automation whose project is gone for an hour → one collapsed skipped
-        entry, not twelve.
+  - [x] Kill the agent before it starts working → the run reads failed, not completed. (cards; evidence/cards-AUTO-012.txt)
+  - [x] Restart Kolux while a run is still going → tracking continues and the run completes when the
+        agent finishes. (cards; evidence/cards-AUTO-012.txt)
+  - [x] An every-five-minutes automation whose project is gone for an hour → one collapsed skipped
+        entry, not twelve. (cards; evidence/cards-AUTO-012.txt)
 Compat: carried-over run history must keep each run's status (the four progress states, the four
   skip causes, and failed to dispatch) and how it was started (timetable, by hand, or event).
 Source: D-09-012
@@ -82,13 +82,13 @@ Rules: the hourly option goes at the chosen minute of every hour, daily at the c
   custom line a day field that covers every day (for example */1) counts as no limit, so only the
   other day field narrows the runs, and weekday 7 is read as Sunday.
 Acceptance:
-  - [ ] On a Friday afternoon save a weekday automation at 09:00 → the upcoming run reads Monday
-        09:00.
-  - [ ] Enter a cron line with 61 in the minute field → saving is blocked with a validation message.
-  - [ ] Save a cron line that only matches 29 February → an upcoming run in the next leap year is
-        shown.
-  - [ ] Pause the automation → nothing launches at its due time; resume it → the following due time
-        fires.
+  - [x] On a Friday afternoon save a weekday automation at 09:00 → the upcoming run reads Monday
+        09:00. (cards; evidence/cards-AUTO-001.txt)
+  - [x] Enter a cron line with 61 in the minute field → saving is blocked with a validation message. (cards; evidence/cards-AUTO-001.txt)
+  - [x] Save a cron line that only matches 29 February → an upcoming run in the next leap year is
+        shown. (cards; evidence/cards-AUTO-001.txt)
+  - [x] Pause the automation → nothing launches at its due time; resume it → the following due time
+        fires. (cards; evidence/cards-AUTO-001.txt)
 Compat: the command line takes the same timetable values (hourly, daily, weekdays, weekly, a
   five-field cron line or an RRULE) through `--trigger` or its alias `--schedule`, with `--time` as
   HH:MM, `--day` from 0 to 6 where Sunday is 0, and `--timezone` taking an IANA zone name.
@@ -121,11 +121,11 @@ Rules: a run starts only for automations that are switched on and whose repo and
   one; Hermes jobs never offer Event; automations made before events existed open unchanged and stay
   on their timetable.
 Acceptance:
-  - [ ] Open a draft pull request from a workspace branch → within the detection window exactly one
-        run begins and its prompt ends with the event description.
-  - [ ] Cause the same kind of event twice inside five minutes → a single run.
-  - [ ] Let an agent that an automation launched complete → no agent-finished automation starts.
-  - [ ] Restart Kolux while a pull request is already open → no run.
+  - [x] Open a draft pull request from a workspace branch → within the detection window exactly one
+        run begins and its prompt ends with the event description. (cards; evidence/cards-AUTO-004.txt)
+  - [x] Cause the same kind of event twice inside five minutes → a single run. (cards; evidence/cards-AUTO-004.txt)
+  - [x] Let an agent that an automation launched complete → no agent-finished automation starts. (cards; evidence/cards-AUTO-004.txt)
+  - [x] Restart Kolux while a pull request is already open → no run. (cards; evidence/cards-AUTO-004.txt)
 Compat: carried-over automations must keep whether they are timed or event-driven and which of the
   three events each one listens for.
 Source: D-09-004
@@ -146,10 +146,10 @@ Rules: workspace options are an existing worktree, or a brand-new worktree for e
   automation; saving is refused, rather than guessed at, while Kolux cannot yet read the project's
   setup.
 Acceptance:
-  - [ ] Create an automation → it is listed at once without a refresh.
-  - [ ] Double-click the save button → only one automation exists.
-  - [ ] Open find in the prompt editor and press Escape → find shuts and the dialog stays; press
-        Escape again → the dialog shuts.
+  - [x] Create an automation → it is listed at once without a refresh. (cards; evidence/cards-AUTO-005.txt)
+  - [x] Double-click the save button → only one automation exists. (cards; evidence/cards-AUTO-005.txt)
+  - [x] Open find in the prompt editor and press Escape → find shuts and the dialog stays; press
+        Escape again → the dialog shuts. (cards; evidence/cards-AUTO-005.txt)
 Compat: on the command line, create and edit take `--name`, `--prompt`, `--provider` (codex, claude
   or gemini), `--repo` (an id:, name: or path: selector), `--workspace`, `--workspace-mode`
   (existing or new-per-run), `--base-branch`, and `--enabled` or `--disabled`.
@@ -169,7 +169,7 @@ Acceptance:
   - [ ] A timed run starts while the user types in another worktree → focus and keystrokes are
         untouched.
   - [ ] Open the run's worktree → all the startup output is there.
-  - [ ] Type in the run's tab, then let the agent exit → the tab stays open.
+  - [x] Type in the run's tab, then let the agent exit → the tab stays open. (cards; evidence/cards-AUTO-011.txt)
 Compat: —
 Source: D-09-011
 
@@ -191,9 +191,9 @@ Rules: names sort the way people count, so 2 comes before 10, and sorting by las
   loads that one's runs; run status and usage update in the open page as runs progress, with no
   refresh needed.
 Acceptance:
-  - [ ] Search for a word that appears only inside a prompt → that automation shows.
-  - [ ] Sort by last run → never-run automations are at the bottom.
-  - [ ] Force a load failure → an error with Retry, not a nothing-created message.
+  - [x] Search for a word that appears only inside a prompt → that automation shows. (cards; evidence/cards-AUTO-016.txt)
+  - [x] Sort by last run → never-run automations are at the bottom. (cards; evidence/cards-AUTO-016.txt)
+  - [x] Force a load failure → an error with Retry, not a nothing-created message. (cards; evidence/cards-AUTO-016.txt)
 Compat: —
 Source: D-09-016
 
@@ -207,10 +207,10 @@ Rules: Run Now ignores the timetable and the precheck and is logged as a manual 
   confirmation can be switched off, and out of the box it is on, so Kolux always asks; after a run
   the upcoming time is shown again.
 Acceptance:
-  - [ ] Click Run Now on a paused automation → a manual run appears in history.
-  - [ ] Delete with confirmation on → a confirm step shows; switch confirmation off → the next
-        delete happens at once.
-  - [ ] Pause → nothing runs at the next due time.
+  - [x] Click Run Now on a paused automation → a manual run appears in history. (cards; evidence/cards-AUTO-019.txt)
+  - [x] Delete with confirmation on → a confirm step shows; switch confirmation off → the next
+        delete happens at once. (cards; evidence/cards-AUTO-019.txt)
+  - [x] Pause → nothing runs at the next due time. (cards; evidence/cards-AUTO-019.txt)
 Compat: —
 Source: D-09-019
 

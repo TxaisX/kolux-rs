@@ -1,0 +1,4 @@
+box 3: src/automations/__cards__/AUTO-011.test.ts::box 3: typing in the run's tab, then the agent exiting, leaves the tab open — pnpm exec vitest run src/automations/__cards__ — Test Files 3 passed (3), Tests 6 passed (6)
+  (real runTab.ts functions; MIRROR App.tsx:1731-1743 keydown + terminal-exit listeners; control: untouched tab closes once)
+box 1: LIVE, not ticked (focus and keystrokes in another worktree need a window)
+box 2: LIVE, not ticked (a hidden worktree's startup output needs a mounted terminal)
