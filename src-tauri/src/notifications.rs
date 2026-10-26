@@ -85,7 +85,7 @@ pub fn notify_event(app: tauri::AppHandle, title: String, body: String, sound: O
     }
     let ping = if kind.as_deref() == Some("bell") { crate::tray::Ping::Bell } else { crate::tray::Ping::AgentFinished };
     crate::tray::ping(&app, ping);
-    show_plain(&app, title, body, sound.unwrap_or(true))?;
+    show_for_event(&app, title, body, sound.unwrap_or(true), &id)?;
     Ok(json!({ "shown": true, "duplicate": false }))
 }
 
@@ -103,10 +103,46 @@ pub fn notification_clicked(app: tauri::AppHandle, id: String) -> Result<Option<
     Ok(pane)
 }
 
+/// The key inside a toast's data that carries the event id back on a click.
+const EVENT_KEY: &str = "eventId";
+
+/// STAT-044 (row 168): the event a click on a toast belongs to; any other action, or a toast
+/// that carries no event, answers none.
+pub fn clicked_event(performed: &tauri_plugin_notification::ActionPerformed) -> Option<String> {
+    if performed.action_id() != "tap" {
+        return None;
+    }
+    performed.notification()?.extra().get(EVENT_KEY)?.as_str().map(String::from)
+}
+
+/// STAT-044 (row 168): once at start, a click on a system toast brings the window forward and
+/// tells the page which pane raised it. Windows reports a click only while the toast is on screen.
+pub fn watch_clicks(app: &tauri::AppHandle) {
+    use tauri_plugin_notification::NotificationExt;
+    let handle = app.clone();
+    let _ = app.notification().on_action(move |performed| {
+        if let Some(id) = clicked_event(performed) {
+            let _ = notification_clicked(handle.clone(), id);
+        }
+    });
+}
+
 /// The toast alone, for the Notifications page's test button: no tray dot.
 pub(crate) fn show_plain(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
+    toast(app, title, body, sound, None)
+}
+
+/// An agent event's toast: a click on it reports `event` back (`watch_clicks`).
+fn show_for_event(app: &tauri::AppHandle, title: String, body: String, sound: bool, event: &str) -> Result<(), String> {
+    toast(app, title, body, sound, Some(event))
+}
+
+fn toast(app: &tauri::AppHandle, title: String, body: String, sound: bool, event: Option<&str>) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     let mut n = app.notification().builder().title(title).body(body);
+    if let Some(id) = event {
+        n = n.extra(EVENT_KEY, id);
+    }
     if sound {
         n = n.sound("Default");
     }
@@ -215,6 +251,7 @@ pub fn welcome_step(macos: bool, saved: Option<&str>) -> Welcome {
 /// system shows it in time, so a start where it does not may ask again later.
 pub fn first_run_welcome(app: &tauri::AppHandle) {
     use tauri::Manager;
+    watch_clicks(app);
     let Some(store) = app.try_state::<std::sync::Mutex<crate::state::Store>>() else { return };
     let saved = store.lock().ok().and_then(|s| s.get(WELCOME_KEY).ok().flatten());
     if welcome_step(cfg!(target_os = "macos"), saved.as_deref()) != Welcome::Ask {
@@ -303,6 +340,19 @@ mod tests {
         assert_eq!(t.pane(&format!("b:{}", TARGETS_MAX * 2 - 1)), Some("px".into()), "the newest are kept");
         assert!(t.record("a:1", None), "an id dropped from memory may show again");
         assert_eq!(t.pane("a:1"), None, "an event without a pane has nothing to focus");
+    }
+
+    #[test]
+    fn stat044_a_clicked_toast_names_its_event_and_no_other_action_does() {
+        use super::{clicked_event, EVENT_KEY};
+        let performed = |action: &str, extra: serde_json::Value| -> tauri_plugin_notification::ActionPerformed {
+            serde_json::from_value(serde_json::json!({ "actionId": action, "notification": { "id": 1, "extra": extra } })).unwrap()
+        };
+        assert_eq!(clicked_event(&performed("tap", serde_json::json!({ EVENT_KEY: "done:7" }))), Some("done:7".into()));
+        assert_eq!(clicked_event(&performed("dismiss", serde_json::json!({ EVENT_KEY: "done:7" }))), None, "only a click counts");
+        assert_eq!(clicked_event(&performed("tap", serde_json::json!({}))), None, "a toast with no event (the test button) focuses nothing");
+        let bare: tauri_plugin_notification::ActionPerformed = serde_json::from_value(serde_json::json!({ "actionId": "tap" })).unwrap();
+        assert_eq!(clicked_event(&bare), None, "a click whose toast cannot be read is ignored");
     }
 
     #[test]

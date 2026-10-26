@@ -1,6 +1,6 @@
 // SKILL-024 / SKILL-026: when the update notice appears and what the dialog says about a run.
 import { expect, test } from "vitest";
-import { chipTone, freshKeys, noticeShown, noticeText, sumUpRun, updatable, type Checked, type Report, type UpdateStatus } from "./updateNotice";
+import { chipTone, claimNotice, freshKeys, noticeShown, resetNoticeClaim, noticeText, sumUpRun, updatable, type Checked, type Report, type UpdateStatus } from "./updateNotice";
 
 const report = (over: Partial<Report> = {}): Report => ({
   rows: [
@@ -54,4 +54,12 @@ test("SKILL-026: the finished run is summed up from the rescan, not the exit cod
   expect(sumUpRun(st({ stopped: true, code: null, results: [bad("a")] }))).toBe("Stopped. Nothing was updated.");
   expect(sumUpRun(st({ stopped: true, code: null, results: [ok("a"), bad("b")] }))).toBe("Stopped. 1 updated, 1 not.");
   expect(sumUpRun(st({ error: "Node.js was not found", results: [bad("a")] }))).toBe("Node.js was not found");
+});
+
+test("after-list row 62: the notice waits for settings and is claimed once per session by whichever screen asks first", () => {
+  resetNoticeClaim();
+  expect(claimNotice(checked(), false)).toBe(false); // settings not loaded: not claimed either
+  expect(claimNotice(checked(), true)).toBe(true);
+  expect(claimNotice(checked(), true)).toBe(false); // the Skills page asking later gets nothing
+  resetNoticeClaim();
 });

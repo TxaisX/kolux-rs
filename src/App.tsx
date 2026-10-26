@@ -38,9 +38,10 @@ import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from ".
 import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode, type Switcher } from "./terminal/tabCycle";
 import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
 import { moveToTab, tidyWeights } from "./shell/tidy";
+import { removeShortcutAsk } from "./launch/removeAsk";
 import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
 import { forgetView } from "./terminal/viewKeep";
-import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
+import { classify, shellInAgentPane } from "./terminal/remove";
 import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
 import { applyWindowBlur } from "./chrome/appLook";
 import { useEscapeLeaves } from "./chrome/fullPage";
@@ -94,6 +95,7 @@ import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
 import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
 import { closeSkills, toggleSkills } from "./skills/nav";
 import { BringSkillsUp } from "./skills/SkillBarItem";
+import SkillUpdateNotice from "./skills/SkillUpdateNotice";
 import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import Guides from "./onboarding/Guides";
@@ -113,6 +115,7 @@ import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
 import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
 import AgentsPanel from "./sessions/AgentsPanel";
+import { BELL_NOTE } from "./terminal/bellNote";
 import { FOLDER_TAB_KEY, offeredTabs, rememberTab, tabFor } from "./sessions/folderTabs";
 import { useWorkspaceKind } from "./sessions/useWorkspaceKind";
 import { AttachedWorktreesTab, FolderChecksTab } from "./projects/AttachedTabs.tsx"; // the extension: attachedTabs.ts (logic) differs only in case
@@ -1009,28 +1012,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }]);
     setFocused(key);
   };
-  // SESS-008: the remove-session shortcut closes the newest chooser pane in front without asking;
-  // with none, the focused session, which asks first (once) when a program would stop. A lone
-  // chooser stays, so the grid never drops below one pane.
+  // VIEW-036 / SESS-008: the remove-session shortcut closes the newest chooser pane in front, else the focused
+  // session, and always asks first (launch/removeAsk.ts), an empty chooser too. A lone chooser stays, so the
+  // grid never drops below one pane.
   const removeSession = async () => {
     const t = removeTarget(panesIn(panes, activeDir), focused);
     if (!t) return;
     const pane = panes.find((p) => p.key === t.key);
-    if (t.chooser || !pane) return dropPane(t.key);
-    // TERM-003: a started session asks first (Cancel focused) unless the setting says stop; an unstarted pane or an idle shell goes at once (terminal/remove.ts).
+    if (!pane) return;
+    // TERM-003: what the pane holds only changes the wording; the shortcut asks for every kind.
     const id = ptys.current[t.key];
-    const busy = id === undefined ? false : ((await invoke<boolean[]>("terminal_busy", { ids: [id] }).catch(() => [false]))[0] ?? false);
-    const kind = classify(pane, busy, running[t.key], shellInAgentPane.has(t.key)); // T-151-c: an ended agent pane is not asked about; a still-starting one (undefined) is; an agent pane running a shell is a shell
-    switch (removePlan(settings, kind)) {
-      case "remove":
-        dropPane(t.key);
-        break;
-      case "stop":
-        dropPanes([t.key]);
-        break;
-      case "ask":
-        if (!asking) setAsking({ keys: [t.key], confirm: "Stop", ...removeQuestion(tabName(pane, titles), kind) }); // at most one question per press
-    }
+    const busy = t.chooser || id === undefined ? false : ((await invoke<boolean[]>("terminal_busy", { ids: [id] }).catch(() => [false]))[0] ?? false);
+    const kind = t.chooser ? "unstarted" : classify(pane, busy, running[t.key], shellInAgentPane.has(t.key)); // T-151-c: an ended agent pane reads as ended; a still-starting one (undefined) as running; an agent pane running a shell as a shell
+    if (!asking) setAsking({ keys: [t.key], ...removeShortcutAsk(tabName(pane, titles), kind) }); // at most one question per press
   };
   // TERM-040 / TERM-041: a new tab joins the focused pane's cell (or opens its own cell) and
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
@@ -1712,9 +1706,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (typedInRunTab(runTabs.current, focusedNow.current, inside)) runTabs.current = touchRunTab(runTabs.current, focusedNow.current);
     };
     document.addEventListener("keydown", typed, true);
-    const off = listen<{ id: number; code?: number | null }>("terminal-exit", (e) => {
+    const off = listen<{ id: number; code?: number | null; session?: string }>("terminal-exit", (e) => {
       const key = paneOfTerminal(ptys.current, e.payload.id);
       if (key === null) return;
+      const printed = e.payload.session; // T-066-d: the id an id-only agent printed in its own resume hint; a hook's id is never replaced
+      if (printed) setPanes((ps) => ps.map((p) => (p.key === key && !p.session ? { ...p, session: printed } : p)));
       setupExits.current[key]?.(e.payload.code ?? null);
       const ended = runTabEnded(runTabs.current, key, pinnedNow.current.has(key));
       runTabs.current = ended.tabs;
@@ -3211,7 +3207,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onIdentity={(l) => setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }))}
-                    onBell={() => noticed(p, "rang the bell")}
+                    onBell={() => noticed(p, BELL_NOTE.what, "", BELL_NOTE.gate)}
                     unread={unreadPanes.has(p.key)}
                     onPty={(id, account) => {
                       ptys.current[p.key] = id;
@@ -3411,6 +3407,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       )}
       <UpdateCenter />
       <BringSkillsUp onShow={() => screen !== "skills" && toggleSkills(screen, setScreen)} />
+      <SkillUpdateNotice settingsLoaded={settingsRead} />
       <FeedbackDialog />
       {reviewOn(settings) && (
         <ReviewNotes

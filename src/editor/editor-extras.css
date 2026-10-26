@@ -151,3 +151,8 @@
 .pdf-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 0 8px; background: color-mix(in srgb, var(--fg) 8%, var(--bg)); outline: none; }
 .pdf-page { margin: 8px auto 0; background: #fff; box-shadow: 0 1px 4px color-mix(in srgb, #000 35%, transparent); }
 .pdf-page > canvas { display: block; }
+
+/* Row 277: the slim bar over a file tab's embedded Changes view */
+.changes-bar { flex: none; height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 9px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; white-space: nowrap; }
+.changes-bar .right { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.changes-bar .btn { height: 20px; padding: 0 8px; font-size: 11px; }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { attach, detach, hashOf, type View } from "./buffers";
-import { createDrafts, flushOnLeave, restoreFrom, type Draft, type DraftIo } from "./drafts";
+import { answerFlushRequests, createDrafts, flushOnLeave, restoreFrom, type Draft, type DraftIo } from "./drafts";
 
 // EDIT-004 (T-177): unsaved text is kept as a draft, brought back unsaved, and never written into the file.
 const P = "C:/w/drafts-note.md";
@@ -135,5 +135,97 @@ describe("row 135: the last moment of typing reaches the draft", () => {
     off();
     t.dispatchEvent(new Event("blur"));
     expect(n).toBe(2);
+  });
+});
+
+describe("row 199: every dirty buffer is in the draft store before the interface reloads", () => {
+  it("flushAll writes a dirty tab again when its earlier write failed, not only tabs still waiting on the timer", async () => {
+    const store = new Map<string, Draft>();
+    let busy = true;
+    const io: DraftIo = {
+      set: async (_w, path, text, base) => {
+        if (busy) throw new Error("store busy");
+        store.set(path, { path, text, base });
+      },
+      clear: async () => undefined,
+      list: async () => [],
+    };
+    const jobs: (() => void)[] = [];
+    const d = createDrafts(io, 600, { set: (f) => (jobs.push(f), jobs.length), clear: () => undefined });
+    open(P, "disk\n", "disk\ntyped\n");
+    d.edited(W, P);
+    jobs.splice(0).forEach((f) => f());
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(store.size).toBe(0); // the timer fired, the write failed
+    busy = false;
+    await d.flushAll();
+    expect(store.get(P)?.text).toBe("disk\ntyped\n");
+  });
+
+  it("a clean or discarded tab is forgotten, so a later flushAll writes and clears nothing for it", async () => {
+    const r = rig();
+    const v = open(P, "same\n", "same\nmore\n");
+    r.d.edited(W, P);
+    await r.d.flushAll();
+    v.dispatch({ changes: { from: 4, to: 9, insert: "" } } as never);
+    r.d.edited(W, P);
+    await r.d.flushAll();
+    expect(r.store.size).toBe(0); // clean again: the draft was cleared
+    r.calls.length = 0;
+    await r.d.flushAll();
+    expect(r.calls).toEqual([]);
+  });
+
+  it("answering a flush request: flush first, acknowledge after", async () => {
+    const order: string[] = [];
+    let handler: (token: number) => void = () => undefined;
+    const req = { on: (h: (token: number) => void) => (handler = h), ack: async (t: number) => void order.push(`ack ${t}`) };
+    answerFlushRequests(req, async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      order.push("flushed");
+      return true;
+    });
+    handler(7);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(order).toEqual(["flushed", "ack 7"]);
+  });
+
+  it("no acknowledgement when the flush failed or threw, so the host does not reload as if the text were safe", async () => {
+    const order: string[] = [];
+    let handler: (token: number) => void = () => undefined;
+    const req = { on: (h: (token: number) => void) => (handler = h), ack: async (t: number) => void order.push(`ack ${t}`) };
+    answerFlushRequests(req, async () => false);
+    handler(8);
+    await new Promise((r) => setTimeout(r, 10));
+    answerFlushRequests(req, async () => Promise.reject(new Error("io")));
+    handler(9);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(order).toEqual([]);
+  });
+
+  it("flushAll is false when a dirty tab's write failed, true once every write lands; the real flushAll feeds the ack", async () => {
+    let busy = true;
+    const io: DraftIo = {
+      set: async () => {
+        if (busy) throw new Error("store busy");
+      },
+      clear: async () => undefined,
+      list: async () => [],
+    };
+    const d = createDrafts(io, 600, { set: () => 1, clear: () => undefined });
+    open(P, "disk\n", "disk\ntyped\n");
+    d.edited(W, P);
+    const acks: number[] = [];
+    let handler: (token: number) => void = () => undefined;
+    answerFlushRequests({ on: (h) => (handler = h), ack: async (t) => void acks.push(t) }, d.flushAll);
+    expect(await d.flushAll()).toBe(false);
+    handler(1);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(acks).toEqual([]);
+    busy = false;
+    expect(await d.flushAll()).toBe(true);
+    handler(2);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(acks).toEqual([2]);
   });
 });
