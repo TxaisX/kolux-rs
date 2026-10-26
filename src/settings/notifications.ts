@@ -167,8 +167,8 @@ export function resetPacer(): void {
  * an `event` the notification is merged and paced (`paced`) and the backend learns its id and pane,
  * so a click can focus that pane; a merged or repeated event raises nothing. With "Stay quiet" on,
  * nothing is shown while the window has focus. A "gone quiet" warning (it may be stuck) skips the
- * pacer. `_focusedWorktree` is no longer read; the callers still pass it. */
-export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: NotifyEvent, _focusedWorktree: string | null = null): Promise<void> {
+ * pacer. */
+export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: NotifyEvent): Promise<void> {
   if (!masterOn(settings)) return; // STAT-042 (T-124-b): the master switch silences every notification
   const prefs = readNotifications(settings);
   if (event && event.kind !== "quiet") {
