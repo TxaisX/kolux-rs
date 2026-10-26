@@ -35,7 +35,7 @@ Rules: Enter on a selected Inbox item does the same as the button; questions and
 Acceptance:
   - [ ] Inbox item for a waiting agent → click Open in Code → Code view, correct worktree, correct
         pane focused.
-  - [ ] Permission item whose terminal has exited → Answer in Code shows instead of inline buttons.
+  - [x] Permission item whose terminal has exited → Answer in Code shows instead of inline buttons. (cards; evidence/cards-EDIT-041.txt)
 Compat: keybinding id view.code.
 Source: D-12-041
 
@@ -82,9 +82,9 @@ Rules: a path that leaves the project through a symlink is refused; terminal lin
   renamed, trashed or moved; a grant lasts the run; a workspace's folder never changes in Kolux RS,
   so the mid-save refusal has nothing to guard.)
 Acceptance:
-  - [ ] Open a file through a symlink that points outside the worktree → refused.
-  - [ ] Click a terminal link to a file on another computer's share → refused, with no network
-        lookup made.
+  - [x] Open a file through a symlink that points outside the worktree → refused. (cards; evidence/cards-EDIT-045.txt)
+  - [x] Click a terminal link to a file on another computer's share → refused, with no network
+        lookup made. (cards; evidence/cards-EDIT-045.txt)
 Compat: —
 Source: D-12-045
 
@@ -107,7 +107,7 @@ Acceptance:
   - [ ] On Linux, an extensionless file with the execute bit → revealed, not run; the same file
         without the bit → it opens in its default app.
   - [ ] Click a link to a plain text file → it opens in the default text app.
-  - [ ] Open a link to a file on another computer → nothing happens.
+  - [x] Open a link to a file on another computer → nothing happens. (cards; evidence/cards-EDIT-053.txt)
 Compat: —
 Source: D-12-053
 
@@ -297,9 +297,9 @@ Rules: hits in the file name outrank hits only in the folder path, and no more t
   covers everything; the new-tab menu's file search ranks results the same way and shows the full
   path on hover.
 Acceptance:
-  - [ ] Press Mod+P and type panel → files with panel in their name come before files that only sit
-        in a panel folder.
-  - [ ] Hover a result → the path tooltip appears and follows the pointer.
+  - [x] Press Mod+P and type panel → files with panel in their name come before files that only sit
+        in a panel folder. (cards; evidence/cards-EDIT-036.txt)
+  - [x] Hover a result → the path tooltip appears and follows the pointer. (cards; evidence/cards-EDIT-036.txt)
 Compat: the existing keybinding id for Quick Open keeps working.
 Source: D-12-036
 

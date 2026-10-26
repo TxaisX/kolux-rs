@@ -1,0 +1,3 @@
+cmd: cargo test --manifest-path src-tauri/Cargo.toml --test cards_12  (scratch env as above)
+box 4: src-tauri/tests/cards_12.rs::edit053_box4_a_link_to_a_file_on_another_computer_is_refused_before_anything_is_handed_to_the_system (open_path's first line links::refuse_host Err "another computer" for UNC a.txt, file://host a.txt, UNC run.bat; local path not refused) — test result: ok. 10 passed; 0 failed
+box 1, 3: not ticked (see ledger). Supporting run only: cards_12.rs::edit053_box1_and_3_programs_scripts_and_shortcuts_are_launchable_and_documents_are_not — ok (launchable true for run.bat RUN.CMD script.ps1 tool.exe Tool.EXE link.lnk setup.msi "tool.exe." "tool.exe . ."; false for notes.txt readme.md report.docx photo.png a.exe.txt)
