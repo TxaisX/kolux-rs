@@ -10,14 +10,14 @@ import { createEmptyHistoryState, registerHistory } from "@lexical/history";
 import { ListItemNode, ListNode, registerCheckList, registerList } from "@lexical/list";
 import { LinkNode } from "@lexical/link";
 import { CodeHighlightNode, CodeNode } from "@lexical/code";
-import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS, type Transformer } from "@lexical/markdown";
+import { $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS, type Transformer } from "@lexical/markdown";
 import { mergeRegister } from "@lexical/utils";
 import { registerTable, TABLE, TABLE_NODES } from "./richTable";
 import { registerListKeys } from "./richFormat";
 import { registerRichKeys } from "./richKeys";
 import { createSlash, type SlashView } from "./slashMenu";
 import { createWiki, type WikiView } from "./wikiPopup";
-import { DETAILS_NODES, makeDetails, withoutSections } from "./richDetails";
+import { $importFlowing, DETAILS_NODES, looseCodeRows, makeDetails, withoutSections } from "./richDetails";
 
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
 
@@ -47,22 +47,43 @@ const fail = (e: Error) => {
 const LIMITS: [RegExp, string][] = [
   [/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "front matter"],
   [/<!--/, "HTML comments"],
-  [/<\/?[a-z][\w-]*(\s[^<>]*)?\/?>/i, "HTML"],
   [/!\[[^\]]*\]\(/, "images"],
   [/^ {0,3}\[[^\]^]+\]:\s/m, "reference links"],
   [/\[\^[^\]]+\]/, "footnotes"],
   [/^ {0,3}([-*_])( *\1){2,} *$/m, "horizontal rules"],
   [/^ {0,3}\S.*\r?\n {0,3}(=+|-+) *$/m, "underlined headings"],
+  // Row 94 round 4: the view reads a blank `>` line as a literal `>` and joins the quote's paragraphs.
+  [/^ {0,3}>[ \t>]*\r?$/m, "block quotes with blank lines"],
 ];
+
+/** The reasons from the cheap, line-level part of `unsupported` that `md` trips (no round trip). */
+export function limitsOf(md: string): string[] {
+  const prose = withoutCode(md);
+  const hit = LIMITS.filter(([re]) => re.test(prose)).map(([, what]) => `it has ${what}`);
+  // ~~~ fences and indented code would be reflowed into one line or lose their indent.
+  if (looseCodeRows(md.split("\n")).some(Boolean)) hit.push("it has code blocks the rich view would reflow");
+  return hit;
+}
 
 /** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
 export function unsupported(md: string): string | null {
-  const prose = withoutSections(md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "")).replace(/`[^`\n]*`/g, "");
-  for (const [re, what] of LIMITS) if (re.test(prose)) return `it has ${what}`;
+  const hit = limitsOf(md);
+  if (hit.length) return hit[0];
+  const prose = withoutCode(md);
   const back = roundTrip(md);
   if (back === null) return "it could not be read as markdown";
-  return words(back) === words(md) ? null : "some of its text would be lost";
+  if (words(back) !== words(md)) return "some of its text would be lost";
+  // Row 94 (EDIT-019): raw and inline HTML show as the tags typed; the note stays only when every tag comes back byte for byte.
+  const backProse = withoutCode(back);
+  const count = (text: string, tag: string) => text.split(tag).length - 1;
+  for (const tag of new Set(prose.match(HTML_TAG) ?? [])) if (count(backProse, tag) < count(prose, tag)) return "it has HTML";
+  return null;
 }
+
+/** `md` without its code (fenced blocks and inline spans) and section lines: the text the HTML check reads. */
+const withoutCode = (md: string): string => withoutSections(md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "")).replace(/`[^`\n]*`/g, "");
+
+const HTML_TAG = /<\/?[a-z][\w-]*(\s[^<>]*)?\/?>/gi;
 
 const words = (s: string) => (s.match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
 
@@ -70,7 +91,7 @@ const words = (s: string) => (s.match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
 export function roundTrip(md: string): string | null {
   try {
     const ed = createEditor({ namespace: "kolux-md-check", nodes: NODES, onError: fail });
-    ed.update(() => $convertFromMarkdownString(md, MD), { discrete: true });
+    ed.update(() => $importFlowing(md, MD), { discrete: true });
     return ed.getEditorState().read(() => $convertToMarkdownString(MD));
   } catch {
     return null;
@@ -150,7 +171,7 @@ export function mountRich(el: HTMLElement, md: string, onEdit: (md: string, prev
   const show = (text: string) =>
     editor.update(
       () => {
-        $convertFromMarkdownString(text, MD);
+        $importFlowing(text, MD); // EDIT-019: adjacent lines flow as one paragraph
         $getRoot().selectStart(); // the caret starts at the top, not after the last line
       },
       { discrete: true, tag: ["kolux-load", "history-merge"] },

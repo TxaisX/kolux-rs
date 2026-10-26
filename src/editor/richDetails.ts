@@ -158,7 +158,7 @@ export function makeDetails(all: () => Transformer[]): MultilineElementTransform
       if (head[1]) s.append($createTextNode(head[1]));
       const b = new BodyNode();
       const text = lines.slice(startLineIndex + 2, end).join("\n").replace(/^\s*\n/, "").replace(/\n\s*$/, "");
-      if (text.trim()) $convertFromMarkdownString(text, all(), b);
+      if (text.trim()) $importFlowing(text, all(), b);
       if (!b.getFirstChild()) b.append($createParagraphNode());
       d.append(s, b);
       rootNode.append(d);
@@ -180,3 +180,49 @@ export function makeDetails(all: () => Transformer[]): MultilineElementTransform
 /** `md` without the open and close lines of sections in the shape the rich view reads (so the HTML check does not flag them). */
 export const withoutSections = (md: string): string =>
   md.replace(/^<details>[ \t]*\r?\n<summary>[^<>\n]*<\/summary>[ \t]*$/gim, "").replace(/^<\/details>[ \t]*$/gim, "");
+
+const LIST_START = /^ {0,3}([-*+]|\d{1,9}[.)])[ \t]/;
+const PAREN_ITEM = /^ {0,3}\d{1,9}\)[ \t]/;
+
+/** Rows of a note the rich view cannot keep as typed: inside a ~~~ fence, or in an indented code block (not under a list item). */
+export function looseCodeRows(rows: string[]): boolean[] {
+  let fence = "";
+  let inList = false;
+  let prevBlank = true;
+  let prevCode = false;
+  return rows.map((line) => {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    const wasTilde = fence[0] === "~";
+    if (f && (!fence || (f[0] === fence[0] && f.length >= fence.length))) fence = fence ? "" : f;
+    if (fence || f) {
+      prevBlank = false;
+      prevCode = false;
+      return wasTilde || fence[0] === "~";
+    }
+    const blank = line.trim() === "";
+    const indented = /^( {4}|\t)/.test(line);
+    const code = !blank && indented && !inList && (prevBlank || prevCode);
+    if (!blank && !indented) inList = LIST_START.test(line);
+    prevBlank = blank;
+    prevCode = code || (blank && prevCode);
+    return code;
+  });
+}
+
+/** Row 94 (EDIT-019): `md` read into the editor with adjacent lines flowing as one paragraph. A section's
+ * title line gets a blank line after it first, since joining would pull the body text into the title. */
+export function $importFlowing(md: string, all: Transformer[], into?: ElementNode): void {
+  let fence = "";
+  const rows = md.split("\n");
+  const loose = looseCodeRows(rows);
+  const lines = rows.flatMap((line, i) => {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (f && (!fence || (f[0] === fence[0] && f.length >= fence.length))) fence = fence ? "" : f;
+    // Lexical merges any two text lines: a blank line keeps loose code, and a `2)` item (which it does not know), apart.
+    if (loose[i]) return ["", line, ""];
+    if (!fence && PAREN_ITEM.test(line)) return ["", line];
+    const next = rows[i + 1];
+    return !fence && TITLE.test(line) && next !== undefined && next.trim() !== "" ? [line, ""] : [line];
+  });
+  $convertFromMarkdownString(lines.join("\n"), all, into, false, true);
+}
