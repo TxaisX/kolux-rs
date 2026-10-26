@@ -1426,8 +1426,8 @@ impl Terminals {
 
     /// cli FIX-7: a session over a fake writer, for tests in other modules. `program` is the mark
     /// Kolux recorded for it (none for a plain shell); it has been quiet for five seconds.
-    #[cfg(test)]
-    pub(crate) fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
+    #[cfg(any(test, feature = "test-fakes"))]
+    pub fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
         let long_ago = Instant::now() - Duration::from_secs(5);
         let mut inner = self.inner.lock().unwrap();
         inner.fresh_incarnation(id);
