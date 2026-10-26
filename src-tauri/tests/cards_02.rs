@@ -152,3 +152,73 @@ fn sess001_box3_a_file_that_cannot_run_or_a_folder_named_after_an_agent_is_not_o
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+// ---- SESS-023: every agent seat gets its own creature-named worktree ----
+
+use kolux_rs_lib::git::Git;
+use kolux_rs_lib::projects::{add_project, create_fresh_workspace, forget_workspace, load_projects, remove_worktree, Place, Project};
+use kolux_rs_lib::state::Store;
+use std::process::Command;
+
+fn repo_for_launches(tag: &str) -> PathBuf {
+    let dir = scratch(tag);
+    for args in [vec!["init", "-q"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&dir).status().unwrap().success(), "git {args:?}");
+    }
+    dir
+}
+
+fn launch_seats(git: &Git, store: &Store, place: &Place, project: &Project, seats: usize) -> Vec<(String, String)> {
+    (0..seats)
+        .map(|_| {
+            let projects = load_projects(store);
+            let made = create_fresh_workspace(git, || Ok(store), place, &projects, project, None).unwrap();
+            assert!(Path::new(&made.path).join(".git").exists(), "a real checkout: {}", made.path);
+            let name = Path::new(&made.path).file_name().unwrap().to_string_lossy().to_string();
+            (name, made.path)
+        })
+        .collect()
+}
+
+#[test]
+fn sess023_three_separate_copy_seats_get_three_distinct_creature_worktrees_and_a_second_launch_never_repeats_them() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let git = Git::detect().unwrap();
+    let profile = scratch("s23-profile");
+    let store = Store::open(&profile).unwrap();
+    let repo = repo_for_launches("s23-repo");
+    let root = scratch("s23-root");
+    let place = Place { root: root.clone(), flat: false, prefix: String::new(), prefix_warning: None, refresh: false };
+    let project = add_project(&git, &store, &repo).unwrap();
+
+    // Box 1: three seats -> three new worktrees, three different adjective-creature names.
+    let first = launch_seats(&git, &store, &place, &project, 3);
+    let names: std::collections::HashSet<_> = first.iter().map(|(n, _)| n.clone()).collect();
+    assert_eq!(names.len(), 3, "different names: {first:?}");
+    let paths: std::collections::HashSet<_> = first.iter().map(|(_, p)| p.clone()).collect();
+    assert_eq!(paths.len(), 3, "one folder per seat");
+    for (name, _) in &first {
+        assert_eq!(name.split('-').count(), 2, "adjective-creature: {name}");
+    }
+
+    // Box 2: launch again (3 more while the first still stand): none repeats.
+    let second = launch_seats(&git, &store, &place, &project, 3);
+    for (n, _) in &second {
+        assert!(!names.contains(n), "{n} repeats an earlier name");
+    }
+    // Retired names stay off the table: remove the first three, launch again.
+    for (_, p) in &first {
+        remove_worktree(&git, &project, p, true, false).unwrap();
+        forget_workspace(&store, p).unwrap();
+    }
+    let all_earlier: std::collections::HashSet<_> = first.iter().chain(second.iter()).map(|(n, _)| n.clone()).collect();
+    let third = launch_seats(&git, &store, &place, &project, 3);
+    for (n, _) in &third {
+        assert!(!all_earlier.contains(n), "{n} repeats a current or retired name");
+    }
+
+    drop(store);
+    for d in [profile, repo, root] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}

@@ -163,8 +163,8 @@ Rules: a generated name never repeats a current or retired worktree name; each s
   model, effort and options and always starts as a terminal session; the count picker is the only
   limit on how many seats launch.
 Acceptance:
-  - [ ] Launch 3 Codex seats with separate copies → 3 new worktrees with different names, one agent in each.
-  - [ ] Launch again in the same project → none of the new names repeats an earlier one.
+  - [x] Launch 3 Codex seats with separate copies → 3 new worktrees with different names, one agent in each. (cards; evidence/cards-SESS-023.txt)
+  - [x] Launch again in the same project → none of the new names repeats an earlier one. (cards; evidence/cards-SESS-023.txt)
 Compat: —
 Source: D-02-023
 
