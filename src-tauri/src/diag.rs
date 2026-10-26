@@ -193,7 +193,7 @@ fn scrub_word(word: &str) -> (String, bool) {
     }
     // A token recognisable by its shape alone.
     let core = bare.trim_end_matches([',', ';', ')', '}', '>']);
-    if (core.len() >= 12 && KNOWN.iter().any(|k| core.starts_with(k))) || (core.len() >= 20 && core.starts_with("AKIA")) {
+    if (core.len() >= 12 && KNOWN.iter().any(|k| core.starts_with(k))) || (core.len() >= 20 && (core.starts_with("AKIA") || core.starts_with("ASIA"))) {
         return (masked(word), false);
     }
     (word.to_string(), false)
@@ -319,6 +319,13 @@ secrets: one-off sealing pass sealed 0 settings field(s) and 0 file(s)";
         }
         assert_eq!(scrub(&out), out, "masking masked text changed it");
         assert_eq!(scrub("plain words, a time 12:30 and a path C:\\x\\y.txt\n"), "plain words, a time 12:30 and a path C:\\x\\y.txt\n");
+    }
+
+    #[test]
+    fn temporary_aws_keys_are_masked_like_long_lived_ones() {
+        let out = scrub("sts ASIAQWERTYUIOP123456 and AKIAQWERTYUIOP123456 and ASIASHORT end");
+        assert_eq!(out, "sts [masked] and [masked] and ASIASHORT end");
+        assert_eq!(scrub(&out), out);
     }
 
     #[test]

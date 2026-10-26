@@ -12,7 +12,7 @@ const root = resolve(import.meta.dirname, "..");
 const TEMP = "G:/Temp/ux-v3/run";
 const CDP = 9280;
 const ID = "com.txaisxiong.kolux-rs.ux.smoke";
-const EXE = join(root, "src-tauri", "target", "release", "kolux-rs.exe");
+const EXE = process.env.UX_EXE ?? join(root, "src-tauri", "target", "release", "kolux-rs.exe"); // UX_EXE: card 11 runs the saved before/after exes back to back
 const OUT = join(root, "evidence", "ux-release-coldstart.txt");
 const [, , label = "busy", planArg = "fresh"] = process.argv;
 

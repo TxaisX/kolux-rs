@@ -1395,6 +1395,7 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .tip-dock { position: fixed; right: 16px; bottom: 40px; z-index: 60; max-width: calc(100vw - 32px); }
 .tip-card { position: relative; width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 .tip-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; background: var(--chip-bg); font-size: 11px; color: var(--fg-muted); }
+.tip-dock[data-docked] .tip-card { width: 100%; }
 .tip-card h3 { margin: 10px 0 8px; font-size: 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .tip-card ul { margin: 0 0 12px; padding-left: 18px; line-height: 1.6; color: var(--fg-muted); }
 .tip-card p { margin: 0 0 12px; line-height: 1.5; color: var(--fg-muted); }

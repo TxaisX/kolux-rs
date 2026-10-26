@@ -42,9 +42,11 @@ describe("EDIT-057 collapsible section", () => {
     expect(unsupported(nested)).toBeNull();
     expect(roundTrip(nested)).toBe(nested);
   });
-  test("other HTML, an open attribute or a missing close still send the note to source view", () => {
-    expect(unsupported("<details open>\n<summary>x</summary>\n\ny\n\n</details>")).toMatch(/HTML/);
-    expect(unsupported("<div>x</div>")).toMatch(/HTML/);
+  test("an open attribute or other HTML is read as plain HTML lines, nothing lost (row 94)", () => {
+    const open = "<details open>\n<summary>x</summary>\n\ny\n\n</details>";
+    expect(unsupported(open)).toBeNull();
+    expect(roundTrip(open)).toBe(open);
+    expect(unsupported("<div>x</div>")).toBeNull();
     expect(unsupported("<details>\n<summary>x</summary>\n\ny\n")).toBeNull(); // read as plain lines, nothing lost
   });
   test("More blocks offers heading 4, heading 5 and the collapsible section; choosing it inserts one with a paragraph after", () => {

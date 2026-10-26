@@ -41,14 +41,16 @@ export const sessionLabel = (p: Pick<Session, "key" | "title" | "cwd">, task?: s
 export const cardPanes = <P extends { key: number; kind?: string }>(panes: P[]): P[] => panes.filter((p) => !p.kind);
 
 /** VIEW-017: a rail row's status, one of the fixed status words with its tone and tip. */
-export type RowStatus = Pick<Vocab, "word" | "tone" | "explain">;
-const NOT_STARTED: RowStatus = { word: "Not started", tone: "", explain: "A preset that has not been launched yet." };
+export type RowStatus = Pick<Vocab, "word" | "tone" | "explain"> & { line: string };
+const NOT_STARTED: RowStatus = { word: "Not started", tone: "", explain: "A preset that has not been launched yet.", line: "" };
 
 /** VIEW-017: a never-launched preset reads Not started; a session reads the word the Board's chip
  *  gives the same signal (Starting with no process yet, Stopped once it ended without a done
  *  signal, No recent update for a stale working reading, never Working then); with no signal at
  *  all it reads Idle. The cannot-reach word waits for a remote host to be unreachable. */
-export function rowStatus(p: Pick<Session, "seats">, chip: { word: string } | null): RowStatus {
+export function rowStatus(p: Pick<Session, "seats">, chip: { word: string; line: string } | null): RowStatus {
   if (p.seats) return NOT_STARTED;
-  return (chip && Object.values(VOCAB).find((v) => v.word === chip.word)) || VOCAB.idle;
+  const v = (chip && Object.values(VOCAB).find((x) => x.word === chip.word)) || VOCAB.idle;
+  // VIEW-016: the line under the row is the Board chip's own line.
+  return { word: v.word, tone: v.tone, explain: v.explain, line: chip?.line ?? "" };
 }

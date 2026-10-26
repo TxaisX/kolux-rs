@@ -1,0 +1,2 @@
+box 1: src/editor/__cards__/GIT-040-041.test.ts::GIT-040 box 1 (real noteField: block widget side 1 at the end of line 12, same field for the inline and the split right-hand view) — pnpm exec vitest run src/scm/__cards__/GIT-016.test.ts src/editor/__cards__/GIT-040-041.test.ts src/scm/model.test.ts — Test Files 3 passed, Tests 48 passed. MIRROR DiffPane.tsx:310/323 (both layouts build the new side with noteTools(act,"new")). Reading: card placement once a note on line 12 exists; the plus/popover path is not exercised.
+box 2: not ticked (LIVE)

@@ -14,6 +14,8 @@ import { usePlan } from "../usage/plan";
 import { popAppMenu } from "./useChrome";
 import { chromeLayout } from "./titleHeader";
 import { t } from "../i18n/lookup";
+import { useSettings } from "../settings/useSettings";
+import { readStatusBar, usagePills } from "./statusItems";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
@@ -45,10 +47,17 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
   // sign-in) and an installed CLI; with neither, nothing is drawn. T-550: the pill is one button
   // that opens Settings > Accounts & keys (Ctrl+, still opens Settings, app.settings).
   const plan = usePlan();
-  const claudeOn = installed.includes("claude");
-  // T-543-b: the Codex pill needs a Codex account, not only the CLI installed.
-  const codexOn = installed.includes("codex") && codexAccount;
-  const anyPill = (claudeOn && !!weeklyOf(plan.claude)) || (codexOn && !!(plan.codex?.weekly || plan.codex?.state === "sign-in-again"));
+  const { settings } = useSettings();
+  // The usage items in the status-bar list (Settings > Appearance) switch each provider off here.
+  const { claude: claudeOn, codex: codexOn, any: anyPill } = usagePills({
+    claudeInstalled: installed.includes("claude"),
+    claudeWeekly: !!weeklyOf(plan.claude),
+    // T-543-b: the Codex pill needs a Codex account, not only the CLI installed.
+    codexInstalled: installed.includes("codex"),
+    codexAccount,
+    codexFigure: !!(plan.codex?.weekly || plan.codex?.state === "sign-in-again"),
+    hidden: readStatusBar(settings ?? {}).hidden,
+  });
   useEffect(() => {
     const win = getCurrentWindow();
     let stop = () => {};
