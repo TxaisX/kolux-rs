@@ -1,0 +1,3 @@
+box 2: src/agents/__cards__/VIEW-017.test.ts::"box 2: a preset that was never launched reads Not started" — pnpm exec vitest run --reporter verbose src/board/__cards__ src/agents/__cards__ src/projects/__cards__/VIEW-037.test.ts (scratch CLAUDE_CONFIG_DIR/CODEX_HOME/USERPROFILE/HOME under G:/Temp/cards-v3/) — ✓ (Test Files 3 passed (3); Tests 7 passed (7)); rowStatus of a pane with seats reads "Not started" with or without a chip
+MIRROR src/App.tsx:2777 (statusOf = rowStatus(p, chipFor(p))) and src/App.tsx:2292 (addPreset creates a pane with seats)
+gates: tsc --noEmit exit 0; plan-check: OK

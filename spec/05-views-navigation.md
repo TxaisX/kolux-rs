@@ -48,8 +48,8 @@ User sees: one list with sections for open tabs, worktrees, projects and project
 Rules: the View menu shows the chord as a label only; the window itself handles the key press;
   archived worktrees are left out; a pasted query over the size limit is refused.
 Acceptance:
-  - [ ] Type part of a branch name → that worktree is in the list; Enter switches to it.
-  - [ ] Type a settings page name → a row that opens that page.
+  - [x] Type part of a branch name → that worktree is in the list; Enter switches to it. (cards; evidence/cards-VIEW-037.txt)
+  - [x] Type a settings page name → a row that opens that page. (cards; evidence/cards-VIEW-037.txt)
 Compat: keybinding id worktree.palette
 Source: D-05-037
 
@@ -83,7 +83,7 @@ Rules: a stale working reading is never shown as working; an unreachable host sh
 Acceptance:
   - [ ] Kill the agent's process without a done signal → label leaves working within the staleness
         window.
-  - [ ] A preset that was never launched → its label reads not started.
+  - [x] A preset that was never launched → its label reads not started. (cards; evidence/cards-VIEW-017.txt)
 Compat: —
 Source: D-05-017
 
@@ -99,9 +99,9 @@ Rules: a stale working signal never shows Working; a plain shell terminal gets n
   newest one wins and the link carries its full path; a working card shows how long it has been
   working and its current step in plain words.
 Acceptance:
-  - [ ] Agent stopped by usage limit → card in a stopped state, chip says Stopped.
-  - [ ] Agent finished → chip shows first line of its last message.
-  - [ ] Agent writes file A, then file B, then finishes → the card links to file B.
+  - [x] Agent stopped by usage limit → card in a stopped state, chip says Stopped. (cards; evidence/cards-VIEW-023.txt)
+  - [x] Agent finished → chip shows first line of its last message. (cards; evidence/cards-VIEW-023.txt)
+  - [x] Agent writes file A, then file B, then finishes → the card links to file B. (cards; evidence/cards-VIEW-023.txt)
 Compat: —
   (Kolux RS, T-028-a: built; Setup needed and Can't reach wait for the chooser and remote work;
   the file link is the file's name with the full path as tooltip until an editor exists.)
