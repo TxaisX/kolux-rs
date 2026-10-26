@@ -151,9 +151,21 @@ pub fn forget_check(project: Option<&Project>, path: &str, folder_exists: bool) 
 #[tauri::command(async)]
 pub fn workspace_forget(store: StoreState<'_>, project_id: Option<String>, path: String) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    let project = project_id.and_then(|id| find_project(&store, &id).ok());
-    forget_check(project.as_ref(), &path, Path::new(&path).exists())?;
+    forget_verdict(&store, project_id.as_deref(), &path)?;
     crate::projects::forget_workspace(&store, &path)
+}
+
+/// The verdict `workspace_forget` acts on, read from the store and the disk.
+fn forget_verdict(store: &Store, project_id: Option<&str>, path: &str) -> Result<(), String> {
+    let project = project_id.and_then(|id| find_project(store, id).ok());
+    forget_check(project.as_ref(), path, Path::new(path).exists())
+}
+
+/// Why `workspace_forget` would refuse this workspace, or none; the panel asks before it offers "Take out".
+#[tauri::command(async)]
+pub fn workspace_forget_check(store: StoreState<'_>, project_id: Option<String>, path: String) -> Result<Option<String>, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(forget_verdict(&store, project_id.as_deref(), &path).err())
 }
 
 // ---- PROJ-084: the status workflow ----------------------------------------------------------------
@@ -417,6 +429,24 @@ mod tests {
         assert!(forget_check(Some(&project), "C:/ws/a", true).unwrap_err().contains("still there"));
         assert!(forget_check(Some(&project), "C:/ws/a", false).is_ok());
         assert!(forget_check(None, "C:/ws/a", true).is_ok(), "after the project was removed, anything goes");
+    }
+
+    #[test]
+    fn the_forget_question_is_asked_with_the_same_verdict_the_forget_acts_on() {
+        let dir = temp("forgetv");
+        let (repo, here, gone) = (dir.join("repo"), dir.join("ws-here"), dir.join("ws-gone"));
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&here).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        let project = crate::projects::register_project(&store, (repo.clone(), repo.clone())).unwrap();
+        let (here, gone, repo) = (here.display().to_string(), gone.display().to_string(), repo.display().to_string());
+        let id = Some(project.id.as_str());
+        assert!(forget_verdict(&store, id, &here).unwrap_err().contains("still there"), "an existing folder of an open project is refused");
+        assert!(forget_verdict(&store, id, &repo).unwrap_err().contains("root"));
+        assert!(forget_verdict(&store, id, &gone).is_ok(), "a folder that is gone may be forgotten");
+        assert!(forget_verdict(&store, Some("no-such-project"), &here).is_ok(), "the project was removed: anything goes");
+        assert!(forget_verdict(&store, None, &here).is_ok());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

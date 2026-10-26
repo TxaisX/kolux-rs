@@ -308,7 +308,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewAnswered, setPreviewAnswered] = useState(false); // Git has answered for the name now shown
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
-  const [forgetAsk, setForgetAsk] = useState<{ projectId: string; path: string; label: string } | null>(null); // row 364: the question before a folder workspace is taken out of Kolux
+  const [forgetAsk, setForgetAsk] = useState<{ projectId: string; path: string; label: string; refused?: string } | null>(null); // row 364: the question before a folder workspace is taken out of Kolux; `refused` is why it cannot be (364b)
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
@@ -914,7 +914,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       const row = projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w }))).find(({ w }) => same(hovered, w.path));
       const act = row ? pointerDelete(row.w, { fieldFocused: isTextField(document.activeElement), deleting: new Set(busy === "removing" && confirm ? [confirm.path] : []) }) : null;
       if (!row || act === null) return;
-      if (act.action === "forget") return void setForgetAsk({ projectId: row.p.id, path: act.path, label: worktreeLabel(row.w) });
+      if (act.action === "forget") return void askForget({ projectId: row.p.id, path: act.path, label: worktreeLabel(row.w) });
       return void ask(row.p.id, row.w.path, worktreeLabel(row.w));
     }
     for (const p of projects) {
@@ -1099,6 +1099,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       setBusy("");
     }
     if (asked) await remove(asked);
+  };
+  // Row 364b: the backend's own verdict decides up front whether the question is offered; a check that cannot be asked still asks.
+  const askForget = (f: { projectId: string; path: string; label: string }) => {
+    invoke<string | null>("workspace_forget_check", { projectId: f.projectId, path: f.path })
+      .catch(() => null)
+      .then((why) => setForgetAsk({ ...f, ...(why ? { refused: why } : {}) }));
   };
   // Row 364: forgetting drops Kolux's records only, but the row vanishes, so it is confirmed first.
   const forget = async (f: { projectId: string; path: string; label: string }) => {
@@ -1827,17 +1833,30 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         )}
         {forgetAsk && same(forgetAsk.path, w.path) && (
           <div className="sb-form warn" data-forget={forgetAsk.label}>
-            <span>
-              Take <b>{forgetAsk.label}</b> out of Kolux? Its folder stays on disk.
-            </span>
-            <div className="btn-row">
-              <button className="btn danger" onClick={() => void forget(forgetAsk)}>
-                Take out
-              </button>
-              <button className="btn" onClick={() => setForgetAsk(null)}>
-                Keep
-              </button>
-            </div>
+            {forgetAsk.refused ? (
+              <>
+                <span>{forgetAsk.refused}</span>
+                <div className="btn-row">
+                  <button className="btn" onClick={() => setForgetAsk(null)}>
+                    OK
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span>
+                  Take <b>{forgetAsk.label}</b> out of Kolux? Its folder stays on disk.
+                </span>
+                <div className="btn-row">
+                  <button className="btn danger" onClick={() => void forget(forgetAsk)}>
+                    Take out
+                  </button>
+                  <button className="btn" onClick={() => setForgetAsk(null)}>
+                    Keep
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
         {asking && (
