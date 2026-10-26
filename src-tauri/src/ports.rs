@@ -89,6 +89,21 @@ pub fn rows_for(listeners: &[Listener], parents: &HashMap<u32, u32>, sessions: &
     rows
 }
 
+/// How many external ports the popover lists; a machine can hold hundreds, and the popover has no room for them.
+pub const MAX_EXTERNAL_ROWS: usize = 12;
+
+/// Keeps every port of the workspace and the first `MAX_EXTERNAL_ROWS` external ones (`rows_for` order: own first, then by port).
+/// Only the list shown is cut: a stop still looks the port up in the whole scan.
+pub fn cap_external(rows: Vec<PortRow>) -> Vec<PortRow> {
+    let mut external = 0;
+    rows.into_iter()
+        .filter(|r| {
+            external += usize::from(r.external);
+            !r.external || external <= MAX_EXTERNAL_ROWS
+        })
+        .collect()
+}
+
 // ---- the system side ---------------------------------------------------------------------------
 
 #[cfg(windows)]
@@ -103,8 +118,8 @@ fn scan_listeners() -> Result<Vec<Listener>, String> {
 
 #[cfg(not(windows))]
 fn scan_listeners() -> Result<Vec<Listener>, String> {
-    // ponytail: macOS and Linux read `lsof -iTCP -sTCP:LISTEN` with T-285; Windows is the build target now.
-    Err("Listing ports is not built for this system yet".into())
+    // ponytail: macOS and Linux read `lsof -iTCP -sTCP:LISTEN` with T-285; until then the popover shows no ports, not an error banner.
+    Ok(Vec::new())
 }
 
 /// Every running process's parent, from the process table.
@@ -148,7 +163,7 @@ fn scan(terminals: &crate::terminal::Terminals, workspaces: &[String], active: &
 #[tauri::command]
 pub async fn ports_list(terminals: tauri::State<'_, crate::terminal::Terminals>, workspaces: Vec<String>, active: String) -> Result<Vec<PortRow>, String> {
     let t = terminals.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || scan(&t, &workspaces, &active)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || scan(&t, &workspaces, &active).map(cap_external)).await.map_err(|e| e.to_string())?
 }
 
 /// VIEW-078: stops the process behind a port with everything it started. A port that is already
@@ -222,5 +237,33 @@ mod tests {
         let parents = HashMap::from([(4242, 4243), (4243, 4242)]);
         let rows = rows_for(&parse_netstat(NETSTAT), &parents, &[(3000, "C:\\work\\app".into())], &ws(), "C:\\work\\app");
         assert!(rows.iter().all(|r| r.external));
+    }
+
+    fn row(port: u16, external: bool) -> PortRow {
+        PortRow { port, addr: "0.0.0.0".into(), pid: u32::from(port), external }
+    }
+
+    #[test]
+    fn row75_external_rows_are_capped_and_the_workspaces_own_are_all_kept() {
+        let mut rows: Vec<PortRow> = (1..=3).map(|p| row(8000 + p, false)).collect();
+        rows.extend((1..=MAX_EXTERNAL_ROWS as u16 + 10).map(|p| row(p, true)));
+        let got = cap_external(rows);
+        assert_eq!(got.iter().filter(|r| !r.external).count(), 3, "own ports are never dropped");
+        assert_eq!(got.iter().filter(|r| r.external).count(), MAX_EXTERNAL_ROWS);
+        assert_eq!(got[3].port, 1, "own first, then the external ones in port order");
+        assert_eq!(got.last().map(|r| r.port), Some(MAX_EXTERNAL_ROWS as u16));
+    }
+
+    #[test]
+    fn row75_a_short_list_is_left_alone() {
+        let rows = vec![row(80, true), row(443, true)];
+        assert_eq!(cap_external(rows.clone()), rows);
+        assert!(cap_external(Vec::new()).is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn row75_a_system_without_a_scan_shows_no_ports_not_an_error() {
+        assert_eq!(scan_listeners(), Ok(Vec::new()));
     }
 }
