@@ -1074,3 +1074,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-26 · prove T-025-d · claude --help text for --settings and --permission-mode as given; this tree's own agent_hooks, hooks.rs and terminal code; no outside source
 > 2026-10-26 · prove T-058-b · this tree's own protected.rs (rule discard, reason text) and hooks.rs PreToolUse ask; claude --help text for --permission-mode as given; no outside source
 > 2026-10-26 · prove T-032-c · this tree's own PlanSheet, TerminalPane and hooks code; claude --help text for --permission-mode as given; no outside source
+> 2026-10-26 · prove T-033-d · this tree's own SourceControlPanel, AllChangesPane, scm status watcher and the T-033-c GIT_TRACE2 method; claude --help text for --permission-mode as given; no outside source
