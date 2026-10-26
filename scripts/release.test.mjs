@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { acquire, downloadUrl, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, takeQueued, unlock, STALE_MS } from "./release.mjs";
+import { acquire, downloadUrl, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, takeQueued, unlock, STALE_MS } from "./release.mjs";
 import { decide, WAIT_MS } from "./ci-gate.mjs";
 import { checkPromises, checkWorkflow } from "./workflow-check.mjs";
 import { parseArgs } from "./ship.mjs";
@@ -54,6 +54,18 @@ describe("one build at a time (APP-059)", () => {
     expect(acquire(dir, { pid: 4, isAlive: () => false })).toBe("locked"); // holder died
     unlock(dir);
     expect(fs.existsSync(dir + ".lock")).toBe(false);
+  });
+});
+
+describe("packaged CLI smoke test (APP-061)", () => {
+  const cli = (version, help) => (words) => (words[0] === "--version" ? version : help);
+  const HELP = ["kolux: drive Kolux from a terminal", "  kolux --version", "  kolux worktree create --name <name>"].join(String.fromCharCode(10));
+  it("passes a CLI that reports the release version and prints its help", () => {
+    expect(() => smokeCli(cli("0.2.0", HELP), "0.2.0")).not.toThrow();
+  });
+  it("stops the release when the CLI's version is wrong or its help is broken", () => {
+    expect(() => smokeCli(cli("0.1.9", HELP), "0.2.0")).toThrow(/says 0.1.9, the release is 0.2.0/);
+    expect(() => smokeCli(cli("0.2.0", ""), "0.2.0")).toThrow(/--help/);
   });
 });
 

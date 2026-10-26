@@ -2,10 +2,11 @@
 // and system under a rule, the user writes above it, ticks Submit anonymously if they like, and
 // Open on GitHub hands the finished new-issue address to the browser. The app sends nothing.
 // Mounted once (App.tsx); anything that wants it calls requestFeedback().
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo } from "../app-info";
 import type { FeedbackFacts } from "../settings/privacy";
+import { addImages, clipboardNote, MAX_IMAGES, MIME, type Shot } from "./images";
 import { closed, issue, reduce, tabTarget, typedText } from "./model";
 
 const EVENT = "kolux-feedback";
@@ -23,9 +24,41 @@ async function readFacts(): Promise<FeedbackFacts> {
   return { version: info?.version ?? "unknown", platform: navigator.platform || "unknown", release: sys?.release ?? "unknown", arch: sys?.arch ?? "unknown", login: sys?.login ?? null };
 }
 
+/** The first screenshot onto the clipboard as a PNG (the only image type a page may put there). */
+async function copyFirst(shot: Shot): Promise<boolean> {
+  try {
+    let blob = new Blob([shot.bytes as BlobPart], { type: MIME[shot.kind] });
+    if (shot.kind !== "png") {
+      const bmp = await createImageBitmap(blob);
+      const canvas = document.createElement("canvas");
+      canvas.width = bmp.width;
+      canvas.height = bmp.height;
+      canvas.getContext("2d")?.drawImage(bmp, 0, 0);
+      blob = await new Promise<Blob>((ok, no) => canvas.toBlob((b) => (b ? ok(b) : no(new Error("no png"))), "image/png"));
+    }
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default function FeedbackDialog() {
   const [s, dispatch] = useReducer(reduce, closed);
   const box = useRef<HTMLTextAreaElement | null>(null);
+  const [shots, setShots] = useState<Shot[]>([]);
+  const [refused, setRefused] = useState<string[]>([]);
+  const previews = useMemo(() => shots.map((x) => URL.createObjectURL(new Blob([x.bytes as BlobPart], { type: MIME[x.kind] }))), [shots]);
+  useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
+
+  // APP-038: a box that closes unsent keeps its text, so it keeps its pictures; a send clears them
+  const pick = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const read = await Promise.all([...files].map(async (f) => ({ name: f.name, type: f.type, bytes: new Uint8Array(await f.arrayBuffer()) })));
+    const r = addImages(shots, read);
+    setShots(r.shots);
+    setRefused(r.refused);
+  };
 
   useEffect(() => {
     const on = (e: Event) => {
@@ -59,8 +92,15 @@ export default function FeedbackDialog() {
     try {
       const r = issue(s.draft, s.facts, s.anonymous);
       if (!r.ok) return dispatch({ t: "fail", error: r.error });
+      // the copy starts inside the click, while the page may still write to the clipboard
+      const copied = shots.length ? copyFirst(shots[0]) : Promise.resolve(false);
       invoke("open_external", { url: r.url }).then(
-        () => dispatch({ t: "sent", trimmed: r.trimmed }),
+        async () => {
+          const extra = clipboardNote(shots.length, await copied);
+          setShots([]);
+          setRefused([]);
+          dispatch({ t: "sent", trimmed: r.trimmed, extra });
+        },
         (e: unknown) => dispatch({ t: "fail", error: `Could not open the browser: ${String(e)}` }),
       );
     } catch (e) {
@@ -87,7 +127,7 @@ export default function FeedbackDialog() {
           else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send();
           else if (e.key === "Tab") {
             // APP-037: the box is modal; Tab never leaves it.
-            const items = [...e.currentTarget.querySelectorAll<HTMLElement>("textarea, input, button:not([disabled])")];
+            const items = [...e.currentTarget.querySelectorAll<HTMLElement>("textarea, input:not([hidden]), button:not([disabled])")];
             const to = tabTarget(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey);
             if (to >= 0) {
               e.preventDefault();
@@ -112,6 +152,26 @@ export default function FeedbackDialog() {
         <label className="auto-radio">
           <input type="checkbox" checked={s.anonymous} onChange={(e) => dispatch({ t: "anon", on: e.target.checked })} /> Submit anonymously (leave my GitHub name out)
         </label>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+          <label className="btn" style={{ cursor: "pointer" }}>
+            Add screenshot
+            <input type="file" multiple accept={Object.values(MIME).join(",")} hidden aria-label="Add screenshots" onChange={(e) => { void pick(e.target.files); e.target.value = ""; }} />
+          </label>
+          {shots.map((x, i) => (
+            <span key={`${x.name}-${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <img src={previews[i]} alt={x.name} title={x.name} style={{ height: 36, borderRadius: 4 }} />
+              <button className="btn" aria-label={`Remove ${x.name}`} onClick={() => setShots(shots.filter((_, j) => j !== i))}>
+                x
+              </button>
+            </span>
+          ))}
+          <span className="muted">Up to {MAX_IMAGES} images; the first is put on the clipboard for you to paste.</span>
+        </div>
+        {refused.map((m) => (
+          <p key={m} role="alert" className="conn-detail" style={{ margin: 0, color: "var(--danger)" }}>
+            {m}
+          </p>
+        ))}
         {s.error && (
           <p role="alert" className="conn-detail" style={{ margin: 0, color: "var(--danger)" }}>
             {s.error}

@@ -450,6 +450,9 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
 
+> 2026-10-12 · T-100-b · the SESS-029 card and the T-100-b plan line. The listing commands, the line format and the Grok effort flag were written from the card; no outside documentation was reachable this pass. Nothing from the old app.
+> 2026-10-12 · T-199-c · the APP-061 spec card and the repo's own release.mjs, release.test.mjs and cli.rs help text. Nothing from the old app.
+> 2026-10-12 · T-161-c · the PROJ-068 spec card, the repo's own projects.rs, visibility.rs, git.rs, model.ts and ProjectsPanel.tsx, and git's own documentation of worktree repair and the gitdir files of linked worktrees. Nothing from the old app.
 > 2026-10-12 · T-105 · the CLI-023, CLI-026 and CLI-027 spec cards and the T-105 and T-185-b plan lines; the Tauri command type files in the cargo registry. The command shapes, messages and the layout report were written from the cards. Nothing from the old app.
 > 2026-10-12 · T-104 · the ACCT-046, ACCT-047, ACCT-048, ACCT-049 and ACCT-065 spec cards and the T-104 plan line; the portable-pty CommandBuilder type files in the cargo registry; the public Windows documentation for ComSpec, chcp, subst and icacls. The shell order, the variable list and the folder messages were written from the cards. Nothing from the old app.
 > 2026-10-12 · T-103-a · the VIEW-036 and VIEW-108 spec cards and the T-103 plan line; no app code changed; the cdp.mjs wheel command and the console-mouse stand-in program were written for this task, the latter from the public Windows console API documentation (SetConsoleMode, ReadConsoleInput). Nothing from the old app.
@@ -1065,3 +1068,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · onboarding T-321-c · spec/16 ONB-024 as given in the brief; this tree's own claude_accounts, codex_accounts, skills installer and InlineTerminal; no outside source
 > 2026-10-20 · worktrees T-110-b close · COMPAT 5.5 as given; this tree's own setup.rs and the lane's T-110-b code; no outside source
 > 2026-10-25 · fix-ui T-103-b, T-101-b · spec/05 VIEW-036 and spec/03 TERM-002, TERM-009 as given; this tree's own keys, launch and shell code; no outside source
+> 2026-10-25 · fix-ui T-125-b · spec/09 STAT-044 as given; this tree's own src/notify and src/status code; no outside source
+> 2026-10-25 · fix-other T-056-b · COMPAT 6.1 and SESS-027 as given; this tree's own agents.rs; no outside source

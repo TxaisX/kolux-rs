@@ -60,6 +60,21 @@ export function add(p: Panel, a: Add): Panel {
   return { ...p, open: true, tabs: [...p.tabs, tab], active: tab.key, next: p.next + 1, focus: tab.key };
 }
 
+/** APP-015: a web link clicked in the panel opens as a browser tab of the panel itself (an open tab on the same address is reused),
+ *  so the window's active worktree and its tabs stay as they are. Anything but http(s) is left to the caller. */
+export function openLink(p: Panel, url: string): Panel {
+  let host: string;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return p;
+    host = u.host;
+  } catch {
+    return p;
+  }
+  const same = p.tabs.find((t) => t.kind === "browser" && t.path === url);
+  return same ? { ...select(p, same.key), open: true } : add(p, { kind: "browser", path: url, title: host });
+}
+
 export const select = (p: Panel, key: number): Panel => (p.tabs.some((t) => t.key === key) ? { ...p, active: key, focus: key } : p);
 
 /** TERM-052 inside the panel: the tab at position n (1-based); a number past the tab count does nothing. */

@@ -30,7 +30,7 @@ mod files;
 pub mod final_save;
 mod fsops;
 mod fonts;
-mod git;
+pub mod git;
 mod github;
 mod groups;
 mod hooks;
@@ -46,9 +46,11 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod login_env;
 mod lifecycle;
 mod menu;
 mod bulk;
+mod models;
 mod names;
 mod newproject;
 mod notifications;
@@ -62,7 +64,7 @@ mod ports;
 mod labels;
 mod tidy;
 mod resources;
-mod projects;
+pub mod projects;
 mod prompt_answer;
 mod prompt_scan;
 mod scm;
@@ -86,12 +88,12 @@ mod sessions;
 mod shell_marks;
 mod shell_history;
 mod skill_delete;
-mod state;
+pub mod state;
 mod status;
 mod sub_work;
 mod term_import;
 mod sysmem;
-mod terminal;
+pub mod terminal;
 #[cfg(test)]
 mod test_dir;
 mod tools;
@@ -234,6 +236,8 @@ pub fn run() {
             let job_ok = procs::app_job_start();
             let dir = app.path().app_data_dir()?;
             diag::set_dir(&dir);
+            // T-182 (APP-020, macOS and Linux): the login shell's environment, read in the background.
+            login_env::start();
             // T-283 (BROW-043): an earlier run's leftover browser helpers are closed, on a thread of
             // its own so a hanging listing never holds up start-up.
             browser::helpers::sweep_at_start(&dir);
@@ -263,6 +267,9 @@ pub fn run() {
             for n in &prep.notes {
                 diag::write(&dir, n);
             }
+            // After-list row 789: what was set aside or repaired is also told to the user, once, by the page.
+            let told = resources::recovery::startup_notes(&prep, &app.state::<resources::recovery::Perms>().0);
+            app.manage(resources::recovery::StartupNotes(Mutex::new(told)));
             if prep.backup_worthwhile() {
                 if let Err(e) = resources::recovery::backup_state(&dir) {
                     diag::write(&dir, &format!("the last good copy of state.db could not be refreshed: {e} (APP-049)"));
@@ -460,6 +467,7 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
                 scm::watch::unwatch_all();
+                browser::preview::clear_grants();
             }
         })
         .on_window_event(|window, event| {
@@ -526,6 +534,7 @@ pub fn run() {
             protected_custom::protected_attempts,
             protected_custom::protected_attempts_clear,
             hooks::claude_usage,
+            hooks::claude_usage_of,
             sysmem::process_memory,
             fonts::list_fonts,
             term_import::term_import_ghostty,
@@ -535,6 +544,7 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             sessions::list::sessions_list,
             sessions::list::session_resume_plan,
+            sessions::files::session_delete, sessions::files::session_reveal, sessions::files::session_open,
             session_rows::session_row_detail,
             session_rows::session_name,
             terminal::terminal_spawn,
@@ -584,6 +594,7 @@ pub fn run() {
             projects::workspace_branches,
             projects::workspace_open_branch,
             projects::workspace_unseen,
+            projects::workspace_scan,
             projects::workspace_seen,
             projects::workspace_hide,
             projects::workspace_rename, projects::workspace_details_get, projects::workspace_details_save,
@@ -627,11 +638,13 @@ pub fn run() {
             projects::git_start,
             setup::workspace_setup,
             setup::workspace_issue_command,
+            setup::workspace_default_tabs,
             setup::script_trust_needed,
             setup::script_trust_grant,
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
+            models::agent_models,
             agents::agent_start_line,
             agents::agent_prompt_send,
             agents::open_install_page,
@@ -732,6 +745,9 @@ pub fn run() {
             browser::browser_go,
             browser::history::browser_suggest,
             browser::browser_close,
+            browser::notices::browser_pane_ready,
+            browser::picture::browser_capture, // after-list 151 (BROW-038), 320 (BROW-035)
+            browser::picture::browser_save_picture,
             browser::browser_viewport,
             browser::browser_cookies_import,
             browser::cookies::browser_import_sources, // T-319-b (BROW-030)
@@ -891,6 +907,7 @@ pub fn run() {
             cli::file_cli::cli_file_result,
             diag::diag_bundle,
             resources::recovery::ui_heartbeat,
+            resources::recovery::startup_recovery_notes,
             resources::recovery::graphics_crash_noted,
             resources::recovery::graphics_keep_running,
             resources::recovery::graphics_restart_safe,
@@ -911,15 +928,31 @@ pub fn run() {
             update::update_compat,
             lifecycle::close_alive,
             lifecycle::app_restart,
+            lifecycle::open_files_take, // APP-019: the page drains the markdown files the system handed over
+            tray::tray_close_switch_available, // APP-007: Settings hides the close-to-tray switch where it cannot work
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
         .build(context)
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
-            // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                browser::crash::quitting();
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                use std::sync::atomic::Ordering::SeqCst;
+                // T-182-e (APP-006): "a quit under way" is any exit the app asked for (quit, restart, the
+                // unanswered-close fallback); remembered, so windows closing on the way out never hold it open.
+                if code.is_some() {
+                    lifecycle::QUIT_UNDER_WAY.store(true, SeqCst);
+                }
+                if lifecycle::keeps_running(cfg!(target_os = "macos"), *code, lifecycle::QUIT_UNDER_WAY.load(SeqCst)) {
+                    api.prevent_exit();
+                } else {
+                    // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
+                    browser::crash::quitting();
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = &event {
+                tools::reopen_main(app);
             }
             if let tauri::RunEvent::Exit = event {
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the

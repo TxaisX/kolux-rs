@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { COOLDOWN_MS, MAX_TRACKED, decide, emptyPacer, eventId, paneFor, type NotifyEvent } from "./pacing";
+import { noteId } from "./pace";
+import { COOLDOWN_MS, MAX_TRACKED, decide, emptyPacer, paneFor, type NotifyEvent } from "./pacing";
 
 const ev = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({ id: "a:1", worktree: "C:/w/a", pane: "p1", kind: "finish", at: 1000, ...over });
 const quiet = { windowFocused: false, suppressFocused: true };
@@ -96,15 +97,15 @@ test("stat044 an event without a worktree is paced on its own and never merged w
 test("stat044 fix-1: two finishes 30 s apart inside one clock minute both notify; a repeat inside the cooldown is merged", () => {
   // 1_700_000_040_000 is a minute boundary: +1 s and +31 s sit in the same minute.
   const t0 = 1_700_000_041_000;
-  const first = eventId("7", "finished its task", t0);
-  const second = eventId("7", "finished its task", t0 + 30_000);
+  const first = noteId();
+  const second = noteId();
   expect(first).not.toBe(second);
   let r = decide(emptyPacer(), ev({ id: first, at: t0 }), quiet);
   expect(r.show).toBe(true);
   r = decide(r.state, ev({ id: second, at: t0 + 30_000 }), quiet);
   expect(r.show).toBe(true);
   // the same pane reporting again 2 s later is one event with the second
-  r = decide(r.state, ev({ id: eventId("7", "finished its task", t0 + 32_000), at: t0 + 32_000 }), quiet);
+  r = decide(r.state, ev({ id: noteId(), at: t0 + 32_000 }), quiet);
   expect(r.show).toBe(false);
   expect(r.reason).toBe("cooldown");
 });

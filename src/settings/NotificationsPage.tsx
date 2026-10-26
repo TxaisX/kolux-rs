@@ -2,7 +2,7 @@
 // a test button that shows a sample notification with that sound, and a link to the system's own
 // notification settings (offered prominently when the system has notifications switched off).
 // USAGE-009: the usage-alerts preference, on by default (shown in the same view).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AUDIO_TYPES, audioTypeAllowed, CLOSE_TO_TRAY_FIELD, CUSTOM_FIELD, KINDS, loadSound, preparePlan, readNotifications, SOUND_FIELD, SOUNDS, SUPPRESS_FOCUSED_FIELD, VOLUME_FIELD, type Sound } from "./notifications";
@@ -17,6 +17,11 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
   const [result, setResult] = useState<Result | { error: string } | null>(null);
   const openSystem = () => invoke("open_notification_settings").catch((e) => setResult({ error: String(e) }));
   const [fileProblem, setFileProblem] = useState<string | null>(null);
+  // APP-007: the close-to-tray switch shows only where closing can hide the window and a tray icon exists.
+  const [closeSwitch, setCloseSwitch] = useState(false);
+  useEffect(() => {
+    invoke<boolean>("tray_close_switch_available").then(setCloseSwitch).catch(() => setCloseSwitch(false));
+  }, []);
   const test = () => {
     void preparePlan(n).then(({ plan, play, close, problem }) => {
       setFileProblem(problem);
@@ -77,13 +82,15 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
             <small>While Kolux has focus, events in the worktree you are viewing are not announced; other worktrees still are.</small>
           </span>
         </label>
-        <label className="conn-switch">
-          <input type="checkbox" role="switch" checked={n.closeToTray} onChange={(e) => onSave({ [CLOSE_TO_TRAY_FIELD]: e.target.checked })} />
-          <span>
-            Closing the window keeps Kolux in the tray
-            <small>Windows only. The agents keep running; Quit from the tray icon stops everything.</small>
-          </span>
-        </label>
+        {closeSwitch && (
+          <label className="conn-switch">
+            <input type="checkbox" role="switch" checked={n.closeToTray} onChange={(e) => onSave({ [CLOSE_TO_TRAY_FIELD]: e.target.checked })} />
+            <span>
+              Closing the window keeps Kolux in the tray
+              <small>Windows only. The agents keep running; Quit from the tray icon stops everything.</small>
+            </span>
+          </label>
+        )}
       </section>
       <section className="conn-card" data-section="sound">
         <h2 className="conn-name">Sound</h2>

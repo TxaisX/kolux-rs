@@ -72,12 +72,11 @@ export function withoutFailed<T extends { key: number; batch?: number }>(panes: 
 
 /** A model choice: its id on the agent's command line, the label the user reads, and (SESS-016)
  * the effort levels and fast mode it offers, when it has them. */
-export type ModelChoice = { id: string; label: string; efforts?: string[]; fast?: boolean };
+export type ModelChoice = { id: string; label: string; efforts?: string[]; fast?: boolean; effortFlag?: string; defaultEffort?: string };
 
 /** Claude Code's effort levels (its `--effort` flag). */
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
-// ponytail: built-in lists only (ACCT-032); the live per-account lookup is SESS-029 (T-100).
 const BUILT_IN: Record<string, ModelChoice[]> = {
   claude: [
     { id: "opus", label: "Claude Opus", efforts: CLAUDE_EFFORTS, fast: true },
@@ -103,13 +102,37 @@ const BUILT_IN: Record<string, ModelChoice[]> = {
   ],
 };
 
+/** SESS-029: Grok's effort levels, up to extra-high; left untouched it stays at Grok's own high. */
+const GROK_EFFORTS = ["low", "medium", "high", "xhigh"];
+const grokModel = (m: { id: string; label: string }): ModelChoice => ({ ...m, efforts: GROK_EFFORTS, effortFlag: "--effort", defaultEffort: "high" });
+for (const m of BUILT_IN.grok) Object.assign(m, grokModel(m));
+
+/** SESS-029: the agents that are asked for their models, and what each one answered. */
+export const LISTED = ["grok", "cursor"];
+const discovered: Record<string, { id: string; label: string }[]> = {};
+
+/** SESS-029: records an agent's live list. For Grok it replaces the built-in list; for the others the
+ * discovered models join after the built-in ones. An empty or unreadable answer changes nothing. */
+export function setDiscovered(agentId: string, found: { id: string; label: string }[] | null) {
+  if (found && found.length > 0) discovered[agentId] = found;
+}
+
+function listOf(agentId: string): ModelChoice[] | undefined {
+  const live = discovered[agentId];
+  const built = BUILT_IN[agentId];
+  if (!live) return built;
+  if (agentId === "grok") return live.map(grokModel);
+  const known = built ?? [];
+  return [...known, ...live.filter((m) => !known.some((k) => k.id === m.id))];
+}
+
 export const DEFAULT_MODEL = "default";
 
 /** The model row for an agent: its built-in list plus the program's own default, which is an
  * explicit pick that adds no model flag. ACCT-032: an agent without a built-in list has no model
  * step at all (empty). */
 export function modelsFor(agentId: string): ModelChoice[] {
-  const list = BUILT_IN[agentId];
+  const list = listOf(agentId);
   return list ? [...list, { id: DEFAULT_MODEL, label: "Program default" }] : [];
 }
 
@@ -131,7 +154,7 @@ export const FAST_SETTINGS = '{"fastMode":true}';
 export function seatArgs(s: Seat): string[] {
   const m = choiceOf(s);
   const out = modelArgs(s.model);
-  if (s.effort && m?.efforts?.includes(s.effort)) out.push("--effort", s.effort);
+  if (s.effort && m?.efforts?.includes(s.effort)) out.push(m.effortFlag ?? "--effort", s.effort);
   if (s.fast && m?.fast) out.push("--settings", FAST_SETTINGS);
   return out;
 }

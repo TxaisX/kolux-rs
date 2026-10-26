@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+import { openDefaultTabs } from "./setup/DefaultTabs";
 import { gatedSetup, settleSetup, setupRequestOf } from "./orchestration/workerSetup";
 import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
@@ -188,9 +189,11 @@ import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
+import { scopesFor } from "./keys/keyScopes";
 import { installTapReset } from "./shell/inputExtras";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { usePromptScan } from "./status/promptScan";
+import { useRestoredStatus } from "./status/useRestoredStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
 import { creditedLive, launchedAgent, launchedName } from "./status/credit";
@@ -413,8 +416,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           setSettingsRead(true);
           applyAppearance(readAppearance(s));
           applyWindowBlur(s);
-          // after-list #39: said once when the settings came from the last good copy
-          void invoke<string | null>("settings_fallback_notice").then((m) => m && setNotice(m), () => {});
+          // after-list #39 / row 789: the fallback sentence is told by RecoveryMount now (its own notice, not the single slot the shortcuts file overwrote)
         })
         .catch(() => setSettings({}));
     readSettings();
@@ -637,7 +639,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       const hit =
         tapHit(windowTaps, keymap, e) ||
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
+        matchEvent(keymap, e, scopesFor({ screen, kind, inTree })) ||
         // GIT-042: a preview tab takes the one editor shortcut that applies to it.
         (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
       if (!hit || heldByTerminal(hit.id, settings)) return;
@@ -1170,6 +1172,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setFocused(key);
   };
 
+  // APP-019: markdown files the system handed to the app open as previews, at start and on each later ask.
+  const openFiles = useRef(openPreview);
+  openFiles.current = openPreview;
+  useEffect(() => {
+    const drain = () => void invoke<string[]>("open_files_take").then((fs) => fs.forEach((f) => openFiles.current(f))).catch(() => undefined);
+    const off = listen("open-files", drain);
+    drain();
+    return () => void off.then((f) => f()).catch(() => undefined);
+  }, []);
+
   // TERM-001: the layout strip sets how many cells the workspace in front holds. Growing adds
   // empty chooser panes (nothing starts on its own); shrinking drops unstarted cells newest
   // first and leaves started sessions alone: the ask before removing a started session is
@@ -1331,6 +1343,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (pid && picked.some(Boolean)) pendingLineup.current[batch] = { pid, lineup: lineupOf(chooser.shape ?? "custom", separate ? "separate" : "shared", seats) };
       // A grid chooser gives its place to the new panes; the New session page adds them (SESS-018).
       setPanes((ps) => (inGrid ? ps.flatMap((p) => (p.key === key ? made : [p])) : [...ps, ...made]));
+      for (const n of madeNew) void openTabs(n.cwd, n.branch); // PROJ-034
       // VIEW-021: a preset started from the Agents rail stays the selected session once it runs.
       setAgentSel((sel) => (sel === key ? made[0].key : sel));
       if (!inGrid) {
@@ -1422,10 +1435,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setFocused(pane.key);
   };
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
+  // PROJ-034: kolux.yaml's default tabs open beside the new workspace's first pane (its setup first, when it has one).
+  const openTabs = (dir: string, branch: string | null) => {
+    const root = projects.find((p) => p.id === projectOf(dir))?.path;
+    return root ? openDefaultTabs(root, dir, branch, { nextKey, setPanes, setTabColors, say: setNotice }) : Promise.resolve();
+  };
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
   const runSetup = (dir: string, branch: string | null) =>
     trustedSetup(dir)
-      .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
+      .then((line) => void (line ? cli.current.startSetup(dir, branch, line, "tab", false, () => openTabs(dir, branch)) : openTabs(dir, branch)))
       .catch((err) => setNotice(String(err)));
   // ORCH-017 (T-172-d): a worker start's setup: the trust question, one run in a background Setup
   // tab, and how it ended (its exit code, or null a second after the tab stopped without one)
@@ -2440,6 +2458,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   report.current = reportLayout;
   useEffect(() => report.current());
   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+  useRestoredStatus({ panes, hookRef, setHook, setStale, setCrew, setTurn });
   useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
   // STAT-044: a clicked notification focuses the pane that raised it (notification_clicked emits the pane).
   useEffect(() => {
@@ -3127,6 +3146,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     follow={p.follow}
                     notes={notes}
                     onRemoveNote={(n) => setNotes((ns) => ns.filter((x) => x !== n))}
+                    onEditNote={(n, text) => setNotes((ns) => ns.map((x) => (x === n ? { ...x, note: text } : x)))}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
@@ -3253,7 +3273,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     renameAsk={askName[p.key]}
                     sessionKnown={!!p.session}
                     session={p.session}
-                    onSessionLaunch={(l, fork) => splitPane(p.key, "right", undefined, { agent: p.agent, agentId: p.agentId, account: p.account, setup: p.setup, env: p.env, program: l.program, args: l.args, forkOf: fork ? p.session : undefined })} // after-list #117: Continue / Fork open a second pane beside this one
+                    onSessionLaunch={(l, fork, forkName) => splitPane(p.key, "right", undefined, { agent: p.agent, agentId: p.agentId, account: p.account, setup: p.setup, env: p.env, program: l.program, args: l.args, forkOf: fork ? p.session : undefined, title: fork ? forkName : undefined })}
+                    entryTabs={panes.filter((q) => sameDir(q.cwd, activeDir)).map((q) => ({ key: q.key, name: tabName(q, titles, labelOf(q), liveIds) }))} // TERM-042: the plus menu's entry box jumps to these
+                    onEntry={(t) => (t.kind === "browser" ? openInBrowser(t.url) : t.kind === "file" ? openFile(t.path) : setFocused(t.key))}
+                    shells={shells}
+                    onShell={(sh) => void newTab({ shell: sh })} // TERM-043: the plus menu's shell choice, a tab like the New tab menu's // after-list #117: Continue / Fork open a second pane beside this one
                     onCopyId={(what) => copyId(p, what)}
                     findHandle={findHandle}
                     typed={p.typed}

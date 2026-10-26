@@ -42,13 +42,6 @@ export function emptyPacer(): PacerState {
 const keep = <T>(list: T[]): T[] => (list.length > MAX_TRACKED ? list.slice(list.length - MAX_TRACKED) : list);
 const normWorktree = (w: string | null): string | null => (w === null ? null : w.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase());
 
-/** The id of one agent event: the pane, what happened and the moment it was reported (a hook stamp or
- * the clock), so two real finishes are two events even inside one clock minute; a repeat that arrives
- * right after is merged by the cooldown, not by the id. A hook sequence number would be exact (T-125-b). */
-export function eventId(pane: string, what: string, stamp: number): string {
-  return `${pane}:${what}:${stamp}`;
-}
-
 /** Decides whether this event is shown and remembers it either way (a held-back event is still that
  * event, so it never comes back later as a duplicate). `focusedWorktree` is the worktree in view. */
 export function decide(state: PacerState, ev: NotifyEvent, opts: { windowFocused: boolean; suppressFocused: boolean; focusedWorktree?: string | null }): Decision {

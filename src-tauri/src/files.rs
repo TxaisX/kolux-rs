@@ -1354,6 +1354,41 @@ pub fn find_program(program: &str, path_var: Option<std::ffi::OsString>) -> Opti
     dirs.iter().flat_map(|d| exts.iter().map(move |e| d.join(format!("{program}{e}")))).find(|p| p.is_file())
 }
 
+/// after-list 781: file types Explorer (or a link/script host behind it) would run rather than show.
+const EXPLORER_REFUSED: [&str; 22] = [
+    "bat", "cmd", "exe", "com", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msi", "msc", "scr", "lnk", "url", "hta", "cpl", "reg", "pif", "appref-ms",
+];
+
+/// True when the launch command is Windows Explorer, which runs (not just shows) a file it is handed.
+fn is_explorer(name: &str, program: &Path) -> bool {
+    let stem = |p: &Path| p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("explorer"));
+    stem(Path::new(name)) || stem(program)
+}
+
+/// True for a file name Explorer must not be handed: a trailing dot or space (Windows drops them, so
+/// `RUN.BAT.` is `RUN.BAT`), a stream suffix, or a program/script/link extension, in any letter case.
+fn explorer_refuses_name(name: &str) -> bool {
+    let trimmed = name.trim_end_matches(['.', ' ']);
+    name.contains(':') || Path::new(trimmed).extension().and_then(|e| e.to_str()).is_some_and(|e| EXPLORER_REFUSED.iter().any(|r| r.eq_ignore_ascii_case(e)))
+}
+
+/// after-list 781: what Explorer is handed. A folder opens as it is; a file is only revealed
+/// (`/select,`), which never runs it, and a program, script or link is refused outright. The path is
+/// resolved first (`..`, links, 8.3 short names, trailing dots), so the check sees the real name.
+pub fn explorer_target(target: &Path) -> Result<std::ffi::OsString, String> {
+    let real = plain_disk_path(target.canonicalize().map_err(|e| format!("{}: {e}", target.display()))?);
+    if real.is_dir() {
+        return Ok(real.into_os_string());
+    }
+    let name = real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    if !real.is_file() || explorer_refuses_name(&name) {
+        return Err(format!("{name} is a program, script or link, so Explorer was not asked to open it"));
+    }
+    let mut select = std::ffi::OsString::from("/select,");
+    select.push(real);
+    Ok(select)
+}
+
 /// Starts `command` with `dir` as its last argument, without a console window. Batch launchers
 /// (VS Code's `code` is one) get the standard library's batch-argument escaping, which refuses an
 /// argument it cannot pass safely instead of handing it to the shell.
@@ -1361,8 +1396,9 @@ pub fn launch_in(dir: &Path, command: &str, path_var: Option<std::ffi::OsString>
     let parts = split_command(command);
     let Some(name) = parts.first() else { return Err("the launch command is empty".into()) };
     let program = find_program(name, path_var).ok_or_else(|| format!("{name} was not found; check the app's launch command in General settings"))?;
+    let target = if is_explorer(name, &program) { explorer_target(dir)? } else { dir.as_os_str().to_owned() };
     let mut cmd = std::process::Command::new(program);
-    cmd.args(&parts[1..]).arg(dir).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.args(&parts[1..]).arg(target).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1410,6 +1446,64 @@ pub fn worktree_branches(path: String, fence: tauri::State<'_, crate::fence::Fen
 #[cfg(test)]
 mod open_in_tests {
     use super::*;
+
+    // after-list 781: the explorer preset must never be handed a program, script or link.
+    #[test]
+    fn fix781_explorer_refuses_programs_scripts_and_links_but_takes_folders() {
+        let base = std::env::temp_dir().join(format!("kolux-fix781-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        for bad in ["run.bat", "RUN.BAT", "a.exe", "b.cmd", "c.ps1", "d.lnk", "e.Vbs", "f.hta", "g.url", "h.msi"] {
+            let f = base.join(bad);
+            std::fs::write(&f, "x").unwrap();
+            assert!(explorer_target(&f).unwrap_err().contains("not asked to open"), "{bad}");
+        }
+        assert!(explorer_target(&base).unwrap().to_string_lossy().ends_with(base.file_name().unwrap().to_str().unwrap()));
+        let note = base.join("notes.txt");
+        std::fs::write(&note, "x").unwrap();
+        let shown = explorer_target(&note).unwrap().to_string_lossy().to_string();
+        assert!(shown.starts_with("/select,") && shown.ends_with("notes.txt"), "{shown}");
+        assert!(explorer_target(&base.join("gone.txt")).is_err());
+        // `..` is resolved before the name is judged
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        assert!(explorer_target(&base.join("sub").join("..").join("run.bat")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix781_a_trailing_dot_or_space_or_stream_does_not_hide_the_extension() {
+        for bad in ["RUN.BAT.", "run.bat ", "run.bat. .", "x.txt:evil.bat", "x.exe::$DATA"] {
+            assert!(explorer_refuses_name(bad), "{bad:?}");
+        }
+        assert!(!explorer_refuses_name("notes.txt") && !explorer_refuses_name("README"));
+        assert!(is_explorer("explorer", Path::new(r"C:\Windows\explorer.exe")) && is_explorer("EXPLORER.EXE", Path::new("x")));
+        assert!(!is_explorer("code", Path::new(r"C:\bin\code.cmd")));
+    }
+
+    // The refusal sits in launch_in, so scm_open_with, open_in and open_file_in all get it; it fires before a spawn.
+    #[cfg(windows)]
+    #[test]
+    fn fix781_launch_in_refuses_a_script_for_explorer_before_starting_anything() {
+        let base = std::env::temp_dir().join(format!("kolux-fix781launch-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("explorer.exe"), "").unwrap();
+        let bat = base.join("Run.Bat");
+        std::fs::write(&bat, "@echo off\r\n").unwrap();
+        let path = Some(std::env::join_paths([base.clone()]).unwrap());
+        let err = launch_in(&bat, "explorer", path).unwrap_err();
+        assert!(err.contains("not asked to open"), "{err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fix781_windows_resolves_a_trailing_dot_to_the_real_script_name() {
+        let base = std::env::temp_dir().join(format!("kolux-fix781dot-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("run.bat"), "x").unwrap();
+        let spelled = format!("{}\\RUN.BAT.", base.display());
+        assert!(explorer_target(Path::new(&spelled)).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn edit043_relative_or_missing_paths_are_refused() {

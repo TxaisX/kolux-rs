@@ -417,3 +417,23 @@ fn row_481_a_plain_script_path_is_written_bare_so_any_shell_runs_it() {
         assert_eq!(quoted(odd), format!("\"{odd}\""), "{odd}");
     }
 }
+
+#[test]
+fn stat_021_pi_titles_come_from_the_kolux_extension_alone() {
+    let text = super::pi::extension("C:/Users/me/.kolux-rs/agent-hooks/pi.cmd");
+    assert!(text.contains("getSessionName") && text.contains("ctx.ui.setTitle") && text.contains("\"session_info_changed\""), "named by Pi's session name, set through Pi's own title call, refreshed on a rename");
+    assert!(text.contains("const TITLE_EVENTS = [\"session_start\",\"agent_start\",\"agent_settled\"];"));
+    // Outside a Kolux pane the extension returns before it wires anything, so Pi's own title stays.
+    assert!(text.find("KOLUX_PANE_KEY").unwrap() < text.find("retitle").unwrap());
+    // The generated file is real JavaScript: run its title path against a stand-in Pi when node exists.
+    let Ok(node) = std::process::Command::new("node").arg("--version").output() else { return };
+    if !node.status.success() {
+        return;
+    }
+    let dir = scratch("pi-title");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("ext.mjs"), &text).unwrap();
+    fs::write(dir.join("run.mjs"), r#"process.env.KOLUX_PANE_KEY='1';process.env.KOLUX_HOOK_IDENTITY='x';const m=await import('./ext.mjs');const on={};let name;const titles=[];m.default({on:(n,h)=>{on[n]=h},getSessionName:()=>name});const ctx={cwd:'C:\\work\\my-app',ui:{setTitle:(t)=>titles.push(t)}};on.session_start({},ctx);name='Fix\nparser';on.session_info_changed({},ctx);console.log(JSON.stringify(titles));"#).unwrap();
+    let out = std::process::Command::new("node").arg(dir.join("run.mjs")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[\"\u{3c0} - Fix parser - my-app\"]", "no title before Pi names the session; then session name and folder: {}", String::from_utf8_lossy(&out.stderr));
+}

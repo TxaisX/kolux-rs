@@ -4,8 +4,8 @@
 //! pumped on a reader thread to a callback; a second thread waits for the child and reports its
 //! exit. Dropping the session (or calling `kill`) ends the program, by force if it does not leave.
 
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
-use std::io::{Read, Write};
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, PtySize};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -14,6 +14,14 @@ use std::time::Duration;
 /// T-075-b: the background terminal service that owns terminals so they outlive the window.
 #[path = "pty_service.rs"]
 pub mod service;
+
+/// Fix-term 801: the output watcher that restores the pty size after a text-area request.
+#[path = "pty_window_ops.rs"]
+mod window_ops;
+
+/// Fix-term 787: the PTY reader's output, batched.
+#[path = "pty_pump.rs"]
+mod pump;
 
 /// T-184-b: the window's side of the service (panes routed through it, taken back after a restart).
 #[path = "pty_link.rs"]
@@ -356,7 +364,9 @@ pub fn write_shared(writer: &SharedWriter, data: &[u8]) -> Result<(), String> {
 }
 
 pub struct PtySession {
-    master: Option<Box<dyn MasterPty + Send>>,
+    master: Option<window_ops::SharedMaster>,
+    /// Row 801: the page's latest size, which the output watcher re-applies.
+    size: Option<Arc<window_ops::SizeKeeper>>,
     writer: Option<SharedWriter>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
@@ -410,7 +420,7 @@ impl PtySession {
         cmds: Vec<CommandBuilder>,
         cols: u16,
         rows: u16,
-        mut on_output: impl FnMut(&[u8]) + Send + 'static,
+        on_output: impl FnMut(&[u8]) + Send + 'static,
         on_exit: impl FnOnce(Option<u32>) + Send + 'static,
     ) -> Result<Self, String> {
         let pair = native_pty_system()
@@ -439,24 +449,13 @@ impl PtySession {
         let killer = child.clone_killer();
         let pid = child.process_id();
         let job = crate::procs::pane_job(&*child);
-        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
-        thread::Builder::new()
-            .name("pty-reader".into())
-            .spawn(move || {
-                if let Some(n) = note {
-                    on_output(n.as_bytes());
-                }
-                let mut buf = [0u8; 8192];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => on_output(&buf[..n]),
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())?;
+        let master: window_ops::SharedMaster = Arc::new(Mutex::new(pair.master));
+        let size = window_ops::SizeKeeper::new(&master, cols, rows);
+
+        pump::start(reader, note, window_ops::guarded(size.clone(), on_output))?;
         thread::Builder::new()
             .name("pty-waiter".into())
             .spawn(move || {
@@ -465,7 +464,7 @@ impl PtySession {
             })
             .map_err(|e| e.to_string())?;
 
-        Ok(Self { master: Some(pair.master), writer: Some(Arc::new(Mutex::new(writer))), killer, pid, program, job })
+        Ok(Self { master: Some(master), size: Some(size), writer: Some(Arc::new(Mutex::new(writer))), killer, pid, program, job })
     }
 
     /// A session over a fake writer, for tests of the write path with no PTY behind it.
@@ -481,7 +480,7 @@ impl PtySession {
                 Box::new(NoChild)
             }
         }
-        Self { master: None, writer: Some(Arc::new(Mutex::new(writer))), killer: Box::new(NoChild), pid: None, program: "fake".into(), job: None }
+        Self { master: None, size: None, writer: Some(Arc::new(Mutex::new(writer))), killer: Box::new(NoChild), pid: None, program: "fake".into(), job: None }
     }
 
     /// Sends keystrokes (already encoded as the terminal would) to the program.
@@ -496,6 +495,10 @@ impl PtySession {
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
         let m = self.master.as_ref().ok_or("session already closed")?;
+        let m = m.lock().map_err(|_| "pty lock poisoned".to_string())?;
+        if let Some(size) = &self.size {
+            size.set(cols, rows);
+        }
         m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())
     }
 
@@ -513,7 +516,7 @@ impl PtySession {
     pub fn foreground_group(&self) -> Option<i32> {
         #[cfg(unix)]
         {
-            self.master.as_ref().and_then(|m| m.process_group_leader())
+            self.master.as_ref().and_then(|m| m.lock().ok()?.process_group_leader())
         }
         #[cfg(not(unix))]
         {
@@ -536,6 +539,10 @@ impl Drop for PtySession {
         self.kill();
     }
 }
+
+#[cfg(test)]
+#[path = "pty_resize_tests.rs"]
+mod resize_tests;
 
 #[cfg(test)]
 mod tests {

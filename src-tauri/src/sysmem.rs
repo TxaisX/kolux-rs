@@ -6,6 +6,19 @@ pub fn working_set_bytes() -> Option<u64> {
     imp::working_set_bytes()
 }
 
+/// Bytes of physical memory the machine has, or `None` where it cannot be read (APP-022).
+pub fn total_ram_bytes() -> Option<u64> {
+    imp::total_ram_bytes()
+}
+
+/// `MemTotal` of /proc/meminfo, in bytes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn meminfo_total(text: &str) -> Option<u64> {
+    let line = text.lines().find(|l| l.starts_with("MemTotal:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    kb.checked_mul(1024)
+}
+
 #[cfg(windows)]
 mod imp {
     #[repr(C)]
@@ -47,6 +60,42 @@ mod imp {
         let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
         (ok != 0).then_some(c.WorkingSetSize as u64)
     }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct MemoryStatusEx {
+        dwLength: u32,
+        dwMemoryLoad: u32,
+        ullTotalPhys: u64,
+        ullAvailPhys: u64,
+        ullTotalPageFile: u64,
+        ullAvailPageFile: u64,
+        ullTotalVirtual: u64,
+        ullAvailVirtual: u64,
+        ullAvailExtendedVirtual: u64,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GlobalMemoryStatusEx(status: *mut MemoryStatusEx) -> i32;
+    }
+
+    pub fn total_ram_bytes() -> Option<u64> {
+        let mut m = MemoryStatusEx {
+            dwLength: std::mem::size_of::<MemoryStatusEx>() as u32,
+            dwMemoryLoad: 0,
+            ullTotalPhys: 0,
+            ullAvailPhys: 0,
+            ullTotalPageFile: 0,
+            ullAvailPageFile: 0,
+            ullTotalVirtual: 0,
+            ullAvailVirtual: 0,
+            ullAvailExtendedVirtual: 0,
+        };
+        // SAFETY: the struct matches the Win32 layout and dwLength carries its size.
+        let ok = unsafe { GlobalMemoryStatusEx(&mut m) };
+        (ok != 0 && m.ullTotalPhys > 0).then_some(m.ullTotalPhys)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -57,11 +106,19 @@ mod imp {
         let resident: u64 = text.split_whitespace().nth(1)?.parse().ok()?;
         Some(resident * 4096)
     }
+
+    pub fn total_ram_bytes() -> Option<u64> {
+        super::meminfo_total(&std::fs::read_to_string("/proc/meminfo").ok()?)
+    }
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
 mod imp {
     pub fn working_set_bytes() -> Option<u64> {
+        None
+    }
+
+    pub fn total_ram_bytes() -> Option<u64> {
         None
     }
 }
@@ -73,6 +130,23 @@ pub fn process_memory() -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn app022_meminfo_total_is_read_in_bytes() {
+        assert_eq!(super::meminfo_total("MemFree: 5 kB
+MemTotal:       16384 kB
+"), Some(16384 * 1024));
+        assert_eq!(super::meminfo_total("MemFree: 5 kB
+"), None);
+        assert_eq!(super::meminfo_total("MemTotal: lots kB
+"), None);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))]
+    fn app022_this_machine_reports_some_ram() {
+        assert!(super::total_ram_bytes().expect("ram readable") >= 256 * 1024 * 1024);
+    }
+
     #[test]
     #[cfg(any(windows, target_os = "linux"))]
     fn a_running_test_holds_at_least_a_megabyte() {

@@ -1,0 +1,2 @@
+box 1: OPEN (LIVE-DRAFTED). Parts proven: agents.rs::tests start_line(.., "claude", .., "go", ..) puts the prompt last (trailing route, SESS-051); cli worktree.create hands the window kind created + agent claude + prompt (cards_01.rs proj077_box1). Not proven without a window: that the first tab of the new workspace is that Claude start. evidence/cards-PROJ-038-live.mjs drives it.
+box 2: OPEN (LIVE-DRAFTED). Same script counts the panes of the new workspace after an agent create (expects exactly one).
