@@ -83,6 +83,10 @@ import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filters
 import { deletePlan, rowMenu, type MenuItem } from "./menu";
 import { commentBlocks, itemFromPaste, type Span } from "./details";
 import { onWorkspaceStatus } from "./statusRefresh";
+import StatusEditor from "./StatusEditorForm";
+import { editorRows, savePayload, type StatusRow } from "./statusEditor";
+import { useMissingFolders } from "./missingFolders";
+import { folderMissingNote } from "./folderWorkspace";
 import { FILE_MANAGER, loadTargets, openIn } from "../editor/openIn";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -203,6 +207,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [menu, setMenu] = useState<{ x: number; y: number; projectId: string; path: string; items: MenuItem[] } | null>(null);
   const [detailsOf, setDetailsOf] = useState<{ path: string; name: string; item: string; comment: string; error?: string } | null>(null);
   const [batch, setBatch] = useState<{ root: string; order: string[]; error?: string } | null>(null);
+  const [statusesOf, setStatusesOf] = useState<{ path: string; rows: StatusRow[]; error?: string } | null>(null); // PROJ-084
   // EDIT-041: coming from the Inbox the workspace rows can take seconds to list, so each render
   // looks for the selected row until it is there, then scrolls to it once.
   const revealed = useRef(0);
@@ -441,6 +446,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   // workspace first, one gh call per GitHub project, a round every few minutes while the window is
   // shown (backing off after failures, waiting out a rate limit), and again on focus when stale.
   const pollPaths = Object.values(worktrees).flat().map((w) => w.path);
+  const goneFolders = useMissingFolders(pollPaths); // PROJ-086
   const norm = (d: string) => d.replace(/[\\/]+$/, "").toLowerCase();
   const pollActive = activeDir === null ? null : (pollPaths.find((p) => norm(p) === norm(activeDir)) ?? null);
   const pollLinks = linkedPrs(settings[SCM_LINKED_PR_KEY]);
@@ -1202,6 +1208,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       else if (id === "details") {
         const d = await invoke<{ name: string | null; item: string | null; comment: string }>("workspace_details_get", { path: w.path });
         setDetailsOf({ path: w.path, name: d.name ?? "", item: d.item ?? "", comment: d.comment });
+      } else if (id === "statuses:edit") {
+        const st = await invoke<{ list: { id: string; label: string }[] }>("workspace_statuses", { paths: [w.path] });
+        setStatusesOf({ path: w.path, rows: editorRows(st.list) });
       } else if (id.startsWith("status:")) {
         await invoke("workspace_status_set", { path: w.path, status: id.slice(7) });
         await reload();
@@ -1677,6 +1686,11 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               external
             </span>
           )}
+          {goneFolders.has(w.path) && (
+            <span className="hint" title={folderMissingNote}>
+              missing
+            </span>
+          )}
           {pushTag(w)}
           {groupBy !== "project" && <span className="hint">{projectLabel(p)}</span>}
           {liveCount(w)}
@@ -1758,6 +1772,21 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
         <CardLine shown={cardDetails.shown} facts={facts} depth={depth} />
         {paneRows(w, depth)}
+        {statusesOf?.path === w.path && !asking && (
+          <StatusEditor
+            initial={statusesOf.rows}
+            error={statusesOf.error}
+            onCancel={() => setStatusesOf(null)}
+            onSave={(rows) =>
+              void invoke("workspace_statuses_set", { list: savePayload(rows) })
+                .then(() => {
+                  setStatusesOf(null);
+                  return reload();
+                })
+                .catch((err) => setStatusesOf({ ...statusesOf, rows, error: String(err) }))
+            }
+          />
+        )}
         {detailsOf?.path === w.path && !asking && (
           <div className="sb-form" data-details={worktreeLabel(w)}>
             <input className="field" aria-label="Name" placeholder="Name (blank uses the branch)" value={detailsOf.name} onChange={(e) => setDetailsOf({ ...detailsOf, name: e.target.value })} />
