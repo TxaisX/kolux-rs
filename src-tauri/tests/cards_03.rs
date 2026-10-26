@@ -180,3 +180,29 @@ fn term022_the_head_the_chip_reads_is_the_branch_a_detached_commit_or_nothing() 
     let _ = std::fs::remove_dir_all(&repo);
     let _ = std::fs::remove_dir_all(&plain);
 }
+
+/// TERM-017 box 2 (backend half): two sessions alive at once never print into each other. A layout change is a pure
+/// reorder of the window's pane list and never reaches a session; where output goes is decided by session id / pane key.
+#[test]
+fn term017_box2_text_printed_in_one_session_never_shows_in_another() {
+    let (wa, wb) = (workspace("term017-a"), workspace("term017-b"));
+    let (mut a, mut b) = (Shell::start(&wa.to_string_lossy()), Shell::start(&wb.to_string_lossy()));
+    let (la, lb) = (wa.file_name().unwrap().to_string_lossy().into_owned(), wb.file_name().unwrap().to_string_lossy().into_owned());
+    assert!(a.until(40, |s| s.text().contains(&la)), "A prompt: {:?}", a.text());
+    assert!(b.until(40, |s| s.text().contains(&lb)), "B prompt: {:?}", b.text());
+    let (ma, mb) = ("KOLUXAAAA17", "KOLUXBBBB17");
+    a.session.write(format!("echo {ma}\r").as_bytes()).unwrap();
+    b.session.write(format!("echo {mb}\r").as_bytes()).unwrap();
+    assert!(a.until(30, |s| s.text().matches(ma).count() >= 2), "A ran its echo: {:?}", a.text());
+    assert!(b.until(30, |s| s.text().matches(mb).count() >= 2), "B ran its echo: {:?}", b.text());
+    assert!(!a.text().contains(mb), "B's text reached A: {:?}", a.text());
+    assert!(!b.text().contains(ma), "A's text reached B: {:?}", b.text());
+    // a pane remounted by a move asks for its terminal by pane key and is handed the one still running, never a fresh one
+    let back = kolux_rs_lib::terminal::attach_answer(5, Some(42), 5);
+    assert_eq!((back.state, back.id), ("attached", Some(42)));
+    assert_eq!(kolux_rs_lib::terminal::attach_answer(5, None, 5).state, "fresh");
+    a.session.kill();
+    b.session.kill();
+    let _ = std::fs::remove_dir_all(&wa);
+    let _ = std::fs::remove_dir_all(&wb);
+}

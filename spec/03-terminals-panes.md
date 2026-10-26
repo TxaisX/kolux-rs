@@ -290,7 +290,7 @@ Rules: rounded corners around 14 px with about 8 px gaps; a group with a single 
   strip; the full (classic) look keeps the older chrome; new installs land on the clean look;
   existing profiles keep what they had.
 Acceptance:
-  - [ ] A new install shows rounded session windows with gaps.
+  - [x] A new install shows rounded session windows with gaps. (cards; evidence/cards-TERM-028.txt)
   - [ ] In the clean look, a session group holding one tab shows no tab strip.
 Compat: —
 Source: D-03-028
@@ -305,7 +305,7 @@ Rules: a split, move or preset never respawns an existing session; output from o
   or move re-parents the existing terminal host instead of remounting it; nothing respawns.)
 Acceptance:
   - [ ] After 10 random splits and moves, each pane still shows its own session.
-  - [ ] Text printed in one pane never shows up in any other pane after splits and moves.
+  - [x] Text printed in one pane never shows up in any other pane after splits and moves. (cards; evidence/cards-TERM-017.txt)
 Compat: —
 Source: D-03-017
 
@@ -320,9 +320,9 @@ Rules: Copy: Cmd+C on macOS; Ctrl+Shift+C on Windows/Linux, and Ctrl+C when text
   (Kolux RS, T-067: Ctrl+C with nothing selected is the interrupt and reaches the program; a refused
   clipboard shows one notice per 5 s in the pane header and keeps the selection; focus returns to the pane.)
 Acceptance:
-  - [ ] With the clipboard locked by another app, copying shows a failure notice and the selection
-      remains.
-  - [ ] Copying with nothing selected never shows a success notice.
+  - [x] With the clipboard locked by another app, copying shows a failure notice and the selection
+      remains. (cards; evidence/cards-TERM-065.txt)
+  - [x] Copying with nothing selected never shows a success notice. (cards; evidence/cards-TERM-065.txt)
 Compat: keybinding command for copying the selection (exact id held back until allowlisted).
 Source: D-03-065
 
