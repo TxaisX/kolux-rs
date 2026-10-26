@@ -13,7 +13,9 @@
 // the file's diff tab in the split chosen in Source Control. T-033-g: the tab reads the status once
 // when it opens (so Commit is ready at once), passes the base it already knows so a refresh runs no
 // second status, and labels a base with no shared history instead of comparing silently.
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Row 837: only the sections near the viewport (and the tree rows in view) are in the page; the rest
+// are spacers sized from an estimate, then from the measured height (sectionWindow.ts).
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
@@ -29,6 +31,9 @@ import { allChangesContext, type LastFocus } from "./allChangesCopy";
 import { clashesOf, withClashes } from "./changeConflicts";
 import { withoutWhitespace } from "./DiffPane";
 import { watchStatus } from "../scm/watch";
+import ChangeTree, { relTo } from "./ChangeTree";
+import { readyStore, SECTION_CHROME, SECTION_GAP, type ReadyStore } from "./sectionWindow";
+import { useReadyStamp, useReadyVersion, useSectionWindow, type Meter } from "./useSectionWindow";
 import { useSettings } from "../settings/useSettings";
 import { allChangesStart } from "../settings/editorPrefs";
 import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, canCommit, clashWord, isCommitShortcut, type AcLayout, type CommitOutcome, type Status } from "../scm/model";
@@ -107,12 +112,11 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   const layout: AcLayout = { ...allChangesStart(settings, { split: AC_SPLIT_KEY, wrap: AC_WRAP_KEY, spaces: AC_WHITESPACE_KEY, tree: AC_TREE_KEY }), ...over };
   const [fold, setFold] = useState<Record<string, boolean>>({});
   const [width, setWidth] = useState(260);
-  const [filter, setFilter] = useState("");
   const [viewed, setViewed] = useState<Record<string, string>>({}); // key: the stamp it was viewed at
-  const [ready, setReady] = useState<Record<string, string>>({}); // key: the stamp it has drawn
+  const [ready] = useState(readyStore); // key: the stamp it has drawn; read by the sections that need it, not by this component
   const cache = useRef<Cache>(new Map());
-  const list = useRef<HTMLDivElement>(null);
-  const top = useRef(0);
+  const loaded = useRef(new Set<string>()); // big diffs the user asked for, kept while their section is out of the window
+  const jumpRef = useRef<((index: number) => void) | null>(null);
   const front = useRef(!hidden);
   const latest = useRef<Status | null>(null); // the last status, read by refreshes without re-running the effect
   const last = useRef<LastFocus | null>(null); // the diff view the cursor was last in, for Copy Context
@@ -168,52 +172,24 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
     };
   }, [root, mode, pinnedBase]);
 
-  // Coming back to the tab puts the scroll where it was.
-  useEffect(() => {
-    if (!hidden && list.current) list.current.scrollTop = top.current;
-  }, [hidden]);
-
-  const rel = (p: string) => p.slice(root.length).replace(/^[\\/]+/, "").replace(/\\/g, "/");
-  const shown = useMemo(() => {
-    const q = filter.toLowerCase();
-    return (entries ?? []).map((e, i) => ({ e, i })).filter(({ e }) => rel(e.path).toLowerCase().includes(q));
-  }, [entries, filter, root]);
-  const sectionId = (i: number) => `ac-${id}-${i}`;
-  const onReady = (key: string, stamp: string | null) =>
-    setReady((r) => {
-      if ((r[key] ?? null) === stamp) return r;
-      const next = { ...r };
-      if (stamp === null) delete next[key];
-      else next[key] = stamp;
-      return next;
-    });
-  const isViewed = (e: Entry) => viewed[entryKey(e)] === e.stamp && ready[entryKey(e)] === e.stamp;
-  const toggleViewed = (e: Entry) => {
-    const k = entryKey(e);
-    if (ready[k] !== e.stamp) return; // still loading or waiting for a click: not viewable yet
-    setViewed((v) => {
-      const next = { ...v };
-      if (next[k] === e.stamp) delete next[k];
-      else next[k] = e.stamp;
-      return next;
-    });
-  };
-  // Sections near the target draw while the jump lands and change height, so the jump is made
-  // again a few times until they settle, unless the user scrolls first.
-  const jump = (anchor: string) => {
-    const go = () => document.getElementById(anchor)?.scrollIntoView({ block: "start" });
-    const l = list.current;
-    let n = 0;
-    const stop = () => {
-      window.clearInterval(t);
-      l?.removeEventListener("wheel", stop);
-      l?.removeEventListener("pointerdown", stop);
-    };
-    const t = window.setInterval(() => (++n > 8 ? stop() : go()), 100);
-    l?.addEventListener("wheel", stop, { passive: true });
-    l?.addEventListener("pointerdown", stop);
-    go();
-  };
+  const toggleViewed = useCallback(
+    (e: Entry) => {
+      const k = entryKey(e);
+      if (ready.get(k) !== e.stamp) return; // still loading or waiting for a click: not viewable yet
+      setViewed((v) => {
+        const next = { ...v };
+        if (next[k] === e.stamp) delete next[k];
+        else next[k] = e.stamp;
+        return next;
+      });
+    },
+    [ready],
+  );
+  const toggleFold = useCallback((k: string) => setFold((f) => ({ ...f, [k]: !f[k] })), []);
+  const jump = useCallback((index: number) => jumpRef.current?.(index), []);
+  const openRef = useRef(onOpenDiff);
+  openRef.current = onOpenDiff;
+  const openDiff = useCallback((path: string, staged: boolean) => openRef.current?.(path, staged), []);
   const resize = (down: React.PointerEvent) => {
     const x0 = down.clientX;
     const w0 = width;
@@ -266,10 +242,10 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   const foldAll = (on: boolean) => setFold(Object.fromEntries((entries ?? []).map((e) => [entryKey(e), on])));
   const allFolded = (entries?.length ?? 0) > 0 && (entries ?? []).every((e) => fold[entryKey(e)]);
   const toggle = (k: keyof Draw | "tree") => setOver((o) => ({ ...o, [k]: !layout[k] }));
-  const draw: Draw = { split: layout.split, wrap: layout.wrap, spaces: layout.spaces };
+  const draw = useMemo<Draw>(() => ({ split: layout.split, wrap: layout.wrap, spaces: layout.spaces }), [layout.split, layout.wrap, layout.spaces]);
+  const tagFor = useCallback((e: Entry) => tagOf(e, base !== null), [base]);
 
   const count = entries?.length ?? 0;
-  const done = (entries ?? []).filter(isViewed).length;
   return (
     <section className={`pane editor all-changes${focused ? " focused" : ""}`} hidden={hidden} aria-label="All Changes" onMouseDown={onFocus} data-kind="changes" data-key={id} tabIndex={-1}>
       <header className="pane-head">
@@ -278,8 +254,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
         </span>
         <span className="title">All Changes</span>
         <span className="preview-tag">
-          {count} {count === 1 ? "file" : "files"}
-          {count ? ` · ${done} viewed` : ""}
+          <ViewedTag entries={entries ?? []} viewed={viewed} ready={ready} />
         </span>
         <span className="path" title={root}>
           {root}
@@ -341,52 +316,29 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
         </div>
       )}
       <div className="pane-body ac-body">
-        {layout.tree && (
-          <aside className="ac-tree" style={{ width }} aria-label="Changed files">
-            <input className="picker-input" placeholder="Filter by name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter changed files" />
-            <div className="ac-rows">
-              {shown.map(({ e, i }, n) => {
-                const dir = rel(e.path).split("/").slice(0, -1).join("/");
-                const prev = n > 0 ? rel(shown[n - 1].e.path).split("/").slice(0, -1).join("/") : null;
-                return (
-                  <div key={entryKey(e)}>
-                    {dir !== prev && dir && <div className="ac-dir">{dir}</div>}
-                    <div className="ac-row">
-                      <input type="checkbox" checked={isViewed(e)} disabled={ready[entryKey(e)] !== e.stamp} onChange={() => toggleViewed(e)} aria-label={`Viewed ${rel(e.path)}`} />
-                      <button className="ac-jump" onClick={() => jump(sectionId(i))} title={rel(e.path)}>
-                        {baseName(e.path)}
-                      </button>
-                      <span className={`ac-code${e.clash ? " ac-conflict" : ""}`} title={e.clash ? `Unresolved conflict: ${clashWord(e.clash)}` : tagOf(e, base !== null)}>{tagOf(e, base !== null)}</span>
-                    </div>
-                  </div>
-                );
-              })}
-              {entries && !shown.length && <div className="menu-hint">{count ? "No changed file matches." : "No changes."}</div>}
-            </div>
-          </aside>
-        )}
+        {layout.tree && <ChangeTree entries={entries} root={root} width={width} ready={ready} viewed={viewed} keyOf={entryKey} tagOf={tagFor} onJump={jump} onToggleViewed={toggleViewed} />}
         {layout.tree && <div className="ac-handle" onPointerDown={resize} role="separator" aria-orientation="vertical" aria-label="Resize the file tree" />}
-        <div className="ac-list" ref={list} onScroll={(e) => (top.current = e.currentTarget.scrollTop)}>
+        <AllChangesList entries={entries} root={root} base={base} draw={draw} cache={cache.current} ready={ready} fold={fold} viewed={viewed} hidden={hidden} idPrefix={`ac-${id}`} jumpRef={jumpRef} loaded={loaded.current} onFocusView={focusedView} onGoneView={goneView} onToggleViewed={toggleViewed} onToggleFold={toggleFold} onOpenDiff={onOpenDiff && base === null ? openDiff : undefined}>
           {entries === null && !error && <div className="menu-hint">Reading the changes…</div>}
           {base?.note && <div className="menu-hint ac-note">{base.note}</div>}
           {entries && !entries.length && <div className="menu-hint">{base ? `This branch has no changes against ${base.against}.` : "This worktree has no changes."}</div>}
-          {(entries ?? []).map((e, i) => (
-            <Section key={entryKey(e)} anchor={sectionId(i)} e={e} name={rel(e.path)} root={root} base={base} draw={draw} cache={cache.current} scroller={list} onReady={onReady} onFocusView={focusedView} onGoneView={goneView} viewed={isViewed(e)} canView={ready[entryKey(e)] === e.stamp} onViewed={() => toggleViewed(e)} folded={!!fold[entryKey(e)]} onFold={() => setFold((f) => ({ ...f, [entryKey(e)]: !f[entryKey(e)] }))} onOpen={onOpenDiff && base === null ? () => onOpenDiff(e.path, e.staged) : undefined} />
-          ))}
-        </div>
+        </AllChangesList>
       </div>
     </section>
   );
 }
 
-type SectionProps = { anchor: string; e: Entry; name: string; root: string; base: Base | null; draw: Draw; cache: Cache; scroller: React.RefObject<HTMLDivElement | null>; onReady: (key: string, stamp: string | null) => void; onFocusView: (f: LastFocus) => void; onGoneView: (v: object) => void; viewed: boolean; canView: boolean; onViewed: () => void; folded: boolean; onFold: () => void; onOpen?: () => void };
+type SectionProps = { anchor: string; e: Entry; name: string; root: string; base: Base | null; draw: Draw; cache: Cache; ready: ReadyStore; meter: Meter; loaded: Set<string>; onFocusView: (f: LastFocus) => void; onGoneView: (v: object) => void; viewedStamp: string | undefined; onToggleViewed: (e: Entry) => void; folded: boolean; onToggleFold: (key: string) => void; onOpenDiff?: (path: string, staged: boolean) => void };
 
-const Section = memo(function Section({ anchor, e, name, root, base, draw, cache, scroller, onReady, onFocusView, onGoneView, viewed, canView, onViewed, folded, onFold, onOpen }: SectionProps) {
+/** Exported for the render-cost test. */
+export const Section = memo(function Section({ anchor, e, name, root, base, draw, cache, ready, meter, loaded, onFocusView, onGoneView, viewedStamp, onToggleViewed, folded, onToggleFold, onOpenDiff }: SectionProps) {
   const key = entryKey(e);
   const box = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
-  const [near, setNear] = useState(false);
-  const [go, setGo] = useState(false);
+  const [go, setGo] = useState(() => loaded.has(key));
+  const drew = useReadyStamp(ready, key);
+  const canView = drew === e.stamp;
+  const viewed = canView && viewedStamp === e.stamp;
   const [sides, setSides] = useState<Sides | null>(null);
   const [pics, setPics] = useState<{ old: string | null; now: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -394,24 +346,18 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
   const kind = e.clash ? "conflict" : IMAGE.test(e.path) && !base ? "image" : e.binary || (IMAGE.test(e.path) && base) ? "binary" : "text";
   const waits = kind === "text" && (e.lines ?? 0) > WAIT_OVER && !go;
 
-  // Sections load as they come near the visible part of the list.
-  useEffect(() => {
-    const el = box.current;
-    if (!el || near) return;
-    const io = new IntersectionObserver((seen) => seen.some((s) => s.isIntersecting) && setNear(true), { root: scroller.current, rootMargin: "800px 0px" });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [near]);
+  // A section is only mounted near the viewport, so it loads at once; its height is reported to the window.
+  useEffect(() => (box.current ? meter.watch(box.current, key) : undefined), [meter, key]);
 
   useEffect(() => {
-    if (!near || waits || kind === "conflict") return;
+    if (waits || kind === "conflict") return;
     let alive = true;
     setError(null);
     if (kind === "binary") {
-      onReady(key, e.stamp);
+      ready.set(key, e.stamp);
       return;
     }
-    onReady(key, null);
+    if (ready.get(key) !== e.stamp) ready.set(key, null);
     if (kind === "image") {
       const url = (bytes: ArrayBuffer) => (bytes.byteLength ? URL.createObjectURL(new Blob([bytes], { type: /\.svg$/i.test(e.path) ? "image/svg+xml" : "" })) : null);
       const made: string[] = [];
@@ -421,7 +367,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
           const p = { old: url(a), now: url(b) };
           made.push(...[p.old, p.now].filter((u): u is string => !!u));
           setPics(p);
-          onReady(key, e.stamp);
+          ready.set(key, e.stamp);
         },
         (err) => alive && setError(String(err)),
       );
@@ -446,7 +392,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
     return () => {
       alive = false;
     };
-  }, [near, waits, e.stamp, kind, base?.since]);
+  }, [waits, e.stamp, kind, base?.since]);
 
   // The diff, drawn again whenever new sides arrive, the layout changes or the section unfolds.
   useEffect(() => {
@@ -481,7 +427,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
       ?.load()
       .then((support) => views.forEach((v) => v.dispatch({ effects: lang.reconfigure(support) })))
       .catch(() => undefined);
-    onReady(key, e.stamp);
+    ready.set(key, e.stamp);
     return () => {
       views.forEach(onGoneView);
       if (merge) merge.destroy();
@@ -489,21 +435,21 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
     };
   }, [sides, draw.split, draw.wrap, draw.spaces, folded]);
 
-  const drawn = (kind === "text" && sides) || (kind === "image" && pics) || (kind === "binary" && near);
+  const drawn = (kind === "text" && sides) || (kind === "image" && pics) || (kind === "binary");
   return (
     <div className="ac-section" id={anchor} ref={box} data-key={key} data-folded={folded || undefined}>
       <div className="ac-head">
-        <button className="ib" onClick={onFold} aria-expanded={!folded} aria-label={folded ? `Expand ${name}` : `Collapse ${name}`} title={folded ? "Expand" : "Collapse"} style={folded ? { transform: "rotate(-90deg)" } : undefined}>
+        <button className="ib" onClick={() => onToggleFold(key)} aria-expanded={!folded} aria-label={folded ? `Expand ${name}` : `Collapse ${name}`} title={folded ? "Expand" : "Collapse"} style={folded ? { transform: "rotate(-90deg)" } : undefined}>
           <ChevronDown size={12} />
         </button>
-        <input type="checkbox" checked={viewed} disabled={!canView} onChange={onViewed} title={canView ? "Mark as viewed" : "Not loaded yet"} aria-label={`Viewed ${name}`} />
+        <input type="checkbox" checked={viewed} disabled={!canView} onChange={() => onToggleViewed(e)} title={canView ? "Mark as viewed" : "Not loaded yet"} aria-label={`Viewed ${name}`} />
         <span className="ac-name" title={e.path}>
           {name}
         </span>
         <span className={`preview-tag${e.clash ? " ac-conflict" : ""}`} title={e.clash ? `Unresolved conflict: ${clashWord(e.clash)}` : undefined}>{tagOf(e, base !== null)}</span>
         {e.lines !== null && <span className="ac-lines">{e.lines} changed {e.lines === 1 ? "line" : "lines"}</span>}
-        {onOpen && (
-          <button className="ib" onClick={onOpen} title="Open as a diff tab, in the split chosen in Source Control" aria-label={`Open ${name} as a tab`}>
+        {onOpenDiff && (
+          <button className="ib" onClick={() => onOpenDiff(e.path, e.staged)} title="Open as a diff tab, in the split chosen in Source Control" aria-label={`Open ${name} as a tab`}>
             <FileCode size={12} />
           </button>
         )}
@@ -518,7 +464,13 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
       ) : waits ? (
         <div className="ac-wait">
           {e.lines} changed lines.
-          <button className="btn" onClick={() => setGo(true)}>
+          <button
+            className="btn"
+            onClick={() => {
+              loaded.add(key);
+              setGo(true);
+            }}
+          >
             Load diff
           </button>
         </div>
@@ -545,3 +497,86 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
     </div>
   );
 });
+
+/** The "n files · m viewed" line; it alone re-renders as sections finish drawing. */
+function ViewedTag({ entries, viewed, ready }: { entries: Entry[]; viewed: Record<string, string>; ready: ReadyStore }) {
+  useReadyVersion(ready);
+  const done = entries.filter((e) => viewed[entryKey(e)] === e.stamp && ready.get(entryKey(e)) === e.stamp).length;
+  return (
+    <>
+      {entries.length} {entries.length === 1 ? "file" : "files"}
+      {entries.length ? ` · ${done} viewed` : ""}
+    </>
+  );
+}
+
+type ListProps = {
+  entries: Entry[] | null;
+  root: string;
+  base: Base | null;
+  draw: Draw;
+  cache: Cache;
+  ready: ReadyStore;
+  fold: Record<string, boolean>;
+  viewed: Record<string, string>;
+  hidden: boolean;
+  idPrefix: string;
+  jumpRef: MutableRefObject<((index: number) => void) | null>;
+  loaded: Set<string>;
+  onFocusView: (f: LastFocus) => void;
+  onGoneView: (v: object) => void;
+  onToggleViewed: (e: Entry) => void;
+  onToggleFold: (key: string) => void;
+  onOpenDiff?: (path: string, staged: boolean) => void;
+  children?: ReactNode;
+  /** The scroll offset of the first paint; a tab keeps its own scroll, so only a test sets it. */
+  initialTop?: number;
+};
+
+/** The scrolling column of sections: only those near the viewport are mounted. */
+export function AllChangesList({ entries, root, base, draw, cache, ready, fold, viewed, hidden, idPrefix, jumpRef, loaded, onFocusView, onGoneView, onToggleViewed, onToggleFold, onOpenDiff, children, initialTop }: ListProps) {
+  const list = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+  const top = useRef(0);
+  const items = useMemo(
+    () =>
+      (entries ?? []).map((e) => {
+        const folded = !!fold[entryKey(e)];
+        return { key: entryKey(e), guess: SECTION_CHROME + (folded ? 0 : estimate(e)), folded };
+      }),
+    [entries, fold],
+  );
+  const { slice, meter, onScroll, jumpTo } = useSectionWindow(list, inner, items, initialTop);
+  useEffect(() => {
+    jumpRef.current = jumpTo;
+    return () => {
+      jumpRef.current = null;
+    };
+  }, [jumpRef, jumpTo]);
+  // Coming back to the tab puts the scroll where it was.
+  useEffect(() => {
+    if (!hidden && list.current) list.current.scrollTop = top.current;
+  }, [hidden]);
+
+  const spacer = (height: number) => <div style={{ height, flex: "none" }} aria-hidden />;
+  return (
+    <div
+      className="ac-list"
+      ref={list}
+      style={{ position: "relative" }}
+      onScroll={(ev) => {
+        top.current = ev.currentTarget.scrollTop;
+        onScroll();
+      }}
+    >
+      {children}
+      <div ref={inner} style={{ flex: "none", display: "flex", flexDirection: "column", gap: SECTION_GAP }}>
+        {slice.top > 0 && spacer(slice.top)}
+        {(entries ?? []).slice(slice.start, slice.end).map((e, k) => (
+          <Section key={entryKey(e)} anchor={`${idPrefix}-${slice.start + k}`} e={e} name={relTo(root, e.path)} root={root} base={base} draw={draw} cache={cache} ready={ready} meter={meter} loaded={loaded} onFocusView={onFocusView} onGoneView={onGoneView} viewedStamp={viewed[entryKey(e)]} onToggleViewed={onToggleViewed} folded={!!fold[entryKey(e)]} onToggleFold={onToggleFold} onOpenDiff={onOpenDiff} />
+        ))}
+        {slice.bottom > 0 && spacer(slice.bottom)}
+      </div>
+    </div>
+  );
+}
