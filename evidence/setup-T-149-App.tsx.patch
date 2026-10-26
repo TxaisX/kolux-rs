@@ -1,0 +1,37 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 4b7b24f0..4e0cf3e3 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
+ import SettingsPage from "./settings/SettingsPage";
+ import Ask from "./chrome/Ask";
+ import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
++import { openDefaultTabs } from "./setup/DefaultTabs";
+ import { gatedSetup, settleSetup, setupRequestOf } from "./orchestration/workerSetup";
+ import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
+ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+@@ -1332,6 +1333,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       if (pid && picked.some(Boolean)) pendingLineup.current[batch] = { pid, lineup: lineupOf(chooser.shape ?? "custom", separate ? "separate" : "shared", seats) };
+       // A grid chooser gives its place to the new panes; the New session page adds them (SESS-018).
+       setPanes((ps) => (inGrid ? ps.flatMap((p) => (p.key === key ? made : [p])) : [...ps, ...made]));
++      for (const n of madeNew) void openTabs(n.cwd, n.branch); // PROJ-034
+       // VIEW-021: a preset started from the Agents rail stays the selected session once it runs.
+       setAgentSel((sel) => (sel === key ? made[0].key : sel));
+       if (!inGrid) {
+@@ -1423,10 +1425,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     setFocused(pane.key);
+   };
+   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
++  // PROJ-034: kolux.yaml's default tabs open beside the new workspace's first pane (its setup first, when it has one).
++  const openTabs = (dir: string, branch: string | null) => {
++    const root = projects.find((p) => p.id === projectOf(dir))?.path;
++    return root ? openDefaultTabs(root, dir, branch, { nextKey, setPanes, setTabColors, say: setNotice }) : Promise.resolve();
++  };
+   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
+   const runSetup = (dir: string, branch: string | null) =>
+     trustedSetup(dir)
+-      .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
++      .then((line) => (line ? cli.current.startSetup(dir, branch, line, "tab", false, () => openTabs(dir, branch)) : openTabs(dir, branch)))
+       .catch((err) => setNotice(String(err)));
+   // ORCH-017 (T-172-d): a worker start's setup: the trust question, one run in a background Setup
+   // tab, and how it ended (its exit code, or null a second after the tab stopped without one)
