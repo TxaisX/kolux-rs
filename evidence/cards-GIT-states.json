@@ -1,0 +1,220 @@
+{
+  "git006": {
+    "edited": {
+      "branch": "feat",
+      "upstream": null,
+      "upstreamRemote": null,
+      "ahead": 0,
+      "behind": 0,
+      "rewritten": false,
+      "base": "main",
+      "heavy": [],
+      "staged": [],
+      "changed": [
+        {
+          "path": "seed.txt",
+          "status": "M",
+          "from": null
+        }
+      ],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {},
+        "changed": {
+          "seed.txt": [
+            1,
+            0
+          ]
+        },
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    },
+    "staged": {
+      "branch": "feat",
+      "upstream": null,
+      "upstreamRemote": null,
+      "ahead": 0,
+      "behind": 0,
+      "rewritten": false,
+      "base": "main",
+      "heavy": [],
+      "staged": [
+        {
+          "path": "seed.txt",
+          "status": "M",
+          "from": null
+        }
+      ],
+      "changed": [],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {
+          "seed.txt": [
+            1,
+            0
+          ]
+        },
+        "changed": {},
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    },
+    "committed": {
+      "branch": "feat",
+      "upstream": null,
+      "upstreamRemote": null,
+      "ahead": 0,
+      "behind": 0,
+      "rewritten": false,
+      "base": "main",
+      "heavy": [],
+      "staged": [],
+      "changed": [],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {},
+        "changed": {},
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    },
+    "published": {
+      "branch": "feat",
+      "upstream": "origin/feat",
+      "upstreamRemote": "origin",
+      "ahead": 0,
+      "behind": 0,
+      "rewritten": false,
+      "base": "main",
+      "heavy": [],
+      "staged": [],
+      "changed": [],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {},
+        "changed": {},
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    },
+    "rebased": {
+      "branch": "feat",
+      "upstream": "origin/feat",
+      "upstreamRemote": "origin",
+      "ahead": 2,
+      "behind": 1,
+      "rewritten": true,
+      "base": "main",
+      "heavy": [],
+      "staged": [],
+      "changed": [],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {},
+        "changed": {},
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    },
+    "forced": {
+      "branch": "feat",
+      "upstream": "origin/feat",
+      "upstreamRemote": "origin",
+      "ahead": 0,
+      "behind": 0,
+      "rewritten": false,
+      "base": "main",
+      "heavy": [],
+      "staged": [],
+      "changed": [],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {},
+        "changed": {},
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    }
+  },
+  "git007": {
+    "two": {
+      "branch": "main",
+      "upstream": "origin/main",
+      "upstreamRemote": "origin",
+      "ahead": 2,
+      "behind": 0,
+      "rewritten": false,
+      "base": "main",
+      "heavy": [],
+      "staged": [],
+      "changed": [],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {},
+        "changed": {},
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    },
+    "zero": {
+      "branch": "main",
+      "upstream": "origin/main",
+      "upstreamRemote": "origin",
+      "ahead": 0,
+      "behind": 0,
+      "rewritten": false,
+      "base": "main",
+      "heavy": [],
+      "staged": [],
+      "changed": [],
+      "untracked": [],
+      "conflicts": [],
+      "operation": null,
+      "resolved": [],
+      "lines": {
+        "staged": {},
+        "changed": {},
+        "untracked": {}
+      },
+      "submodules": {},
+      "submodulesCut": 0,
+      "cut": 0
+    }
+  }
+}
