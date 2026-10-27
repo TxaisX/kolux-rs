@@ -1,5 +1,5 @@
 diff --git a/src-tauri/src/projects.rs b/src-tauri/src/projects.rs
-index 2ae26797..d2a2ce8f 100644
+index 2ae26797..7dd22210 100644
 --- a/src-tauri/src/projects.rs
 +++ b/src-tauri/src/projects.rs
 @@ -119,6 +119,10 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
@@ -13,7 +13,7 @@ index 2ae26797..d2a2ce8f 100644
      save_projects(store, &projects)?;
      // PROJ-019: a forgotten project's icon choice goes with it.
      let mut icons = project_icons(store);
-@@ -5364,6 +5368,52 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
+@@ -5364,6 +5368,53 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
          assert_eq!(details_of(&store, w).name, None, "an over-long comment writes nothing");
          drop(store);
      }
@@ -54,11 +54,12 @@ index 2ae26797..d2a2ce8f 100644
 +        assert_eq!(load_projects(&store).len(), 1, "the project is still listed");
 +        assert_eq!(store.get("localSetups").unwrap().as_deref(), Some("{not json"), "the saved setups are untouched");
 +        assert_eq!(store.get("setupCardDismissed").unwrap().as_deref(), Some(r#"["keep"]"#), "the dismissed list is untouched");
-+        assert!(store.set("localSetups", "{}").is_err(), "a key that could not be kept aside is not saved over");
 +        let conn = rusqlite::Connection::open(profile.join("state.db")).unwrap();
 +        conn.execute_batch("DROP TRIGGER no_copies;").unwrap();
 +        forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
 +        assert!(load_projects(&store).is_empty(), "a retry finishes the job");
++        assert_eq!(crate::orchestration::kept::asides(&store, "localSetups"), vec!["{not json".to_string()], "the unreadable blob was kept aside byte for byte on the retry");
++        store.set("localSetups", "{}").unwrap();
 +        drop(conn);
 +        drop(store);
 +        let _ = fs::remove_dir_all(profile);
