@@ -237,8 +237,12 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     let undo = |before: &Option<String>| {
         if existing {
             let earlier = before.clone().or_else(|| secrets::read_file(&vault, profile).ok().flatten());
-            if let Some(e) = earlier {
-                let _ = fs::write(&creds, e);
+            match earlier {
+                Some(e) => {
+                    let _ = fs::write(&creds, e);
+                }
+                // Row 932: no earlier bytes anywhere, so the live file can only hold the refused login.
+                None => remove_refused_login(&creds),
             }
         } else {
             let _ = fs::remove_dir_all(&dir);
@@ -302,17 +306,22 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         };
         // Row 929: with no live file and no earlier bytes put back, the live file can only hold the refused login, so it goes.
         if existing && before.is_none() && !restored {
-            if let Err(e) = fs::remove_file(&creds) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("kolux-rs: could not delete the refused sign-in {} ({:?})", creds.display(), e.kind());
-                }
-            }
+            remove_refused_login(&creds);
         } else {
             undo(&before);
         }
         return Err(e.into());
     }
     Ok(account)
+}
+
+/// Row 929: deletes the live credentials of a refused login; a file that is already gone is fine, any other failure is logged by path and kind only.
+fn remove_refused_login(creds: &Path) {
+    if let Err(e) = fs::remove_file(creds) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("kolux-rs: could not delete the refused sign-in {} ({:?})", creds.display(), e.kind());
+        }
+    }
 }
 
 /// Row 921: makes the folder of a NEW account (`agent` is the sealed copy's name prefix) and never reuses a taken id (listed, a folder or a sealed copy
@@ -911,6 +920,20 @@ mod tests {
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
         assert!(!live.exists(), "the refused login is not left live");
         assert!(!vault.exists(), "and no sealed copy appears");
+    }
+
+    // Row 932: no live file and a sealed copy that cannot be opened (lost key) leaves no earlier bytes, so the refused login must not stay live.
+    #[test]
+    fn row932_a_refused_re_sign_in_with_an_unopenable_sealed_copy_leaves_no_live_file() {
+        let (dir, store) = profile("row932-garbage");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::remove_file(&live).unwrap();
+        fs::write(&vault, format!("{}!!!", secrets::seal("x").unwrap())).unwrap();
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| None).is_err());
+        assert!(!live.exists(), "the refused login is not left live");
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
