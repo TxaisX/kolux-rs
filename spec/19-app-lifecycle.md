@@ -61,7 +61,7 @@ Rules: logs go to local files that rotate, can be read only by the user, and are
 Acceptance:
   - [x] Run a command containing a fake API key, then copy diagnostics → the key is absent from the
         clipboard text. (cards; evidence/cards-APP-041.txt)
-  - [ ] Produce logs past the size cap → the oldest files are deleted and the total stays below the cap.
+  - [x] Produce logs past the size cap → the oldest files are deleted and the total stays below the cap. (cards; evidence/cards-APP-041.txt)
 Compat: —
 Source: D-19-041
 

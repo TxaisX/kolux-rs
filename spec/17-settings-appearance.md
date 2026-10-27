@@ -186,7 +186,7 @@ Rules: the pages are General, Appearance, Accounts & keys, Agents, Terminal & se
   holds the protected-action rules (area 10) and Usage holds the stats page (area 06), and this area
   only places them in the page list.
 Acceptance:
-  - [ ] Press Mod+Comma → Settings opens on the last page used, or the first.
+  - [x] Press Mod+Comma → Settings opens on the last page used, or the first. (cards; evidence/cards-SET-006.txt)
   - [x] Count the pages in the side list → exactly the ten named, plus one per repository. (cards; evidence/cards-SET-006.txt)
   - [ ] Follow an in-app link to the shortcut policy → Shortcuts opens, scrolled to that setting.
 Compat: the keybinding command id app.settings stays, with Mod+Comma as its default.
@@ -276,8 +276,8 @@ Rules: collisions are judged inside a scope (global, tabs, terminal, browser, ed
   short; the macOS desktop-switching warning appears only when the current keyboard layout really
   produces a digit on that key, and stays quiet otherwise.
 Acceptance:
-  - [ ] Bind Mod+P to a second global command → both rows show Conflicts.
-  - [ ] On macOS with Ctrl+digit desktop switching on, bind Ctrl+2 → the system-capture warning shows.
+  - [x] Bind Mod+P to a second global command → both rows show Conflicts. (cards; evidence/cards-SET-010.txt)
+  - [x] On macOS with Ctrl+digit desktop switching on, bind Ctrl+2 → the system-capture warning shows. (cards; evidence/cards-SET-010.txt)
 Compat: —
 Source: D-17-010
 
@@ -299,8 +299,8 @@ Rules: the file's shape is given under Compat; entries in the section for the ru
   saved for another platform does not block it), leaves other overrides alone, and changes nothing the
   second time it runs.
 Acceptance:
-  - [ ] Put terminal.clear with the value null in the keybindings map and reload → the clear-terminal
-        command shows Unassigned.
+  - [x] Put terminal.clear with the value null in the keybindings map and reload → the clear-terminal
+        command shows Unassigned. (cards; evidence/cards-SET-011.txt)
   - [x] Break the file's syntax and reload → an error diagnostic, the default chords work, and the
         broken file itself stays untouched. (cards; evidence/cards-SET-011.txt)
   - [x] Add a win32 section overriding a shared entry → on Windows the section's value applies. (cards; evidence/cards-SET-011.txt)
