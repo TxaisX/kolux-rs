@@ -20,7 +20,8 @@ import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
-import { aiShownFor, fixRequest, recipeFor, type FixLaunch, type FixPlan } from "./recipes";
+import { aiShownFor, fixRequest, recipeFor, type FixLaunch, type FixPlan, type RepoRef } from "./recipes";
+import { readRepoRef } from "./repoId";
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, writerName, writerUsable, DEFAULT_WRITER, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
@@ -142,7 +143,17 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
   const gen = dir === null ? null : genState(dir);
   // GIT-019: the generate and Fix with AI controls follow the global switch and this repository's own mode.
   const { settings: appSettings } = useSettings();
-  const aiOn = aiShownFor(appSettings, ghRepo ? `${ghRepo.owner}/${ghRepo.name}` : null);
+  // Row 917: keyed by the provider-neutral repository id; null until it is read, which keeps AI off while any repository is switched off.
+  const [repoRef, setRepoRef] = useState<RepoRef | null>(null);
+  useEffect(() => {
+    setRepoRef(null);
+    let live = true;
+    if (dir !== null) void readRepoRef(dir).then((r) => live && setRepoRef(r));
+    return () => {
+      live = false;
+    };
+  }, [dir]);
+  const aiOn = aiShownFor(appSettings, repoRef);
   // GIT-019: a recipe for the action wins over the single writer; the Rust side expands its variables.
   const commitRecipe = recipeFor(appSettings, "commit");
   const fixRecipe = recipeFor(appSettings, "fix");

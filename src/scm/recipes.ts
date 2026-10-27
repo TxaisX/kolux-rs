@@ -77,23 +77,41 @@ export function migrateRecipes(settings: Record<string, unknown> | null): Recipe
 export type RepoAiMode = "follow" | "on" | "off";
 export const REPO_AI_KEY = "scmRepoAi";
 
-/** A repository's mode; anything but the two forcing values follows the global choice. */
-export function repoAiMode(settings: Record<string, unknown> | null, repo: string): RepoAiMode {
-  const m = (settings?.[REPO_AI_KEY] as Record<string, unknown> | undefined)?.[repo];
-  return m === "on" || m === "off" ? m : "follow";
+/** A repository as the switch knows it: the provider-neutral id (scm_repo_id), plus the `owner/name` key a GitHub repository was saved under before ids existed. A bare string is an id. */
+export type RepoRef = string | { id: string; legacy?: string | null };
+const idOf = (r: RepoRef): string => (typeof r === "string" ? r : r.id);
+const legacyOf = (r: RepoRef): string | null => (typeof r === "string" ? null : r.legacy ?? null);
+const savedModes = (settings: Record<string, unknown> | null): Record<string, unknown> => (settings?.[REPO_AI_KEY] as Record<string, unknown> | undefined) ?? {};
+const forcing = (m: unknown): m is "on" | "off" => m === "on" || m === "off";
+
+/** A repository's mode: its id's entry, else its old GitHub key's; anything but the two forcing values follows the global choice. */
+export function repoAiMode(settings: Record<string, unknown> | null, repo: RepoRef): RepoAiMode {
+  const saved = savedModes(settings);
+  const own = saved[idOf(repo)];
+  if (forcing(own)) return own;
+  const legacy = legacyOf(repo);
+  const old = legacy === null ? undefined : saved[legacy];
+  return forcing(old) ? old : "follow";
 }
 
-/** Do the AI actions show for this repository: forced on or off, else the one global switch. */
-export function aiShownFor(settings: Record<string, unknown> | null, repo: string | null): boolean {
-  const mode = repo === null ? "follow" : repoAiMode(settings, repo);
+/**
+ * Do the AI actions show for this repository: forced on or off, else the one global switch. A null
+ * repository is one whose id could not be read: it fails closed while any repository is switched
+ * off (it may be that one), else it follows the global switch.
+ */
+export function aiShownFor(settings: Record<string, unknown> | null, repo: RepoRef | null): boolean {
+  if (repo === null) return Object.values(savedModes(settings)).includes("off") ? false : aiControlsShown(settings);
+  const mode = repoAiMode(settings, repo);
   return mode === "on" ? true : mode === "off" ? false : aiControlsShown(settings);
 }
 
-/** The saved per-repository modes with `repo` set; "follow" removes its entry. */
-export function withRepoAi(settings: Record<string, unknown> | null, repo: string, mode: RepoAiMode): Record<string, RepoAiMode> {
-  const now = { ...((settings?.[REPO_AI_KEY] as Record<string, RepoAiMode> | undefined) ?? {}) };
-  if (mode === "follow") delete now[repo];
-  else now[repo] = mode;
+/** The saved per-repository modes with `repo` set under its id (its old GitHub key retired); "follow" removes both entries. */
+export function withRepoAi(settings: Record<string, unknown> | null, repo: RepoRef, mode: RepoAiMode): Record<string, RepoAiMode> {
+  const now = { ...(savedModes(settings) as Record<string, RepoAiMode>) };
+  const legacy = legacyOf(repo);
+  if (legacy !== null) delete now[legacy];
+  if (mode === "follow") delete now[idOf(repo)];
+  else now[idOf(repo)] = mode;
   return now;
 }
 

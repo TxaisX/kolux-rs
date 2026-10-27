@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index b9fc3f48..9683c3cb 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -736,7 +736,7 @@ pub fn run() {
+             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
+             pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
+             pr_review::scm_review_read, pr_review::scm_review_act, pr_review::scm_review_send, pr_review::scm_pr_conflicts,
+-            scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
++            scm::scm_history, scm::scm_commit_files, scm::scm_github_repo, scm::repo_id::scm_repo_id,
+             bulk::workspace_remove_many, bulk::workspace_forget, bulk::workspace_forget_check,
+             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
+             bulk::space_scan, bulk::space_saved,

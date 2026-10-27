@@ -68,8 +68,8 @@ export default function AiRecipesSection({ settings, save }: Props) {
           </li>
         ))}
       </ul>
-      <input className="field" aria-label="Repository to override" placeholder="owner/name" value={repo} onChange={(e) => setRepo(e.target.value)} />
-      <button type="button" className="btn" disabled={!/^[^/\s]+\/[^/\s]+$/.test(repo.trim())} onClick={() => (void save({ [REPO_AI_KEY]: withRepoAi(settings, repo.trim(), "off") }), setRepo(""))}>
+      <input className="field" aria-label="Repository to override" title="The repository id: host/owner/name for a remote, or the folder path when there is no remote. An older owner/name still works for GitHub." placeholder="github.com/owner/name" value={repo} onChange={(e) => setRepo(e.target.value)} />
+      <button type="button" className="btn" disabled={!repo.trim().includes("/") || repo.trim().endsWith("/")} onClick={() => (void save({ [REPO_AI_KEY]: withRepoAi(settings, repo.trim(), "off") }), setRepo(""))}>
         Turn AI actions off for it
       </button>
     </section>
