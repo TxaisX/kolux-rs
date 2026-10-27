@@ -285,9 +285,10 @@ pub fn run() {
             // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
             // lock or a lock that cannot be opened is logged; the latter still recovers).
             skill_delete::startup_recover(&dir);
-            let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
-            store.set("start_count", &starts.to_string())?;
-            onboarding::first_start(&store, starts)?;
+            let starts = onboarding::count_start(&store)?; // a failed count write is logged inside, never fatal
+            if let Err(e) = onboarding::first_start(&store, starts) {
+                eprintln!("kolux-rs: onboarding start failed ({e}); startup goes on");
+            }
             // USAGE-011: last run's activity counts, before any pane reports.
             activity::start(&store);
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.

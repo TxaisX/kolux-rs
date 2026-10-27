@@ -94,7 +94,6 @@ fn save(store: &Store, rec: &Onboarding) -> Result<(), String> {
 
 /// This start's number: the stored count plus one. A count that cannot be read stops startup (it would
 /// pass an old profile off as new); one that cannot be written is logged and the start still counts.
-#[allow(dead_code)] // lib.rs calls it once evidence/fix-other-fix-884-lib.rs.patch is applied (hard-stop file)
 pub fn count_start(store: &Store) -> Result<u64, String> {
     let starts: u64 = store.get("start_count").map_err(|e| e.to_string())?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
     if let Err(e) = store.set("start_count", &starts.to_string()) {
