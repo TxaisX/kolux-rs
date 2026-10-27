@@ -222,13 +222,20 @@ pub fn login_command(program: &Path, dir: &Path) -> CommandBuilder {
 /// account's earlier credentials are put back.
 #[allow(clippy::too_many_arguments)]
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended), status: impl FnOnce(&Path) -> Option<String>) -> Result<Account, Attention> {
-    let dir = profile.join(FOLDER).join(id);
+    // Row 932: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id; an unreadable list fails here, before the login.
+    let (listed_ids, existing) = if existing {
+        let ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
+        let listed = ids.iter().any(|l| l == id);
+        (ids, listed)
+    } else {
+        (load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect(), false)
+    };
     let (id, dir) = if existing {
+        let dir = profile.join(FOLDER).join(id);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         (id.to_string(), dir)
     } else {
-        let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
-        claim_new_folder(profile, FOLDER, "claude", &listed, id)?
+        claim_new_folder(profile, FOLDER, "claude", &listed_ids, id)?
     };
     let id = id.as_str();
     let creds = dir.join(CREDENTIALS);
@@ -876,10 +883,8 @@ mod tests {
         let vault = dir.join(secrets::VAULT).join("claude-a1.json");
         let sealed = fs::read(&vault).unwrap();
         let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
-        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
-        crate::orchestration::kept::refuse_copies(&dir);
         let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
-        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(sign_in(&store, &dir, "a1", true, 9, breaks_list(&store, &dir, broken, new), |_| Some(SIGNED_IN.into())).is_err());
         assert_eq!(fs::read(&vault).unwrap(), sealed, "the sealed copy is the earlier one again");
         assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS));
         assert_eq!(fs::read_to_string(Path::new(&a.config_dir).join(CREDENTIALS)).unwrap(), CREDS, "and so is the live file");
@@ -894,10 +899,8 @@ mod tests {
         let live = Path::new(&a.config_dir).join(CREDENTIALS);
         fs::remove_file(&live).unwrap();
         let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
-        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
-        crate::orchestration::kept::refuse_copies(&dir);
         let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
-        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(sign_in(&store, &dir, "a1", true, 9, breaks_list(&store, &dir, broken, new), |_| Some(SIGNED_IN.into())).is_err());
         assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS), "the vault holds the earlier sign-in");
         assert_ne!(fs::read_to_string(&live).ok().as_deref(), Some(new), "the live file is not the new sign-in");
         assert_eq!(fs::read_to_string(&live).unwrap(), CREDS, "undo copied the earlier sealed credentials back");
@@ -911,10 +914,8 @@ mod tests {
         let vault = dir.join(secrets::VAULT).join("claude-a1.json");
         fs::remove_file(&vault).unwrap();
         let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
-        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
-        crate::orchestration::kept::refuse_copies(&dir);
         let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
-        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(sign_in(&store, &dir, "a1", true, 9, breaks_list(&store, &dir, broken, new), |_| Some(SIGNED_IN.into())).is_err());
         assert!(!vault.exists(), "no sealed copy appears");
     }
 
@@ -928,10 +929,8 @@ mod tests {
         fs::remove_file(&live).unwrap();
         fs::remove_file(&vault).unwrap();
         let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
-        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
-        crate::orchestration::kept::refuse_copies(&dir);
         let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
-        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(sign_in(&store, &dir, "a1", true, 9, breaks_list(&store, &dir, broken, new), |_| Some(SIGNED_IN.into())).is_err());
         assert!(!live.exists(), "the refused login is not left live");
         assert!(!vault.exists(), "and no sealed copy appears");
     }
@@ -961,6 +960,22 @@ mod tests {
         assert!(!write_live_from_sealed(&other, format!("{}!!!", secrets::seal("x").unwrap()).as_bytes()));
         assert!(!write_live_from_sealed(&other, &[0xff, 0xfe]));
         assert!(!other.exists(), "bytes that cannot be opened write nothing");
+    }
+
+    // Row 932: existing:true at an id that is not listed (a stale screen) is a new account, so an orphan sealed copy at that id is never overwritten.
+    #[test]
+    fn row932_an_existing_claude_sign_in_at_an_unlisted_id_claims_a_free_one() {
+        let (dir, store) = profile("row932-stale");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a7.json");
+        secrets::write_file(&vault, "orphan sealed text").unwrap();
+        let orphan = fs::read(&vault).unwrap();
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"lee@example.com","orgName":"Other Org"}"#;
+        let got = sign_in(&store, &dir, "a7", true, 9, writes(r#"{"claudeAiOauth":{"accessToken":"fake-lee"}}"#, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
+        assert_ne!(got.id, "a7", "the unlisted id is taken by an orphan copy, so the account gets another");
+        assert_eq!(fs::read(&vault).unwrap(), orphan, "the orphan is byte-identical");
+        assert!(dir.join(secrets::VAULT).join(format!("claude-{}.json", got.id)).is_file());
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
@@ -998,6 +1013,15 @@ mod tests {
         let dir = crate::test_dir::temp(&format!("claude-accounts-{tag}"));
         let store = Store::open(&dir).unwrap();
         (dir, Mutex::new(store))
+    }
+
+    /// A login that writes `creds`, and breaks the account list as it ends so the save is refused: a list broken before the login fails the sign-in up front (row 932).
+    fn breaks_list<'a>(store: &'a Mutex<Store>, dir: &'a Path, broken: &'a str, creds: &'static str) -> impl FnOnce(&Path) -> (String, Ended) + 'a {
+        move |d| {
+            store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+            crate::orchestration::kept::refuse_copies(dir);
+            writes(creds, Ended::Exited(Some(0)))(d)
+        }
     }
 
     fn writes(creds: &'static str, ended: Ended) -> impl FnOnce(&Path) -> (String, Ended) {
