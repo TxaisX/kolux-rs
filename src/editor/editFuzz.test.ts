@@ -88,8 +88,8 @@ function spots(prev: string): number[] {
 }
 
 /** One random edit as the rich view would give it back, before its own spelling (`roundTrip`) is applied. */
-function editOf(prev: string, r: (n: number) => number): { what: string; out: string } {
-  const at = spots(prev);
+function editOf(prev: string, r: (n: number) => number, win?: [number, number]): { what: string; out: string } {
+  const at = win ? spots(prev).filter((x) => x >= win[0] && x <= win[1]) : spots(prev);
   const p = at[r(at.length)];
   const ins = (t: string) => prev.slice(0, p) + t + prev.slice(p);
   const k = r(10);
@@ -100,7 +100,9 @@ function editOf(prev: string, r: (n: number) => number): { what: string; out: st
   if (k === 3) {
     const lineStart = prev.lastIndexOf("\n", p - 1) + 1;
     const item = /^ *([-*+]|\d+[.)]) /.exec(prev.slice(lineStart))?.[1];
-    return { what: "Enter", out: ins(item ? `\n${/\d/.test(item) ? "9." : item} ` : "\n\n") };
+    // Round 12 shapes: Enter in a nested item opens a sibling at the same depth, as the view does.
+    const lead = R12 ? (/^ */.exec(prev.slice(lineStart))?.[0] ?? "") : "";
+    return { what: "Enter", out: ins(item ? `\n${lead}${/\d/.test(item) ? "9." : item} ` : "\n\n") };
   }
   if (k === 4) {
     const nl = [...prev.matchAll(/\n+(?: *[-*+] | *\d+[.)] |> )?/g)];
@@ -132,6 +134,25 @@ function note(r: (n: number) => number): string {
   if (r(2)) body += "\n";
   if (r(6) === 0) body = body.replace(/\n/g, "\r\n");
   return (r(5) === 0 ? "---\ntitle: fuzz\n---\n" : "") + body;
+}
+
+// Round 12 shapes (opt-in, FUZZ_SHAPES=r12; seeds 1-200 draw exactly what they drew before): a note over 400 lines with a fenced
+// block above the edit, and 2-space nested lists with emphasis in sibling items. The edit lands between "Intro" and "After".
+const R12 = ENV.FUZZ_SHAPES === "r12";
+function note12(r: (n: number) => number): { text: string; win: boolean } {
+  const crlf = (t: string) => (r(5) === 0 ? t.replace(/\n/g, "\r\n") : t);
+  if (r(2)) {
+    const lines = (w: string) => Array.from({ length: 100 }, (_, i) => w + i).join("\n");
+    const mid = Array.from({ length: 1 + r(3) }, (_, i) => KINDS[r(KINDS.length)](i)).join("\n\n");
+    const paras = Array.from({ length: 300 }, (_, i) => "para " + i).join("\n\n");
+    const fenceTop = r(4) ? "```\n" + lines("alpha") + "\n```\n\n" : "";
+    const fenceLow = r(2) ? "```\n" + lines("beta") + "\n```\n\n" : "";
+    return { text: crlf(fenceTop + "Intro\n\n" + mid + "\n\nAfter\n\n" + fenceLow + paras + "\n"), win: true };
+  }
+  const item = () => ["sub _a_", "two __b__ words", "more", "_x_ and __y__", "plain"][r(5)];
+  const sub = (n: number) => Array.from({ length: n }, () => "  - " + item()).join(r(4) ? "\n" : "\n\n");
+  const lists = Array.from({ length: 1 + r(2) }, (_, i) => `- one ${i}\n${sub(2 + r(3))}\n- three ${i}`).join("\n\n");
+  return { text: crlf((r(2) ? "Intro\n\n" : "") + lists + (r(2) ? "\n\nTail para here.\n" : "\n")), win: false };
 }
 
 const WORD = /[\p{L}\p{N}]+/gu;
@@ -319,18 +340,21 @@ describe("fuzz: chained everyday rich-view edits save a note that reads back as 
   it.each(SEEDS)("400 chained edits (seed %i)", (seed) => {
     const r = rng(seed);
     Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0 });
-    const N = 400;
+    const N = R12 ? 120 : 400;
     let edits = 0;
     let refused = 0;
     let refusedHard = 0;
     let chained = 0;
     const t0 = performance.now();
     while (edits < N) {
-      let now = note(r);
+      const shaped = R12 ? note12(r) : { text: note(r), win: false };
+      let now = shaped.text;
       if (unsupported(splitFront(now).body)) continue;
       let prev = roundTrip(splitFront(now).body)!;
       for (let s = 0; s < 12 && edits < N; s++) {
-        const { what, out: typed } = editOf(prev, r);
+        const a = shaped.win ? prev.indexOf("Intro") : -1;
+        const z = shaped.win ? prev.indexOf("After") : -1;
+        const { what, out: typed } = editOf(prev, r, a >= 0 && z > a ? [a, z + 5] : undefined);
         const out = roundTrip(typed);
         // Only edits the rich view could have made: its text is its own spelling, stable, and changed.
         if (out === null || out === prev || roundTrip(out) !== out) continue;
@@ -370,11 +394,11 @@ tail=${JSON.stringify(tail)}`).toBe(true);
     }
     const ms = performance.now() - t0;
     // Notes the view cannot spell (a fence in an item, a blank line inside a list item) refuse more: random selections tear their fences. Ordinary notes mix several loose and nested lists now: 2% was the round 6 bar, 3% holds with the new shapes.
-    expect(refused, "refused on ordinary notes").toBeLessThanOrEqual(N / 35);
-    expect(refusedHard, "refused on notes with a nested fence or a loose nested list").toBeLessThanOrEqual(N / 8);
+    if (!R12) expect(refused, "refused on ordinary notes").toBeLessThanOrEqual(N / 35);
+    if (!R12) expect(refusedHard, "refused on notes with a nested fence or a loose nested list").toBeLessThanOrEqual(N / 8);
     // Shown with --silent=false: how often each path holds.
-    console.log(`fuzz seed ${seed}: ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, mismatched 0, ${ms.toFixed(0)} ms`);
-  }, 20_000);
+    console.log(`fuzz seed ${seed}${R12 ? " (round 12 shapes)" : ""}: invariant refusals ${placeStats.invariant}, ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, mismatched 0, ${ms.toFixed(0)} ms`);
+  }, R12 ? 240_000 : 20_000);
 });
 
 // Round 8: the oracle itself. Each saved text below is what round 7 (4a018d90) saved, and the oracle must flag it.
