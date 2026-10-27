@@ -372,6 +372,12 @@ pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
     if path == "/antigravity/PreToolUse" {
         return json!({ "decision": "allow" }).to_string();
     }
+    // STAT-012: only an older hooks.json still posts Cursor's shell/MCP permission events (never installed now, DT-C49);
+    // "ask" defers to the user (cursor.com/docs/agent/hooks), never "allow". preToolUse stays `{}`: the doc says ask
+    // "is accepted by the schema but not enforced for preToolUse".
+    if path == "/cursor" && serde_json::from_slice::<Value>(body).ok().is_some_and(|e| matches!(e.get("hook_event_name").and_then(Value::as_str), Some("beforeShellExecution" | "beforeMCPExecution"))) {
+        return json!({ "permission": "ask" }).to_string();
+    }
     // T-156-b: the rules in force for the command's folder (built-ins, the user's own, per project)
     // and the recent-attempts list, both in protected_custom.rs.
     crate::protected_custom::listen(path, body, settings).unwrap_or_else(|| "{}".into())
@@ -1489,6 +1495,19 @@ Content-Length: {}
         // The Claude script prints the answer for Claude to read; Codex's still discards it.
         assert!(claude_script().contains("%KP%/claude\" 2>NUL") && !claude_script().contains("-o NUL"));
         assert!(codex_script().contains("-o NUL"));
+    }
+
+    /// STAT-012 (kolux-87 ruling): a /cursor shell or MCP permission post can only come from an older hooks.json
+    /// that was never reinstalled; it gets "ask", which defers to the user, and never "allow".
+    #[test]
+    fn stat_012_legacy_cursor_shell_and_mcp_permission_hooks_get_ask() {
+        let s = json!({});
+        let ev = |name: &str| format!(r#"{{"hook_event_name":"{name}","conversation_id":"c1","command":"git push -f"}}"#);
+        for name in ["beforeShellExecution", "beforeMCPExecution"] {
+            assert_eq!(reply_body("/cursor", ev(name).as_bytes(), &s), r#"{"permission":"ask"}"#, "{name}");
+        }
+        assert_eq!(reply_body("/cursor", ev("preToolUse").as_bytes(), &s), "{}", "ask is not enforced for preToolUse");
+        assert_eq!(reply_body("/claude", ev("beforeShellExecution").as_bytes(), &s), "{}", "only the Cursor route");
     }
 
     #[test]
