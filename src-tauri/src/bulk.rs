@@ -191,7 +191,8 @@ fn slug(label: &str) -> String {
 /// id it had (\`id\` given); a new one gets an id from its label, made unique. Blank labels drop.
 pub fn set_statuses(store: &Store, list: &[(Option<String>, String)]) -> Result<Vec<Status>, String> {
     let mut out: Vec<Status> = Vec::new();
-    let old: Vec<Status> = crate::orchestration::kept::or_default(store, STATUS_LIST_KEY);
+    // A list that cannot be read or kept aside is an error, never an empty one to save over.
+    let old: Vec<Status> = crate::orchestration::kept::load(store, STATUS_LIST_KEY)?;
     for (id, label) in list.iter().filter(|(_, l)| !l.trim().is_empty()) {
         let base = id.clone().filter(|i| !i.is_empty()).unwrap_or_else(|| slug(label));
         let mut unique = base.clone();
@@ -200,7 +201,7 @@ pub fn set_statuses(store: &Store, list: &[(Option<String>, String)]) -> Result<
             unique = format!("{base}-{n}");
             n += 1;
         }
-        let rest = id.as_ref().and_then(|i| old.iter().find(|s| s.id == *i)).map(|s| s.rest.clone()).unwrap_or_default();
+        let rest = id.as_ref().filter(|_| unique == base).and_then(|i| old.iter().find(|s| s.id == *i)).map(|s| s.rest.clone()).unwrap_or_default();
         out.push(Status { id: unique, label: label.trim().to_string(), rest });
     }
     let out = if out.is_empty() { default_statuses() } else { out };
@@ -558,8 +559,38 @@ mod tests {
         crate::orchestration::kept::refuse_copies(&db);
         assert_eq!(statuses(&store), default_statuses(), "the page shows the defaults");
         let err = set_statuses(&store, &[(None, "Backlog".into())]).unwrap_err();
-        assert!(err.contains(STATUS_LIST_KEY) && err.contains("not saving over it"), "{err}");
+        assert!(err.contains(STATUS_LIST_KEY) && (err.contains("not saving over it") || err.contains("could not be kept aside")), "{err}");
         assert_eq!(store.get(STATUS_LIST_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row922_a_save_with_the_list_refused_a_copy_never_replaces_it() {
+        let dir = temp("r922a");
+        let db = dir.join("db");
+        let store = Store::open(&db).unwrap();
+        let broken = "[{\"id\": \"mine\", \"label\": \"Mine\"";
+        store.set(STATUS_LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        // No statuses() call first: the save itself must notice the list was not kept aside.
+        let err = set_statuses(&store, &[(None, "Backlog".into())]).unwrap_err();
+        assert!(err.contains(STATUS_LIST_KEY), "{err}");
+        assert_eq!(store.get(STATUS_LIST_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row922_a_renamed_duplicate_does_not_copy_the_unknown_fields_of_the_first() {
+        let dir = temp("r922b");
+        let store = Store::open(&dir).unwrap();
+        store.set(STATUS_LIST_KEY, r##"[{"id":"ideas","label":"Ideas","color":"#f00"}]"##).unwrap();
+        set_statuses(&store, &[(Some("ideas".into()), "A".into()), (Some("ideas".into()), "B".into())]).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&store.get(STATUS_LIST_KEY).unwrap().unwrap()).unwrap();
+        assert_eq!((back[0]["id"].as_str(), back[0]["color"].as_str()), (Some("ideas"), Some("#f00")));
+        assert_eq!(back[1]["id"], "ideas-2");
+        assert!(back[1].get("color").is_none(), "{back}");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }
