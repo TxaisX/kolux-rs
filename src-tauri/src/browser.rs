@@ -896,7 +896,7 @@ fn read_system_proxy() -> bool {
         ((rc == 0).then_some(value), reg("ProxyServer"), reg("AutoConfigURL"))
     };
     #[cfg(not(windows))]
-    let (enable, server, pac) = (None, None, None);
+    let (enable, server, pac): (Option<u32>, Option<String>, Option<String>) = (None, None, None);
     system_proxy_from(enable, server.as_deref(), pac.as_deref(), |n| std::env::var(n).ok())
 }
 
