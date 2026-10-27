@@ -75,19 +75,22 @@ impl Budget {
     /// One worker for a whole scan: `work` runs on a single helper thread (started on the first call),
     /// and each call waits for its answer only while the budget lasts. `none` runs inline.
     pub fn worker<I: Send + 'static, O: Send + 'static>(&self, work: impl Fn(I) -> O + Send + Sync + 'static) -> Worker<I, O> {
-        Worker { end: self.0, work: std::sync::Arc::new(work), line: RefCell::new(None), stalled: Cell::new(false) }
+        Worker { end: self.0, work: std::sync::Arc::new(work), line: RefCell::new(None), stalled: Cell::new(false), respawned: Cell::new(false) }
     }
 }
 
 type Line<I, O> = (mpsc::Sender<I>, mpsc::Receiver<O>);
 
 /// See [`Budget::worker`]. Calls are one at a time; after the budget runs out on a call the helper is
-/// left to finish on its own and every later call answers `None` at once.
+/// left to finish on its own and every later call answers `None` at once. A helper that died (its work
+/// panicked on one item) answers `None` for that item only and is replaced once per scan; a second
+/// death also sets `stalled`, so the scan reports itself cut short.
 pub struct Worker<I, O> {
     end: Option<Instant>,
     work: std::sync::Arc<dyn Fn(I) -> O + Send + Sync>,
     line: RefCell<Option<Line<I, O>>>,
     stalled: Cell<bool>,
+    respawned: Cell<bool>,
 }
 
 impl<I: Send + 'static, O: Send + 'static> Worker<I, O> {
@@ -113,11 +116,27 @@ impl<I: Send + 'static, O: Send + 'static> Worker<I, O> {
             });
             (jobs, answers)
         });
-        let answer = jobs.send(item).ok().and_then(|()| answers.recv_timeout(end.saturating_duration_since(Instant::now())).ok());
-        if answer.is_none() {
-            self.stalled.set(true);
+        let answer = jobs.send(item).map_err(|_| mpsc::RecvTimeoutError::Disconnected).and_then(|()| answers.recv_timeout(end.saturating_duration_since(Instant::now())));
+        match answer {
+            Ok(done) => Some(done),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.stalled.set(true);
+                None
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // The helper is gone, not hung: the next call starts a fresh one, once; a second death stops the scan's helper work.
+                *line = None;
+                if self.respawned.replace(true) {
+                    self.stalled.set(true);
+                }
+                None
+            }
         }
-        answer
+    }
+
+    /// Whether the budget ran out on a call (or the helper died twice), so the scan was cut short.
+    pub fn stalled(&self) -> bool {
+        self.stalled.get()
     }
 }
 
@@ -344,6 +363,24 @@ mod tests {
         assert!(began.elapsed() < Duration::from_millis(100));
         assert_eq!(SPAWNS.with(|n| n.get()), 1);
         assert_eq!(Budget::none().worker(|x: u8| x + 1).call(1), Some(2));
+    }
+
+    #[test]
+    fn row893_a_worker_whose_work_panicked_loses_that_item_only_and_is_replaced_once() {
+        SPAWNS.with(|n| n.set(0));
+        let w = Budget::within(Duration::from_secs(60)).worker(|n: u8| {
+            assert!(n != 0, "test panic");
+            n
+        });
+        assert_eq!(w.call(1), Some(1));
+        assert_eq!(w.call(0), None);
+        assert!(!w.stalled(), "a dead helper is not a stalled one");
+        assert_eq!(w.call(2), Some(2), "later items still run");
+        assert_eq!(SPAWNS.with(|n| n.get()), 2);
+        assert_eq!(w.call(0), None);
+        assert!(w.stalled(), "a second death ends the helper work for this scan");
+        assert_eq!(w.call(3), None);
+        assert_eq!(SPAWNS.with(|n| n.get()), 2, "nothing more is spawned");
     }
 
     /// after-list row 608: a read stalled inside one transcript (a hung network disk) does not hold

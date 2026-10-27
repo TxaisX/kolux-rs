@@ -270,10 +270,12 @@ pub fn drop_unreadable(store: &Store, dir: &Path) -> Vec<String> {
 
 /// ACCT-010: the secret fields waiting for a reconnect, for the note in the main window.
 pub fn dropped(store: &Store) -> Vec<String> {
-    crate::orchestration::kept::or_default_held(store, DROPPED_KEY)
+    crate::orchestration::kept::or_default(store, DROPPED_KEY)
 }
 
 pub fn dismiss_dropped(store: &Store) -> Result<(), String> {
+    // Read first: a blob that cannot be kept aside fails the dismiss rather than being overwritten blind.
+    crate::orchestration::kept::load::<Vec<String>>(store, DROPPED_KEY)?;
     store.set(DROPPED_KEY, "[]").map_err(|e| e.to_string())
 }
 
@@ -685,6 +687,35 @@ mod tests {
         let err = write_setting(&store, "xaiApiKey", "xai-NEW").unwrap_err();
         assert!(err.contains(DROPPED_KEY) && err.contains("nothing was saved"), "{err}");
         assert!(store.settings().get("xaiApiKey").is_none());
+        assert_eq!(store.get(DROPPED_KEY).unwrap().as_deref(), Some(broken), "the note blob is byte-identical");
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn card16c_a_failed_note_read_for_display_does_not_block_the_next_key_save_from_clearing_the_note() {
+        let dir = temp_dir("note-display");
+        let store = Store::open(&dir).unwrap();
+        store.set(DROPPED_KEY, "[\"xaiApiKey\"]").unwrap();
+        let side = crate::orchestration::kept::Unreadable::new(&dir);
+        assert!(dropped(&store).is_empty(), "the display falls back to nothing");
+        side.restore();
+        write_setting(&store, "xaiApiKey", "xai-NEW").unwrap();
+        assert_eq!(store.get(DROPPED_KEY).unwrap().as_deref(), Some("[]"), "the key stored again is no longer one to reconnect");
+        drop(side);
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn card16c_dismissing_a_note_that_cannot_be_kept_aside_fails_and_leaves_the_blob() {
+        let dir = temp_dir("note-dismiss");
+        let store = Store::open(&dir).unwrap();
+        let broken = "[\"claudeOauthTok";
+        store.set(DROPPED_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let err = dismiss_dropped(&store).unwrap_err();
+        assert!(err.contains(DROPPED_KEY), "{err}");
         assert_eq!(store.get(DROPPED_KEY).unwrap().as_deref(), Some(broken), "the note blob is byte-identical");
         drop(store);
         fs::remove_dir_all(&dir).unwrap();

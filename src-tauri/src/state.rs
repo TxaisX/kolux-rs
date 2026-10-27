@@ -33,7 +33,7 @@ impl Store {
     pub fn open(dir: &Path) -> rusqlite::Result<Store> {
         fs::create_dir_all(dir).map_err(|e| rusqlite::Error::InvalidPath(dir.join(e.to_string())))?;
         let conn = Connection::open(dir.join("state.db"))?;
-        // Absorbs a transient SQLITE_BUSY from a second process, so held keys are not poisoned for nothing.
+        // Pins rusqlite's 5 s default so a future default change cannot drop it; absorbs a transient SQLITE_BUSY so held keys are not poisoned for nothing.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
