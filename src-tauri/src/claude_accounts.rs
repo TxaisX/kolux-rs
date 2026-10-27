@@ -292,12 +292,13 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     })();
     if let Err(e) = listed {
         // Row 923: the vault goes back first, so undo's fallback copy to the live file reads the earlier credentials.
-        let restored = match prior_vault.flatten() {
+        let prior = prior_vault.flatten();
+        let restored = match &prior {
             _ if !existing => {
                 remove_sealed_copy(&vault);
                 false
             }
-            Some(Some(bytes)) => restore_sealed_copy(&vault, &bytes),
+            Some(Some(bytes)) => restore_sealed_copy(&vault, bytes),
             Some(None) => {
                 remove_sealed_copy(&vault);
                 false
@@ -305,14 +306,27 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
             None => false,
         };
         // Row 929: with no live file and no earlier bytes put back, the live file can only hold the refused login, so it goes.
+        // Row 932: unless the earlier sealed bytes are still in memory; those are opened and written live instead.
         if existing && before.is_none() && !restored {
-            remove_refused_login(&creds);
+            let back = matches!(&prior, Some(Some(bytes)) if write_live_from_sealed(&creds, bytes));
+            if !back {
+                remove_refused_login(&creds);
+            }
         } else {
             undo(&before);
         }
         return Err(e.into());
     }
     Ok(account)
+}
+
+/// Row 932: opens earlier sealed bytes and writes them as the live credentials, the way undo writes earlier bytes; false when they cannot be opened or written.
+fn write_live_from_sealed(creds: &Path, sealed: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(sealed) else { return false };
+    match secrets::unseal(text.trim_end()) {
+        Ok(plain) => fs::write(creds, plain).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Row 929: deletes the live credentials of a refused login; a file that is already gone is fine, any other failure is logged by path and kind only.
@@ -934,6 +948,19 @@ mod tests {
         let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| None).is_err());
         assert!(!live.exists(), "the refused login is not left live");
+    }
+
+    // Row 932: no seam fails the sealed-copy restore without failing the first vault write (both use the same temp file), so the live-file step is tested on its own.
+    #[test]
+    fn row932_earlier_sealed_bytes_are_opened_and_written_live_or_nothing_is() {
+        let dir = crate::test_dir::temp("claude-accounts-row932-live");
+        let live = dir.join(CREDENTIALS);
+        assert!(write_live_from_sealed(&live, secrets::seal(CREDS).unwrap().as_bytes()));
+        assert_eq!(fs::read_to_string(&live).unwrap(), CREDS);
+        let other = dir.join("other.json");
+        assert!(!write_live_from_sealed(&other, format!("{}!!!", secrets::seal("x").unwrap()).as_bytes()));
+        assert!(!write_live_from_sealed(&other, &[0xff, 0xfe]));
+        assert!(!other.exists(), "bytes that cannot be opened write nothing");
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
