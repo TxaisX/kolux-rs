@@ -130,6 +130,12 @@ describe("row 917 review fixes: one switch under every key a repository is known
     expect(aiShownFor({ scmRepoAi: after }, upstream)).toBe(false);
     expect(withRepoAi(s, fork, "off")).toEqual({ ...s.scmRepoAi, "github.com/me/app": "off", "C:/work/fork": "off" });
   });
+  it("a pre-917 owner/name off still counts for a repository that is not on github.com", () => {
+    const s = { scmRepoAi: { "Org/app": "off" } };
+    expect(aiShownFor(s, { id: "github.example.com/Org/app", legacy: "Org/app", also: [] })).toBe(false);
+    expect(aiShownFor(s, { id: "gitlab.com/Org/app", legacy: "Org/app", also: [] })).toBe(false);
+    expect(aiShownFor(s, { id: "gitlab.com/Org/other", legacy: "Org/other", also: [] })).toBe(true);
+  });
   it("an off under any key wins over an on under the primary id", () => {
     const s = { scmRepoAi: { "gitlab.com/Team/App": "on", "C:/work/app": "off" } };
     expect(repoAiMode(s, origin)).toBe("off");

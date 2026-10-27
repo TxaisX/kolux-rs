@@ -61,6 +61,15 @@ pub fn remote_id(url: &str, ssh_config: &str) -> Option<String> {
     Some(format!("{}/{}", host.to_lowercase(), path))
 }
 
+/// A remote that is a folder, not a host: `file://`, a drive, UNC, absolute or relative path. `remote_id` reads these as paths.
+fn is_local_remote(url: &str) -> bool {
+    let url = url.trim();
+    match url.split_once("://") {
+        Some((scheme, _)) => scheme.eq_ignore_ascii_case("file"),
+        None => !matches!(url.split_once(':'), Some((auth, _)) if auth.len() > 1 && !auth.contains(['/', '\\'])),
+    }
+}
+
 fn not_a_repository(err: &str) -> bool {
     err.to_lowercase().contains("not a git repository")
 }
@@ -112,7 +121,7 @@ pub fn identity(worktree: &Path, ssh_config: &str) -> Result<RepoIdentity, Strin
     if let Some(i) = names.iter().position(|n| *n == "origin") {
         names.swap(0, i);
     }
-    // The primary remote's id and old GitHub key: origin, else the first readable remote. An origin that exists but cannot be read is an error, never a quiet switch to another remote.
+    // The primary remote's id and old GitHub key: origin, else the first readable remote that is a host (never a folder path). An origin that exists but cannot be read is an error, never a quiet switch to another remote.
     let mut primary: Option<(String, Option<String>)> = None;
     for (i, name) in names.iter().enumerate() {
         let url = match run(&["remote", "get-url", name], Some(worktree)) {
@@ -120,9 +129,13 @@ pub fn identity(worktree: &Path, ssh_config: &str) -> Result<RepoIdentity, Strin
             Err(e) if i == 0 && *name == "origin" => return Err(e),
             Err(_) => continue,
         };
+        // A folder remote is another checkout's path: using it as the key would share that checkout's switch.
+        if is_local_remote(&url) {
+            continue;
+        }
         if let Some(id) = remote_id(&url, ssh_config) {
-            // The old key has no host, so only github.com repositories may own it.
-            let legacy = super::github_repo(&url, ssh_config).filter(|g| g.host.eq_ignore_ascii_case("github.com")).map(|g| format!("{}/{}", g.owner, g.name));
+            // The key saved before ids, on any host `github_repo` parses.
+            let legacy = super::github_repo(&url, ssh_config).map(|g| format!("{}/{}", g.owner, g.name));
             primary = Some((id, legacy));
             break;
         }
@@ -357,7 +370,7 @@ mod tests {
         assert_eq!(now.id, "gitlab.com/g/app", "origin is the primary id");
         assert_eq!(now.also, old.also, "the root path id is the key that survives the switch");
         assert_eq!(now.also.len(), 1);
-        assert!(!now.also.contains(&old.id) && now.legacy.is_none());
+        assert!(!now.also.contains(&old.id) && now.legacy.as_deref() == Some("g/app"));
     }
 
     #[test]
@@ -372,16 +385,38 @@ mod tests {
     }
 
     #[test]
-    fn row917r_only_a_github_com_primary_has_a_legacy_key() {
-        let dir = repo("legacy-host");
-        run(&["remote", "add", "origin", "https://gitlab.com/Org/app.git"], Some(&dir)).unwrap();
-        run(&["remote", "add", "upstream", "https://github.com/Org/app.git"], Some(&dir)).unwrap();
-        let got = identity(&dir, "").unwrap();
-        assert_eq!(got.legacy, None);
-        assert!(!got.also.contains(&"Org/app".to_string()), "{:?}", got.also);
-        let ghe = repo("legacy-ghe");
-        run(&["remote", "add", "origin", "https://github.example.com/Org/app.git"], Some(&ghe)).unwrap();
-        assert_eq!(identity(&ghe, "").unwrap().legacy, None);
+    fn row917r_any_host_primary_that_parses_keeps_its_old_owner_name_key() {
+        for (name, url) in [("legacy-ghe", "https://github.example.com/Org/app.git"), ("legacy-gitlab", "https://gitlab.com/Org/app.git")] {
+            let dir = repo(name);
+            run(&["remote", "add", "origin", url], Some(&dir)).unwrap();
+            run(&["remote", "add", "upstream", "https://github.com/Other/thing.git"], Some(&dir)).unwrap();
+            let got = identity(&dir, "").unwrap();
+            assert_eq!(got.legacy.as_deref(), Some("Org/app"), "{url}");
+            assert!(got.also.iter().all(|k| !k.contains("Other")), "another remote adds no key: {:?}", got.also);
+        }
+    }
+
+    #[test]
+    fn row917r_a_local_path_remote_is_never_a_key() {
+        let a = repo("clone-a");
+        let b = repo("clone-b");
+        run(&["remote", "add", "origin", &forward(&a)], Some(&b)).unwrap();
+        let a_root = identity(&a, "").unwrap().id;
+        let got = identity(&b, "").unwrap();
+        assert_ne!(got.id, a_root, "B must not share A's key");
+        assert!(!got.also.contains(&a_root), "{:?}", got.also);
+        run(&["remote", "add", "upstream", "https://gitlab.com/g/app.git"], Some(&b)).unwrap();
+        assert_eq!(identity(&b, "").unwrap().id, "gitlab.com/g/app", "the next non-local remote is the primary");
+    }
+
+    #[test]
+    fn row917r_which_remote_forms_are_local_paths() {
+        for url in ["C:/work/A", "C:\\work\\A", "//srv/share/a", "/srv/a", "../a", "file:///srv/a"] {
+            assert!(is_local_remote(url), "{url}");
+        }
+        for url in ["git@gitlab.com:g/a.git", "https://gitlab.com/g/a", "ssh://git@h/g/a", "host:r"] {
+            assert!(!is_local_remote(url), "{url}");
+        }
     }
 
     #[test]
