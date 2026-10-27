@@ -148,6 +148,22 @@ test("SET-009 box 3: Reset brings the default chord back and the Modified badge 
   expect(host.file.value.platforms.win32["terminal.clear"]).toBeUndefined();
 });
 
+// ---- SET-010 ----
+test("SET-010 box 1: Mod+P bound to a second global command flags both rows Conflicts and lists them under Conflicting", async () => {
+  const { c } = await page(file({ version: 1, keybindings: {} }));
+  const holders = find(c, (n) => n.localName === "tr").filter((r) => chords(r).includes("Ctrl+P")).map((r) => r.attrs["data-id"]);
+  expect(holders).toHaveLength(1); // the shipped holder of Mod+P (quick open)
+  const second = "workspace.openBoard";
+  await click(c, button(row(c, second), "Add"));
+  await press({ key: "P", code: "KeyP", ctrlKey: true });
+  await until(() => chords(row(c, second)).includes("Ctrl+P"));
+  expect(badges(row(c, second))).toContain("Conflicts");
+  expect(badges(row(c, holders[0]))).toContain("Conflicts");
+  await pickFilter(c, "Conflicting");
+  await settle();
+  expect(ids(c).sort()).toEqual([second, holders[0]].sort());
+});
+
 // ---- SET-011 ----
 test("SET-011 box 1: terminal.clear set to null in the keybindings map has no chord and sits under the Unassigned filter", async () => {
   const { c } = await page(file({ version: 1, keybindings: { "terminal.clear": null } }));

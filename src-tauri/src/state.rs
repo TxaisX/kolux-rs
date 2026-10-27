@@ -6,6 +6,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// What `Store::keep_aside` did; only `Done` wrote anything.
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeepAside {
+    Done,
+    NameTaken,
+    Changed,
+}
+
 pub struct Store {
     conn: Connection,
     settings_path: PathBuf,
@@ -84,6 +92,27 @@ impl Store {
             tx.execute("INSERT INTO kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![k, v])?;
         }
         tx.commit()
+    }
+
+    /// Row 875, in one transaction: copy `read` to the new key `aside` (a plain insert, never an
+    /// upsert) and set `key` to `fresh`, but only while `key` still holds `read`. Any other outcome
+    /// than `Done` changes nothing.
+    pub fn keep_aside(&self, key: &str, read: &str, aside: &str, fresh: &str) -> rusqlite::Result<KeepAside> {
+        let tx = self.conn.unchecked_transaction()?;
+        match tx.execute("INSERT INTO kv (key, value) VALUES (?1, ?2)", params![aside, read]) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY || e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                return Ok(KeepAside::NameTaken);
+            }
+            Err(e) => return Err(e),
+        }
+        if tx.execute("UPDATE kv SET value = ?1 WHERE key = ?2 AND value = ?3", params![fresh, key, read])? == 0 {
+            return Ok(KeepAside::Changed);
+        }
+        tx.commit()?;
+        Ok(KeepAside::Done)
     }
 
     /// User settings as JSON. No file yet reads as an empty object; a file that cannot be read or

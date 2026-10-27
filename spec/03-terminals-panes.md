@@ -404,7 +404,7 @@ Rules: list shows terminals and can narrow to one worktree, cap how many are ret
   the background, stays alive and is listed.
 Acceptance:
   - [x] kolux terminal send --enter types text and submits it. (cards; evidence/cards-TERM-125.txt)
-  - [ ] kolux terminal close --worktree X --all closes every terminal there.
+  - [x] kolux terminal close --worktree X --all closes every terminal there. (cards; evidence/cards-TERM-125.txt)
 Compat: CLI group kolux terminal with the subcommands list, show, read, send, wait, create, switch
   (also focus), rename, split and close. Flags, alphabetically: --all, --command, --cursor,
   --direction (horizontal or vertical), --enter, --focus, --for (exit or tui-idle),

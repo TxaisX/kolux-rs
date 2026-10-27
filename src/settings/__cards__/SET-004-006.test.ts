@@ -123,6 +123,15 @@ test("SET-006 box 1: Mod+Comma opens Settings on the last page used, or the firs
   expect(current(stale.container)).toEqual(["General"]);
 });
 
+test("SET-006 box 1 (repository page): the repository page used last comes back once the project list is read", async () => {
+  h.projects = [{ id: "p1", name: "alpha" }, { id: "p2", name: "beta" }];
+  store.set("kolux.settingsPage", "repo:p2");
+  const m = await openWithShortcut();
+  await until(() => current(m.container).includes("beta"), "the remembered repository page");
+  expect(heading(m.container)).toBe("beta");
+  expect(store.get("kolux.settingsPage")).toBe("repo:p2"); // not overwritten by the placeholder General
+});
+
 test("SET-006 box 2: the side list has exactly the ten named pages, then one per repository", async () => {
   h.projects = [{ id: "p1", name: "alpha" }, { id: "p2", name: "beta" }, { id: "p3", name: "gamma" }];
   const m = await openWithShortcut();

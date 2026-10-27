@@ -166,7 +166,7 @@ Rules: possible reasons: browser blocked, sign-in refused, plan does not cover t
   key expired, but only for a Claude connected by the 1-year key; account-mode Claude, other stop
   reasons and other agents leave the card as it is.
 Acceptance:
-  - [ ] Let the Claude key run out → the card shows key expired with Renew.
+  - [x] Let the Claude key run out → the card shows key expired with Renew. (cards; evidence/cards-ACCT-013.txt)
   - [x] Reach a Claude usage limit → the card shows the reset time and no fix button. (cards; evidence/cards-ACCT-013.txt)
 Compat: —
 Source: D-07-013
