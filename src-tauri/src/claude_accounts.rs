@@ -63,28 +63,13 @@ pub fn load(store: &Store) -> Vec<Account> {
     load_kept(store, LIST_KEY)
 }
 
-/// Row 193: the saved value under `key`, or its default. A value that no longer reads is never
-/// loaded as empty and then saved over: its bytes are copied to `<key>.corrupt-<ms>` (a free name,
-/// -2, -3 on a same-millisecond clash) in the same transaction that starts `key` fresh, so the
-/// original survives and the next read does not set anything aside again. Absent and cleared
-/// (`null`) values are the default with no copy. A store that cannot be read at all gives the
-/// default and changes nothing. Coordinator default (Txais may overrule): keep aside and start
-/// fresh, rather than refusing every save.
+/// Row 193: the saved value under `key`, or its default. A value that no longer reads is kept
+/// aside (`<key>.corrupt-<ms>`) and the key starts fresh, in one step of the store that never
+/// replaces an existing copy or a value that changed since it was read (row 888); a store that
+/// cannot be read gives the default and changes nothing. Coordinator default (Txais may overrule):
+/// keep aside and start fresh, rather than refusing every save.
 pub(crate) fn load_kept<T: serde::de::DeserializeOwned + serde::Serialize + Default>(store: &Store, key: &str) -> T {
-    let Some(text) = store.get(key).ok().flatten().filter(|t| t.trim() != "null") else { return T::default() };
-    if let Ok(v) = serde_json::from_str(&text) {
-        return v;
-    }
-    let fresh = T::default();
-    let (Ok(fresh_text), base) = (serde_json::to_string(&fresh), format!("{key}.corrupt-{}", crate::artifacts::now_ms())) else { return fresh };
-    let mut aside = base.clone();
-    let mut n = 1;
-    while store.get(&aside).ok().flatten().is_some() {
-        n += 1;
-        aside = format!("{base}-{n}");
-    }
-    let _ = store.set_all(&[(aside.as_str(), text.as_str()), (key, fresh_text.as_str())]);
-    fresh
+    crate::orchestration::kept::or_default(store, key)
 }
 
 fn save(store: &Store, list: &[Account]) -> Result<(), String> {
@@ -655,6 +640,39 @@ mod tests {
             crate::claude_key::mark_refused(&store, now);
         }
         assert!(expired(&store));
+    }
+
+    // Row 888: the account list goes through the store's own keep-aside step, once, and resets the key.
+    #[test]
+    fn row888_an_undecodable_account_list_is_kept_aside_exactly_once_and_the_key_is_reset() {
+        let (_dir, store) = profile("row888-once");
+        let store = store.lock().unwrap();
+        for broken in ["{\"not\": \"a list\"}", "[{\"id\":", "7"] {
+            store.set(LIST_KEY, broken).unwrap();
+            assert!(load(&store).is_empty());
+            assert!(load(&store).is_empty(), "a second read sets nothing aside again");
+            assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some("[]"), "the key starts fresh");
+            assert!(crate::orchestration::kept::asides(&store, LIST_KEY).contains(&broken.to_string()), "{broken}: byte-identical copy");
+        }
+        assert_eq!(crate::orchestration::kept::asides(&store, LIST_KEY).len(), 3, "one copy per broken value, none replaced");
+    }
+
+    // Row 888: a write that lands while the copy is being made is never overwritten by the reset.
+    #[test]
+    fn row888_the_list_is_not_reset_when_it_changes_during_the_keep_aside() {
+        let (dir, store) = profile("row888-changed");
+        let store = store.lock().unwrap();
+        let broken = "[{\"id\":\"a1\",";
+        store.set(LIST_KEY, broken).unwrap();
+        // Another process saves a new list at the moment the copy is written.
+        let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        side.execute_batch(&format!(
+            "CREATE TRIGGER other_writer AFTER INSERT ON kv WHEN NEW.key LIKE '%.corrupt-%' BEGIN UPDATE kv SET value = '[]' || ' ' WHERE key = '{LIST_KEY}'; END;"
+        ))
+        .unwrap();
+        assert!(load(&store).is_empty());
+        assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the reset was refused: nothing was changed");
+        assert!(crate::orchestration::kept::asides(&store, LIST_KEY).is_empty(), "the copy rolled back with the refused reset");
     }
 
     #[test]
