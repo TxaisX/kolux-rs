@@ -81,8 +81,8 @@ Rules: a stale working reading is never shown as working; an unreachable host sh
   its queued word, alongside the set above; a process that ends without a done signal reads stopped
   at once; the cannot-reach word has no remote host to show yet, DT-C21.)
 Acceptance:
-  - [ ] Kill the agent's process without a done signal → label leaves working within the staleness
-        window.
+  - [x] Kill the agent's process without a done signal → label leaves working within the staleness
+        window. (cards live; evidence/cards-VIEW-017.txt)
   - [x] A preset that was never launched → its label reads not started. (cards; evidence/cards-VIEW-017.txt)
 Compat: —
 Source: D-05-017
@@ -190,10 +190,10 @@ Rules: the switch sits in the full-width top bar of the new look; the classic lo
   stays on the terminal grid; when no view was ever chosen the workspace opens on Board; switching
   screens never closes, restarts or rebuilds a running terminal.
 Acceptance:
-  - [ ] New look on, click each of the three labels → each screen renders and the selected label is
-        highlighted.
-  - [ ] Start an agent on Terminals, switch to Board and back → same pane, same scrollback, process
-        still running.
+  - [x] New look on, click each of the three labels → each screen renders and the selected label is
+        highlighted. (cards live; evidence/cards-VIEW-001.txt)
+  - [x] Start an agent on Terminals, switch to Board and back → same pane, same scrollback, process
+        still running. (cards live; evidence/cards-VIEW-001.txt)
 Compat: —
 Source: D-05-001
 
@@ -210,7 +210,7 @@ Rules: the order follows the left-to-right order of the labels in the top-bar sw
   window, not by the menu.
 Acceptance:
   - [ ] New look, on Agents, press the chord three times → Board, Terminals, Agents.
-  - [ ] Classic look, press the chord → nothing changes.
+  - [x] Classic look, press the chord → nothing changes. (cards live; evidence/cards-VIEW-002.txt)
   - [x] Switch to Board with the mouse, open the menu → Board is checked. (cards; evidence/cards-VIEW-002.txt)
   - [x] Turn the new look off → the submenu is gone. (cards; evidence/cards-VIEW-002.txt)
 Compat: the cycle command is a keybinding command with default Mod+Alt+V; its exact command id is
@@ -226,7 +226,7 @@ User sees: a bar spanning the whole window above the sidebar row, carrying the w
 Rules: classic chrome keeps a sidebar-width title header and no top bar; the top bar never overlaps
   the native window controls on Windows.
 Acceptance:
-  - [ ] Click the search hint → the worktree palette opens with focus in its input.
+  - [x] Click the search hint → the worktree palette opens with focus in its input. (cards live; evidence/cards-VIEW-003.txt)
   - [x] Click the bell → the Inbox page opens. (cards; evidence/cards-VIEW-003.txt)
 Compat: —
 Source: D-05-003
@@ -239,8 +239,8 @@ User sees: Agents and Board take the full width with no classic worktree sidebar
 Rules: the hide rule applies only in the new look; the classic look keeps the sidebar everywhere;
   hiding the sidebar leaves the terminal workbench behind it running.
 Acceptance:
-  - [ ] New look: Agents and Board show no worktree list; Terminals shows it.
-  - [ ] Classic look: the sidebar is visible on every screen.
+  - [x] New look: Agents and Board show no worktree list; Terminals shows it. (cards live; evidence/cards-VIEW-004.txt)
+  - [x] Classic look: the sidebar is visible on every screen. (cards live; evidence/cards-VIEW-004.txt)
 Compat: —
 Source: D-05-004
 
@@ -325,7 +325,7 @@ Rules: saved widths are clamped into range; invalid saved widths fall back to th
   closed sidebar takes no width; with the sidebar closed the first tab stays visible and the toggle
   never overlaps the back button.
 Acceptance:
-  - [ ] Close with Mod+B → first tab still fully visible.
+  - [x] Close with Mod+B → first tab still fully visible. (cards live; evidence/cards-VIEW-050.txt)
   - [x] Drag past the maximum → width stops at the limit. (cards; evidence/cards-VIEW-050.txt)
 Compat: keybinding id sidebar.left.toggle; the focus-the-list command is a keybinding command whose
   exact id is held back pending the allowlist.
@@ -372,7 +372,7 @@ Rules: a failed save is retried, then falls back to a durable-only save; restore
   their tab layouts in session order in one pass.
 Acceptance:
   - [x] Quit with three tabs → relaunch shows the three tabs. (cards; evidence/cards-VIEW-107.txt)
-  - [ ] Quit with an unsaved editor buffer → prompt, no silent loss.
+  - [x] Quit with an unsaved editor buffer → prompt, no silent loss. (cards live; evidence/cards-VIEW-107.txt)
 Compat: —
 Source: D-05-107
 
