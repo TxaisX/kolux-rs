@@ -20,7 +20,8 @@ export const STEP_WORDS: Record<StepId, string> = {
   open: "Opening the pull request",
 };
 
-export type Run = { dir: string; step: StepId; state: "running" | "done" | "failed"; message: string | null; pr: Pr | null; skipped: StepId[]; push: "push" | "publish" | "force" | null };
+export type Run = { dir: string; step: StepId; state: "running" | "done" | "failed"; message: string | null; pr: Pr | null; skipped: StepId[]; push: "push" | "publish" | "force" | null; neutral?: boolean };
+// neutral: the flow ended on the user's own setting (AI off), not on a fault; the notice does not mark it failed.
 
 /** The step as the notice words it: the push step says what kind of push it is. */
 export const stepWord = (r: Pick<Run, "step" | "push">): string => (r.step === "push" && r.push === "publish" ? "Publishing the branch" : r.step === "push" && r.push === "force" ? "Pushing the branch (force with lease)" : STEP_WORDS[r.step]);
@@ -164,7 +165,7 @@ export async function startOneClick(dir: string, ports: Ports, ai: boolean): Pro
     const before = stateOf(s);
     const base = (s.base ?? "").replace(/^origin\//, "");
     at("text");
-    if (!ai) return stop("AI writing is off, so no review text was written. The work is committed and pushed: open Create pull request and write the title and description yourself."), run;
+    if (!ai) return put((run = { ...run, state: "failed", neutral: true, message: "AI writing is off, so no review text was written. The work is committed and pushed: open Create pull request and write the title and description yourself." })), run;
     const [title, body] = await ports.text(dir, base);
     // The text took a while: the branch must still be the one it was written for.
     const now = await ports.status(dir);

@@ -114,6 +114,20 @@ describe("GIT-022 one click", () => {
     expect(p.text).not.toHaveBeenCalled();
     expect(run.state).toBe("failed");
   });
+  // Row 915 review item 3: an AI-off stop is the user's own setting, not a failure.
+  it("the AI-off stop is shown as a neutral end, not as Stopped with a cross", async () => {
+    const run = await startOneClick("C:/w", ports(), false);
+    const html = renderToString(createElement(OneClickView, { run }));
+    expect(html).toContain("Branch ready for your review text");
+    expect(html).not.toContain("Stopped");
+    expect(html).not.toContain("×");
+    expect(html).not.toContain('data-mark="failed"');
+    expect(html).toContain("write the title and description yourself");
+    const real = await startOneClick("C:/x", ports({ remote: vi.fn(async () => ({ ok: false, output: "rejected" })) }), false);
+    const bad = renderToString(createElement(OneClickView, { run: real }));
+    expect(bad).toContain("Stopped");
+    expect(bad).toContain('data-mark="failed"');
+  });
   it("offers the flow only when there is work to carry", () => {
     expect(needsOneClick(status({ changed: [ch("a")] }))).toBe(true);
     expect(needsOneClick(status({ upstream: "origin/x" }))).toBe(false);

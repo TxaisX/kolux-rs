@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { writerOf, writerUsable } from "./generate";
-import { applyDraft, applyIfUnchanged, draftOffered, draftPrText, draftRunning, settleDraft, startGatedOneClick, writingAfter } from "./prDraft";
+import { applyDraft, applyIfUnchanged, draftOffered, draftPrText, draftRunning, draftSubscribe, draftVersion, readDraftGate, settleDraft, startGatedOneClick } from "./prDraft";
 import { clearOneClick, type Ports } from "./oneClick";
 import type { Status } from "./model";
 
@@ -209,15 +209,80 @@ describe("settleDraft (composer session)", () => {
   });
 });
 
-// Row 915 (b): a busy answer never clears the flag of the draft that is still running.
-describe("writingAfter (the Writing flag)", () => {
-  it("a busy answer keeps the flag for that worktree", () => {
-    expect(writingAfter("C:/a", "C:/a", { state: "busy" })).toBe("C:/a");
+// Row 915 review item 1: a settings read that fails shuts the gate; it must not read as "no settings = AI on".
+describe("readDraftGate fails closed", () => {
+  const settingsFails = (cmd: string) => {
+    if (cmd === "get_settings") throw new Error("settings unreadable");
+    if (cmd === "agent_list") return [{ id: "claude", installed: true }];
+    if (cmd === "scm_github_repo") return null;
+    return ["Add login", "Fixes the login."];
+  };
+  beforeEach(() => {
+    calls.length = 0;
+    clearOneClick();
   });
-  it("a finished draft clears its own worktree's flag, and only that one", () => {
-    expect(writingAfter("C:/a", "C:/a", { state: "filled", title: "t", body: "b" })).toBeNull();
-    expect(writingAfter("C:/a", "C:/a", { state: "failed", message: "x" })).toBeNull();
-    expect(writingAfter("C:/a", "C:/a", { state: "off" })).toBeNull();
-    expect(writingAfter("C:/b", "C:/a", { state: "filled", title: "t", body: "b" })).toBe("C:/b");
+  it("the draft button path: a settings read failure calls no writer", async () => {
+    reply = settingsFails;
+    const { settings, gate } = await readDraftGate("C:/w");
+    expect(draftOffered(settings, gate.repo, gate.agents)).toBe(false);
+    expect((await draftPrText("C:/w", "main", settings, gate)).state).toBe("off");
+    expect(textCalls()).toHaveLength(0);
+  });
+  it("the one-click path: a settings read failure calls no writer", async () => {
+    reply = settingsFails;
+    const { settings, gate } = await readDraftGate("C:/w");
+    const p = {
+      status: vi.fn(async () => ({ branch: "b", upstream: null, ahead: 0, behind: 0, rewritten: false, base: "origin/main", head: "h", staged: [], changed: [{ path: "a", status: "M", from: null }], untracked: [], conflicts: [], operation: null, resolved: [] }) as Status),
+      stage: vi.fn(async () => undefined),
+      message: vi.fn(async () => "m"),
+      commit: vi.fn(async () => ({ id: "x", blocked: false, output: "" })),
+      remote: vi.fn(async () => ({ ok: true, output: "" })),
+      text: vi.fn(async () => ["T", "B"] as [string, string]),
+      create: vi.fn(),
+    } as unknown as Ports;
+    await startGatedOneClick("C:/w", settings, gate, p);
+    expect(p.message).not.toHaveBeenCalled();
+    expect(p.text).not.toHaveBeenCalled();
+    expect(calls.filter((c) => c.cmd === "scm_commit_message" || c.cmd === "scm_pr_text")).toHaveLength(0);
+  });
+  it("a readable settings file opens the gate as before", async () => {
+    reply = (cmd) => (cmd === "get_settings" ? {} : cmd === "agent_list" ? [{ id: "claude", installed: true }] : null);
+    const { settings, gate } = await readDraftGate("C:/w");
+    expect(draftOffered(settings, gate.repo, gate.agents)).toBe(true);
+  });
+});
+
+// Row 915 review item 2: the running state lives in the module, so a remounted composer sees the true state.
+describe("draft running state is shared, never stuck", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    reply = () => ["Add login", "Fixes the login."];
+  });
+  it("subscribers hear a start and the finish; a late subscriber reads the truth from draftRunning", async () => {
+    let release: (v: [string, string]) => void = () => {};
+    reply = () => new Promise<[string, string]>((res) => (release = res));
+    const v0 = draftVersion();
+    const first = draftPrText("C:/w", "main", {}, claudeIn);
+    await vi.waitFor(() => expect(textCalls()).toHaveLength(1));
+    expect(draftVersion()).toBeGreaterThan(v0);
+    expect(draftRunning("C:/w")).toBe(true);
+    const heard = vi.fn();
+    const off = draftSubscribe(heard); // a remounted composer
+    const second = await draftPrText("C:/w", "main", {}, claudeIn);
+    expect(second.state).toBe("busy");
+    expect(heard).not.toHaveBeenCalled(); // a busy answer changes nothing
+    expect(draftRunning("C:/w")).toBe(true);
+    release(["T", "B"]);
+    await first;
+    expect(heard).toHaveBeenCalled();
+    expect(draftRunning("C:/w")).toBe(false);
+    off();
+  });
+  it("an off answer starts nothing and notifies nobody", async () => {
+    const heard = vi.fn();
+    const off = draftSubscribe(heard);
+    await draftPrText("C:/w", "main", { commitWriter: "off" }, claudeIn);
+    expect(heard).not.toHaveBeenCalled();
+    off();
   });
 });

@@ -1,5 +1,6 @@
 // Row 76 (VIEW-074 / GIT-024): the AI draft button in the Checks pull request composer. It asks the
 // same text writer the one-click flow uses (oneClick.ts realPorts.text), one run per worktree.
+import { invoke } from "@tauri-apps/api/core";
 import { writerOf, writerUsable } from "./generate";
 import { realPorts, startOneClick, type Ports, type Run } from "./oneClick";
 import { aiShownFor } from "./recipes";
@@ -7,9 +8,32 @@ import { aiShownFor } from "./recipes";
 export type DraftResult = { state: "filled"; title: string; body: string } | { state: "failed"; message: string } | { state: "busy" } | { state: "off" };
 
 const running = new Set<string>();
+const subs = new Set<() => void>();
+let version = 0;
+const bump = () => {
+  version += 1;
+  subs.forEach((f) => f());
+};
+/** The running set lives here, not in a component, so a remounted composer shows the true state; it subscribes to hear the finish. */
 export const draftRunning = (dir: string): boolean => running.has(dir);
+export const draftSubscribe = (f: () => void) => {
+  subs.add(f);
+  return () => void subs.delete(f);
+};
+export const draftVersion = () => version;
 
 export type DraftGate = { repo: string | null; agents: ReadonlyArray<{ id: string; installed: boolean }> };
+
+/** What the gate sees when the settings cannot be read: the writer is off, so neither the draft button nor the one-click flow sends a diff anywhere. */
+const CLOSED_SETTINGS: Record<string, unknown> = { commitWriter: "off" };
+
+/** The gate, read fresh each time: settings, the repository and the installed agents can all change while the composer is open. A settings read that fails shuts it (never "no settings = AI on"). */
+export async function readDraftGate(dir: string): Promise<{ settings: Record<string, unknown>; gate: DraftGate }> {
+  const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => CLOSED_SETTINGS);
+  const repo = await invoke<{ owner: string; name: string } | null>("scm_github_repo", { worktree: dir }).catch(() => null);
+  const agents = await invoke<DraftGate["agents"]>("agent_list").catch(() => []);
+  return { settings, gate: { repo: repo ? `${repo.owner}/${repo.name}` : null, agents } };
+}
 
 /** The button shows under the Source Control writer rules: the AI switch for this repository, a writer that is not off, and that writer usable (agent installed or custom command). */
 export const draftOffered = (settings: Record<string, unknown>, repo: string | null, agents: DraftGate["agents"]): boolean =>
@@ -24,6 +48,7 @@ export async function draftPrText(dir: string, base: string, settings: Record<st
   if (!draftOffered(settings, gate.repo, gate.agents)) return { state: "off" };
   if (running.has(dir)) return { state: "busy" };
   running.add(dir);
+  bump();
   try {
     const [title, body] = await realPorts(writerOf(settings)).text(dir, base);
     return title.trim() === "" ? { state: "failed", message: "The writer came back without a title." } : { state: "filled", title: title.trim(), body };
@@ -31,6 +56,7 @@ export async function draftPrText(dir: string, base: string, settings: Record<st
     return { state: "failed", message: String(err) };
   } finally {
     running.delete(dir);
+    bump();
   }
 }
 
@@ -56,6 +82,3 @@ export function settleDraft<T extends Fields>(cur: T | null, snap: Fields, r: Dr
   if (cur === null || startedIn !== now) return { draft: cur, note: null };
   return applyIfUnchanged(cur, snap, r);
 }
-
-/** The "Writing…" flag after a result: a busy answer is not this worktree's draft finishing, so it keeps the flag. */
-export const writingAfter = (w: string | null, dir: string, r: DraftResult): string | null => (r.state === "busy" ? w : w === dir ? null : w);

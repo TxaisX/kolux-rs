@@ -3,13 +3,12 @@
 // tied to the exact worktree, branch and git state and goes stale after about five minutes), and
 // when only a push is missing offers one combined push-and-create action. Rules live in startPr.ts.
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
-import type { AgentInfo } from "../launch/PlusMenu";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ActionOutcome, Pr, Status } from "./model";
 import SearchPick from "../editor/SearchPick";
 import { needsOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
-import { draftOffered, draftPrText, settleDraft, startGatedOneClick, writingAfter, type DraftGate } from "./prDraft";
+import { draftOffered, draftPrText, draftRunning, draftSubscribe, draftVersion, readDraftGate, settleDraft, startGatedOneClick } from "./prDraft";
 import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
 type Props = { dir: string; onCreated: (pr: Pr) => void };
@@ -25,7 +24,8 @@ export default function PrStart({ dir, onCreated }: Props) {
   const [busy, setBusy] = useState(false);
   const [branches, setBranches] = useState<string[]>([]); // EDIT-048: the Base box suggests from these
   const [aiOffered, setAiOffered] = useState(false); // GIT-024: the AI draft button follows the Source Control writer switches
-  const [writing, setWriting] = useState<string | null>(null); // the worktree a draft is running for, so another worktree never shows "Writing…"
+  const [starting, setStarting] = useState<string | null>(null); // the worktree whose click is still reading the gate, before the draft is registered
+  useSyncExternalStore(draftSubscribe, draftVersion);
   const [writeNote, setWriteNote] = useState<string | null>(null);
   const going = useOneClick(dir);
   const asking = useRef(dir);
@@ -79,14 +79,7 @@ export default function PrStart({ dir, onCreated }: Props) {
     setWriteNote(null);
     void offerDraft();
   };
-  // The gate is read fresh each time: settings, the repository and the installed agents can all change while the composer is open.
-  const readGate = async () => {
-    const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => ({}));
-    const repo = await invoke<{ owner: string; name: string } | null>("scm_github_repo", { worktree: dir }).catch(() => null);
-    const agents = await invoke<AgentInfo[]>("agent_list").catch(() => [] as AgentInfo[]);
-    const gate: DraftGate = { repo: repo ? `${repo.owner}/${repo.name}` : null, agents };
-    return { settings, gate };
-  };
+  const readGate = () => readDraftGate(dir);
   const offerDraft = async () => {
     const { settings, gate } = await readGate();
     if (asking.current === dir) setAiOffered(draftOffered(settings, gate.repo, gate.agents));
@@ -95,10 +88,12 @@ export default function PrStart({ dir, onCreated }: Props) {
   const write = async (d: Draft) => {
     const snap = { title: d.title, body: d.body };
     const started = session.current;
-    setWriting(dir);
+    setStarting(dir);
     setWriteNote(null);
     const { settings, gate } = await readGate();
-    const result = await draftPrText(dir, d.base.trim(), settings, gate);
+    const pending = draftPrText(dir, d.base.trim(), settings, gate); // registers the run before its first await
+    setStarting(null);
+    const result = await pending;
     if (asking.current === dir) {
       if (result.state === "off") setAiOffered(false);
       if (session.current === started) {
@@ -110,7 +105,6 @@ export default function PrStart({ dir, onCreated }: Props) {
       setDraft(out.draft);
       if (out.note) setWriteNote(out.note);
     }
-    setWriting((w) => writingAfter(w, dir, result));
   };
   const create = async (d: Draft, push: "none" | "publish" | "push") => {
     setBusy(true);
@@ -130,6 +124,7 @@ export default function PrStart({ dir, onCreated }: Props) {
       setBusy(false);
     }
   };
+  const writingNow = starting === dir || draftRunning(dir); // the shared run set, so a remounted composer never shows a stuck or missing "Writing…"
   const push = mine && mine.ready.reason === null ? mine.ready.push : "none";
   // GIT-022: with work still to commit or push, one click does all of it and opens the review.
   const oneClick = async () => {
@@ -167,8 +162,8 @@ export default function PrStart({ dir, onCreated }: Props) {
           <textarea className="field multi" aria-label="pull request description" placeholder="Description" value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           {aiOffered && (
             <div className="btn-row">
-              <button className="btn" data-pr-draft disabled={writing === dir || busy || !draft.base.trim()} title="Write the title and description from this branch's changes" onClick={() => void write(draft)}>
-                {writing === dir ? "Writing…" : "Write with AI"}
+              <button className="btn" data-pr-draft disabled={writingNow || busy || !draft.base.trim()} title="Write the title and description from this branch's changes" onClick={() => void write(draft)}>
+                {writingNow ? "Writing…" : "Write with AI"}
               </button>
             </div>
           )}
