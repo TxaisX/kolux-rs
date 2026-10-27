@@ -286,15 +286,14 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         save(&store, &list)
     })();
     if let Err(e) = listed {
-        undo(&before);
+        // Row 923: the vault goes back first, so undo's fallback copy to the live file reads the earlier credentials.
         match prior_vault.flatten() {
             _ if !existing => remove_sealed_copy(&vault),
-            Some(Some(bytes)) => {
-                let _ = fs::write(&vault, bytes);
-            }
+            Some(Some(bytes)) => restore_sealed_copy(&vault, &bytes),
             Some(None) => remove_sealed_copy(&vault),
             None => {}
         }
+        undo(&before);
         return Err(e.into());
     }
     Ok(account)
@@ -327,6 +326,15 @@ fn claim_new_folder(store: &Mutex<Store>, profile: &Path, id: &str) -> Result<(S
 }
 
 const CLAIM_TRIES: u32 = 8;
+
+/// Row 923: puts earlier sealed bytes back through a temp file and a rename, so a crash never leaves a truncated copy; a failure is logged by path and kind only.
+fn restore_sealed_copy(path: &Path, bytes: &[u8]) {
+    let tmp = path.with_extension("tmp");
+    if let Err(e) = fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, path)) {
+        eprintln!("kolux-rs: could not put the sealed copy back {} ({:?})", path.display(), e.kind());
+        let _ = fs::remove_file(&tmp);
+    }
+}
 
 /// Deletes a sealed vault copy; a copy that is already gone is fine, any other failure is logged by path only.
 pub(crate) fn remove_sealed_copy(path: &Path) {
@@ -833,6 +841,39 @@ mod tests {
         assert_eq!(fs::read(&vault).unwrap(), sealed, "the sealed copy is the earlier one again");
         assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS));
         assert_eq!(fs::read_to_string(Path::new(&a.config_dir).join(CREDENTIALS)).unwrap(), CREDS, "and so is the live file");
+    }
+
+    // Row 923 (1): with the live file gone, a refused re-sign-in leaves neither the vault nor the live file on the new sign-in.
+    #[test]
+    fn row923_a_refused_re_sign_in_with_no_live_file_does_not_leave_the_new_credentials() {
+        let (dir, store) = profile("row923-order");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::remove_file(&live).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS), "the vault holds the earlier sign-in");
+        assert_ne!(fs::read_to_string(&live).ok().as_deref(), Some(new), "the live file is not the new sign-in");
+        assert_eq!(fs::read_to_string(&live).unwrap(), CREDS, "undo copied the earlier sealed credentials back");
+    }
+
+    // Row 923 (1): an existing account with no sealed copy gets none from a refused re-sign-in.
+    #[test]
+    fn row923_a_refused_re_sign_in_with_no_earlier_sealed_copy_leaves_none() {
+        let (dir, store) = profile("row923-novault");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        fs::remove_file(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(!vault.exists(), "no sealed copy appears");
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
