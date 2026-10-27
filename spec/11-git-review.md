@@ -87,8 +87,8 @@ Rules: fetch refreshes remote refs and merges nothing; publish pushes to origin 
   already set up.
 Acceptance:
   - [x] Make two local commits → the menu offers to push 2 commits; push → the counts fall to zero. (cards; evidence/cards-GIT-007.txt)
-  - [ ] Leave an unpublished branch open for ten minutes → git traces show no repeating remote
-        checks.
+  - [x] Leave an unpublished branch open for ten minutes → git traces show no repeating remote
+        checks. (cards live; evidence/cards-GIT-007.txt)
 Compat: —
 Source: D-11-007
 
