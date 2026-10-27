@@ -29,7 +29,9 @@ pub fn proxy_flag(proxy: &Url) -> Result<String, String> {
         "socks5" => Some(proxy.port().unwrap_or(SOCKS_PORT)),
         _ => None,
     };
-    let host = proxy.host_str().filter(|h| !h.is_empty());
+    // Only a host Chromium reads as one host: `=`, `;` or `,` turn the value into a per-scheme rule
+    // list it drops, and the engine goes direct.
+    let host = proxy.host_str().filter(|h| (h.starts_with('[') && h.ends_with(']')) || (!h.is_empty() && h.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))));
     match (host, port) {
         (Some(host), Some(port)) if matches!(proxy.path(), "" | "/") && proxy.query().is_none() && proxy.fragment().is_none() => Ok(format!("--proxy-server={}://{host}:{port}", proxy.scheme())),
         _ => Err(SHAPE_REFUSED.into()),
@@ -56,12 +58,13 @@ fn strip(args: &str, switches: &[&str]) -> String {
 /// the saved address goes to the builder exactly as `proxy_of` gave it. On every OS an address the
 /// engine cannot take (credentials, a path) is refused here, before anything loads.
 pub fn tab_setup(launch: &str, folder: &str, saved: Option<&Url>) -> Result<(String, Option<Url>), String> {
-    let args = tab_browser_args(&without_proxy(launch), saved)?;
+    let args = tab_browser_args(&without_proxy(launch), saved)?; // on non-Windows only to validate the proxy
     if !cfg!(windows) {
         return Ok((launch.to_string(), saved.cloned()));
     }
     admit(folder, (folder == DEFAULT_FOLDER).then_some(launch), &args)?;
-    Ok((args, None))
+    // The window's own string when it matches: byte-exact even if the engine compares options exactly.
+    Ok((if folder == DEFAULT_FOLDER { launch.to_string() } else { args }, None))
 }
 
 /// `args` without any `--proxy-server` switch.
@@ -179,6 +182,26 @@ mod tests {
             let e = tab_browser_args(BASE, Some(&url(saved))).unwrap_err();
             assert_eq!(e, SHAPE_REFUSED, "{saved}");
         }
+    }
+
+    #[test]
+    fn row939_a_host_the_switch_cannot_state_refuses_instead_of_going_direct() {
+        // `=`, `;` and `,` make Chromium read the value as a per-scheme rule list, drop it and go direct.
+        for saved in ["http://http=proxy.corp:3128", "socks5://a=b:1080", "http://a%3Db:3128", "socks5://a%3Db:1080", "http://a;b:3128", "http://a,b:3128", "socks5://a;b:1080", "socks5://a,b:1080"] {
+            let u = url(saved);
+            assert_eq!(proxy_flag(&u), Err(SHAPE_REFUSED.to_string()), "{saved}");
+            assert_eq!(tab_browser_args(BASE, Some(&u)), Err(SHAPE_REFUSED.to_string()), "{saved}");
+        }
+        for ok in ["http://proxy.corp-1.example:3128", "http://10.0.0.1:80", "http://[::1]:8080", "http://localhost:8080", "socks5://proxy_1.test:1080", "http://PROXY.Test:80"] {
+            assert!(proxy_flag(&url(ok)).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn row939_a_default_folder_tab_passes_the_window_string_itself() {
+        let launch = "--a  --proxy-server=http://x.test:1";
+        let (args, _) = tab_setup(launch, DEFAULT_FOLDER, Some(&url("http://x.test:1"))).unwrap();
+        assert_eq!(args, launch, "byte for byte, spacing included, not a rebuilt string");
     }
 
     #[test]

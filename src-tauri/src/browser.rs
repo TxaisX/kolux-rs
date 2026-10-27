@@ -937,8 +937,19 @@ fn set_system_proxy_for_test(on: bool) {
 /// The sealed proxy setting as saved (None without a store or a value).
 fn saved_proxy(app: &AppHandle) -> Result<Option<String>, String> {
     match app.try_state::<Mutex<crate::state::Store>>() {
-        Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy"),
+        Some(store) => proxy_in_settings(store.lock().map_err(|e| e.to_string())?.try_settings()),
         None => Ok(None),
+    }
+}
+
+const SETTINGS_UNREADABLE: &str = "Kolux can't read its settings, so the in-app browser won't open pages in case a proxy is set. Nothing was loaded directly; restart Kolux or check settings.json.";
+
+/// The saved `httpProxy`, opened. A file that cannot be read is an error, never "no proxy"; a file
+/// that is simply not there (first run) reads as no settings.
+fn proxy_in_settings(read: std::io::Result<serde_json::Value>) -> Result<Option<String>, String> {
+    match read.map_err(|_| SETTINGS_UNREADABLE.to_string())?.get("httpProxy") {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => crate::secrets::unseal(s).map(Some),
+        _ => Ok(None),
     }
 }
 
@@ -2910,6 +2921,21 @@ mod tests {
         assert_eq!(hand_off(&local, Some("/real.ico"), None), Some(u("http://localhost:3000/real.ico")));
         assert_eq!(hand_off(&local, Some("http://127.0.0.1:8745/"), None), None);
         assert_eq!(hand_off(&local, Some("http://localhost:1420/x"), Some(&u("http://localhost:1420"))), None);
+    }
+
+    #[test]
+    fn row939_an_unreadable_settings_file_is_an_error_not_no_proxy() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row939-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        assert_eq!(proxy_in_settings(store.try_settings()), Ok(None), "no file yet (first run) is no proxy");
+        std::fs::write(dir.join("settings.json"), "{ half written").unwrap();
+        assert_eq!(proxy_in_settings(store.try_settings()), Err(SETTINGS_UNREADABLE.to_string()), "corrupt with no usable backup");
+        assert!(!icon_fetch_allowed(&proxy_in_settings(store.try_settings())), "and no icon goes direct either");
+        std::fs::write(dir.join("settings.json"), r#"{"httpProxy":"http://127.0.0.1:3128"}"#).unwrap();
+        assert_eq!(proxy_in_settings(store.try_settings()), Ok(Some("http://127.0.0.1:3128".to_string())));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // T-323-c: a saved proxy means no icon fetch at all; the icon clients only ever connect directly.

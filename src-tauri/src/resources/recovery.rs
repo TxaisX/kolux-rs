@@ -709,16 +709,16 @@ pub fn browser_args(current: Option<&str>, safe: bool) -> String {
 /// folder must pass the same string, or the engine refuses to create it.
 static LAUNCH_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// In `run`, once per window config before the builder starts: the window's arguments, remembered
-/// for later webviews.
+// Until lib.rs calls `launch_browser_args_for` (evidence/browser-939-lib.rs.patch, which drops this).
 pub fn launch_browser_args(current: Option<&str>, safe: bool) -> String {
     launch_with_proxy(current, safe, None)
 }
 
-/// Row 939: the same, plus the proxy saved in this profile, so the window and the
+/// In `run`, once per window config before the builder starts: the window's arguments, remembered
+/// for later webviews. Row 939: they carry the proxy saved in this profile, so the window and the
 /// tabs on its data folder agree on `--proxy-server` (the engine refuses two sets on one folder).
 /// Read from the profile folder because the store is not open yet when the windows are built.
-#[allow(dead_code)] // lib.rs calls it once evidence/browser-939-lib.rs.patch is applied, which also drops `launch_browser_args`
+#[allow(dead_code)] // lib.rs calls it once evidence/browser-939-lib.rs.patch is applied
 pub fn launch_browser_args_for(current: Option<&str>, safe: bool, identifier: &str) -> String {
     launch_with_proxy(current, safe, profile_dir(identifier).and_then(|d| saved_proxy_in(&d)).as_ref())
 }
@@ -732,7 +732,8 @@ fn launch_with_proxy(current: Option<&str>, safe: bool, proxy: Option<&tauri::Ur
 fn launch_string(current: Option<&str>, safe: bool, proxy: Option<&tauri::Url>) -> String {
     // T-324-b (APP-022): the interface's memory ceiling rides in the same string.
     let s = super::renderer_heap::apply_here(&browser_args(current, safe));
-    // A proxy the switch cannot carry (credentials) is left out here; every tab refuses it.
+    // A proxy the switch cannot carry (credentials, a bad shape) is left out here: the main window then
+    // runs without it, and every tab refuses it.
     crate::browser::proxy::tab_browser_args(&s, proxy).unwrap_or(s)
 }
 
@@ -2102,6 +2103,7 @@ mod tests {
             ("empty", r#"{"httpProxy":""}"#.to_string(), None),
             ("unset", r#"{"theme":"dark"}"#.to_string(), None),
             ("credentialed", r#"{"httpProxy":"http://me:pw@127.0.0.1:8080"}"#.to_string(), None),
+            ("equals-host", r#"{"httpProxy":"http://http=proxy.corp:3128"}"#.to_string(), None),
             ("unusable", r#"{"httpProxy":"ftp://p:1"}"#.to_string(), None),
         ] {
             let d = profile_with(name, &settings);
