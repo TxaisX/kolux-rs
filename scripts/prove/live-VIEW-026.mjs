@@ -21,11 +21,14 @@ try {
   await pickScreen(app, "Board");
   await sleep(1500);
   const cardInfo = () =>
-    app.evalJs(`(() => { const s = document.querySelector("section.pane.card"); if (!s) return null; const b = s.getBoundingClientRect(); const host = [...s.querySelectorAll("div")].find((d) => d.__koluxTerm); const hb = host ? host.getBoundingClientRect() : null; const btn = [...s.querySelectorAll("button")].find((x) => /^(Expand|Collapse)/.test(x.title)); return { tag: s.__proveTag ?? null, expanded: s.classList.contains("expanded"), card: { w: Math.round(b.width), h: Math.round(b.height) }, termVisible: !!host && host.offsetParent !== null && hb.width > 20 && hb.height > 20, term: hb ? { w: Math.round(hb.width), h: Math.round(hb.height) } : null, btnTitle: btn ? btn.title : null, parentClass: s.parentElement.className }; })()`);
+    app.evalJs(`(() => { const s = document.querySelector("section.pane.card"); if (!s) return null; const b = s.getBoundingClientRect(); const host = [...s.querySelectorAll("div")].find((d) => d.__koluxTerm); const hb = host ? host.getBoundingClientRect() : null; const btn = [...s.querySelectorAll("button")].find((x) => /^(Expand|Collapse)/.test(x.title)); return { tag: s.__proveTag ?? null, expanded: s.classList.contains("expanded"), card: { w: Math.round(b.width), h: Math.round(b.height) }, termVisible: !!host && host.offsetParent !== null && hb.width > 20 && hb.height > 20, term: hb ? { w: Math.round(hb.width), h: Math.round(hb.height) } : null, btnTitle: btn ? btn.title : null, btnRect: btn ? { w: Math.round(btn.getBoundingClientRect().width), h: Math.round(btn.getBoundingClientRect().height) } : null, boardDisplay: getComputedStyle(document.querySelector(".board")).display, parentClass: s.parentElement.className }; })()`);
   const c0 = await cardInfo();
   log(`Board card, collapsed: ${JSON.stringify(c0)}`);
   check("setup: the Board shows the pane as a collapsed card (terminal not visible)", !!c0 && !c0.expanded && !c0.termVisible && /^Expand/.test(c0.btnTitle ?? ""), JSON.stringify(c0));
   log(`screenshot: ${await ctx.shot("VIEW-026-board-collapsed")}`);
+  const clickable = !!c0?.btnRect && c0.btnRect.w >= 8 && c0.btnRect.h >= 8 && (c0?.card?.w ?? 0) >= 100;
+  check("a user can reach the card: it has a real width and its Expand button a clickable size", clickable, JSON.stringify({ card: c0?.card, btnRect: c0?.btnRect, boardDisplay: c0?.boardDisplay }));
+  if (!clickable) throw new Error("Board card is not usable (see the check above); stopping before the expand step");
 
   // Expand it and type.
   await app.clickWhere("section.pane.card button", "/^Expand: show this session/");

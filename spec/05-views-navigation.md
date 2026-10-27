@@ -358,7 +358,7 @@ Rules: quick successive switches are saved as one write; the final choice is wri
   has read the saved state back, and a later sync from another window never moves the user off the
   page in front of them.
 Acceptance:
-  - [ ] Open Tasks, quit, relaunch → Tasks is shown.
+  - [x] Open Tasks, quit, relaunch → Tasks is shown. (cards live; evidence/cards-VIEW-005.txt)
   - [ ] Corrupt the saved preference file, relaunch → app opens on the terminal workspace without an
         error dialog.
 Compat: —

@@ -10,7 +10,7 @@ const { check, allPassed } = checker(log);
 let ctx;
 let ok = false;
 const tasksUp = (app) =>
-  app.evalJs(`(() => { const row = [...document.querySelectorAll(".sidebar-wrap .row")].find((r) => /Tasks/.test(r.textContent)); const vis = (e) => !!e && e.offsetParent !== null; return { rowCurrent: row ? row.getAttribute("aria-current") : "no row", filters: [...document.querySelectorAll(".tasks-filter")].filter(vis).length, picker: vis(document.querySelector(".tasks-picker")) }; })()`);
+  app.evalJs(`(() => { const row = [...document.querySelectorAll(".sidebar-wrap .row")].find((r) => /Tasks/.test(r.textContent)); const vis = (e) => !!e && e.offsetParent !== null; return { rowCurrent: row ? row.getAttribute("aria-current") : "no row", filters: [...document.querySelectorAll(".tasks-tabs")].filter(vis).length, picker: [...document.querySelectorAll("h1,h2")].some((h) => vis(h) && /^Tasks$/.test(h.textContent.trim())) }; })()`);
 try {
   ctx = await startPlain("VIEW-005", { report: rep });
   const { app } = ctx;
@@ -35,7 +35,7 @@ try {
   await sleep(1500);
   const t2 = await tasksUp(app);
   log(`after relaunch: ${JSON.stringify(t2)}`);
-  check("relaunch: Tasks is shown (its sidebar row is the current page and its filters are on screen)", t2.rowCurrent === "page" && t2.filters > 0, JSON.stringify(t2));
+  check("relaunch: Tasks is shown (its sidebar row is the current page and its Tasks heading and tab bar are on screen)", t2.rowCurrent === "page" && t2.filters > 0 && t2.picker, JSON.stringify(t2));
   log(`screenshot: ${await ctx.shot("VIEW-005-tasks-after-relaunch")}`);
   ok = allPassed();
 } catch (e) {
