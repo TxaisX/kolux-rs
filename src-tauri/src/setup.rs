@@ -1834,7 +1834,7 @@ mod tests {
 
     #[test]
     fn row887_a_trust_blob_of_the_wrong_type_is_kept_aside_and_never_read_as_an_empty_record() {
-        for (i, blob) in ["[]", "\"x\"", "7", "[1,2]", "true"].into_iter().enumerate() {
+        for blob in ["[]", "\"x\"", "7", "[1,2]", "true"] {
             let (store, dir, root) = trust_store();
             let key = format!("{TRUST_PREFIX}{}", trust_project(&store, &root).unwrap().id);
             store.set(&key, blob).unwrap();
