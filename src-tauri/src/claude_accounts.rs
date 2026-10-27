@@ -264,13 +264,32 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     }
     let account = Account { id: id.into(), email, organization, config_dir: dir.to_string_lossy().into_owned(), last_sign_in: now, stale: false };
     let store = store.lock().map_err(|e| e.to_string())?;
-    let mut list: Vec<Account> = crate::orchestration::kept::load(&store, LIST_KEY)?;
-    match list.iter_mut().find(|a| a.id == id) {
-        Some(a) => *a = account.clone(),
-        None => list.push(account.clone()),
+    // Row 916: a list that cannot be read or saved leaves no credentials behind for an account that was never listed.
+    let listed = (|| {
+        let mut list: Vec<Account> = crate::orchestration::kept::load(&store, LIST_KEY)?;
+        match list.iter_mut().find(|a| a.id == id) {
+            Some(a) => *a = account.clone(),
+            None => list.push(account.clone()),
+        }
+        save(&store, &list)
+    })();
+    if let Err(e) = listed {
+        undo(&before);
+        if !existing {
+            remove_sealed_copy(&vault);
+        }
+        return Err(e.into());
     }
-    save(&store, &list)?;
     Ok(account)
+}
+
+/// Deletes a sealed vault copy; a copy that is already gone is fine, any other failure is logged by path only.
+pub(crate) fn remove_sealed_copy(path: &Path) {
+    if let Err(e) = fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("kolux-rs: could not delete the sealed copy {} ({:?})", path.display(), e.kind());
+        }
+    }
 }
 
 /// The one sign-in that may run, and what the last one left behind.
@@ -684,6 +703,8 @@ mod tests {
         crate::orchestration::kept::refuse_copies(&dir);
         let got = sign_in(&store, &dir, "a9", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into()));
         assert!(got.is_err(), "the save is refused, not made over an empty list");
+        assert!(!dir.join(secrets::VAULT).join("claude-a9.json").exists(), "a refused sign-in leaves no sealed copy");
+        assert!(!dir.join(FOLDER).join("a9").exists(), "and no account folder");
         let store = store.lock().unwrap();
         assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the stored list is byte-identical");
     }
@@ -696,6 +717,8 @@ mod tests {
         store.lock().unwrap().set(LIST_KEY, &serde_json::to_string(&vec![old]).unwrap()).unwrap();
         let side = crate::orchestration::kept::Unreadable::new(&dir);
         assert!(sign_in(&store, &dir, "a9", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(!dir.join(secrets::VAULT).join("claude-a9.json").exists(), "no sealed copy left behind");
+        assert!(!dir.join(FOLDER).join("a9").exists(), "no account folder left behind");
         side.restore();
         let got = sign_in(&store, &dir, "a10", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into()));
         assert!(got.is_ok(), "{:?}", got.err());

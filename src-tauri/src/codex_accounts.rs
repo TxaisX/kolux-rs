@@ -314,18 +314,38 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
         return Err(failure(&ended, &output, code.as_deref()));
     }
     let text = fs::read_to_string(&auth).map_err(|e| e.to_string())?;
-    if let Err(e) = secrets::write_file(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")), &text) {
+    let vault = profile.join(secrets::VAULT).join(format!("codex-{id}.json"));
+    let vault_was_there = vault.exists();
+    if let Err(e) = secrets::write_file(&vault, &text) {
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
     let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now, sign_in_error: false, label: None };
     let store = store.lock().map_err(|e| e.to_string())?;
-    let mut list: Vec<Account> = crate::orchestration::kept::load(&store, LIST_KEY)?;
+    // Row 916: the home stays (ACCT-019), but a sealed copy made for an account that never got listed is deleted.
+    let drop_new_copy = || {
+        if !vault_was_there {
+            crate::claude_accounts::remove_sealed_copy(&vault);
+        }
+    };
+    let mut list: Vec<Account> = match crate::orchestration::kept::load(&store, LIST_KEY) {
+        Ok(l) => l,
+        Err(e) => {
+            drop_new_copy();
+            return Err(e.into());
+        }
+    };
     let listed = list.iter().any(|a| a.id == id);
     match list.iter_mut().find(|a| a.id == id) {
         Some(a) => *a = Account { label: a.label.take(), ..account.clone() },
         None => list.push(account.clone()),
     }
-    store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let saved = serde_json::to_string(&list).map_err(|e| e.to_string()).and_then(|json| store.set(LIST_KEY, &json).map_err(|e| e.to_string()));
+    if let Err(e) = saved {
+        if !listed {
+            drop_new_copy();
+        }
+        return Err(e.into());
+    }
     if !listed {
         store.set(ACTIVE_KEY, id).map_err(|e| e.to_string())?;
     }
@@ -925,6 +945,8 @@ mod tests {
             (String::new(), Ended::Exited(Some(0)), None)
         });
         assert!(got.is_err(), "the save is refused, not made over an empty list");
+        assert!(!profile.join(secrets::VAULT).join("codex-c9.json").exists(), "a refused sign-in leaves no sealed copy");
+        assert!(profile.join(FOLDER).join("c9").join("auth.json").exists(), "the home keeps its sign-in (ACCT-019)");
         let store = store.lock().unwrap();
         assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the stored list is byte-identical");
         assert_eq!(store.get(ACTIVE_KEY).unwrap(), None, "no account became active for a list that was not saved");
