@@ -23,6 +23,9 @@ pub struct Store {
     /// after-list #39: set once per run when a read fell back to settings.json.bak; the window takes it and says so.
     fallback_notice: std::sync::Mutex<Option<String>>,
     fallback_told: AtomicBool,
+    /// Row 881: keys whose blob did not read and was not copied aside. Saves to them are refused, so
+    /// a registry or list that fell back to defaults cannot overwrite the original blob.
+    poisoned: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl Store {
@@ -34,7 +37,7 @@ impl Store {
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
-        Ok(Store { conn, settings_path: dir.join("settings.json"), read_failed: AtomicBool::new(false), fallback_notice: std::sync::Mutex::new(None), fallback_told: AtomicBool::new(false) })
+        Ok(Store { conn, settings_path: dir.join("settings.json"), read_failed: AtomicBool::new(false), fallback_notice: std::sync::Mutex::new(None), fallback_told: AtomicBool::new(false), poisoned: Default::default() })
     }
 
     /// Row 785: a settings file that lacks the look or the mode gets them, once, as the page
@@ -77,7 +80,22 @@ impl Store {
             .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })
     }
 
+    /// Marks `key` as holding a blob that could not be read or kept aside; saves to it are refused.
+    /// Only a successful `keep_aside` of the key clears it (a later plain read does not).
+    pub fn poison(&self, key: &str) {
+        self.poisoned.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string());
+    }
+
+    fn refuse_poisoned<'a>(&self, keys: impl IntoIterator<Item = &'a str>) -> rusqlite::Result<()> {
+        let bad = self.poisoned.lock().unwrap_or_else(|e| e.into_inner());
+        match keys.into_iter().find(|k| bad.contains(*k)) {
+            None => Ok(()),
+            Some(k) => Err(rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!("{k} could not be read and was not kept aside; not saving over it"))))),
+        }
+    }
+
     pub fn set(&self, key: &str, value: &str) -> rusqlite::Result<()> {
+        self.refuse_poisoned([key])?;
         self.conn.execute(
             "INSERT INTO kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
@@ -87,6 +105,7 @@ impl Store {
 
     /// Several keys in one transaction: all of them land, or none do.
     pub fn set_all(&self, pairs: &[(&str, &str)]) -> rusqlite::Result<()> {
+        self.refuse_poisoned(pairs.iter().map(|(k, _)| *k))?;
         let tx = self.conn.unchecked_transaction()?;
         for (k, v) in pairs {
             tx.execute("INSERT INTO kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![k, v])?;
@@ -112,6 +131,7 @@ impl Store {
             return Ok(KeepAside::Changed);
         }
         tx.commit()?;
+        self.poisoned.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
         Ok(KeepAside::Done)
     }
 

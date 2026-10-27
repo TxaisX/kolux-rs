@@ -17,16 +17,20 @@ fn now_ms() -> u128 {
 /// The blob under `key`. No blob, or a cleared (`null`) one, is the default. A blob that does not
 /// read is kept aside first (see the module note); the error cases leave the store untouched.
 pub fn load<T: DeserializeOwned + Serialize + Default>(store: &Store, key: &str) -> Result<T, String> {
-    let text = store.get(key).map_err(|e| format!("{key} could not be read ({e}); nothing was changed"))?;
-    let Some(text) = text.filter(|t| t.trim() != "null") else { return Ok(T::default()) };
-    match serde_json::from_str(&text) {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            let aside = set_aside_at(store, key, &text, &T::default(), now_ms())?;
-            eprintln!("{}", kept_note(key, &aside, &decode_kind(&e)));
-            Ok(T::default())
+    let read = || -> Result<T, String> {
+        let text = store.get(key).map_err(|e| format!("{key} could not be read ({e}); nothing was changed"))?;
+        let Some(text) = text.filter(|t| t.trim() != "null") else { return Ok(T::default()) };
+        match serde_json::from_str(&text) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let aside = set_aside_at(store, key, &text, &T::default(), now_ms())?;
+                eprintln!("{}", kept_note(key, &aside, &decode_kind(&e)));
+                Ok(T::default())
+            }
         }
-    }
+    };
+    // Row 881: the blob is still in the store, uncopied, so nothing may save over it (see Store::poison).
+    read().inspect_err(|_| store.poison(key))
 }
 
 /// For readers with no error path: the blob, or the default when the store itself cannot be read.
@@ -354,5 +358,49 @@ mod tests {
             drop(store);
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    #[test]
+    fn row881_an_unread_uncopied_key_is_poisoned_until_a_keep_aside_succeeds() {
+        let (store, dir) = fresh("poison");
+        let broken = "{\"runs\": [tru";
+        store.set("demo.list", broken).unwrap();
+        store.set("demo.other", "[1]").unwrap();
+        refuse_copies(&dir);
+        assert!(load::<Vec<Value>>(&store, "demo.list").is_err());
+        let err = store.set("demo.list", "[]").unwrap_err().to_string();
+        assert!(err.contains("demo.list") && err.contains("not kept aside") && err.contains("not saving over it"), "{err}");
+        assert!(store.set_all(&[("demo.other", "[2]"), ("demo.list", "[]")]).is_err(), "a batch naming the key is refused whole");
+        assert_eq!(store.get("demo.other").unwrap().as_deref(), Some("[1]"), "nothing of the refused batch landed");
+        store.set("demo.other", "[3]").unwrap();
+        store.set_all(&[("demo.other", "[4]")]).unwrap();
+        assert_eq!(store.get("demo.list").unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        // A plain read that works does not clear it: here the key reads as a different type, which is Err again, still uncopied.
+        assert!(load::<Vec<Value>>(&store, "demo.list").is_err());
+        assert!(store.set("demo.list", "[]").is_err());
+        // Keeping it aside is how it clears, and keep_aside itself is never blocked by the poison.
+        let aside = set_aside_at(&store, "demo.list", broken, &Vec::<Value>::new(), 5);
+        assert!(aside.is_err(), "the disk still refuses copies");
+        rusqlite::Connection::open(dir.join("state.db")).unwrap().execute_batch("DROP TRIGGER no_copies").unwrap();
+        let got: Vec<Value> = load(&store, "demo.list").unwrap();
+        assert!(got.is_empty());
+        assert_eq!(asides(&store, "demo.list"), vec![broken.to_string()]);
+        store.set("demo.list", "[7]").unwrap();
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn row881_a_store_that_cannot_be_read_poisons_the_key_too() {
+        let (store, dir) = fresh("poison-get");
+        store.set("demo.list", "[1]").unwrap();
+        let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        side.execute_batch("ALTER TABLE kv RENAME TO kv_gone").unwrap();
+        assert!(load::<Vec<Value>>(&store, "demo.list").is_err());
+        side.execute_batch("ALTER TABLE kv_gone RENAME TO kv").unwrap();
+        assert!(store.set("demo.list", "[]").is_err());
+        assert_eq!(store.get("demo.list").unwrap().as_deref(), Some("[1]"));
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

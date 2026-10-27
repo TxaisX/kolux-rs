@@ -5530,8 +5530,11 @@ mod tests {
         assert_eq!(err.code, "failed");
         assert_eq!(typed::count(5313), 0, "nothing was typed before the refusal");
         assert_eq!(store.lock().unwrap().get(so::KEY).unwrap().as_deref(), Some(broken), "the receipts blob is byte-identical");
-        // Repaired: the same retry types once, then answers from its receipt without typing again.
-        store.lock().unwrap().set(so::KEY, "[]").unwrap();
+        // Repaired and restarted (row 881: this run refuses to save over the key until then): the same retry types once, then answers from its receipt without typing again.
+        let mut restarted = Store::open(&dir.join("data")).unwrap();
+        restarted.set(so::KEY, "[]").unwrap();
+        std::mem::swap(&mut *store.lock().unwrap(), &mut restarted);
+        drop(restarted);
         dispatch(&ctx, &req).unwrap();
         let typed_once = typed::count(5313);
         assert!(typed_once >= 1);

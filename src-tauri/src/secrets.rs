@@ -273,8 +273,8 @@ pub fn dropped(store: &Store) -> Vec<String> {
     crate::orchestration::kept::or_default(store, DROPPED_KEY)
 }
 
-pub fn dismiss_dropped(store: &Store) {
-    let _ = store.set(DROPPED_KEY, "[]");
+pub fn dismiss_dropped(store: &Store) -> Result<(), String> {
+    store.set(DROPPED_KEY, "[]").map_err(|e| e.to_string())
 }
 
 /// ACCT-011: every Claude key in `line` (`sk-ant-` and the URL-safe characters after it)
@@ -529,8 +529,7 @@ pub async fn secrets_dropped(app: tauri::AppHandle) -> Result<Vec<String>, Strin
 
 #[tauri::command]
 pub fn secrets_dropped_dismiss(store: tauri::State<'_, Mutex<Store>>) -> Result<(), String> {
-    dismiss_dropped(&*store.lock().map_err(|e| e.to_string())?);
-    Ok(())
+    dismiss_dropped(&*store.lock().map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -665,7 +664,7 @@ mod tests {
         s["xaiApiKey"] = Value::String(format!("{PREFIX}BBBB"));
         store.save_settings(&s).unwrap();
         assert_eq!(drop_unreadable(&store, &dir), ["xaiApiKey"]);
-        dismiss_dropped(&store);
+        dismiss_dropped(&store).unwrap();
         assert!(dropped(&store).is_empty());
         drop(store);
         fs::remove_dir_all(&dir).unwrap();

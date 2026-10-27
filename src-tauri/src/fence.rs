@@ -358,4 +358,19 @@ mod tests {
         assert!(check(&link.join("other.txt"), &[t.0.join("project")], &[], true).is_err());
         let _ = fs::remove_dir(&link);
     }
+
+    #[test]
+    fn row881_a_grants_list_that_could_not_be_kept_aside_is_never_saved_over() {
+        let t = temp("poisoned");
+        let db = t.0.join("data");
+        let store = Mutex::new(Store::open(&db).unwrap());
+        let broken = r#"["C:/picked.txt", tru"#;
+        store.lock().unwrap().set(KEY_GRANTS, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        let f = Fence::load(&store);
+        assert!(f.grants.lock().unwrap().is_empty(), "a damaged list grants nothing");
+        let err = f.grant(&t.0.join("outside/picked.txt"), &store.lock().unwrap()).unwrap_err();
+        assert!(err.contains(KEY_GRANTS) && err.contains("not saving over it"), "{err}");
+        assert_eq!(store.lock().unwrap().get(KEY_GRANTS).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+    }
 }
