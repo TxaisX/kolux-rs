@@ -225,7 +225,8 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     // Row 932: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id; an unreadable list fails here, before the login.
     let (listed_ids, existing) = if existing {
         let ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
-        let listed = ids.iter().any(|l| l == id);
+        // Row 938: an empty list is a set-aside corrupt list or a first account, not a stale screen, so the id keeps its own folder.
+        let listed = ids.is_empty() || ids.iter().any(|l| l == id);
         (ids, listed)
     } else {
         (load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect(), false)
@@ -1015,6 +1016,20 @@ mod tests {
         };
         let _ = sign_in(&store, &dir, "a1", true, 9, login, |_| Some(SIGNED_IN.into()));
         assert_eq!(fs::read(&live).unwrap(), bytes, "the unreadable live file is byte-identical");
+    }
+
+    // Row 938 (2): with nothing listed at all (a list set aside as corrupt, or a first account) an existing re-sign-in keeps its own id and folder.
+    #[test]
+    fn row938_an_existing_sign_in_with_an_empty_list_keeps_its_own_id() {
+        let (dir, store) = profile("row938-empty");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        let got = sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        assert_eq!(got.id, "a1", "the account keeps its id, not a2");
+        assert_eq!(got.config_dir, a.config_dir, "and its folder");
+        assert_eq!(fs::read_dir(dir.join(FOLDER)).unwrap().count(), 1, "no second account folder");
+        assert_eq!(load(&store.lock().unwrap()).len(), 1);
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
