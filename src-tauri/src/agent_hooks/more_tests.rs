@@ -517,6 +517,41 @@ fn stat_012_cursor_install_and_remove_leave_the_users_empty_keys() {
     assert_eq!(read(&file), original, "removal gives the user's file back byte for byte, empty keys included");
 }
 
+/// A user's empty key under one of the five installed events is not dropped when Kolux's entry goes: the kept copy has it.
+#[test]
+fn stat_012_cursor_remove_keeps_the_users_empty_key_under_an_installed_event() {
+    let home = scratch("cursor-empty-installed");
+    let file = cursor_file(&home);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{\"version\":1,\"hooks\":{\"stop\":[]}}";
+    fs::write(&file, original).unwrap();
+    assert!(install_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert!(v["hooks"]["stop"].as_array().unwrap().iter().any(names_mine), "install puts Kolux's entry under stop");
+    assert!(remove_cursor(&home, &file).unwrap());
+    assert_eq!(read(&file), original, "removal gives the user's bytes back, the empty stop key included");
+}
+
+/// An older Kolux entry sits in a key the user also had: install's strip keeps the key the kept copy has.
+#[test]
+fn stat_012_cursor_install_keeps_a_users_key_the_kept_copy_has() {
+    let home = scratch("cursor-old-key");
+    let file = cursor_file(&home);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{\"version\":1,\"hooks\":{\"preToolUse\":[]}}";
+    fs::write(&file, original).unwrap();
+    assert!(install_cursor(&home, &file).unwrap());
+    let mut v: Value = serde_json::from_str(&read(&file)).unwrap();
+    let mine = v["hooks"]["stop"][0].clone();
+    v["hooks"]["preToolUse"] = json!([mine]);
+    fs::write(&file, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    assert!(install_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["hooks"]["preToolUse"], json!([]), "the key the user had stays");
+    assert!(remove_cursor(&home, &file).unwrap());
+    assert_eq!(read(&file), original);
+}
+
 /// Removal on an older eight-event file leaves no Kolux entry under any key, and the user's own stay.
 #[test]
 fn stat_012_cursor_remove_clears_an_older_files_permission_entries() {
