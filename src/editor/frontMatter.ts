@@ -4,7 +4,8 @@
 // byte as it was. The text here is the buffer's (CodeMirror joins lines with \n; the file's own
 // line ends are put back when it is written).
 import { diff } from "@codemirror/merge";
-import { changeBetween, htmlTagsOf, limitsOf, RICH_LIMIT, roundTrip, unsupported } from "./markdown";
+import { saveBreaksInvariant } from "./richSaveInvariant";
+import { changeBetween, htmlTagsOf, limitsOf, RICH_LIMIT, roundTrip, unsupported, WORD, wordSpans, type Span } from "./markdown";
 
 /** The front matter block including its closing line and that line's end ("" when there is none),
  *  and the rest of the note. `front + body` is always the whole text. */
@@ -39,6 +40,8 @@ export function richChange(now: string, out: string, prev?: string, refused?: ()
   const crlf = inFileEnds(now, body[c.from - 1], c.insert);
   // Code lines keep their CR in the view, so the CRLF spelling is used only where the view reads it as it read the added lines.
   const insert = crlf !== c.insert && same(body.slice(0, c.from) + crlf + body.slice(c.to), next) ? crlf : c.insert;
+  // Round 11: whatever the placement did, a save must leave every byte and every untouched list outside the edit as it was.
+  if (prev !== undefined && saveBreaksInvariant(body, body.slice(0, c.from) + insert + body.slice(c.to), prev, out) !== null) return placeStats.refused++, refused?.(), null;
   return { from: c.from + front.length, to: c.to + front.length, insert };
 }
 
@@ -48,11 +51,6 @@ function inFileEnds(now: string, before: string | undefined, insert: string): st
   if (!bare(before === "\r" ? "\r" + insert : insert) || bare(now) || !now.includes("\r\n")) return insert;
   return (before === "\r" ? "\r" + insert : insert).replace(/(?<!\r)\n/g, "\r\n").slice(before === "\r" ? 1 : 0);
 }
-
-const WORD = /[\p{L}\p{N}]+/gu;
-
-type Span = { s: number; e: number };
-const wordSpans = (text: string): Span[] => Array.from(text.matchAll(WORD), (m) => ({ s: m.index, e: m.index + m[0].length }));
 
 /** Whether `a` and `b` hold the same words in the same order, whatever lies between them. */
 function sameWords(a: string, b: string): boolean {

@@ -104,6 +104,11 @@ export function roundTrip(md: string): string | null {
   }
 }
 
+export const WORD = /[\p{L}\p{N}]+/gu;
+
+export type Span = { s: number; e: number };
+export const wordSpans = (text: string): Span[] => Array.from(text.matchAll(WORD), (m) => ({ s: m.index, e: m.index + m[0].length }));
+
 /** The one replacement that turns `a` into `b`: the span between their common start and end. */
 export function changeBetween(a: string, b: string): { from: number; to: number; insert: string } | null {
   if (a === b) return null;
