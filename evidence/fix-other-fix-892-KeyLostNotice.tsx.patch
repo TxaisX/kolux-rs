@@ -1,0 +1,80 @@
+diff --git a/src/settings/KeyLostNotice.test.ts b/src/settings/KeyLostNotice.test.ts
+index 0c3aca4d..bd1f5949 100644
+--- a/src/settings/KeyLostNotice.test.ts
++++ b/src/settings/KeyLostNotice.test.ts
+@@ -2,7 +2,7 @@
+ import { expect, test } from "vitest";
+ import { createElement } from "react";
+ import { renderToString } from "react-dom/server";
+-import { KeyLostView, lostText } from "./KeyLostNotice";
++import { KeyLostView, dismissFailure, lostText } from "./KeyLostNotice";
+ 
+ test("the note names each cleared key and says where to reconnect it", () => {
+   expect(lostText(["claudeOauthToken"])).toBe("Your Claude 1-year key could not be opened on this computer, so it was cleared. Reconnect it in Settings › Accounts & keys.");
+@@ -26,3 +26,17 @@ test("every secret field the app stores has a label in the note", async () => {
+   for (const k of SECRET_KEYS) expect(lostText([k]), k).toContain("Your ");
+   expect(lostText(["moonshotApiKey", "minimaxApiKey"])).toContain("Moonshot key and MiniMax key");
+ });
++
++// AFTER row 892: a refused dismiss keeps the note and says why; only a successful one lets it go.
++test("a dismiss the app refuses is reported and keeps the note", async () => {
++  expect(await dismissFailure(() => Promise.resolve(null))).toBeNull();
++  const why = await dismissFailure(() => Promise.reject("poisoned key: not saving over it"));
++  expect(why).toContain("could not be dismissed");
++  expect(why).toContain("poisoned key: not saving over it");
++  expect(await dismissFailure(() => Promise.reject(new Error("locked")))).toContain("locked");
++  const noop = () => {};
++  const html = renderToString(createElement(KeyLostView, { names: ["claudeOauthToken"], onOpen: noop, onDismiss: noop, error: why }));
++  expect(html).toContain('role="alert"');
++  expect(html).toContain("will show again");
++  expect(renderToString(createElement(KeyLostView, { names: ["claudeOauthToken"], onOpen: noop, onDismiss: noop }))).not.toContain('role="alert"');
++});
+diff --git a/src/settings/KeyLostNotice.tsx b/src/settings/KeyLostNotice.tsx
+index b52128c0..7f5a8110 100644
+--- a/src/settings/KeyLostNotice.tsx
++++ b/src/settings/KeyLostNotice.tsx
+@@ -26,12 +26,27 @@ export function lostText(names: string[]): string | null {
+   return `${subject} could not be opened on this computer, so ${many ? "they were" : "it was"} cleared. Reconnect ${many ? "them" : "it"} in Settings › Accounts & keys.`;
+ }
+ 
+-export function KeyLostView({ names, onOpen, onDismiss }: { names: string[]; onOpen: () => void; onDismiss: () => void }) {
++/** Row 892: asks the app to forget the note; the reason when it refuses, else null (the note may go). */
++export async function dismissFailure(dismiss: () => Promise<unknown>): Promise<string | null> {
++  try {
++    await dismiss();
++    return null;
++  } catch (e) {
++    return `The note could not be dismissed (${e instanceof Error ? e.message : String(e)}), so it will show again.`;
++  }
++}
++
++export function KeyLostView({ names, onOpen, onDismiss, error }: { names: string[]; onOpen: () => void; onDismiss: () => void; error?: string | null }) {
+   const text = lostText(names);
+   if (!text) return null;
+   return (
+     <div className="notice signin-notice key-lost" role="status">
+       <span>{text}</span>
++      {error && (
++        <span className="warn" role="alert">
++          {error}
++        </span>
++      )}
+       <button className="btn" onClick={onOpen}>
+         Open Accounts &amp; keys
+       </button>
+@@ -51,9 +66,12 @@ export default function KeyLostNotice() {
+     const offs = [listen("claude-key", read), listen("settings-saved", read)];
+     return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
+   }, []);
++  const [error, setError] = useState<string | null>(null);
+   const dismiss = () => {
+-    setNames([]);
+-    invoke("secrets_dropped_dismiss").catch(() => {});
++    void dismissFailure(() => invoke("secrets_dropped_dismiss")).then((why) => {
++      setError(why);
++      if (!why) setNames([]);
++    });
+   };
+-  return <KeyLostView names={names} onOpen={() => openSettings("accounts")} onDismiss={dismiss} />;
++  return <KeyLostView names={names} onOpen={() => openSettings("accounts")} onDismiss={dismiss} error={error} />;
+ }
