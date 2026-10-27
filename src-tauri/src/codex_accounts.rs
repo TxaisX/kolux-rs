@@ -339,15 +339,15 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
         Some(a) => *a = Account { label: a.label.take(), ..account.clone() },
         None => list.push(account.clone()),
     }
-    let saved = serde_json::to_string(&list).map_err(|e| e.to_string()).and_then(|json| store.set(LIST_KEY, &json).map_err(|e| e.to_string()));
+    // A new account is listed and made active in one transaction, so a refused save leaves neither.
+    let saved = serde_json::to_string(&list).map_err(|e| e.to_string()).and_then(|json| {
+        if listed { store.set(LIST_KEY, &json) } else { store.set_all(&[(LIST_KEY, &json), (ACTIVE_KEY, id)]) }.map_err(|e| e.to_string())
+    });
     if let Err(e) = saved {
         if !listed {
             drop_new_copy();
         }
         return Err(e.into());
-    }
-    if !listed {
-        store.set(ACTIVE_KEY, id).map_err(|e| e.to_string())?;
     }
     Ok(account)
 }
@@ -970,6 +970,24 @@ mod tests {
         let store = store.lock().unwrap();
         assert_eq!(load(&store).len(), 1);
         assert_eq!(store.get(ACTIVE_KEY).unwrap().as_deref(), Some("c10"));
+    }
+
+    // Row 916 L3: a new account's list and active choice land together or not at all.
+    #[test]
+    fn row916_a_new_account_is_listed_and_made_active_in_one_save() {
+        let profile = temp("row916-set-all");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
+        store.lock().unwrap().poison(ACTIVE_KEY);
+        let got = sign_in(&store, &profile, "c9", 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        });
+        assert!(got.is_err(), "the active choice cannot be saved");
+        let store = store.lock().unwrap();
+        assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some("[]"), "the list did not change either");
+        assert_eq!(store.get(ACTIVE_KEY).unwrap(), None);
+        assert!(!profile.join(secrets::VAULT).join("codex-c9.json").exists());
     }
 
     // Row 916: label, flag and remove answer an honest Err while the store is unreadable, and work after.
