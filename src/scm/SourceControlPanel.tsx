@@ -816,17 +816,17 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
               {gen !== null && gen !== "running" && (
                 <div className="note warn" role="status">
                   {gen}{" "}
-                  <button className="link" onClick={() => dir !== null && dismissGenerate(dir)}>
+                  <button type="button" className="link" onClick={() => dir !== null && dismissGenerate(dir)}>
                     Dismiss
                   </button>
                 </div>
               )}
               {aiShown && repoRef !== null && (
                 <div className="sb-hint">
-                  <button className="link" title={`This repository's AI switch is saved as ${typeof repoRef === "string" ? repoRef : repoRef.id}`} onClick={() => void saveSettings({ [REPO_AI_KEY]: withRepoAi(appSettings, repoRef, repoOff ? "follow" : "off") })}>
+                  <button type="button" className="link" title={`This repository's AI switch is saved as ${typeof repoRef === "string" ? repoRef : repoRef.id}`} onClick={() => void saveSettings({ [REPO_AI_KEY]: withRepoAi(appSettings, repoRef, repoOff ? "follow" : "off") })}>
                     {repoOff ? "Follow the global AI setting for this repository" : "Turn AI off for this repository"}
                   </button>
-                  <span> {typeof repoRef === "string" ? repoRef : repoRef.id}</span>
+                  <span> Repository: {typeof repoRef === "string" ? repoRef : repoRef.id}</span>
                 </div>
               )}
               <div className="scm-main" hidden={box.controlsHidden}>

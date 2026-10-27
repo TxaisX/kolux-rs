@@ -113,10 +113,22 @@ describe("row 917 review fixes: one switch under every key a repository is known
     expect(repoAiMode(s, origin)).toBe("off");
     expect(aiShownFor(s, origin)).toBe(false);
   });
-  it("an off saved under the old remote still counts after origin is switched", () => {
-    const s = { scmRepoAi: { "github.com/old/app": "off" } };
-    expect(aiShownFor(s, { id: "github.com/new/app", legacy: null, also: ["github.com/old/app", "old/app"] })).toBe(false);
-    expect(aiShownFor(s, { id: "github.com/new/app", legacy: null, also: [] })).toBe(true);
+  it("an off written before an origin switch still counts after it, through the root path", () => {
+    const before = { id: "github.com/old/app", legacy: "old/app", also: ["C:/work/app"] };
+    const s = { scmRepoAi: withRepoAi({}, before, "off") };
+    expect(s.scmRepoAi).toEqual({ "github.com/old/app": "off", "C:/work/app": "off" });
+    expect(aiShownFor(s, { id: "github.com/new/app", legacy: "new/app", also: ["C:/work/app"] })).toBe(false);
+    expect(aiShownFor(s, { id: "github.com/new/app", legacy: "new/app", also: [] })).toBe(true);
+  });
+  it("a fork never reads or wipes its upstream's switch", () => {
+    const upstream = { id: "github.com/Org/app", legacy: "Org/app", also: ["C:/work/upstream"] };
+    const fork = { id: "github.com/me/app", legacy: "me/app", also: ["C:/work/fork"] };
+    const s = { scmRepoAi: withRepoAi({}, upstream, "off") };
+    expect(repoAiMode(s, fork)).toBe("follow");
+    const after = withRepoAi(s, fork, "follow");
+    expect(after).toEqual(s.scmRepoAi);
+    expect(aiShownFor({ scmRepoAi: after }, upstream)).toBe(false);
+    expect(withRepoAi(s, fork, "off")).toEqual({ ...s.scmRepoAi, "github.com/me/app": "off", "C:/work/fork": "off" });
   });
   it("an off under any key wins over an on under the primary id", () => {
     const s = { scmRepoAi: { "gitlab.com/Team/App": "on", "C:/work/app": "off" } };
@@ -126,6 +138,7 @@ describe("row 917 review fixes: one switch under every key a repository is known
     const s = { scmRepoAi: { "C:/work/app": "off", "other/repo": "off" } };
     expect(withRepoAi(s, origin, "on")).toEqual({ "gitlab.com/Team/App": "on", "other/repo": "off" });
     expect(withRepoAi(s, origin, "follow")).toEqual({ "other/repo": "off" });
+    expect(withRepoAi(s, origin, "off")).toEqual({ "gitlab.com/Team/App": "off", "C:/work/app": "off", "other/repo": "off" });
   });
   it("a repository read for another folder counts as unread (fails closed)", () => {
     const state = { dir: "/a", ref: origin };

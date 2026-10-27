@@ -77,7 +77,7 @@ export function migrateRecipes(settings: Record<string, unknown> | null): Recipe
 export type RepoAiMode = "follow" | "on" | "off";
 export const REPO_AI_KEY = "scmRepoAi";
 
-/** A repository as the switch knows it: the provider-neutral id (scm_repo_id) a write goes to, the `owner/name` key a GitHub repository was saved under before ids existed, and `also`, every other key it is known by (other remotes, its root path) so a switch survives a remote change. A bare string is an id. */
+/** A repository as the switch knows it: the provider-neutral id (scm_repo_id) a write goes to, the `owner/name` key a github.com repository was saved under before ids existed, and `also`, its root path, which an "off" is written under too so it survives a remote change. Never another remote's key. A bare string is an id. */
 export type RepoRef = string | { id: string; legacy?: string | null; also?: string[] };
 const idOf = (r: RepoRef): string => (typeof r === "string" ? r : r.id);
 /** Every key the repository may have been saved under, the primary id first. */
@@ -107,11 +107,17 @@ export function aiShownFor(settings: Record<string, unknown> | null, repo: RepoR
   return mode === "on" ? true : mode === "off" ? false : aiControlsShown(settings);
 }
 
-/** The saved per-repository modes with `repo` set under its primary id (every older key retired); "follow" removes them all. */
+/**
+ * The saved per-repository modes with `repo` set. Only the repository's own keys are touched, never
+ * another remote's (a fork must not wipe its upstream's switch). "off" is written under the primary
+ * id and its root path (so it survives a remote change); "on" under the primary id; "follow" removes
+ * the own keys.
+ */
 export function withRepoAi(settings: Record<string, unknown> | null, repo: RepoRef, mode: RepoAiMode): Record<string, RepoAiMode> {
   const now = { ...(savedModes(settings) as Record<string, RepoAiMode>) };
   for (const k of keysOf(repo)) delete now[k];
-  if (mode !== "follow") now[idOf(repo)] = mode;
+  if (mode === "off") for (const k of typeof repo === "string" ? [repo] : [repo.id, ...(repo.also ?? [])]) now[k] = "off";
+  else if (mode === "on") now[idOf(repo)] = "on";
   return now;
 }
 

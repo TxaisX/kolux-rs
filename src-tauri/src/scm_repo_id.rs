@@ -12,7 +12,7 @@ pub struct RepoIdentity {
     pub id: String,
     /// `owner/name` when the remote is GitHub: the key the switch was saved under before ids, read as a fallback.
     pub legacy: Option<String>,
-    /// Every other key this repository is known by (other remotes, its root path, their old GitHub keys): an "off" saved under any of them still counts.
+    /// Its root path id when a remote is the primary: written beside an "off" so a later remote change keeps it. Never another remote's key.
     pub also: Vec<String>,
 }
 
@@ -98,8 +98,8 @@ fn root_id(worktree: &Path) -> Result<String, String> {
 }
 
 /// The identity of `worktree`: see the module note. The primary id is origin's, else the first
-/// remote's, else the root path; `also` holds every other remote, the root path and their old
-/// GitHub keys, so a switch saved under any of them survives a remote being added or origin changed.
+/// remote's, else the root path; `also` holds the root path, so an "off" saved with it survives a
+/// remote being added or origin changed.
 /// Err when git fails in a way that does not say "not a repository".
 pub fn identity(worktree: &Path, ssh_config: &str) -> Result<RepoIdentity, String> {
     let folder = || path_id(&worktree.to_string_lossy()).ok_or_else(|| "empty folder path".to_string());
@@ -112,8 +112,8 @@ pub fn identity(worktree: &Path, ssh_config: &str) -> Result<RepoIdentity, Strin
     if let Some(i) = names.iter().position(|n| *n == "origin") {
         names.swap(0, i);
     }
-    // (id, old GitHub key) per remote, origin first. An origin that exists but cannot be read is an error, never a quiet switch to another remote.
-    let mut remotes: Vec<(String, Option<String>)> = Vec::new();
+    // The primary remote's id and old GitHub key: origin, else the first readable remote. An origin that exists but cannot be read is an error, never a quiet switch to another remote.
+    let mut primary: Option<(String, Option<String>)> = None;
     for (i, name) in names.iter().enumerate() {
         let url = match run(&["remote", "get-url", name], Some(worktree)) {
             Ok(u) => u,
@@ -121,34 +121,18 @@ pub fn identity(worktree: &Path, ssh_config: &str) -> Result<RepoIdentity, Strin
             Err(_) => continue,
         };
         if let Some(id) = remote_id(&url, ssh_config) {
-            let legacy = super::github_repo(&url, ssh_config).map(|g| format!("{}/{}", g.owner, g.name));
-            if !remotes.iter().any(|(r, _)| *r == id) {
-                remotes.push((id, legacy));
-            }
+            // The old key has no host, so only github.com repositories may own it.
+            let legacy = super::github_repo(&url, ssh_config).filter(|g| g.host.eq_ignore_ascii_case("github.com")).map(|g| format!("{}/{}", g.owner, g.name));
+            primary = Some((id, legacy));
+            break;
         }
     }
     let root = root_id(worktree);
-    let mut rest: Vec<String> = Vec::new();
-    let (id, legacy) = if remotes.is_empty() {
-        (root?, None)
-    } else {
-        if let Ok(r) = root {
-            rest.push(r);
-        }
-        let (id, legacy) = remotes.remove(0);
-        (id, legacy)
-    };
-    for (rid, rlegacy) in remotes {
-        rest.extend([rid]);
-        rest.extend(rlegacy);
-    }
-    let mut also: Vec<String> = Vec::new();
-    for k in rest {
-        if k != id && legacy.as_deref() != Some(k.as_str()) && !also.contains(&k) {
-            also.push(k);
-        }
-    }
-    Ok(RepoIdentity { id, legacy, also })
+    // A repository owns only its own keys: never another remote's (a fork must not touch its upstream's switch).
+    Ok(match primary {
+        Some((id, legacy)) => RepoIdentity { also: root.into_iter().filter(|r| *r != id).collect(), id, legacy },
+        None => RepoIdentity { id: root?, legacy: None, also: Vec::new() },
+    })
 }
 
 /// A repository typed or pasted in Settings as the id `identity` would resolve for it: a URL or
@@ -363,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn row917r_switching_origin_keeps_the_old_remote_as_another_key() {
+    fn row917r_switching_origin_keeps_the_root_id_and_drops_the_old_remote() {
         let dir = repo("switch-origin");
         run(&["remote", "add", "origin", "https://github.com/Acme/app.git"], Some(&dir)).unwrap();
         let old = identity(&dir, "").unwrap();
@@ -371,8 +355,33 @@ mod tests {
         run(&["remote", "add", "origin", "https://gitlab.com/g/app.git"], Some(&dir)).unwrap();
         let now = identity(&dir, "").unwrap();
         assert_eq!(now.id, "gitlab.com/g/app", "origin is the primary id");
-        assert!(now.also.contains(&old.id), "{:?} should hold {}", now.also, old.id);
-        assert!(now.also.contains(&"Acme/app".to_string()), "the old remote's GitHub key too: {:?}", now.also);
+        assert_eq!(now.also, old.also, "the root path id is the key that survives the switch");
+        assert_eq!(now.also.len(), 1);
+        assert!(!now.also.contains(&old.id) && now.legacy.is_none());
+    }
+
+    #[test]
+    fn row917r_a_fork_does_not_own_its_upstream_keys() {
+        let dir = repo("fork");
+        run(&["remote", "add", "origin", "https://github.com/me/app.git"], Some(&dir)).unwrap();
+        run(&["remote", "add", "upstream", "https://github.com/Org/app.git"], Some(&dir)).unwrap();
+        let got = identity(&dir, "").unwrap();
+        assert_eq!((got.id.as_str(), got.legacy.as_deref()), ("github.com/me/app", Some("me/app")));
+        assert_eq!(got.also.len(), 1, "only the root path: {:?}", got.also);
+        assert!(got.also.iter().all(|k| !k.contains("Org")), "{:?}", got.also);
+    }
+
+    #[test]
+    fn row917r_only_a_github_com_primary_has_a_legacy_key() {
+        let dir = repo("legacy-host");
+        run(&["remote", "add", "origin", "https://gitlab.com/Org/app.git"], Some(&dir)).unwrap();
+        run(&["remote", "add", "upstream", "https://github.com/Org/app.git"], Some(&dir)).unwrap();
+        let got = identity(&dir, "").unwrap();
+        assert_eq!(got.legacy, None);
+        assert!(!got.also.contains(&"Org/app".to_string()), "{:?}", got.also);
+        let ghe = repo("legacy-ghe");
+        run(&["remote", "add", "origin", "https://github.example.com/Org/app.git"], Some(&ghe)).unwrap();
+        assert_eq!(identity(&ghe, "").unwrap().legacy, None);
     }
 
     #[test]
