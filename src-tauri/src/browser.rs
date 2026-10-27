@@ -724,7 +724,8 @@ impl reqwest::dns::Resolve for Resolver {
 /// page's own-host icon only when that page is itself open on this machine or the local network
 /// (`icon_near`); a redirect off that host stops and is handed to `far`. `far` fetches every
 /// other icon, a public page's own-host icon included, through the public-only lookup. Neither
-/// goes through a proxy (a proxy would resolve the name where the lookup cannot see it).
+/// goes through a proxy (a proxy would resolve the name where the lookup cannot see it), so with a saved
+/// proxy no icon is fetched at all (T-323-c: `fetch_icon_unless_proxied`; never around the proxy).
 /// DNS rebinding: a public name rebound to a local address after its page loaded reaches `far`
 /// as an empty lookup and is never asked (council FIX-3: reqwest goes through none of the
 /// engine's local-network checks, so `near` never serves a public page).
@@ -860,6 +861,29 @@ pub fn hand_off(from: &Url, location: Option<&str>, app: Option<&Url>) -> Option
     hop_ok(&next, std::slice::from_ref(from), app).then_some(next)
 }
 
+/// T-323-c: whether an icon may be fetched. The icon clients connect directly (their public-only name
+/// lookup would not see a proxy's side), so a saved proxy, or one that cannot be read, means no icon
+/// rather than a connection around the user's proxy.
+pub fn icon_fetch_allowed(saved: &Result<Option<String>, String>) -> bool {
+    matches!(saved, Ok(p) if matches!(proxy_of(p.as_deref()), Ok(None)))
+}
+
+/// The sealed proxy setting as saved (None without a store or a value).
+fn saved_proxy(app: &AppHandle) -> Result<Option<String>, String> {
+    match app.try_state::<Mutex<crate::state::Store>>() {
+        Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy"),
+        None => Ok(None),
+    }
+}
+
+/// `fetch_icon` unless a proxy is saved: then no connection is made and there is no icon.
+pub(crate) async fn fetch_icon_unless_proxied(saved: &Result<Option<String>, String>, clients: &IconClients, near: bool, url: Url, app: Option<&Url>) -> Option<String> {
+    if !icon_fetch_allowed(saved) {
+        return None;
+    }
+    fetch_icon(clients, near, url, app).await
+}
+
 /// How long one icon fetch may take in all, near and far together.
 const ICON_TIME: Duration = Duration::from_secs(8);
 
@@ -907,9 +931,10 @@ fn icon_for(app: AppHandle, dev: Option<Url>, id: u32, page: String, url: Url, n
             let _ = app.emit(ICON_EVENT, IconPayload { id, page, icon });
         }
         IconStep::Fetch => {
+            let saved = saved_proxy(&app);
             tauri::async_runtime::spawn(async move {
                 let icon = match icon_client(dev.clone()) {
-                    Some(clients) => fetch_icon(clients, near, url.clone(), dev.as_ref()).await,
+                    Some(clients) => fetch_icon_unless_proxied(&saved, clients, near, url.clone(), dev.as_ref()).await,
                     None => None,
                 };
                 if let Ok(mut i) = ICONS.lock() {
@@ -1032,10 +1057,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let download_app = app.clone();
     // T-240 (BROW-033): every tab of every profile goes through the configured proxy; a value the
     // engine cannot take leaves the tab unopened rather than going direct.
-    let proxy = match app.try_state::<Mutex<crate::state::Store>>() {
-        Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy")?,
-        None => None,
-    };
+    let proxy = saved_proxy(&app)?;
     #[cfg(windows)]
     let crash_dir = app.path().app_data_dir().ok();
     // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
@@ -2011,7 +2033,8 @@ fn io_kind(e: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> 
 /// APP-070: every request Kolux itself makes outside the page (a download's size, a dev server's
 /// check, the failed-load diagnosis, the update check's installer) is one HEAD through the icon
 /// clients, the one approved way out: `near` for an address on this machine or the local network,
-/// the public-only client otherwise, both without a proxy and under the icon redirect rule. Nothing
+/// the public-only client otherwise, both without a proxy and under the icon redirect rule (an icon
+/// fetch itself is skipped under a saved proxy, T-323-c; a caller of this checks `icon_fetch_allowed` first when it must not go around one). Nothing
 /// of the body is read.
 pub async fn head_with(clients: &IconClients, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
     match if near { &clients.near } else { &clients.far }.head(url.clone()).timeout(wait).send().await {
@@ -2774,6 +2797,33 @@ mod tests {
         assert_eq!(hand_off(&local, Some("/real.ico"), None), Some(u("http://localhost:3000/real.ico")));
         assert_eq!(hand_off(&local, Some("http://127.0.0.1:8745/"), None), None);
         assert_eq!(hand_off(&local, Some("http://localhost:1420/x"), Some(&u("http://localhost:1420"))), None);
+    }
+
+    // T-323-c: a saved proxy means no icon fetch at all; the icon clients only ever connect directly.
+    #[test]
+    fn t323c_with_a_saved_proxy_no_icon_fetch_goes_direct() {
+        use std::io::{Read, Write};
+        let ok = |p: Option<&str>| icon_fetch_allowed(&Ok(p.map(str::to_string)));
+        assert!(ok(None) && ok(Some("  ")));
+        assert!(!ok(Some("http://127.0.0.1:8080")) && !ok(Some("socks5://proxy.test:1080")));
+        assert!(!ok(Some("not a url")), "a setting the engine cannot take is not an excuse to go direct");
+        assert!(!icon_fetch_allowed(&Err("sealed value unreadable".into())));
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let url = Url::parse(&format!("http://127.0.0.1:{}/favicon.ico", l.local_addr().unwrap().port())).unwrap();
+        let clients = icon_clients(None, system_lookup).unwrap();
+        let proxied = Ok(Some("http://127.0.0.1:8080".to_string()));
+        assert_eq!(tauri::async_runtime::block_on(fetch_icon_unless_proxied(&proxied, &clients, true, url.clone(), None)), None);
+        assert!(l.accept().is_err(), "a connection reached the icon host under a saved proxy");
+        l.set_nonblocking(false).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = s.read(&mut [0u8; 4096]);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\n\x07\x07\x07");
+        });
+        let got = tauri::async_runtime::block_on(fetch_icon_unless_proxied(&Ok(None), &clients, true, url, None));
+        assert_eq!(got, Some("data:image/png;base64,BwcH".into()), "without a proxy the icon is fetched as before");
+        server.join().unwrap();
     }
 
     // Council FIX-3, AFTER 2: one overall time limit, however the fetch goes.

@@ -102,8 +102,14 @@ pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
+/// For display and lookup only: an unreadable list shows empty (after being kept aside).
 pub fn load_projects(store: &Store) -> Vec<Project> {
-    store.get(PROJECTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, PROJECTS_KEY)
+}
+
+/// The list a save starts from (row 895): a store or copy that fails is an error, never an empty list.
+pub(crate) fn load_projects_for_write(store: &Store) -> Result<Vec<Project>, String> {
+    crate::orchestration::kept::load(store, PROJECTS_KEY)
 }
 
 pub(crate) fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
@@ -116,7 +122,7 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     if ids.is_empty() {
         return Ok(());
     }
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     let gone: Vec<String> = projects.iter().filter(|p| ids.contains(&p.id)).map(|p| p.path.clone()).collect();
     projects.retain(|p| !ids.contains(&p.id));
     // Empty runs of the two cleanups below read what they will touch (kept::load keeps a corrupt blob
@@ -584,7 +590,7 @@ pub fn locate_repo(git: &Git, path: &Path) -> Result<(PathBuf, PathBuf), String>
 
 /// The store half of `add_project`, over what `locate_repo` found.
 pub fn register_project(store: &Store, (top, main): (PathBuf, PathBuf)) -> Result<Project, String> {
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     if let Some(existing) = projects.iter().find(|p| same_folder(Path::new(&p.path), &main) || same_folder(Path::new(&p.path), &top)) {
         return Ok(existing.clone());
     }
@@ -2212,7 +2218,7 @@ pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, projec
 /// PROJ-028 / CLI-015: saves the ref new workspaces of project `id` start from; None goes back to
 /// the default branch Git reports.
 pub fn set_base(store: &Store, id: &str, base: Option<&str>) -> Result<Project, String> {
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     let project = projects.iter_mut().find(|p| p.id == id).ok_or("that project is no longer registered")?;
     project.base = base.map(String::from);
     let project = project.clone();
@@ -2224,7 +2230,7 @@ pub fn set_base(store: &Store, id: &str, base: Option<&str>) -> Result<Project, 
 #[tauri::command]
 pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: String, base: String) -> Result<Project, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    let mut projects = load_projects(&store);
+    let mut projects = load_projects_for_write(&store)?;
     let project = projects.iter_mut().find(|p| p.id == project_id).ok_or("that project is no longer registered")?;
     let clean = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
     project.workspaces_dir = clean(&workspaces_dir);
@@ -2250,7 +2256,7 @@ pub fn clean_display_name(raw: &str) -> Option<String> {
 /// SET-033: saves (or with a blank `raw` clears) the display name of project `id`. The folder, the
 /// base and every other field of the project stay as they are.
 pub fn set_display_name(store: &Store, id: &str, raw: &str) -> Result<Project, String> {
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     let project = projects.iter_mut().find(|p| p.id == id).ok_or("that project is no longer registered")?;
     project.display_name = clean_display_name(raw);
     let project = project.clone();
@@ -5412,6 +5418,59 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert_eq!(crate::orchestration::kept::asides(&store, "localSetups"), vec!["{not json".to_string()], "the unreadable blob was kept aside byte for byte on the retry");
         store.set("localSetups", "{}").unwrap();
         drop(conn);
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    /// after-list row 895: a project list that does not read must never be saved over by a
+    /// read-then-save (forget, add, edit); the blob stays byte for byte, or is kept aside first.
+    const BROKEN_LIST: &str = r#"[{"id":"keep-1","name":"keep","path":"C:/keep"},{"id":"keep-2","na"#;
+
+    fn broken_list_store(tag: &str, refuse_copy: bool) -> (Store, PathBuf) {
+        let profile = temp(tag);
+        let store = Store::open(&profile).unwrap();
+        store.set("projects", BROKEN_LIST).unwrap();
+        if refuse_copy {
+            crate::orchestration::kept::refuse_copies(&profile);
+        }
+        (store, profile)
+    }
+
+    #[test]
+    fn row895_forget_refuses_when_the_project_list_does_not_read_and_cannot_be_kept_aside() {
+        let (store, profile) = broken_list_store("row895-forget", true);
+        assert!(forget_projects(&store, &["keep-1".to_string()]).is_err(), "no list to filter, so nothing is forgotten");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST), "the list blob is byte for byte what it was");
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn row895_forget_keeps_an_unreadable_list_aside_before_it_saves() {
+        let (store, profile) = broken_list_store("row895-aside", false);
+        let _ = forget_projects(&store, &["keep-1".to_string()]);
+        assert_eq!(crate::orchestration::kept::asides(&store, "projects"), vec![BROKEN_LIST.to_string()], "the unreadable list survives under a corrupt- name");
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn row895_adding_a_project_refuses_rather_than_wiping_an_unreadable_list() {
+        let (store, profile) = broken_list_store("row895-add", true);
+        let repo = temp("row895-add-repo");
+        assert!(register_project(&store, (repo.clone(), repo.clone())).is_err());
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST), "no one-project list replaced it");
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn row895_editing_a_project_refuses_rather_than_wiping_an_unreadable_list() {
+        let (store, profile) = broken_list_store("row895-edit", true);
+        assert!(set_base(&store, "keep-1", Some("main")).is_err());
+        assert!(set_display_name(&store, "keep-1", "Shop").is_err());
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST));
         drop(store);
         let _ = fs::remove_dir_all(profile);
     }

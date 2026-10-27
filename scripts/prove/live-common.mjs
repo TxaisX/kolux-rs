@@ -9,7 +9,7 @@
 //  - nothing here reads or writes a credential file; the account folder is only named as a variable value.
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp, sleep, waitFor } from "../evidence/app-launch.mjs";
 
@@ -205,8 +205,8 @@ export function hookEventsInstalled(settingsFile) {
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
 
 // ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
-export const LIVE_BASE = "G:/Temp/live-v2";
-export const LIVE_LOGS = "G:/Temp/live-v2-logs";
+export const LIVE_BASE = "G:/Temp/live-v3";
+export const LIVE_LOGS = "G:/Temp/live-v3-logs";
 export const TERM = "section.pane[data-agent]";
 export const SHELL = 'section.pane[data-agent="shell"]';
 
@@ -254,10 +254,18 @@ export async function startPlain(id, opts) {
   writeFileSync(join(TEMP, ".kolux-rs-scratch"), "");
   if (existsSync(repo)) rmSync(repo, { recursive: true, force: true });
   mkdirSync(repo, { recursive: true });
-  for (const [name, text] of Object.entries(opts.files ?? { "notes.txt": "live-v1\n" })) writeFileSync(join(repo, name), text);
+  const put = (name, text) => {
+    mkdirSync(dirname(join(repo, name)), { recursive: true });
+    writeFileSync(join(repo, name), text);
+  };
+  for (const [name, text] of Object.entries(opts.files ?? { "notes.txt": "live-v1\n" })) put(name, text);
   await git(repo, ["init", "-q", "-b", "main"]);
   await git(repo, ["add", "."]);
   await git(repo, ["commit", "-q", "-m", "start"]);
+  // opts.dirty: {name: text} written after the first commit, so the repo starts with uncommitted changes.
+  for (const [name, text] of Object.entries(opts.dirty ?? {})) put(name, text);
+  // opts.prepare(repo): more repo setup before the app starts, e.g. a second git worktree the app lists when the project is added.
+  if (opts.prepare) await opts.prepare(repo);
   // uiLook is written down: a profile with any setting reads as Classic, and the clean (New) look is what a new install shows.
   const seeded = { confirmCloseRunning: false, agentStatusHooks: true, uiLook: "new", ...(opts.settings ?? {}) };
   if (opts.standin) seeded.agentOptions = { claude: { command: writeStandinClaude(join(TEMP, "standin"), opts.standin) } };
@@ -313,6 +321,25 @@ export async function startPlain(id, opts) {
       const file = `${shotDir}/${name}.png`;
       if (data) writeFileSync(file, Buffer.from(data, "base64"));
       return data ? file : null;
+    },
+    /** One key press with an explicit key, code and virtual-key code (cdp.mjs knows only a few names, e.g. not F7). mods: Alt 1, Ctrl 2, Shift 8. */
+    async rawKey({ key, code, vk, mods = 0 }) {
+      const targets = await (await fetch("http://127.0.0.1:9290/json")).json();
+      const t = targets.find((x) => x.type === "page" && /localhost:1470|tauri\.localhost/.test(x.url));
+      const ws = new WebSocket(t.webSocketDebuggerUrl);
+      await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+      let id = 0;
+      const send = (method, params) =>
+        new Promise((resolve) => {
+          const mine = ++id;
+          const on = (ev) => { const m = JSON.parse(ev.data); if (m.id === mine) { ws.removeEventListener("message", on); resolve(m); } };
+          ws.addEventListener("message", on);
+          ws.send(JSON.stringify({ id: mine, method, params }));
+        });
+      const k = { key, code, windowsVirtualKeyCode: vk, modifiers: mods };
+      await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...k });
+      await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
+      ws.close();
     },
     /** Pids of the shells (powershell/pwsh) under the app: a session restarted or started shows as a changed pid set. */
     shellPids: async () => (await app.treeOf(app.pid)).filter((p) => /^(powershell|pwsh).exe$/i.test(p.name)).map((p) => p.pid).sort((x, y) => x - y),

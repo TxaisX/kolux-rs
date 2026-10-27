@@ -1,0 +1,33 @@
+T-323-c - the rest of T-323-b (lane/editor-close from 281ac8c7, 2026-10-26)
+
+(a) Icon fetches and a saved proxy (browser lane) - DECIDED + BUILT
+DECISION (coordinator default; Txais may overrule): with a saved proxy (Settings httpProxy) the page icon is not fetched at all.
+  The icon clients are built with no_proxy() on purpose (their public-only name lookup could not see a proxy's side), so they
+  always connect DIRECT. Before this change a saved proxy therefore did not stop icon fetches: they went around the proxy.
+  The card text ("a saved proxy leaves them without icons rather than sending them around it") is now true.
+BUILT: src-tauri/src/browser.rs - icon_fetch_allowed(saved) (false for a saved proxy, an address the engine cannot take, or an
+  unreadable sealed value), fetch_icon_unless_proxied (the gate in front of fetch_icon), saved_proxy(app) (the store read that
+  browser_open already did, now shared), icon_for calls the gated fetch.
+TEST: browser::tests::t323c_with_a_saved_proxy_no_icon_fetch_goes_direct - a loopback listener: under a proxy value the fetch returns
+  None and the listener sees NO connection; with no proxy the same fetch returns the data: icon as before.
+NOT CHANGED (noted for the coordinator, outside this card): the other direct requests through the same clients (browser::head: a
+  download's size in browser_downloads.rs, the failed-load diagnosis, dev-server checks in browser_ports.rs) still go direct. The
+  dev-server check is local by design; the update installer HEAD probe is skipped under a proxy by the T-323-b patch chain. A
+  download-size HEAD to a public host under a proxy is the one left; icon_fetch_allowed(&saved_proxy) is the call a caller would use.
+
+(b) Open in menu for the keybindings file - ALREADY-OK
+  Built by after-list 499 (commit e8dfe3c8): src/settings/shortcutsFileOpen.ts (shortcutsFileApps = fileTargetsOf = the saved Open in
+  list through readOpenIn, the same list openInItems reads, without the file manager) and the "Open file in" select in
+  ShortcutsPage.tsx:98-112; keybindings_show (keybindings.rs:157) takes the command and runs it through files::open_file_in.
+  Proving tests: src/settings/shortcutsFileOpen.test.ts (2 tests). No patch needed.
+
+(c) Worktree menu listing the Open in apps - ALREADY-OK
+  The worktree row menu is the Projects panel menu (src/projects/menu.ts rowMenu, "Open in" children): ProjectsPanel.tsx:1152-1157
+  loads loadTargets() (editor/openIn.ts targetsOf = readOpenIn in the user's order) and passes them as editors. T-323-b piece 2
+  built it. Proving tests: src/editor/openIn.test.ts (order, defaults, removed list) and src/projects/menu.test.ts. No patch needed.
+  (T-304's own open-in-editor code, SESS-039, is in PLAN-done.md and unchanged.)
+
+GATES: cargo test --lib browser 223 ok (new test included); cargo clippy --all-targets -D warnings clean; tsc 0;
+  vitest src/editor src/browser 843 pass (114 files); plan-check OK; uniq -d empty.
+LIVE PROOF PENDING (batched): save a proxy address in Settings, open a site with a favicon in the built-in browser; the tab shows
+  no site icon (and a proxy log, if any, never sees an icon request from the app). Clear the proxy: the icon returns.
