@@ -56,6 +56,9 @@ pub mod helpers;
 pub mod popup;
 #[path = "browser_certs.rs"]
 pub mod certs;
+// Row 939: the saved proxy reaches the engine as a browser argument; a tab that cannot have it is refused.
+#[path = "browser_proxy.rs"]
+pub mod proxy;
 // T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
 #[path = "browser_engine.rs"]
 pub mod engine;
@@ -1120,21 +1123,22 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let download_app = app.clone();
     // T-240 (BROW-033): every tab of every profile goes through the configured proxy; a value the
     // engine cannot take leaves the tab unopened rather than going direct.
-    let proxy = saved_proxy(&app)?;
+    let saved = proxy_of(saved_proxy(&app)?.as_deref())?;
     #[cfg(windows)]
     let crash_dir = app.path().app_data_dir().ok();
     // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
     let key = url.to_string();
-    let (builder, spoof) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
-    let builder = match proxy_of(proxy.as_deref())? {
-        Some(u) => builder.proxy_url(u),
-        None => builder,
-    };
+    let (builder, spoof, folder) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
+    // Row 939: wry drops `.proxy_url()` whenever browser arguments are passed, so the proxy rides in
+    // them. Tabs already open keep the proxy they opened with until Kolux restarts.
+    let launch = crate::resources::recovery::browser_args_now();
+    let args = proxy::tab_browser_args(&proxy::without_proxy(&launch), saved.as_ref()).and_then(|args| proxy::admit(&folder, (folder == proxy::DEFAULT_FOLDER).then_some(launch.as_str()), &args).map(|()| args));
+    let args = args.inspect_err(|_| profiles::page_closed(id))?; // no engine page was made: the profile's folder is not in use
     let builder = builder
         .focused(false)
-        // T-286-b (APP-017): the same browser arguments as the window (throttling exemption, safe
-        // graphics), or the engine refuses a second set on the same data folder.
-        .additional_browser_args(&crate::resources::recovery::browser_args_now())
+        // T-286-b (APP-017): the window's browser arguments (throttling exemption, safe graphics),
+        // or the engine refuses a second set on the same data folder; plus the saved proxy.
+        .additional_browser_args(&args)
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
         .zoom_hotkeys_enabled(false)
         .initialization_script(CHORD_SCRIPT)
@@ -1869,22 +1873,24 @@ pub fn take_profile(url: &str) -> Option<String> {
 
 /// A tab in a profile other than the default runs in that profile's own engine data folder; the
 /// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
-fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, url: &str) -> (WebviewBuilder<tauri::Wry>, bool) {
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, url: &str) -> (WebviewBuilder<tauri::Wry>, bool, String) {
+    let shared = || proxy::DEFAULT_FOLDER.to_string();
     let profile = profile.or_else(|| take_profile(url));
-    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true) };
-    let Ok(root) = profiles::root() else { return (b, true) };
+    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true, shared()) };
+    let Ok(root) = profiles::root() else { return (b, true, shared()) };
     let mut store = profiles::load(&root);
     if profiles::set_tab(&mut store, id, &p).is_err() {
-        return (b, true);
+        return (b, true, shared());
     }
     let _ = profiles::save(&root, &store);
     let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
         Some(dir) => {
             profiles::page_opened(id, &p); // after-list 153: a deleted profile's folder waits for its last page
-            (b.data_directory(dir), spoof)
+            let folder = dir.to_string_lossy().into_owned();
+            (b.data_directory(dir), spoof, folder)
         }
-        None => (b, spoof),
+        None => (b, spoof, shared()),
     }
 }
 
