@@ -217,7 +217,7 @@ Rules: unread can be switched by hand, even on the active row; switching branch 
 Acceptance:
   - [x] An agent in a background workspace asks for permission → its row shows the permission state
         ahead of other activity. (cards; evidence/cards-PROJ-063.txt)
-  - [ ] Switch branch in a workspace's terminal → the row shows the new branch.
+  - [x] Switch branch in a workspace's terminal → the row shows the new branch. (cards live; evidence/cards-PROJ-063.txt)
 Compat: —
 Source: D-01-063
 

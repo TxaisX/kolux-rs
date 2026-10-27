@@ -16,6 +16,9 @@ const FIND = `(() => { const r = document.querySelector(".sidebar .sess"); for (
 const scroll = (app) => app.evalJs(`(() => { const e = ${FIND}; return e ? { top: e.scrollTop, max: e.scrollHeight - e.clientHeight, client: e.clientHeight, cls: e.className } : null; })()`);
 const rowTop = (app, label) => app.evalJs(`(() => { const r = document.querySelector('[data-worktree=${JSON.stringify(label)}] .sess'); const e = ${FIND}; if (!r || !e) return null; return Math.round(r.getBoundingClientRect().top - e.getBoundingClientRect().top); })()`);
 
+const vmap = (app) => app.evalJs(`(() => { const e = ${FIND}; const t = e.getBoundingClientRect().top; return Object.fromEntries([...document.querySelectorAll("[data-worktree]")].map((r) => [r.dataset.worktree, Math.round(r.getBoundingClientRect().top - t)])); })()`);
+const moved = (a, b) => Object.keys(a).filter((k) => k in b && a[k] !== b[k] && a[k] > -40 && a[k] < 500).map((k) => `${k}:${a[k]}->${b[k]}`);
+
 export async function run070(ctx, { check, log }) {
   const { app } = ctx;
   const rows = await poll(async () => {
@@ -34,9 +37,10 @@ export async function run070(ctx, { check, log }) {
   await app.click(`[data-worktree="${target}"] .sess`);
   await poll(async () => ((await workspaceRows(app)).find((r) => r.label === target)?.sel ? true : null), 15000, 300);
   await sleep(4000);
-  // Scroll the list to just short of the bottom so the active row is on screen and a removed row leaves room.
+  // The active row is pinned at the top of the list while it is selected; scroll to just short of the bottom so a removed row leaves room.
   await app.evalJs(`(() => { const e = ${FIND}; e.scrollTop = e.scrollHeight - e.clientHeight - 120; })()`);
   await sleep(1000);
+  const mapBefore = await vmap(app);
   const before = await scroll(app), topBefore = await rowTop(app, name(36));
   log(`before the delete: ${JSON.stringify(before)}; ${name(36)} sits ${topBefore} px below the list top; ${target} selected`);
   check("the active row is on screen with the list scrolled partway", (await rowTop(app, target)) !== null && before.top > 0 && before.top < before.max, JSON.stringify(before));
@@ -45,12 +49,15 @@ export async function run070(ctx, { check, log }) {
   const ask = await poll(async () => ((await app.exists(".sidebar .btn.danger")) ? true : null), 10000, 300);
   check("Mod+Shift+Backspace asks to remove the active workspace", !!ask, "");
   if (!ask) return;
-  const mid = await scroll(app);
+  const mid = await scroll(app), mapMid = await vmap(app);
+  log(`rows that moved on screen when the question opened: ${JSON.stringify(moved(mapBefore, mapMid))}`);
   log(`while the question is open: ${JSON.stringify(mid)}`);
   await app.clickWhere(".sidebar .btn.danger", "/^\\s*Remove/");
   const gone = await poll(async () => ((await workspaceRows(app)).some((r) => r.label === target) ? null : true), 40000, 400);
   await sleep(3000);
   const after = await scroll(app), topAfter = await rowTop(app, name(36)), sel = (await workspaceRows(app)).filter((r) => r.sel).map((r) => r.label);
+  const mapAfter = await vmap(app);
+  log(`rows on screen that moved after the delete (before -> after, px from list top): ${JSON.stringify(moved(mapBefore, mapAfter))}`);
   log(`after the delete (row gone=${!!gone}): ${JSON.stringify(after)}; ${name(36)} sits ${topAfter} px below the list top; selected now ${JSON.stringify(sel)}`);
   check("the row is gone", !!gone, "");
   check("the list did not jump (scrollTop unchanged within 1 px, a neighbour row stays where it was)", !!after && Math.abs(after.top - before.top) <= 1 && topAfter !== null && Math.abs(topAfter - topBefore) <= 1, `${before.top} -> ${after?.top}; row ${topBefore} -> ${topAfter}`);

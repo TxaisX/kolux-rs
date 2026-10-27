@@ -11,7 +11,7 @@ const prepare = async (repo) => {
   await git(repo, ["worktree", "add", "-q", "-b", "W", W_DIR]);
 };
 const rowFacts = (app, label) =>
-  app.evalJs(`(() => { const r = document.querySelector('[data-worktree=${JSON.stringify(label)}]'); if (!r) return null; const n = r.querySelector(".name"); return { text: r.innerText.replace(/\\s+/g, " ").trim().slice(0, 120), title: (n?.title ?? "").slice(0, 300), path: r.getAttribute("data-path") }; })()`);
+  app.evalJs(`(() => { const r = document.querySelector('[data-worktree=${JSON.stringify(label)}]'); if (!r) return false; const n = r.querySelector(".name"); return { text: r.innerText.replace(/\\s+/g, " ").trim().slice(0, 120), title: (n?.title ?? "").slice(0, 300), path: r.getAttribute("data-path") }; })()`);
 
 export async function run063(ctx, { check, log }) {
   const { app } = ctx;
@@ -38,7 +38,7 @@ export async function run063(ctx, { check, log }) {
   const old = await rowFacts(app, "W");
   log(`row for the new branch after ${waited} ms: ${JSON.stringify(row)}; row still labelled W: ${JSON.stringify(old)}`);
   check("the row shows the new branch (x063) within the poll window", !!row && row.path === w.path, JSON.stringify(row));
-  check("the old branch name is gone from the row", old === null, JSON.stringify(old));
+  check("the old branch name is gone from the row", !old, JSON.stringify(old));
   log(`screenshot: ${await ctx.shot("PROJ-063")}`);
   // Named workspace made through the composer, for the record.
   await fillComposer(app, { name: "named-063" });
