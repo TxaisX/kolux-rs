@@ -116,12 +116,28 @@ pub fn check(path: &Path, roots: &[PathBuf], grants: &[PathBuf], exact: bool) ->
     }
 }
 
+/// Why [`Fence::grant`] granted nothing, or not durably.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantError {
+    /// The fence refused the path; nothing was granted.
+    Refused(String),
+    /// The grant is live in memory for this run, but the grants list could not be saved.
+    SaveFailed(String),
+}
+
+impl std::fmt::Display for GrantError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Refused(m) | Self::SaveFailed(m)) = self;
+        f.write_str(m)
+    }
+}
+
 impl Fence {
     /// The grants an earlier run saved, each checked again (a file since deleted drops out); a
     /// damaged list grants nothing.
     pub fn load(store: &Mutex<Store>) -> Fence {
         let list: Vec<PathBuf> = store.lock().ok().map(|s| crate::orchestration::kept::or_default_held(&s, KEY_GRANTS)).unwrap_or_default();
-        let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p) && on_a_drive(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p)).collect();
+        let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p) && on_a_drive(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p) && p.to_str().is_some()).collect();
         while grants.len() > GRANT_CAP {
             grants.pop_front();
         }
@@ -129,21 +145,27 @@ impl Fence {
     }
 
     /// Grants one picked file exactly and saves the list; folders, drive roots and shares are never granted.
-    pub fn grant(&self, path: &Path, store: &Store) -> Result<(), String> {
+    /// `Refused`: nothing was granted. `SaveFailed`: the grant holds in memory this run, only the save failed.
+    pub fn grant(&self, path: &Path, store: &Store) -> Result<(), GrantError> {
         if is_share(path) || !on_a_drive(path) {
-            return Err(not_on_a_drive(path));
+            return Err(GrantError::Refused(not_on_a_drive(path)));
         }
-        let real = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
+        let real = path.canonicalize().map_err(|e| GrantError::Refused(format!("{}: {e}", path.display())))?;
         if !grantable(&real) {
-            return Err(refused(path));
+            return Err(GrantError::Refused(refused(path)));
         }
-        let mut g = self.grants.lock().map_err(|e| e.to_string())?;
+        // A link can resolve to a name that is not valid Unicode; the saved list could not hold it.
+        if real.to_str().is_none() {
+            return Err(GrantError::Refused(format!("{} resolves to a name Kolux cannot save", path.display())));
+        }
+        let mut g = self.grants.lock().map_err(|e| GrantError::Refused(e.to_string()))?;
         g.retain(|x| *x != real);
         g.push_back(real);
         while g.len() > GRANT_CAP {
             g.pop_front();
         }
-        store.set(KEY_GRANTS, &serde_json::to_string(&*g).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+        let list = serde_json::to_string(&*g).map_err(|e| GrantError::SaveFailed(e.to_string()))?;
+        store.set(KEY_GRANTS, &list).map_err(|e| GrantError::SaveFailed(e.to_string()))
     }
 
     /// Notes the paths of a drop from outside Kolux, in place of the last drop's.
@@ -311,6 +333,48 @@ mod tests {
         assert!(!f.grants.lock().unwrap().contains(&t.0.join("outside/picked.txt").canonicalize().unwrap()), "the oldest grant went first");
     }
 
+    // A valid-Unicode link that resolves to a non-Unicode name must not be granted: serde could not save it.
+    #[cfg(windows)]
+    #[test]
+    fn row909_a_link_that_resolves_to_a_non_unicode_name_is_refused() {
+        use std::os::windows::ffi::OsStringExt;
+        let t = temp("nonunicode");
+        let store = Store::open(&t.0.join("data")).unwrap();
+        let f = Fence::default();
+        let odd = t.0.join(std::ffi::OsString::from_wide(&[0x61, 0xD800, 0x2E, 0x64]));
+        fs::create_dir_all(&odd).unwrap();
+        fs::write(odd.join("f.txt"), "x").unwrap();
+        let link = t.0.join("link");
+        if let Err(e) = std::os::windows::fs::symlink_dir(&odd, &link) {
+            eprintln!("skipped: symlink_dir needs developer mode or admin ({e})");
+            return;
+        }
+        assert!(link.to_str().is_some());
+        assert!(matches!(f.grant(&link.join("f.txt"), &store), Err(GrantError::Refused(_))));
+        assert!(f.grants.lock().unwrap().is_empty(), "nothing was granted");
+    }
+
+    // A saved grant whose link now resolves to a non-Unicode name must drop out at load, or every later save fails.
+    #[cfg(windows)]
+    #[test]
+    fn row914_load_drops_a_saved_grant_that_now_resolves_to_a_non_unicode_name() {
+        use std::os::windows::ffi::OsStringExt;
+        let t = temp("loadnonunicode");
+        let store = Mutex::new(Store::open(&t.0.join("data")).unwrap());
+        let odd = t.0.join(std::ffi::OsString::from_wide(&[0x61, 0xD800, 0x2E, 0x64]));
+        fs::create_dir_all(&odd).unwrap();
+        fs::write(odd.join("f.txt"), "x").unwrap();
+        let link = t.0.join("link");
+        if let Err(e) = std::os::windows::fs::symlink_dir(&odd, &link) {
+            eprintln!("skipped: symlink_dir needs developer mode or admin ({e})");
+            return;
+        }
+        store.lock().unwrap().set(KEY_GRANTS, &serde_json::json!([link.join("f.txt")]).to_string()).unwrap();
+        let after = Fence::load(&store);
+        assert!(after.grants.lock().unwrap().is_empty(), "the non-Unicode path was dropped");
+        after.grant(&t.0.join("outside/picked.txt"), &store.lock().unwrap()).unwrap();
+    }
+
     #[test]
     fn acct_055_picked_file_grants_are_kept_across_a_restart() {
         let t = temp("restart");
@@ -370,7 +434,39 @@ mod tests {
         let f = Fence::load(&store);
         assert!(f.grants.lock().unwrap().is_empty(), "a damaged list grants nothing");
         let err = f.grant(&t.0.join("outside/picked.txt"), &store.lock().unwrap()).unwrap_err();
+        assert!(matches!(err, GrantError::SaveFailed(_)), "the grant is live, only the save failed: {err:?}");
+        let err = err.to_string();
         assert!(err.contains(KEY_GRANTS) && err.contains("not saving over it"), "{err}");
         assert_eq!(store.lock().unwrap().get(KEY_GRANTS).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+    }
+
+    /// Row 898: every shape `grant` refuses, and the words it says; recorded on the old string error
+    /// and kept after `grant` got a typed one, so the refusal set cannot drift.
+    #[test]
+    fn row898_every_shape_grant_refuses_stays_refused_with_the_same_words() {
+        let t = temp("refused-shapes");
+        let store = Store::open(&t.0.join("data")).unwrap();
+        let f = Fence::default();
+        let said = |p: &Path| {
+            let e = f.grant(p, &store).unwrap_err();
+            assert!(matches!(e, GrantError::Refused(_)), "{}: {e:?}", p.display());
+            e.to_string()
+        };
+        // The first is root-relative (one backslash, no server); the next four are the real UNC and device spellings.
+        for p in [r"\server\share\a.txt", r"\\server\share\a.txt", r"\\?\UNC\server\share\a.txt", r"\\.\C:\a.txt", r"\\?\GLOBALROOT\Device\x", "//server/share/a.txt", r"\??\UNC\kolux-none.invalid\share\p.txt", r"\??\C:\Windows\win.ini", r"C:Windows\win.ini", r"relative\a.txt", ""] {
+            assert_eq!(said(Path::new(p)), not_on_a_drive(Path::new(p)), "{p}");
+        }
+        let gone = t.0.join("outside/gone.txt");
+        let err = said(&gone);
+        assert!(err.starts_with(&format!("{}: ", gone.display())), "{err}");
+        for dir in [t.0.join("outside"), t.0.join("project"), t.0.ancestors().last().unwrap().to_path_buf()] {
+            assert_eq!(said(&dir), refused(&dir), "{}", dir.display());
+        }
+        // outside every root is check's refusal, not grant's
+        assert!(check(&t.0.join("outside/other.txt"), &[t.0.join("project")], &[], true).is_err());
+        assert!(f.grants.lock().unwrap().is_empty());
+        assert_eq!(store.get(KEY_GRANTS).unwrap(), None::<String>, "a refusal saves nothing");
+        f.grant(&t.0.join("outside/picked.txt"), &store).unwrap();
+        assert_eq!(f.grants.lock().unwrap().len(), 1, "the one shape that is let in");
     }
 }
