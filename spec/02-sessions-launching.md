@@ -66,7 +66,7 @@ Rules: the menu lists only agents that are detected and switched on, the default
   use; one item opens agent settings; when an agent is set to open as chat (a flag that is off by
   default), a temporary starting row shows until it is ready.
 Acceptance:
-  - [ ] Click plus, then Claude Code → a new pane appears with Claude Code running in it.
+  - [x] Click plus, then Claude Code → a new pane appears with Claude Code running in it. (cards live; evidence/cards-SESS-004.txt)
   - [x] Make Codex the default → Codex moves to the top of the plus menu with its shortcut shown. (cards; evidence/cards-SESS-004.txt)
 Compat: —
 Source: D-02-004
@@ -201,7 +201,7 @@ Rules: the page belongs to the new look, while the older look keeps the dialog (
   the page; the add-agents link opens AI connections in Settings and must not name retired agents
   such as OpenCode.
 Acceptance:
-  - [ ] Open New session → a full-page sheet fills the workspace area.
+  - [x] Open New session → a full-page sheet fills the workspace area. (cards live; evidence/cards-SESS-018.txt)
   - [x] With one blank seat, press Ctrl+Enter → nothing starts and the footer names that seat. (cards; evidence/cards-SESS-018.txt)
   - [x] Press Escape → the page closes. (cards; evidence/cards-SESS-018.txt)
 Compat: —

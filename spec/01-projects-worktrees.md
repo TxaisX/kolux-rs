@@ -73,8 +73,8 @@ Rules: the shortcut is Mod+N, and Mod+Shift+N is bound as well; terminals in the
   header has one-click New workspace and Add project buttons, and New workspace works even before
   any project exists.
 Acceptance:
-  - [ ] Create a workspace called fix-login → its branch and folder exist, its terminal starts in
-        that folder, and going back to the main checkout keeps the two terminals apart.
+  - [x] Create a workspace called fix-login → its branch and folder exist, its terminal starts in
+        that folder, and going back to the main checkout keeps the two terminals apart. (cards live; evidence/cards-PROJ-020.txt)
   - [ ] Start a create and move to another workspace → the create finishes in the background without
         taking focus.
 Compat: Keybinding id workspace.create.
@@ -137,8 +137,8 @@ Rules: a choice made for this one workspace always takes priority; a saved base 
   and review refs are passed along untouched; the fallback dialog waits until other dialogs close
   and lines up several notices one after another.
 Acceptance:
-  - [ ] Delete the saved base branch on the remote, then create a workspace → it starts from the
-        default branch and a fallback notice appears.
+  - [x] Delete the saved base branch on the remote, then create a workspace → it starts from the
+        default branch and a fallback notice appears. (cards live; evidence/cards-PROJ-028.txt)
   - [x] Pick a full commit id as the start → the workspace starts there and no fetch happens. (cards; evidence/cards-PROJ-028.txt)
 Compat: —
 Source: D-01-028
@@ -154,8 +154,8 @@ Rules: the agent runs in the startup tab made for it, not in an extra default ta
   is installed, else the first installed agent in catalogue order, and only when a prompt was
   given; a create with no prompt and no agent makes the worktree and opens no agent tab.)
 Acceptance:
-  - [ ] Create with Claude and the prompt hello → the first tab runs Claude with that prompt.
-  - [ ] Create with an agent and a prompt → no additional empty default tab is opened.
+  - [x] Create with Claude and the prompt hello → the first tab runs Claude with that prompt. (cards live; evidence/cards-PROJ-038.txt)
+  - [x] Create with an agent and a prompt → no additional empty default tab is opened. (cards live; evidence/cards-PROJ-038.txt)
 Compat: —
 Source: D-01-038
 
@@ -169,7 +169,7 @@ Rules: rm also answers to remove and delete and is marked as destructive; create
 Acceptance:
   - [x] Create one with a name, an agent, a prompt and JSON output → the JSON includes the new
         folder path; remove it by name → it is gone. (cards; evidence/cards-PROJ-077.txt)
-  - [ ] Create with setup skipped → no setup script runs for it.
+  - [x] Create with setup skipped → no setup script runs for it. (cards live; evidence/cards-PROJ-077.txt)
 Compat: kolux worktree create takes --name plus optional --repo, --agent, --prompt, --setup (run,
   skip or inherit), --base-branch, --issue, --comment, --parent-worktree or --no-parent, --activate,
   --run-hooks (the older spelling that runs setup and activates) and --json; kolux worktree rm (also
