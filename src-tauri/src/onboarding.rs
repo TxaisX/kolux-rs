@@ -333,8 +333,9 @@ fn tours_read(store: &Store) -> Result<Guide, String> {
             Ok(g)
         }
         Err(e) => {
-            eprintln!("kolux-rs: {e}; tours answered from the default");
-            Ok(tours_decided(Guide::default(), open).0)
+            // Row 885: a damaged guide cannot record that a tour was seen, so it must never start one.
+            eprintln!("kolux-rs: {e}; tours answered from the default, none automatic");
+            Ok(tours_decided(Guide::default(), false).0)
         }
     }
 }
@@ -407,7 +408,11 @@ pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<GuideView, String> {
 #[tauri::command]
 pub fn guide_mark(store: State<'_, Mutex<Store>>, list: String, id: String) -> Result<Guide, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    let g = marked(try_guide_load(&store)?, &list, &id)?;
+    guide_mark_in(&store, &list, &id)
+}
+
+fn guide_mark_in(store: &Store, list: &str, id: &str) -> Result<Guide, String> {
+    let g = marked(try_guide_load(store)?, list, id)?;
     store.set(GUIDE, &serde_json::to_string(&g).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     Ok(g)
 }
@@ -926,6 +931,22 @@ mod tests {
         refuse_writes(&dir, "start_count");
         assert_eq!(count_start(&s), Ok(3), "the count is answered although it could not be written");
         assert_eq!(s.get("start_count").unwrap().as_deref(), Some("2"));
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row885_a_guide_that_cannot_be_read_or_kept_aside_gives_no_automatic_tours() {
+        let (s, dir) = store("r885");
+        first_start(&s, 1).unwrap();
+        assert!(load(&s).is_some_and(|r| r.closed_at.is_none()), "a new profile with its wizard showing");
+        let broken = "{\"toursSeen\": [\"x\"";
+        s.set(GUIDE, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert_eq!(tours_read(&s).unwrap().tours_auto, Some(false), "a damaged guide never nags");
+        assert_eq!(tours_read(&s).unwrap().tours_auto, Some(false), "and not on the next launch either");
+        assert!(guide_mark_in(&s, "toursSeen", TOURS[0]).is_err(), "marking a tour seen is refused, without a panic");
+        assert_eq!(s.get(GUIDE).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }
