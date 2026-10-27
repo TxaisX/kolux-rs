@@ -121,8 +121,8 @@ export function needsOneClick(s: Status | null): boolean {
 
 const stateOf = (s: Status) => `${s.branch}|${s.head}`;
 
-/** Runs the whole flow for `dir`; resolves when it ended (the outcome is in the run). A second start for a folder that is already running does nothing. */
-export async function startOneClick(dir: string, ports: Ports): Promise<Run> {
+/** Runs the whole flow for `dir`; resolves when it ended (the outcome is in the run). A second start for a folder that is already running does nothing. `ai` is the fresh AI gate (prDraft.ts startGatedOneClick): false means neither writer is called, the commit gets the plain message and the flow stops before the review text for the user to write it. */
+export async function startOneClick(dir: string, ports: Ports, ai: boolean): Promise<Run> {
   const live = runs.get(dir);
   if (live && live.state === "running") return live;
   let run: Run = { dir, step: "prepare", state: "running", message: null, pr: null, skipped: [], push: null };
@@ -138,8 +138,11 @@ export async function startOneClick(dir: string, ports: Ports): Promise<Run> {
     if (dirty(s) > 0) {
       const paths = [...s.changed, ...s.untracked].map((c) => c.path);
       if (paths.length > 0) await ports.stage(dir, paths);
-      at("message");
-      const message = (await ports.message(dir).catch(() => "")).trim() || `Work on ${s.branch}`;
+      let message = `Work on ${s.branch}`;
+      if (ai) {
+        at("message");
+        message = (await ports.message(dir).catch(() => "")).trim() || message;
+      } else skip("message");
       at("commit");
       const out = await ports.commit(dir, message);
       if (out.blocked || out.id === null) return stop(`The commit did not go through: ${out.output}`), run;
@@ -161,6 +164,7 @@ export async function startOneClick(dir: string, ports: Ports): Promise<Run> {
     const before = stateOf(s);
     const base = (s.base ?? "").replace(/^origin\//, "");
     at("text");
+    if (!ai) return stop("AI writing is off, so no review text was written. The work is committed and pushed: open Create pull request and write the title and description yourself."), run;
     const [title, body] = await ports.text(dir, base);
     // The text took a while: the branch must still be the one it was written for.
     const now = await ports.status(dir);

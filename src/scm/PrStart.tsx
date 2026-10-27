@@ -6,11 +6,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { AgentInfo } from "../launch/PlusMenu";
 import type { ActionOutcome, Pr, Status } from "./model";
-import { writerOf } from "./generate";
 import SearchPick from "../editor/SearchPick";
-import { needsOneClick, realPorts, startOneClick, useOneClick } from "./oneClick";
+import { needsOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
-import { applyIfUnchanged, draftOffered, draftPrText, type DraftGate } from "./prDraft";
+import { draftOffered, draftPrText, settleDraft, startGatedOneClick, writingAfter, type DraftGate } from "./prDraft";
 import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
 type Props = { dir: string; onCreated: (pr: Pr) => void };
@@ -33,6 +32,7 @@ export default function PrStart({ dir, onCreated }: Props) {
   asking.current = dir;
   const latest = useRef<Draft | null>(null);
   latest.current = draft;
+  const session = useRef(0); // bumped each time the composer opens or closes; a draft finishing in an older one is dropped
 
   const check = async (): Promise<{ status: Status; ready: Readiness } | null> => {
     try {
@@ -48,6 +48,7 @@ export default function PrStart({ dir, onCreated }: Props) {
     }
   };
   useEffect(() => {
+    session.current++;
     setDraft(null);
     setSeen(null);
     setWriteNote(null);
@@ -71,6 +72,7 @@ export default function PrStart({ dir, onCreated }: Props) {
     let now: { status: Status; ready: Readiness } | null = mine;
     if (!now || !confirmed(now.ready, readinessKey(dir, now.status), Date.now())) now = await check();
     if (!now || now.ready.reason !== null) return tick((n) => n + 1);
+    session.current++;
     setDraft({ title: "", body: "", base: (now.status.base ?? "").replace(/^origin\//, ""), draft: false });
     invoke<string[]>("worktree_branches", { path: dir }).then((b) => asking.current === dir && setBranches(b), () => setBranches([]));
     setAiOffered(false);
@@ -92,24 +94,23 @@ export default function PrStart({ dir, onCreated }: Props) {
   // GIT-024: the writer fills title and description; a failure is shown and the typed text stays.
   const write = async (d: Draft) => {
     const snap = { title: d.title, body: d.body };
+    const started = session.current;
     setWriting(dir);
     setWriteNote(null);
     const { settings, gate } = await readGate();
     const result = await draftPrText(dir, d.base.trim(), settings, gate);
     if (asking.current === dir) {
-      if (result.state === "off") {
-        setAiOffered(false);
-        setWriteNote("Writing with AI is switched off or has no usable writer, so nothing was written.");
+      if (result.state === "off") setAiOffered(false);
+      if (session.current === started) {
+        if (result.state === "off") setWriteNote("Writing with AI is switched off or has no usable writer, so nothing was written.");
+        if (result.state === "failed") setWriteNote(result.message);
+        if (result.state === "busy") setWriteNote("A draft is already being written for this worktree.");
       }
-      if (result.state === "failed") setWriteNote(result.message);
-      const cur = latest.current;
-      if (cur) {
-        const out = applyIfUnchanged(cur, snap, result);
-        setDraft(out.draft);
-        if (out.note) setWriteNote(out.note);
-      }
+      const out = settleDraft(latest.current, snap, result, started, session.current);
+      setDraft(out.draft);
+      if (out.note) setWriteNote(out.note);
     }
-    setWriting((w) => (w === dir ? null : w));
+    setWriting((w) => writingAfter(w, dir, result));
   };
   const create = async (d: Draft, push: "none" | "publish" | "push") => {
     setBusy(true);
@@ -120,6 +121,7 @@ export default function PrStart({ dir, onCreated }: Props) {
         if (!out.ok) return fail(`The push failed, so no pull request was created: ${out.output}`);
       }
       const pr = await invoke<Pr>("scm_pr_create", { worktree: dir, title: d.title, body: d.body, base: d.base, draft: d.draft });
+      session.current++;
       setDraft(null);
       onCreated(pr);
     } catch (err) {
@@ -132,8 +134,8 @@ export default function PrStart({ dir, onCreated }: Props) {
   // GIT-022: with work still to commit or push, one click does all of it and opens the review.
   const oneClick = async () => {
     errors = dismiss(errors, dir);
-    const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => ({}));
-    const done = await startOneClick(dir, realPorts(writerOf(settings)));
+    const { settings, gate } = await readGate();
+    const done = await startGatedOneClick(dir, settings, gate);
     if (done.state === "done" && done.pr) onCreated(done.pr);
     void check();
   };
@@ -187,7 +189,7 @@ export default function PrStart({ dir, onCreated }: Props) {
             <button className="btn primary" data-pr-create disabled={busy || !draft.title.trim() || !draft.base.trim()} title={!draft.title.trim() ? "Write a title first" : undefined} onClick={() => void create(draft, push)}>
               {busy ? "Creating…" : `${push === "none" ? "Create" : "Push and create"}${draft.draft ? " draft" : ""} pull request`}
             </button>
-            <button className="btn" onClick={() => (setDraft(null), setWriteNote(null))}>
+            <button className="btn" onClick={() => (session.current++, setDraft(null), setWriteNote(null))}>
               Cancel
             </button>
           </div>

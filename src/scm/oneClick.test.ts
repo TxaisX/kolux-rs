@@ -25,7 +25,7 @@ describe("GIT-022 one click", () => {
   beforeEach(() => clearOneClick());
   it("commits, publishes and opens the pull request, ending in success", async () => {
     const p = ports();
-    const run = await startOneClick("C:/w", p);
+    const run = await startOneClick("C:/w", p, true);
     expect(run.state).toBe("done");
     expect(run.pr?.number).toBe(7);
     expect(p.stage).toHaveBeenCalledWith("C:/w", ["a.txt"]);
@@ -44,7 +44,7 @@ describe("GIT-022 one click", () => {
   });
   it("stops with the sync message before writing any text", async () => {
     const p = ports({}, [status({ upstream: "origin/user/work", behind: 2 })]);
-    const run = await startOneClick("C:/w", p);
+    const run = await startOneClick("C:/w", p, true);
     expect(run.state).toBe("failed");
     expect(run.message).toMatch(/^Sync first/);
     expect(run.step).toBe("push");
@@ -53,14 +53,14 @@ describe("GIT-022 one click", () => {
   it("stops when the branch changed while the text was being written", async () => {
     const same = status({ upstream: "origin/user/work" });
     const p = ports({}, [same, same, status({ upstream: "origin/user/work", head: "other" })]);
-    const run = await startOneClick("C:/w", p);
+    const run = await startOneClick("C:/w", p, true);
     expect(run.state).toBe("failed");
     expect(run.message).toMatch(/changed while the review text/);
     expect(p.create).not.toHaveBeenCalled();
   });
   it("skips message and commit on a clean branch and names the push step by kind", async () => {
     const p = ports({}, [status()]);
-    const run = await startOneClick("C:/w", p);
+    const run = await startOneClick("C:/w", p, true);
     expect(run.skipped).toEqual(["message", "commit"]);
     expect(p.commit).not.toHaveBeenCalled();
     expect(p.remote).toHaveBeenCalledWith("C:/w", "publish");
@@ -69,7 +69,7 @@ describe("GIT-022 one click", () => {
   });
   it("falls back to a plain message when the writer fails, and reports a failed push", async () => {
     const p = ports({ message: vi.fn(async () => Promise.reject("no agent")), remote: vi.fn(async () => ({ ok: false, output: "rejected" })) });
-    const run = await startOneClick("C:/w", p);
+    const run = await startOneClick("C:/w", p, true);
     expect(p.commit).toHaveBeenCalledWith("C:/w", "Work on user/work");
     expect(run.message).toBe("The push failed, so no pull request was created: rejected");
   });
@@ -77,20 +77,42 @@ describe("GIT-022 one click", () => {
     expect(blocker(status({ branch: "main", base: "origin/main" }))).toBe("Move to a feature branch first");
     expect(blocker(status({ conflicts: [ch("x")] }))).toBe("Resolve the conflicts first");
     const p = ports({ commit: vi.fn(async () => ({ id: null, blocked: true, output: "hook said no" })) });
-    expect((await startOneClick("C:/w", p)).message).toMatch(/hook said no/);
+    expect((await startOneClick("C:/w", p, true)).message).toMatch(/hook said no/);
   });
   it("keeps a second start from doubling a running flow, and runs per folder", async () => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((r) => (release = r));
     const slow = ports({ message: vi.fn(async () => (await gate, "m")) });
-    const first = startOneClick("C:/a", slow);
+    const first = startOneClick("C:/a", slow, true);
     await Promise.resolve();
     expect(oneClickRun("C:/a")?.state).toBe("running");
     expect(oneClickRun("C:/b")).toBeNull();
-    const second = await startOneClick("C:/a", ports());
+    const second = await startOneClick("C:/a", ports(), true);
     expect(second.state).toBe("running");
     release();
     expect((await first).state).toBe("done");
+  });
+  // Row 915: with AI off the flow never calls the commit-message or review-text writer.
+  it("with AI off it commits with the plain message, pushes, writes no text and stops asking the user to write it", async () => {
+    const p = ports();
+    const run = await startOneClick("C:/w", p, false);
+    expect(p.message).not.toHaveBeenCalled();
+    expect(p.text).not.toHaveBeenCalled();
+    expect(p.commit).toHaveBeenCalledWith("C:/w", "Work on user/work");
+    expect(p.remote).toHaveBeenCalledWith("C:/w", "push");
+    expect(p.create).not.toHaveBeenCalled();
+    expect(run.state).toBe("failed");
+    expect(run.step).toBe("text");
+    expect(run.skipped).toContain("message");
+    expect(run.message).toMatch(/AI writing is off/);
+    expect(run.message).toMatch(/committed and pushed/);
+  });
+  it("with AI off on a clean branch it still pushes and stops before any writer call", async () => {
+    const p = ports({}, [status()]);
+    const run = await startOneClick("C:/w", p, false);
+    expect(p.remote).toHaveBeenCalledWith("C:/w", "publish");
+    expect(p.text).not.toHaveBeenCalled();
+    expect(run.state).toBe("failed");
   });
   it("offers the flow only when there is work to carry", () => {
     expect(needsOneClick(status({ changed: [ch("a")] }))).toBe(true);

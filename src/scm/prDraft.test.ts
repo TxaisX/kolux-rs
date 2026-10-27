@@ -12,7 +12,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { writerOf, writerUsable } from "./generate";
-import { applyDraft, applyIfUnchanged, draftOffered, draftPrText, draftRunning } from "./prDraft";
+import { applyDraft, applyIfUnchanged, draftOffered, draftPrText, draftRunning, settleDraft, startGatedOneClick, writingAfter } from "./prDraft";
+import { clearOneClick, type Ports } from "./oneClick";
+import type { Status } from "./model";
 
 const typed = { title: "my title", body: "my words", base: "main", draft: false };
 const claudeIn = { repo: null, agents: [{ id: "claude", installed: true }] };
@@ -137,5 +139,85 @@ describe("row 76 AI draft in the pull request composer", () => {
     expect(writerUsable(writerOf({}), agents, null)).toBe(false);
     expect(writerUsable(writerOf({}), agents, { agent: null, args: "", template: "x" })).toBe(true);
     expect(writerUsable(writerOf({ commitWriter: "off" }), [{ id: "claude", installed: true }], null)).toBe(false);
+  });
+});
+
+// Row 915: the one-click path asks the same fresh gate as the draft button.
+describe("row 915 one click honours the AI switches", () => {
+  const status = (o: Partial<Status> = {}): Status => ({ branch: "user/work", upstream: null, ahead: 0, behind: 0, rewritten: false, base: "origin/main", head: "h1", staged: [], changed: [{ path: "a.txt", status: "M", from: null }], untracked: [], conflicts: [], operation: null, resolved: [], ...o });
+  const ports = (): Ports => {
+    const seq = [status(), status({ head: "h2", ahead: 1, upstream: "origin/user/work", changed: [] })];
+    let i = 0;
+    return {
+      status: vi.fn(async () => seq[Math.min(i++, seq.length - 1)]),
+      stage: vi.fn(async () => undefined),
+      message: vi.fn(async () => "Fix the thing"),
+      commit: vi.fn(async () => ({ id: "abc", blocked: false, output: "" })),
+      remote: vi.fn(async () => ({ ok: true, output: "" })),
+      text: vi.fn(async () => ["Title", "Body"] as [string, string]),
+      create: vi.fn(async () => ({ number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN" })),
+    };
+  };
+  beforeEach(() => clearOneClick());
+
+  it("the writer switched off: no writer call, the work is still committed and pushed", async () => {
+    const p = ports();
+    const run = await startGatedOneClick("C:/w", { commitWriter: "off" }, claudeIn, p);
+    expect(p.message).not.toHaveBeenCalled();
+    expect(p.text).not.toHaveBeenCalled();
+    expect(p.commit).toHaveBeenCalledWith("C:/w", "Work on user/work");
+    expect(p.remote).toHaveBeenCalled();
+    expect(p.create).not.toHaveBeenCalled();
+    expect(run.state).toBe("failed");
+  });
+  it("the AI switch off for the repository: no writer call", async () => {
+    const p = ports();
+    await startGatedOneClick("C:/w", { scmRepoAi: { "o/r": "off" } }, { repo: "o/r", agents: claudeIn.agents }, p);
+    expect(p.message).not.toHaveBeenCalled();
+    expect(p.text).not.toHaveBeenCalled();
+  });
+  it("the chosen agent not installed: no writer call", async () => {
+    const p = ports();
+    await startGatedOneClick("C:/w", {}, { repo: null, agents: [{ id: "claude", installed: false }] }, p);
+    expect(p.message).not.toHaveBeenCalled();
+    expect(p.text).not.toHaveBeenCalled();
+  });
+  it("a usable writer: the message and the review text are written as before", async () => {
+    const p = ports();
+    const run = await startGatedOneClick("C:/w", {}, claudeIn, p);
+    expect(p.message).toHaveBeenCalledTimes(1);
+    expect(p.text).toHaveBeenCalledTimes(1);
+    expect(p.commit).toHaveBeenCalledWith("C:/w", "Fix the thing");
+    expect(run.state).toBe("done");
+  });
+});
+
+// Row 915 (a): a draft whose composer was closed and reopened is dropped.
+describe("settleDraft (composer session)", () => {
+  const snap = { title: "", body: "" };
+  const filled = { state: "filled", title: "Add login", body: "Fixes it." } as const;
+  const cur = { title: "", body: "", base: "main", draft: false };
+  it("same session: the draft fills as applyIfUnchanged does", () => {
+    expect(settleDraft(cur, snap, filled, 3, 3)).toEqual({ draft: { ...cur, title: "Add login", body: "Fixes it." }, note: null });
+  });
+  it("the composer was closed and reopened (new session): nothing fills it and no edit note appears", () => {
+    expect(settleDraft(cur, snap, filled, 3, 4)).toEqual({ draft: cur, note: null });
+    expect(settleDraft({ ...cur, title: "typed" }, snap, filled, 3, 4)).toEqual({ draft: { ...cur, title: "typed" }, note: null });
+  });
+  it("the composer is closed (no draft): nothing to fill", () => {
+    expect(settleDraft(null, snap, filled, 3, 3)).toEqual({ draft: null, note: null });
+  });
+});
+
+// Row 915 (b): a busy answer never clears the flag of the draft that is still running.
+describe("writingAfter (the Writing flag)", () => {
+  it("a busy answer keeps the flag for that worktree", () => {
+    expect(writingAfter("C:/a", "C:/a", { state: "busy" })).toBe("C:/a");
+  });
+  it("a finished draft clears its own worktree's flag, and only that one", () => {
+    expect(writingAfter("C:/a", "C:/a", { state: "filled", title: "t", body: "b" })).toBeNull();
+    expect(writingAfter("C:/a", "C:/a", { state: "failed", message: "x" })).toBeNull();
+    expect(writingAfter("C:/a", "C:/a", { state: "off" })).toBeNull();
+    expect(writingAfter("C:/b", "C:/a", { state: "filled", title: "t", body: "b" })).toBe("C:/b");
   });
 });
