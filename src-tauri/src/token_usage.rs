@@ -402,10 +402,10 @@ pub fn token_tracking_set(store: tauri::State<'_, Mutex<Store>>, provider: Strin
     set_tracking(&*store.lock().map_err(|e| e.to_string())?, &provider, on)
 }
 
-/// Row 193: the choices are read through `claude_accounts::load_kept`, so a blob that no longer
-/// reads is kept aside before this save, never written over.
+/// Rows 193, 912: the choices are read through `claude_accounts::load_for_save`, so a blob that no
+/// longer reads is kept aside before this save, and one that cannot be kept refuses the save.
 fn set_tracking(store: &Store, provider: &str, on: bool) -> Result<(), String> {
-    let mut all = choices(store);
+    let mut all: serde_json::Map<String, Value> = crate::claude_accounts::load_for_save(store, KEY_TRACKING);
     all.insert(provider.to_string(), Value::Bool(on));
     store.set(KEY_TRACKING, &Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
@@ -697,6 +697,19 @@ mod tests {
         set_tracking(&store, "claude", true).unwrap();
         assert_eq!(crate::claude_accounts::test_asides(&store, KEY_TRACKING), vec![broken.to_string()]);
         assert_eq!(choices(&store).get("claude").and_then(Value::as_bool), Some(true));
+    }
+
+    // Row 912: a choices blob that could not be read or kept aside is never saved over by a switch.
+    #[test]
+    fn row912_a_switch_cannot_save_over_choices_that_could_not_be_kept_aside() {
+        let t = temp("row912");
+        let store = Store::open(&t.0).unwrap();
+        let broken = "{\"claude\":tr\u{0}\u{fffd} half written";
+        store.set(KEY_TRACKING, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&t.0);
+        assert!(set_tracking(&store, "claude", true).is_err(), "the save is refused");
+        assert_eq!(store.get(KEY_TRACKING).unwrap().as_deref(), Some(broken), "the stored choices are byte-identical");
+        assert!(choices(&store).is_empty(), "a read-only caller still gets the default");
     }
 
     #[test]

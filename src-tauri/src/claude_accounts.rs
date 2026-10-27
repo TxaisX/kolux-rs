@@ -72,6 +72,11 @@ pub(crate) fn load_kept<T: serde::de::DeserializeOwned + serde::Serialize + Defa
     crate::orchestration::kept::or_default(store, key)
 }
 
+/// Row 912: for a caller that loads, changes and saves the value back. A value that could not be read, or kept aside, poisons the key, so the save is refused instead of writing the default over it.
+pub(crate) fn load_for_save<T: serde::de::DeserializeOwned + serde::Serialize + Default>(store: &Store, key: &str) -> T {
+    crate::orchestration::kept::or_default_held(store, key)
+}
+
 fn save(store: &Store, list: &[Account]) -> Result<(), String> {
     store.set(LIST_KEY, &serde_json::to_string(list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
@@ -264,7 +269,7 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     }
     let account = Account { id: id.into(), email, organization, config_dir: dir.to_string_lossy().into_owned(), last_sign_in: now, stale: false };
     let store = store.lock().map_err(|e| e.to_string())?;
-    let mut list = load(&store);
+    let mut list: Vec<Account> = load_for_save(&store, LIST_KEY);
     match list.iter_mut().find(|a| a.id == id) {
         Some(a) => *a = account.clone(),
         None => list.push(account.clone()),
@@ -441,7 +446,7 @@ pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Sto
 /// hands new panes back to the system default when it was the active one. Only a folder inside
 /// Kolux's own accounts folder is ever deleted.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
-    let mut list = load(store);
+    let mut list: Vec<Account> = load_for_save(store, LIST_KEY);
     let Some(at) = list.iter().position(|a| a.id == id) else {
         return Err("That Claude account is no longer listed.".into());
     };
@@ -471,7 +476,7 @@ pub fn claude_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store
 
 /// Marks an account stale or fresh (ACCT-012); true when that changed anything.
 pub fn mark_stale(store: &Store, id: &str, stale: bool) -> Result<bool, String> {
-    let mut list = load(store);
+    let mut list: Vec<Account> = load_for_save(store, LIST_KEY);
     let Some(a) = list.iter_mut().find(|a| a.id == id && a.stale != stale) else {
         return Ok(false);
     };
@@ -673,6 +678,35 @@ mod tests {
         assert!(load(&store).is_empty());
         assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the reset was refused: nothing was changed");
         assert!(crate::orchestration::kept::asides(&store, LIST_KEY).is_empty(), "the copy rolled back with the refused reset");
+    }
+
+    // Row 912: a list that could not be read or kept aside is never saved over by a sign-in.
+    #[test]
+    fn row912_a_sign_in_cannot_save_over_a_list_that_could_not_be_kept_aside() {
+        let (dir, store) = profile("row912");
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let got = sign_in(&store, &dir, "a9", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into()));
+        assert!(got.is_err(), "the save is refused, not made over an empty list");
+        let store = store.lock().unwrap();
+        assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the stored list is byte-identical");
+    }
+
+    // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
+    #[test]
+    fn row912_a_read_only_load_gives_the_default_and_poisons_nothing() {
+        let (dir, store) = profile("row912-ro");
+        let store = store.lock().unwrap();
+        store.set(LIST_KEY, "[{\"id\":").unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(load(&store).is_empty());
+        assert!(active(&store).is_none());
+        store.set("unrelated.key", "1").unwrap();
+        store.set(ACTIVE_KEY, "").unwrap();
+        assert!(load_for_save::<Vec<Account>>(&store, LIST_KEY).is_empty(), "the held read still hands the default back");
+        assert!(store.set(LIST_KEY, "[]").is_err(), "and only it holds the list");
+        store.set("unrelated.key", "2").unwrap();
     }
 
     #[test]
