@@ -86,10 +86,13 @@ fn chosen_root(store: &Store, project: &Project) -> Option<String> {
 
 /// The choices for a listing, which only reads: when they cannot be read or first made (an unreadable
 /// record the keep-aside could not copy, or a refused first-use save), external worktrees stay hidden.
-/// Only this log line says so; no settings notice covers it (by design, coordinator default).
+/// Only this log line (once per run) says so; no settings notice covers it (by design, coordinator default).
 fn read_choices(store: &Store) -> Value {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     ensure(store, &crate::projects::load_projects(store)).unwrap_or_else(|e| {
-        eprintln!("kolux-rs: the worktree visibility choices could not be read or created ({e}); worktrees made outside Kolux stay hidden until that works");
+        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("kolux-rs: the worktree visibility choices could not be read or created ({e}); worktrees made outside Kolux stay hidden until that works");
+        }
         Value::Null
     })
 }

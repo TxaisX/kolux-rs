@@ -137,7 +137,7 @@ impl Fence {
     /// damaged list grants nothing.
     pub fn load(store: &Mutex<Store>) -> Fence {
         let list: Vec<PathBuf> = store.lock().ok().map(|s| crate::orchestration::kept::or_default_held(&s, KEY_GRANTS)).unwrap_or_default();
-        let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p) && on_a_drive(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p)).collect();
+        let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p) && on_a_drive(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p) && p.to_str().is_some()).collect();
         while grants.len() > GRANT_CAP {
             grants.pop_front();
         }
@@ -352,6 +352,27 @@ mod tests {
         assert!(link.to_str().is_some());
         assert!(matches!(f.grant(&link.join("f.txt"), &store), Err(GrantError::Refused(_))));
         assert!(f.grants.lock().unwrap().is_empty(), "nothing was granted");
+    }
+
+    // A saved grant whose link now resolves to a non-Unicode name must drop out at load, or every later save fails.
+    #[cfg(windows)]
+    #[test]
+    fn row914_load_drops_a_saved_grant_that_now_resolves_to_a_non_unicode_name() {
+        use std::os::windows::ffi::OsStringExt;
+        let t = temp("loadnonunicode");
+        let store = Mutex::new(Store::open(&t.0.join("data")).unwrap());
+        let odd = t.0.join(std::ffi::OsString::from_wide(&[0x61, 0xD800, 0x2E, 0x64]));
+        fs::create_dir_all(&odd).unwrap();
+        fs::write(odd.join("f.txt"), "x").unwrap();
+        let link = t.0.join("link");
+        if let Err(e) = std::os::windows::fs::symlink_dir(&odd, &link) {
+            eprintln!("skipped: symlink_dir needs developer mode or admin ({e})");
+            return;
+        }
+        store.lock().unwrap().set(KEY_GRANTS, &serde_json::json!([link.join("f.txt")]).to_string()).unwrap();
+        let after = Fence::load(&store);
+        assert!(after.grants.lock().unwrap().is_empty(), "the non-Unicode path was dropped");
+        after.grant(&t.0.join("outside/picked.txt"), &store.lock().unwrap()).unwrap();
     }
 
     #[test]
