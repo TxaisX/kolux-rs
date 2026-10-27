@@ -296,12 +296,13 @@ pub fn login_command(program: &Path, home: &Path, device: bool) -> CommandBuilde
 /// removed, unless it already holds a working sign-in.
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
     // Row 923: a NEW account never reuses a taken id, so a clash cannot overwrite a listed account's home or sealed copy.
-    let (id, home) = if existing {
+    // Row 929: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id.
+    let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
+    let (id, home) = if existing && listed.iter().any(|l| l == id) {
         let home = profile.join(FOLDER).join(id);
         fs::create_dir_all(&home).map_err(|e| e.to_string())?;
         (id.to_string(), home)
     } else {
-        let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
         crate::claude_accounts::claim_new_folder(profile, FOLDER, "codex", &listed, id)?
     };
     let id = id.as_str();
@@ -1310,6 +1311,25 @@ mod tests {
         assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth_before, "the listed home is byte-identical");
         assert_eq!(fs::read(&vault).unwrap(), sealed_before, "and so is its sealed copy");
         assert_eq!(load(&store.lock().unwrap()).len(), 2);
+    }
+
+    // Row 929: existing:true at an id that is not listed (a stale screen) is a new account, so an orphan sealed copy at that id is never overwritten.
+    #[test]
+    fn row929_an_existing_codex_sign_in_at_an_unlisted_id_claims_a_free_one() {
+        let profile = temp("row929-stale");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let vault = profile.join(secrets::VAULT).join("codex-c7.json");
+        secrets::write_file(&vault, "orphan sealed text").unwrap();
+        let orphan = fs::read(&vault).unwrap();
+        let got = sign_in(&store, &profile, "c7", true, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
+        assert_ne!(got.id, "c7", "the unlisted id is taken by an orphan copy, so the account gets another");
+        assert_eq!(fs::read(&vault).unwrap(), orphan, "the orphan is byte-identical");
+        assert!(profile.join(secrets::VAULT).join(format!("codex-{}.json", got.id)).is_file());
+        assert_eq!(got.home, profile.join(FOLDER).join(&got.id).to_string_lossy());
     }
 
     #[test]
