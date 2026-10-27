@@ -202,7 +202,7 @@ pub fn prepare(dir: &Path, record: RunRecord, earlier_name: &str) -> Prepared {
         Err(e) => out.earlier_error = Some(e),
     }
     // SKILL-014: the folder's own history rides in the same record file.
-    let run = Past { dir: dir.to_string_lossy().into_owned(), kit: record.kit.clone(), title: record.title.clone(), started: record.started, collected: None };
+    let run = Past { dir: dir.to_string_lossy().into_owned(), kit: record.kit.clone(), title: record.title.clone(), started: record.started, collected: None, rest: Default::default() };
     let history = remember_run(old.map(|f| f.history).unwrap_or_default(), run);
     if let Err(e) = write_file(dir, &RecordFile { run: record, history }) {
         out.record_error = Some(e.to_string());
@@ -224,7 +224,7 @@ pub fn kit_prepare(store: State<'_, Mutex<Store>>, dir: String, kit: String, tit
     let started = now_ms();
     let out = prepare(&path, RunRecord { kit: kit.clone(), title: title.clone(), started, roles }, &earlier_name);
     if let Ok(s) = store.lock() {
-        let _ = record_started(&s, Past { dir, kit, title, started, collected: None });
+        let _ = record_started(&s, Past { dir, kit, title, started, collected: None, rest: Default::default() });
     }
     Ok(out)
 }
@@ -261,6 +261,9 @@ pub struct Past {
     /// The dated folder inside the results folder this run was collected into.
     #[serde(default)]
     pub collected: Option<String>,
+    /// Fields a newer version saved, carried through untouched.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The hidden record file: the current run and this folder's own history.
@@ -292,7 +295,12 @@ fn same_run(a: &Past, b: &Past) -> bool {
 
 /// SKILL-014: adds a run, the same folder, kit and start time stored only once, newest first,
 /// the newest 50 kept.
-pub fn remember_run(mut list: Vec<Past>, run: Past) -> Vec<Past> {
+pub fn remember_run(mut list: Vec<Past>, mut run: Past) -> Vec<Past> {
+    // The replaced entry's unknown fields stay unless the new run sets the same ones.
+    let replaced: Vec<_> = list.iter().filter(|x| same_run(x, &run)).flat_map(|x| x.rest.clone()).collect();
+    for (k, v) in replaced {
+        run.rest.entry(k).or_insert(v);
+    }
     list.retain(|x| !same_run(x, &run));
     list.push(run);
     list.sort_by_key(|p| std::cmp::Reverse(p.started));
@@ -551,7 +559,7 @@ pub fn collect(dir: &Path, roles: &[CollectRole], name: &str) -> Result<(Collect
     let title = file.run.title.clone();
     fs::write(out.join("README.md"), readme(&title, &folder, &items, &missing)).map_err(|e| format!("Kolux could not write the README: {e}"))?;
     fs::write(out.join("Results.html"), results_page(&title, &folder, &items, &missing)).map_err(|e| format!("Kolux could not write the Results page: {e}"))?;
-    let run = Past { dir: dir.to_string_lossy().into_owned(), kit: file.run.kit.clone(), title, started: file.run.started, collected: Some(folder.clone()) };
+    let run = Past { dir: dir.to_string_lossy().into_owned(), kit: file.run.kit.clone(), title, started: file.run.started, collected: Some(folder.clone()), rest: Default::default() };
     if !file.history.iter().any(|x| same_run(x, &run)) {
         file.history = remember_run(std::mem::take(&mut file.history), run.clone());
     }
@@ -752,7 +760,7 @@ mod tests {
 
     #[test]
     fn history_keeps_one_entry_per_run_and_the_newest_fifty() {
-        let past = |dir: &str, started: u64| Past { dir: dir.into(), kit: "sales".into(), title: "Sales".into(), started, collected: None };
+        let past = |dir: &str, started: u64| Past { dir: dir.into(), kit: "sales".into(), title: "Sales".into(), started, collected: None, rest: Default::default() };
         let mut list = Vec::new();
         for n in 1..=51 {
             list = remember_run(list, past("C:\\work\\shop", n));
@@ -807,10 +815,26 @@ mod tests {
         let broken = "[{\"dir\": \"C:/a\", \"kit\"";
         store.set(HISTORY_KEY, broken).unwrap();
         crate::orchestration::kept::refuse_copies(&dir);
-        let run = Past { dir: "C:/a".into(), kit: "k".into(), title: "t".into(), started: 1, collected: None };
+        let run = Past { dir: "C:/a".into(), kit: "k".into(), title: "t".into(), started: 1, collected: None, rest: Default::default() };
         assert!(record_started(&store, run.clone()).unwrap_err().contains(HISTORY_KEY));
         assert!(record_collected(&store, &run, "out").unwrap_err().contains(HISTORY_KEY));
         assert_eq!(store.get(HISTORY_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row919_a_past_run_keeps_the_fields_this_version_does_not_know_when_the_history_is_saved_again() {
+        let dir = temp("row919");
+        let store = Store::open(&dir).unwrap();
+        store.set(HISTORY_KEY, r#"[{"dir":"C:/a","kit":"k","title":"t","started":1,"star":true},{"dir":"C:/b","kit":"k","title":"u","started":2,"star":true}]"#).unwrap();
+        record_started(&store, Past { dir: "C:/c".into(), kit: "k".into(), title: "v".into(), started: 3, collected: None, rest: Default::default() }).unwrap();
+        record_collected(&store, &Past { dir: "C:/a".into(), kit: "k".into(), title: "t".into(), started: 1, collected: None, rest: Default::default() }, "out").unwrap();
+        let back: serde_json::Value = serde_json::from_str(&store.get(HISTORY_KEY).unwrap().unwrap()).unwrap();
+        let of = |d: &str| back.as_array().unwrap().iter().find(|p| p["dir"] == d).unwrap().clone();
+        assert_eq!(of("C:/b")["star"], true, "an untouched run keeps its unknown field");
+        assert_eq!(of("C:/a")["star"], true, "a re-recorded run keeps its unknown field");
+        assert_eq!(of("C:/a")["collected"], "out");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }
