@@ -119,6 +119,10 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     let mut projects = load_projects(store);
     let gone: Vec<String> = projects.iter().filter(|p| ids.contains(&p.id)).map(|p| p.path.clone()).collect();
     projects.retain(|p| !ids.contains(&p.id));
+    // Empty runs of the two cleanups below read what they will touch (kept::load keeps a corrupt blob
+    // aside when the copy succeeds), so a refused read stops here with the project still listed.
+    crate::folder_projects::unflag(store, &[])?;
+    crate::setup::prune_setup(store, &[], &[])?;
     save_projects(store, &projects)?;
     // PROJ-019: a forgotten project's icon choice goes with it.
     let mut icons = project_icons(store);
@@ -5363,6 +5367,53 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert!(save_details(&store, w, "n", "", &long).is_err());
         assert_eq!(details_of(&store, w).name, None, "an over-long comment writes nothing");
         drop(store);
+    }
+
+    /// after-list row 882: a refused read of the folder flags or the saved setup must not leave the
+    /// project removed with its flag and setup state orphaned; nothing changes and a retry finishes.
+    #[test]
+    fn row882_a_refused_flag_or_setup_read_leaves_the_project_listed() {
+        let profile = temp("row882");
+        let store = Store::open(&profile).unwrap();
+        let project = project_at("p882", &profile);
+        save_projects(&store, std::slice::from_ref(&project)).unwrap();
+        store.set("folderProjects", "[1,2").unwrap(); // does not read, so it must be kept aside first
+        crate::orchestration::kept::refuse_copies(&profile); // and the store refuses that copy
+        assert!(forget_projects(&store, std::slice::from_ref(&project.id)).is_err());
+        assert_eq!(load_projects(&store).len(), 1, "the project is still listed");
+        assert_eq!(store.get("folderProjects").unwrap().as_deref(), Some("[1,2"), "the flags are untouched");
+        let conn = rusqlite::Connection::open(profile.join("state.db")).unwrap();
+        conn.execute_batch("DROP TRIGGER no_copies;").unwrap();
+        forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
+        assert!(load_projects(&store).is_empty(), "a retry finishes the job");
+        drop(conn);
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    /// The saved-setup half of row 882 (`prune_setup`): its key unreadable and the copy refused.
+    #[test]
+    fn row882_a_refused_setup_read_leaves_the_project_listed() {
+        let profile = temp("row882-setup");
+        let store = Store::open(&profile).unwrap();
+        let project = project_at("p882s", &profile);
+        save_projects(&store, std::slice::from_ref(&project)).unwrap();
+        store.set("setupCardDismissed", r#"["keep"]"#).unwrap();
+        store.set("localSetups", "{not json").unwrap();
+        crate::orchestration::kept::refuse_copies(&profile);
+        assert!(forget_projects(&store, std::slice::from_ref(&project.id)).is_err());
+        assert_eq!(load_projects(&store).len(), 1, "the project is still listed");
+        assert_eq!(store.get("localSetups").unwrap().as_deref(), Some("{not json"), "the saved setups are untouched");
+        assert_eq!(store.get("setupCardDismissed").unwrap().as_deref(), Some(r#"["keep"]"#), "the dismissed list is untouched");
+        let conn = rusqlite::Connection::open(profile.join("state.db")).unwrap();
+        conn.execute_batch("DROP TRIGGER no_copies;").unwrap();
+        forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
+        assert!(load_projects(&store).is_empty(), "a retry finishes the job");
+        assert_eq!(crate::orchestration::kept::asides(&store, "localSetups"), vec!["{not json".to_string()], "the unreadable blob was kept aside byte for byte on the retry");
+        store.set("localSetups", "{}").unwrap();
+        drop(conn);
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
     }
 }
 
