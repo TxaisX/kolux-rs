@@ -864,12 +864,13 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
         store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
     }
+    // Row 944: the sealed copy goes first, so a home that will not delete never leaves a copy a stale sign-in could unseal.
+    crate::claude_accounts::remove_sealed_copy(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
     let home = PathBuf::from(&gone.home);
     // Row 944: only the account's own home directly under the accounts folder is deleted (a ".." or a nested path is not).
     if home.parent() == Some(profile.join(FOLDER).as_path()) && home.file_name().is_some_and(|n| n == id) {
         remove_dir_patiently(&home).map_err(|e| format!("The account was removed, but its Codex home could not be deleted: {e}"))?;
     }
-    let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
     Ok(())
 }
 
@@ -1364,6 +1365,25 @@ mod tests {
         assert_eq!(got.home, first.home, "and its home");
         let homes: Vec<_> = fs::read_dir(profile.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(homes, ["c1"], "no second account home");
+    }
+
+    // Row 944: the sealed copy goes before the home, so a home that will not delete never leaves an orphan copy that a stale sign-in could unseal.
+    #[test]
+    fn row944_a_failed_home_delete_still_removes_the_sealed_copy() {
+        let profile = temp("row944-order");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        sign_in(&store, &profile, "c1", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
+        let home = profile.join(FOLDER).join("c1");
+        fs::remove_dir_all(&home).unwrap();
+        fs::write(&home, "not a folder").unwrap();
+        let vault = profile.join(secrets::VAULT).join("codex-c1.json");
+        assert!(vault.is_file());
+        assert!(remove(&store.lock().unwrap(), &profile, "c1").is_err(), "the home delete still reports its failure");
+        assert!(!vault.exists(), "the sealed copy is gone");
     }
 
     // Row 944: an id like ".." is never an account home; a cancelled login must not roll back (delete) the profile folder.

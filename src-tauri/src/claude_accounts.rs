@@ -601,12 +601,13 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
         store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
     }
+    // Row 944: the sealed copy goes first, so a folder that will not delete never leaves a copy a stale sign-in could unseal.
+    remove_sealed_copy(&profile.join(secrets::VAULT).join(format!("claude-{id}.json")));
     let dir = PathBuf::from(&gone.config_dir);
     // Row 944: only the account's own folder directly under the accounts folder is deleted (a ".." or a nested path is not).
     if dir.parent() == Some(profile.join(FOLDER).as_path()) && dir.file_name().is_some_and(|n| n == id) {
         crate::codex_accounts::remove_dir_patiently(&dir).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
     }
-    let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("claude-{id}.json")));
     Ok(())
 }
 
@@ -1098,6 +1099,20 @@ mod tests {
         assert!(got.is_err(), "an unsafe id is refused");
         assert!(!called.get(), "the login never ran");
         assert!(marker.exists(), "nothing outside the accounts folder was touched");
+    }
+
+    // Row 944: the sealed copy goes before the folder, so a folder that will not delete never leaves an orphan copy that a stale sign-in could unseal.
+    #[test]
+    fn row944_a_failed_folder_delete_still_removes_the_sealed_copy() {
+        let (dir, store) = profile("row944-order");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let folder = dir.join(FOLDER).join("a1");
+        fs::remove_dir_all(&folder).unwrap();
+        fs::write(&folder, "not a folder").unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        assert!(vault.is_file());
+        assert!(remove(&store.lock().unwrap(), &dir, "a1").is_err(), "the folder delete still reports its failure");
+        assert!(!vault.exists(), "the sealed copy is gone");
     }
 
     // Row 944: removing an account whose listed id is ".." must not delete the profile folder.
