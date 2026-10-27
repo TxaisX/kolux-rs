@@ -3,6 +3,9 @@
 // switches it off once (the switch writes both keys), and an opt-out after that is respected.
 import { invoke } from "@tauri-apps/api/core";
 import { writerArgs, writerOf } from "./generate";
+import { CLOSED_SETTINGS } from "./prDraft";
+import { aiShownFor, type RepoRef } from "./recipes";
+import { readRepoRef } from "./repoId";
 
 export const AUTO_BRANCH_KEY = "autoBranchName";
 export const AUTO_BRANCH_SEEN_KEY = "autoBranchChosen";
@@ -15,13 +18,27 @@ export type Renamed = { renamed: boolean; branch: string; reason: string | null 
 
 const tried = new Set<string>();
 
+export type NamingPorts = { settings: () => Promise<Record<string, unknown>>; repo: (dir: string) => Promise<RepoRef | null> };
+const realPorts: NamingPorts = { settings: () => invoke<Record<string, unknown>>("get_settings"), repo: readRepoRef };
+
+/**
+ * Row 931: who may name the branch, under the rules of the 915 commit writer, read fresh. Global AI
+ * off, this repository off (or unreadable while any is off), an unreadable settings file or a writer
+ * set to off all give null: no agent runs, and the back end names the branch from the task's own words.
+ */
+export async function namingWriter(dir: string, ports: NamingPorts = realPorts): Promise<ReturnType<typeof writerArgs> | null> {
+  const settings = await ports.settings().catch(() => CLOSED_SETTINGS);
+  const w = writerOf(settings);
+  const repo = await ports.repo(dir).catch(() => null);
+  return w.mode === "off" || !aiShownFor(settings, repo) ? null : writerArgs(w);
+}
+
 /** Names the placeholder branch of `dir` after `task`, once per folder. The back end leaves a branch that already has a name of its own, or an upstream, alone. */
-export async function nameBranchFor(dir: string, task: string, settings: Record<string, unknown>, call: typeof invoke = invoke): Promise<Renamed | null> {
+export async function nameBranchFor(dir: string, task: string, settings: Record<string, unknown>, call: typeof invoke = invoke, ports: NamingPorts = realPorts): Promise<Renamed | null> {
   if (!autoBranchOn(settings) || task.trim() === "" || tried.has(dir)) return null;
   tried.add(dir);
-  const w = writerOf(settings);
   try {
-    return await call<Renamed>("scm_name_branch", { worktree: dir, task, writer: w.mode === "off" ? null : writerArgs(w) });
+    return await call<Renamed>("scm_name_branch", { worktree: dir, task, writer: await namingWriter(dir, ports) });
   } catch {
     return null;
   }

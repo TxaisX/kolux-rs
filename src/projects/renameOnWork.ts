@@ -5,8 +5,7 @@
 // and tells listeners what happened so the sidebar can show the result or the folder question.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { autoBranchOn } from "../scm/autoBranch";
-import { writerArgs, writerOf } from "../scm/generate";
+import { autoBranchOn, namingWriter, type NamingPorts } from "../scm/autoBranch";
 import { useEffect, useRef } from "react";
 
 /** The Settings > Git & worktrees switch (mirrors the back end's setting key). */
@@ -57,12 +56,12 @@ export const forgetRename = (dir?: string) => {
  * counts as tried; a failed one (Git's own error) is kept as the folder's error and may be tried
  * again by a later prompt.
  */
-export async function renameOnFirstPrompt(dir: string, task: string, settings: Record<string, unknown>, call: typeof invoke = invoke): Promise<RenameAnswer | null> {
+export async function renameOnFirstPrompt(dir: string, task: string, settings: Record<string, unknown>, call: typeof invoke = invoke, ports?: NamingPorts): Promise<RenameAnswer | null> {
   if (!renameOn(settings) || task.trim() === "" || tried.has(dir)) return null;
   tried.add(dir);
-  const w = writerOf(settings);
   try {
-    const answer = await call<RenameAnswer>("workspace_rename_on_first_prompt", { path: dir, task, writer: w.mode === "off" ? null : writerArgs(w) });
+    // Row 931: the same AI gate as the commit writer; closed means the task's own words name the branch.
+    const answer = await call<RenameAnswer>("workspace_rename_on_first_prompt", { path: dir, task, writer: await namingWriter(dir, ports) });
     errors.delete(dir);
     for (const cb of listeners) cb({ dir, answer, error: null });
     return answer;
