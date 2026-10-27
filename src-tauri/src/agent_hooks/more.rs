@@ -45,6 +45,7 @@ pub const CURSOR_EVENTS: [&str; 5] = ["beforeSubmitPrompt", "stop", "postToolUse
 pub const DROID_EVENTS: [&str; 7] = ["SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "PreToolUse", "PostToolUse", "Notification"];
 const DROID_TOOL_EVENTS: [&str; 2] = ["PreToolUse", "PostToolUse"];
 /// Whether each Claude-group agent's script prints the reply; install and write_scripts both read these.
+const CURSOR_PRINTS: bool = true;
 const DROID_PRINTS: bool = true;
 const COMMAND_CODE_PRINTS: bool = false;
 /// STAT-014: Command Code's events (commandcode.ai/docs/hooks/reference); SessionStart fires while idle, so it is not hooked.
@@ -325,7 +326,7 @@ pub fn change(event: &Value) -> Option<Option<Change>> {
 // Wired into agent_hooks::sync by evidence/hooks-T-121-mod.rs.patch (the lane/vendors region).
 #[allow(dead_code)]
 pub fn write_scripts(home: &Path) -> Result<String, String> {
-    write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", true))?;
+    write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", CURSOR_PRINTS))?;
     write_script(home, DROID_SCRIPT, &script("droid", "droid", DROID_PRINTS))?;
     write_script(home, COMMAND_CODE_SCRIPT, &script("command-code", "command-code", COMMAND_CODE_PRINTS))?;
     // Kimi adds a hook's output to the model's context, so its script prints nothing.
@@ -493,10 +494,15 @@ fn root_of<'a>(file: &Path, v: &'a mut Value) -> Result<&'a mut Map<String, Valu
     v.as_object_mut().ok_or_else(|| format!("{} has a top level that is not an object; left alone", file.display()))
 }
 
+/// The kept copy has `event` under "hooks": the key is the user's, so Kolux's strip leaves it even when it empties it.
+fn kept_has_hooks_key(file: &Path, event: &str) -> bool {
+    kept(file).is_some_and(|(_, c)| c.get("hooks").and_then(Value::as_object).is_some_and(|h| h.contains_key(event)))
+}
+
 /// STAT-012: one Kolux entry under each Cursor event, the user's entries kept where they are; an older
 /// file's Kolux entries under the permission events go (DT-C49).
 pub fn install_cursor(home: &Path, file: &Path) -> Result<bool, String> {
-    let command = quoted(&write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", true))?);
+    let command = quoted(&write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", CURSOR_PRINTS))?);
     let text = read_opt(file)?;
     let mut v = parse(file, text.as_deref())?;
     let before = v.clone();
@@ -509,7 +515,7 @@ pub fn install_cursor(home: &Path, file: &Path) -> Result<bool, String> {
         return Err(format!("{} has a \"{e}\" value that is not a list; left alone", file.display()));
     }
     let mine_already = hooks.values().filter_map(Value::as_array).flatten().any(names_mine);
-    // Only a key Kolux's own strip empties goes; the user's own empty key stays as it was.
+    // Only a key Kolux's own strip empties goes, and not one the kept copy has; the user's own empty key stays as it was.
     let mut emptied = Vec::new();
     for (event, entries) in hooks.iter_mut() {
         if let Some(list) = entries.as_array_mut().filter(|_| !CURSOR_EVENTS.contains(&event.as_str())) {
@@ -520,7 +526,7 @@ pub fn install_cursor(home: &Path, file: &Path) -> Result<bool, String> {
             }
         }
     }
-    hooks.retain(|e, _| !emptied.contains(e));
+    hooks.retain(|e, _| !emptied.contains(e) || kept_has_hooks_key(file, e));
     for event in CURSOR_EVENTS {
         let list = hooks.entry(event).or_insert_with(|| json!([])).as_array_mut().expect("checked above");
         let mine = json!({ "command": command });
@@ -559,8 +565,8 @@ pub fn remove_cursor(home: &Path, file: &Path) -> Result<bool, String> {
     if !changed {
         return Ok(false);
     }
-    // Only a key Kolux's removal emptied goes; the user's own empty key stays.
-    hooks.retain(|e, _| !emptied.contains(e));
+    // Only a key Kolux's removal emptied goes, and not one the kept copy has; the user's own empty key stays.
+    hooks.retain(|e, _| !emptied.contains(e) || kept_has_hooks_key(file, e));
     let copy = kept(file).map(|(_, c)| c);
     let root = v.as_object_mut().expect("has hooks");
     if root.get("hooks").and_then(Value::as_object).is_some_and(Map::is_empty) && copy.as_ref().is_none_or(|c| c.get("hooks").is_none()) {
