@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aiShownFor, migrateRecipes, recipeProblem, recipesOf, recipeVariables, repoAiMode, withRepoAi } from "./recipes";
+import { aiShownFor, migrateRecipes, recipeProblem, recipesOf, recipeVariables, refForDir, repoAiMode, withRepoAi } from "./recipes";
 
 describe("GIT-019 recipes", () => {
   it("offer the linked-issue variable only in the commit and pull request recipes", () => {
@@ -80,9 +80,9 @@ describe("row 917 repository id", () => {
     expect(aiShownFor(s, github)).toBe(false);
     expect(aiShownFor({ scmAiHidden: true, scmRepoAi: { "Acme/app": "on" } }, github)).toBe(true);
   });
-  it("a mode saved under the new id wins over the old key, and writing it retires the old key", () => {
+  it("a stale off under the old key is not hidden by an on under the new id, and writing retires the old key", () => {
     const s = { scmRepoAi: { "Acme/app": "off", "github.com/Acme/app": "on" } };
-    expect(aiShownFor(s, github)).toBe(true);
+    expect(aiShownFor(s, github)).toBe(false);
     expect(withRepoAi({ scmRepoAi: { "Acme/app": "off" } }, github, "on")).toEqual({ "github.com/Acme/app": "on" });
   });
   it("going back to follow clears the old key too, so a retired off cannot come back", () => {
@@ -98,5 +98,39 @@ describe("row 917 repository id", () => {
     expect(aiShownFor({}, null)).toBe(true);
     expect(aiShownFor({ scmRepoAi: { "x/y": "on" } }, null)).toBe(true);
     expect(aiShownFor({ scmAiHidden: true, scmRepoAi: { "x/y": "on" } }, null)).toBe(false);
+  });
+});
+
+describe("row 917 review fixes: one switch under every key a repository is known by", () => {
+  const origin = { id: "gitlab.com/Team/App", legacy: null, also: ["C:/work/app"] };
+
+  it("a typed entry saved under the resolved id turns AI off for that repository", () => {
+    const s = { scmRepoAi: { "gitlab.com/Team/App": "off" } };
+    expect(aiShownFor(s, { id: "gitlab.com/Team/App", legacy: null, also: [] })).toBe(false);
+  });
+  it("an off saved under the root path still counts after a remote is added", () => {
+    const s = { scmRepoAi: { "C:/work/app": "off" } };
+    expect(repoAiMode(s, origin)).toBe("off");
+    expect(aiShownFor(s, origin)).toBe(false);
+  });
+  it("an off saved under the old remote still counts after origin is switched", () => {
+    const s = { scmRepoAi: { "github.com/old/app": "off" } };
+    expect(aiShownFor(s, { id: "github.com/new/app", legacy: null, also: ["github.com/old/app", "old/app"] })).toBe(false);
+    expect(aiShownFor(s, { id: "github.com/new/app", legacy: null, also: [] })).toBe(true);
+  });
+  it("an off under any key wins over an on under the primary id", () => {
+    const s = { scmRepoAi: { "gitlab.com/Team/App": "on", "C:/work/app": "off" } };
+    expect(repoAiMode(s, origin)).toBe("off");
+  });
+  it("writing a mode retires every older key and sets the primary id", () => {
+    const s = { scmRepoAi: { "C:/work/app": "off", "other/repo": "off" } };
+    expect(withRepoAi(s, origin, "on")).toEqual({ "gitlab.com/Team/App": "on", "other/repo": "off" });
+    expect(withRepoAi(s, origin, "follow")).toEqual({ "other/repo": "off" });
+  });
+  it("a repository read for another folder counts as unread (fails closed)", () => {
+    const state = { dir: "/a", ref: origin };
+    expect(refForDir(state, "/a")).toBe(origin);
+    expect(refForDir(state, "/b")).toBeNull();
+    expect(refForDir(null, "/a")).toBeNull();
   });
 });

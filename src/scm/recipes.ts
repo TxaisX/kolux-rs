@@ -77,21 +77,23 @@ export function migrateRecipes(settings: Record<string, unknown> | null): Recipe
 export type RepoAiMode = "follow" | "on" | "off";
 export const REPO_AI_KEY = "scmRepoAi";
 
-/** A repository as the switch knows it: the provider-neutral id (scm_repo_id), plus the `owner/name` key a GitHub repository was saved under before ids existed. A bare string is an id. */
-export type RepoRef = string | { id: string; legacy?: string | null };
+/** A repository as the switch knows it: the provider-neutral id (scm_repo_id) a write goes to, the `owner/name` key a GitHub repository was saved under before ids existed, and `also`, every other key it is known by (other remotes, its root path) so a switch survives a remote change. A bare string is an id. */
+export type RepoRef = string | { id: string; legacy?: string | null; also?: string[] };
 const idOf = (r: RepoRef): string => (typeof r === "string" ? r : r.id);
-const legacyOf = (r: RepoRef): string | null => (typeof r === "string" ? null : r.legacy ?? null);
+/** Every key the repository may have been saved under, the primary id first. */
+const keysOf = (r: RepoRef): string[] => (typeof r === "string" ? [r] : [r.id, ...(r.also ?? []), ...(r.legacy ? [r.legacy] : [])]);
 const savedModes = (settings: Record<string, unknown> | null): Record<string, unknown> => (settings?.[REPO_AI_KEY] as Record<string, unknown> | undefined) ?? {};
-const forcing = (m: unknown): m is "on" | "off" => m === "on" || m === "off";
 
-/** A repository's mode: its id's entry, else its old GitHub key's; anything but the two forcing values follows the global choice. */
+/** A repository's mode: an "off" under any of its keys wins, else an "on" under any; anything else follows the global choice. */
 export function repoAiMode(settings: Record<string, unknown> | null, repo: RepoRef): RepoAiMode {
   const saved = savedModes(settings);
-  const own = saved[idOf(repo)];
-  if (forcing(own)) return own;
-  const legacy = legacyOf(repo);
-  const old = legacy === null ? undefined : saved[legacy];
-  return forcing(old) ? old : "follow";
+  const modes = keysOf(repo).map((k) => saved[k]);
+  return modes.includes("off") ? "off" : modes.includes("on") ? "on" : "follow";
+}
+
+/** A repository read for `dir`: another folder's answer is dropped (null fails closed) rather than shown for one frame. */
+export function refForDir(state: { dir: string; ref: RepoRef | null } | null, dir: string): RepoRef | null {
+  return state !== null && state.dir === dir ? state.ref : null;
 }
 
 /**
@@ -105,13 +107,11 @@ export function aiShownFor(settings: Record<string, unknown> | null, repo: RepoR
   return mode === "on" ? true : mode === "off" ? false : aiControlsShown(settings);
 }
 
-/** The saved per-repository modes with `repo` set under its id (its old GitHub key retired); "follow" removes both entries. */
+/** The saved per-repository modes with `repo` set under its primary id (every older key retired); "follow" removes them all. */
 export function withRepoAi(settings: Record<string, unknown> | null, repo: RepoRef, mode: RepoAiMode): Record<string, RepoAiMode> {
   const now = { ...(savedModes(settings) as Record<string, RepoAiMode>) };
-  const legacy = legacyOf(repo);
-  if (legacy !== null) delete now[legacy];
-  if (mode === "follow") delete now[idOf(repo)];
-  else now[idOf(repo)] = mode;
+  for (const k of keysOf(repo)) delete now[k];
+  if (mode !== "follow") now[idOf(repo)] = mode;
   return now;
 }
 

@@ -12,14 +12,22 @@ pub struct RepoIdentity {
     pub id: String,
     /// `owner/name` when the remote is GitHub: the key the switch was saved under before ids, read as a fallback.
     pub legacy: Option<String>,
+    /// Every other key this repository is known by (other remotes, its root path, their old GitHub keys): an "off" saved under any of them still counts.
+    pub also: Vec<String>,
 }
 
-/// A local path as an id: forward slashes, no trailing slash, no `.git`.
+#[tauri::command]
+pub fn scm_repo_id_of(text: String) -> String {
+    typed_id(&text, &super::ssh_config())
+}
+
+/// A local path as an id: forward slashes, no trailing slash, no `.git`, lowercased on Windows only.
 fn path_id(p: &str) -> Option<String> {
     let p = p.trim().replace('\\', "/");
     let p = p.trim_end_matches('/');
     let p = p.strip_suffix(".git").unwrap_or(p).trim_end_matches('/');
-    (!p.is_empty()).then(|| p.to_string())
+    // Windows paths are case-insensitive; elsewhere the case is kept.
+    (!p.is_empty()).then(|| if cfg!(windows) { p.to_lowercase() } else { p.to_string() })
 }
 
 /// `host/path` for a remote URL: host lowercased, no scheme, credentials, port, `.git` or trailing
@@ -43,6 +51,8 @@ pub fn remote_id(url: &str, ssh_config: &str) -> Option<String> {
         }
     };
     let path = path.trim_matches('/');
+    // `ssh://host/~/r` and `host:r` both mean r under the login's home.
+    let path = path.strip_prefix("~/").unwrap_or(path);
     let path = path.strip_suffix(".git").unwrap_or(path).trim_end_matches('/');
     if host.is_empty() || path.is_empty() {
         return None;
@@ -55,27 +65,14 @@ fn not_a_repository(err: &str) -> bool {
     err.to_lowercase().contains("not a git repository")
 }
 
-/// The remote the id is read from: origin, else the first remote. Ok(None) means a repository with no
-/// remote; Err(not a repository) means a folder.
-fn remote_url(worktree: &Path) -> Result<Option<String>, String> {
-    if let Ok(url) = run(&["remote", "get-url", "origin"], Some(worktree)) {
-        return Ok(Some(url));
-    }
-    let names = run(&["remote"], Some(worktree))?;
-    match names.lines().map(str::trim).find(|n| !n.is_empty()) {
-        Some(name) => run(&["remote", "get-url", name], Some(worktree)).map(Some),
-        None => Ok(None),
-    }
-}
-
-/// The repository's own root (the main checkout, so every linked worktree agrees), as an id.
-fn root_id(worktree: &Path) -> Result<String, String> {
-    let common = run(&["rev-parse", "--git-common-dir"], Some(worktree))?;
+/// The repository root as an id, from `git rev-parse --git-common-dir` read in `worktree`: always
+/// absolute (a relative gitdir is resolved against `worktree`, `..` folded), the main checkout so
+/// every linked worktree agrees, and the same text whether git said `.git` or the full path.
+fn root_from(worktree: &Path, common: &str) -> Option<String> {
+    let common = common.trim().replace('\\', "/");
     let common = Path::new(&common);
-    let dir = if common.is_absolute() { common.to_path_buf() } else { worktree.join(common) };
-    let root = if dir.file_name().is_some_and(|n| n == ".git") { dir.parent().unwrap_or(&dir).to_path_buf() } else { dir };
-    // `..` from a subfolder (`../.git`) is cleaned by canonical form only when the path exists; fold it by hand otherwise.
-    let text = root.to_string_lossy().replace('\\', "/");
+    let dir = if common.is_absolute() || common.has_root() { common.to_path_buf() } else { worktree.join(common) };
+    let text = dir.to_string_lossy().replace('\\', "/");
     let mut parts: Vec<&str> = Vec::new();
     for seg in text.split('/') {
         match seg {
@@ -86,22 +83,93 @@ fn root_id(worktree: &Path) -> Result<String, String> {
             s => parts.push(s),
         }
     }
-    path_id(&parts.join("/")).ok_or_else(|| "the repository root has no path".to_string())
+    let folded = parts.join("/");
+    let folded = folded.trim_end_matches('/');
+    let root = match folded.strip_suffix("/.git") {
+        Some(parent) => parent,
+        None => folded,
+    };
+    path_id(root)
 }
 
-/// The identity of `worktree`: see the module note. Err when git fails in a way that does not say "not a repository".
+fn root_id(worktree: &Path) -> Result<String, String> {
+    let common = run(&["rev-parse", "--git-common-dir"], Some(worktree))?;
+    root_from(worktree, &common).ok_or_else(|| "the repository root has no path".to_string())
+}
+
+/// The identity of `worktree`: see the module note. The primary id is origin's, else the first
+/// remote's, else the root path; `also` holds every other remote, the root path and their old
+/// GitHub keys, so a switch saved under any of them survives a remote being added or origin changed.
+/// Err when git fails in a way that does not say "not a repository".
 pub fn identity(worktree: &Path, ssh_config: &str) -> Result<RepoIdentity, String> {
     let folder = || path_id(&worktree.to_string_lossy()).ok_or_else(|| "empty folder path".to_string());
-    let url = match remote_url(worktree) {
-        Ok(u) => u,
-        Err(e) if not_a_repository(&e) => return Ok(RepoIdentity { id: folder()?, legacy: None }),
+    let names = match run(&["remote"], Some(worktree)) {
+        Ok(n) => n,
+        Err(e) if not_a_repository(&e) => return Ok(RepoIdentity { id: folder()?, legacy: None, also: Vec::new() }),
         Err(e) => return Err(e),
     };
-    if let Some(id) = url.as_deref().and_then(|u| remote_id(u, ssh_config)) {
-        let legacy = url.as_deref().and_then(|u| super::github_repo(u, ssh_config)).map(|g| format!("{}/{}", g.owner, g.name));
-        return Ok(RepoIdentity { id, legacy });
+    let mut names: Vec<&str> = names.lines().map(str::trim).filter(|n| !n.is_empty()).collect();
+    if let Some(i) = names.iter().position(|n| *n == "origin") {
+        names.swap(0, i);
     }
-    Ok(RepoIdentity { id: root_id(worktree)?, legacy: None })
+    // (id, old GitHub key) per remote, origin first. An origin that exists but cannot be read is an error, never a quiet switch to another remote.
+    let mut remotes: Vec<(String, Option<String>)> = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        let url = match run(&["remote", "get-url", name], Some(worktree)) {
+            Ok(u) => u,
+            Err(e) if i == 0 && *name == "origin" => return Err(e),
+            Err(_) => continue,
+        };
+        if let Some(id) = remote_id(&url, ssh_config) {
+            let legacy = super::github_repo(&url, ssh_config).map(|g| format!("{}/{}", g.owner, g.name));
+            if !remotes.iter().any(|(r, _)| *r == id) {
+                remotes.push((id, legacy));
+            }
+        }
+    }
+    let root = root_id(worktree);
+    let mut rest: Vec<String> = Vec::new();
+    let (id, legacy) = if remotes.is_empty() {
+        (root?, None)
+    } else {
+        if let Ok(r) = root {
+            rest.push(r);
+        }
+        let (id, legacy) = remotes.remove(0);
+        (id, legacy)
+    };
+    for (rid, rlegacy) in remotes {
+        rest.extend([rid]);
+        rest.extend(rlegacy);
+    }
+    let mut also: Vec<String> = Vec::new();
+    for k in rest {
+        if k != id && legacy.as_deref() != Some(k.as_str()) && !also.contains(&k) {
+            also.push(k);
+        }
+    }
+    Ok(RepoIdentity { id, legacy, also })
+}
+
+/// A repository typed or pasted in Settings as the id `identity` would resolve for it: a URL or
+/// scp form through `remote_id`, a path through the path rules, `host/owner/name` with its host
+/// lowercased. Anything else (the old `owner/name`) is kept as typed.
+pub fn typed_id(text: &str, ssh_config: &str) -> String {
+    let t = text.trim();
+    let drive = t.as_bytes().get(1) == Some(&b':') && t.as_bytes()[0].is_ascii_alphabetic();
+    if t.contains(':') && !drive {
+        return remote_id(t, ssh_config).unwrap_or_else(|| t.to_string());
+    }
+    if drive || t.starts_with('/') || t.starts_with('\\') {
+        return path_id(t).unwrap_or_else(|| t.to_string());
+    }
+    let t = t.replace('\\', "/");
+    let t = t.trim_matches('/');
+    let t = t.strip_suffix(".git").unwrap_or(t).trim_end_matches('/');
+    match t.split_once('/') {
+        Some((first, rest)) if first.contains('.') => format!("{}/{}", first.to_lowercase(), rest),
+        _ => t.to_string(),
+    }
 }
 
 #[tauri::command]
@@ -126,6 +194,11 @@ mod tests {
         let dir = scratch(name);
         run(&["init", "-q", "-b", "main"], Some(&dir)).unwrap();
         dir
+    }
+
+    /// Windows paths are case-insensitive, so their ids are lowercased there and nowhere else.
+    fn fold(s: &str) -> String {
+        if cfg!(windows) { s.to_lowercase() } else { s.to_string() }
     }
 
     fn forward(p: &Path) -> String {
@@ -183,7 +256,7 @@ mod tests {
             assert_eq!(remote_id(u, ""), None, "{u:?}");
         }
         // A remote that is a local path reads as that path, with forward slashes and no .git.
-        assert_eq!(remote_id("C:\\work\\origin.git", "").as_deref(), Some("C:/work/origin"));
+        assert_eq!(remote_id("C:\\work\\origin.git", "").as_deref(), Some(fold("C:/work/origin").as_str()));
         assert_eq!(remote_id("/srv/git/origin.git/", "").as_deref(), Some("/srv/git/origin"));
     }
 
@@ -192,7 +265,7 @@ mod tests {
         let dir = repo("gitlab");
         run(&["remote", "add", "origin", "git@gitlab.com:group/sub/app.git"], Some(&dir)).unwrap();
         let got = identity(&dir, "").unwrap();
-        assert_eq!(got, RepoIdentity { id: "gitlab.com/group/sub/app".into(), legacy: None });
+        assert_eq!((got.id.as_str(), got.legacy.as_deref()), ("gitlab.com/group/sub/app", None));
     }
 
     #[test]
@@ -200,7 +273,7 @@ mod tests {
         let dir = repo("github");
         run(&["remote", "add", "origin", "https://github.com/Acme/app.git"], Some(&dir)).unwrap();
         let got = identity(&dir, "").unwrap();
-        assert_eq!(got, RepoIdentity { id: "github.com/Acme/app".into(), legacy: Some("Acme/app".into()) });
+        assert_eq!((got.id.as_str(), got.legacy.as_deref()), ("github.com/Acme/app", Some("Acme/app")));
     }
 
     #[test]
@@ -227,17 +300,17 @@ mod tests {
         assert!(!want.id.contains('\\') && !want.id.ends_with('/') && !want.id.contains(".git"), "{}", want.id);
         let linked = scratch("no-remote-linked").join("wt");
         run(&["worktree", "add", "-q", "-b", "side", &linked.to_string_lossy()], Some(&dir)).unwrap();
-        assert_eq!(identity(&linked, "").unwrap(), want, "a linked worktree is the same repository");
+        assert_eq!(identity(&linked, "").unwrap().id, want.id, "a linked worktree is the same repository");
         let sub = dir.join("deep");
         fs::create_dir_all(&sub).unwrap();
-        assert_eq!(identity(&sub, "").unwrap(), want, "a subfolder is the same repository");
+        assert_eq!(identity(&sub, "").unwrap().id, want.id, "a subfolder is the same repository");
     }
 
     #[test]
     fn row917_a_folder_workspace_is_its_own_path() {
         let dir = scratch("plain-folder");
         let got = identity(&dir, "").unwrap();
-        assert_eq!(got, RepoIdentity { id: forward(&dir), legacy: None });
+        assert_eq!((got.id, got.legacy, got.also), (fold(&forward(&dir)), None, Vec::<String>::new()));
     }
 
     #[test]
@@ -245,5 +318,72 @@ mod tests {
         let missing = std::env::temp_dir().join(format!("kolux-rs-repoid-missing-{}", std::process::id()));
         let _ = fs::remove_dir_all(&missing);
         assert!(identity(&missing, "").is_err(), "an unreadable directory must not read as a folder id");
+    }
+
+    // ---- row 917 review fixes ----
+
+    #[test]
+    fn row917r_ssh_home_relative_and_scp_forms_agree() {
+        assert_eq!(remote_id("ssh://git@host.example/~/team/app.git", "").as_deref(), Some("host.example/team/app"));
+        assert_eq!(remote_id("git@host.example:team/app.git", "").as_deref(), Some("host.example/team/app"));
+        assert_eq!(remote_id("git@host.example:~/team/app", "").as_deref(), Some("host.example/team/app"));
+    }
+
+    #[test]
+    fn row917r_the_root_id_is_absolute_and_the_same_from_a_relative_or_absolute_gitdir() {
+        let repo = Path::new("/w/Repo");
+        let want = Some(fold("/w/Repo"));
+        assert_eq!(root_from(repo, ".git"), want);
+        assert_eq!(root_from(&repo.join("deep").join("er"), "../../.git"), want);
+        assert_eq!(root_from(&repo.join("deep"), "/w/Repo/.git"), want);
+        assert_eq!(root_from(&repo.join("deep"), "/w/Repo/.git/"), want);
+        assert_eq!(root_from(Path::new("/srv"), "/srv/bare.git"), Some("/srv/bare".to_string()));
+        if cfg!(windows) {
+            assert_eq!(root_from(Path::new("C:/W/Repo"), "C:/w/repo/.git"), root_from(Path::new("c:/w/repo"), ".git"));
+        }
+    }
+
+    #[test]
+    fn row917r_windows_path_case_does_not_make_a_second_id() {
+        let a = remote_id("C:/Work/Origin.git", "");
+        let b = remote_id("c:/work/origin.git", "");
+        assert_eq!(a == b, cfg!(windows));
+        assert_eq!(typed_id("C:\\Work\\Repo\\", ""), fold("C:/Work/Repo"));
+    }
+
+    #[test]
+    fn row917r_adding_a_remote_keeps_the_root_id_as_another_key_of_the_repository() {
+        let dir = repo("add-remote");
+        let before = identity(&dir, "").unwrap();
+        assert!(before.also.is_empty());
+        run(&["remote", "add", "origin", "https://gitlab.com/g/app.git"], Some(&dir)).unwrap();
+        let after = identity(&dir, "").unwrap();
+        assert_eq!(after.id, "gitlab.com/g/app");
+        assert!(after.also.contains(&before.id), "{:?} should hold {}", after.also, before.id);
+    }
+
+    #[test]
+    fn row917r_switching_origin_keeps_the_old_remote_as_another_key() {
+        let dir = repo("switch-origin");
+        run(&["remote", "add", "origin", "https://github.com/Acme/app.git"], Some(&dir)).unwrap();
+        let old = identity(&dir, "").unwrap();
+        run(&["remote", "rename", "origin", "old"], Some(&dir)).unwrap();
+        run(&["remote", "add", "origin", "https://gitlab.com/g/app.git"], Some(&dir)).unwrap();
+        let now = identity(&dir, "").unwrap();
+        assert_eq!(now.id, "gitlab.com/g/app", "origin is the primary id");
+        assert!(now.also.contains(&old.id), "{:?} should hold {}", now.also, old.id);
+        assert!(now.also.contains(&"Acme/app".to_string()), "the old remote's GitHub key too: {:?}", now.also);
+    }
+
+    #[test]
+    fn row917r_a_typed_entry_saves_under_the_id_a_repository_resolves() {
+        let dir = repo("typed");
+        run(&["remote", "add", "origin", "git@gitlab.com:Team/App"], Some(&dir)).unwrap();
+        let resolved = identity(&dir, "").unwrap().id;
+        for typed in ["https://GitLab.com/Team/App.git", "git@gitlab.com:Team/App.git", "ssh://git@gitlab.com/Team/App/", "GitLab.com/Team/App.git/", "gitlab.com/Team/App"] {
+            assert_eq!(typed_id(typed, ""), resolved, "{typed}");
+        }
+        assert_eq!(typed_id("  Acme/app  ", ""), "Acme/app", "the old owner/name form is left as typed");
+        assert_eq!(typed_id("/srv/work/Repo/", ""), fold("/srv/work/Repo"));
     }
 }
