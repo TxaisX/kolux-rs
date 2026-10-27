@@ -41,6 +41,7 @@ import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNu
 import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
 import { moveToTab, tidyWeights } from "./shell/tidy";
 import { removeShortcutAsk } from "./launch/removeAsk";
+import { chooserClosable } from "./launch/chooserClosable";
 import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
 import { forgetView } from "./terminal/viewKeep";
 import { classify, shellInAgentPane } from "./terminal/remove";
@@ -2519,7 +2520,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       inGit={inGitFor(p)}
       onCopies={(copies) => setChooser(p.key, { copies })}
       busy={launching}
-      closable
+      closable={chooserClosable(panesIn(panes, activeDir).length, sheetOf !== null)}
       onClose={onClose}
       sheet={sheetOf}
       saved={Array.isArray(settings[SAVED_SHAPES_KEY]) ? (settings[SAVED_SHAPES_KEY] as SavedShape[]) : []}
