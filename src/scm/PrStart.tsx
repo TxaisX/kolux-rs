@@ -9,6 +9,7 @@ import SearchPick from "../editor/SearchPick";
 import { needsOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
 import { draftOffered, draftPrText, draftRunning, draftSubscribe, draftVersion, readDraftGate, settleDraft, startGatedOneClick } from "./prDraft";
+import { readReview, reviewKey, reviewLines, reviewSettle, reviewShown, type ReviewSlot } from "./prFind";
 import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
 type Props = { dir: string; onCreated: (pr: Pr) => void };
@@ -32,6 +33,7 @@ export default function PrStart({ dir, onCreated }: Props) {
   asking.current = dir;
   const latest = useRef<Draft | null>(null);
   latest.current = draft;
+  const [review, setReview] = useState<ReviewSlot>(null); // VIEW-074 / GIT-025: the linked-pull-request lookup, kept by worktree and branch
   const session = useRef(0); // bumped each time the composer opens or closes; a draft finishing in an older one is dropped
 
   const check = async (): Promise<{ status: Status; ready: Readiness } | null> => {
@@ -58,8 +60,19 @@ export default function PrStart({ dir, onCreated }: Props) {
 
   // The answer on screen is only ever this worktree's.
   const mine = seen && seen.dir === dir ? seen : null;
+  // One lookup per worktree and branch change, no polling; a failure or an unsupported provider never blocks starting a pull request.
+  const reviewAsk = mine?.status.branch ? reviewKey(dir, mine.status.branch) : null;
+  const reviewNow = useRef<string | null>(null);
+  reviewNow.current = reviewAsk;
+  useEffect(() => {
+    if (reviewAsk === null || !mine) return;
+    void readReview(dir, mine.status).then((facts) => setReview((slot) => reviewSettle(slot, reviewAsk, facts, reviewNow.current)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewAsk]);
+  const facts = reviewShown(review, reviewAsk);
+  const linkedPr = facts?.lookup.kind === "found" && facts.lookup.pr.state === "OPEN" ? facts.lookup.pr : null;
   const key = mine ? readinessKey(dir, mine.status) : null;
-  const offer: Offer = offerFor(mine?.ready ?? null, key, Date.now());
+  const offer: Offer = linkedPr ? { kind: "blocked", reason: "" } : offerFor(mine?.ready ?? null, key, Date.now());
   const failed = errorShown(errors, dir, key ?? "status");
 
   const fail = (message: string) => {
@@ -137,14 +150,29 @@ export default function PrStart({ dir, onCreated }: Props) {
 
   return (
     <div className="pr-start" data-pr-start>
-      <div className="sb-hint">There is no review for this branch: it has no pull request.</div>
+      {facts ? (
+        <div className="pr-start-review" data-pr-review={facts.lookup.kind}>
+          {reviewLines(facts).map((line, i) => (
+            <div key={i} className={`sb-hint${facts.lookup.kind === "failed" && i === 0 ? " warn" : ""}`}>
+              {line}
+            </div>
+          ))}
+          {facts.lookup.kind === "found" && (
+            <button className="btn" data-pr-linked-open onClick={() => void invoke("open_external", { url: facts.lookup.kind === "found" ? facts.lookup.pr.url : "" })}>
+              Open pull request
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="sb-hint">{reviewAsk === null ? "There is no review for this branch: it has no pull request." : "Looking for this branch's pull request…"}</div>
+      )}
       {failed && (
         <div className="note error" role="alert">
           {failed}
         </div>
       )}
-      {offer.kind === "blocked" && !draft && <div className="sb-hint">{offer.reason}</div>}
-      {mine && !draft && offer.kind === "blocked" && going?.state !== "running" && needsOneClick(mine.status) && (
+      {offer.kind === "blocked" && !draft && !linkedPr && <div className="sb-hint">{offer.reason}</div>}
+      {mine && !draft && !linkedPr && offer.kind === "blocked" && going?.state !== "running" && needsOneClick(mine.status) && (
         <button className="btn primary" data-pr-one-click onClick={() => void oneClick()}>
           Commit, push and create pull request
         </button>

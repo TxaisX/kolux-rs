@@ -708,6 +708,11 @@ pub fn gh_login() -> Option<String> {
     gh_account(&gh_program().ok()?, "github.com")
 }
 
+/// Row 76: true when gh holds a sign-in for `host`, which is how a GitHub Enterprise Server host is told from any other self-hosted one. No network.
+pub(crate) fn gh_signed_in_on(host: &str) -> bool {
+    gh_program().ok().and_then(|p| gh_account(&p, host)).is_some()
+}
+
 /// GIT-043 / GIT-066: the account gh is signed in with on `host`, from gh's own config (no network).
 /// None when gh is signed out there, cannot run, or does not answer within GH_ACCOUNT_LIMIT.
 fn gh_account(program: &Path, host: &str) -> Option<String> {

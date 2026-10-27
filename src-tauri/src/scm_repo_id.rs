@@ -169,6 +169,17 @@ pub fn typed_id(text: &str, ssh_config: &str) -> String {
     }
 }
 
+/// The host of a host id (`host/owner/name`); None for a path id (root, drive, UNC) or a bare name.
+pub fn host_of_id(id: &str) -> Option<&str> {
+    let (host, rest) = id.split_once('/')?;
+    (!host.is_empty() && !host.contains(':') && !rest.is_empty()).then_some(host)
+}
+
+/// Row 76: the host of the repository's primary remote (origin, else the first one that is a host); None without one.
+pub fn primary_host(worktree: &Path, ssh_config: &str) -> Result<Option<String>, String> {
+    Ok(host_of_id(&identity(worktree, ssh_config)?.id).map(str::to_string))
+}
+
 #[tauri::command]
 pub async fn scm_repo_id(worktree: String) -> Result<RepoIdentity, String> {
     identity(Path::new(&worktree), &super::ssh_config())
@@ -429,5 +440,21 @@ mod tests {
         }
         assert_eq!(typed_id("  Acme/app  ", ""), "Acme/app", "the old owner/name form is left as typed");
         assert_eq!(typed_id("/srv/work/Repo/", ""), fold("/srv/work/Repo"));
+    }
+
+    #[test]
+    fn row76_the_host_is_read_from_a_host_id_and_never_from_a_path_id() {
+        for (id, host) in [("github.com/acme/app", Some("github.com")), ("gitlab.example.org/group/sub/app", Some("gitlab.example.org")), ("git.corp.example/o/r", Some("git.corp.example")), ("/home/me/app", None), ("c:/dev/app", None), ("//server/share/app", None), ("app", None), ("", None)] {
+            assert_eq!(host_of_id(id), host, "{id}");
+        }
+    }
+
+    #[test]
+    fn row76_a_repository_with_a_remote_names_its_host_and_one_without_names_none() {
+        let dir = repo("host-gitlab");
+        run(&["remote", "add", "origin", "git@gitlab.com:group/sub/app.git"], Some(&dir)).unwrap();
+        assert_eq!(primary_host(&dir, "").unwrap().as_deref(), Some("gitlab.com"));
+        let bare = repo("host-none");
+        assert_eq!(primary_host(&bare, "").unwrap(), None);
     }
 }
