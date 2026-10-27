@@ -55,6 +55,28 @@ fn kept_note(key: &str, aside: &str, why: &str) -> String {
 }
 
 #[cfg(test)]
+/// Test aid: hides the kv table behind a second connection, as a busy or unreadable store would; the guard puts it back.
+pub(crate) struct Unreadable(rusqlite::Connection);
+#[cfg(test)]
+impl Unreadable {
+    pub(crate) fn new(dir: &std::path::Path) -> Self {
+        let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        side.execute_batch("ALTER TABLE kv RENAME TO kv_gone").unwrap();
+        Unreadable(side)
+    }
+    pub(crate) fn restore(&self) {
+        self.0.execute_batch("ALTER TABLE kv_gone RENAME TO kv").unwrap();
+    }
+}
+#[cfg(test)]
+impl Drop for Unreadable {
+    // A failed assert must not leak the renamed table; after restore() the rename finds nothing and is ignored.
+    fn drop(&mut self) {
+        let _ = self.0.execute_batch("ALTER TABLE kv_gone RENAME TO kv");
+    }
+}
+
+#[cfg(test)]
 /// Test aid: a second connection that makes the store refuse any `.corrupt-` copy, as a full disk would.
 pub(crate) fn refuse_copies(dir: &std::path::Path) {
     let conn = rusqlite::Connection::open(dir.join("state.db")).unwrap();
@@ -392,19 +414,6 @@ mod tests {
         store.set("demo.list", "[7]").unwrap();
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// Hides the kv table behind a second connection, as a busy or unreadable store would; the guard puts it back.
-    struct Unreadable(rusqlite::Connection);
-    impl Unreadable {
-        fn new(dir: &std::path::Path) -> Self {
-            let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
-            side.execute_batch("ALTER TABLE kv RENAME TO kv_gone").unwrap();
-            Unreadable(side)
-        }
-        fn restore(&self) {
-            self.0.execute_batch("ALTER TABLE kv_gone RENAME TO kv").unwrap();
-        }
     }
 
     #[test]

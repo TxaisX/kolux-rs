@@ -131,12 +131,16 @@ fn with<T>(app: &tauri::AppHandle, f: impl FnOnce(&mut Resumes) -> T) -> Option<
     let out = f(&mut r);
     if let Some(store) = app.try_state::<std::sync::Mutex<crate::state::Store>>() {
         if let Ok(store) = store.lock() {
-            if let Err(e) = store.set(KEY, &serde_json::to_string(r.waiting()).unwrap_or_default()) {
+            if let Err(e) = save_waits(&store, &r) {
                 eprintln!("kolux-rs: resume waits not saved: {e}");
             }
         }
     }
     Some(out)
+}
+
+fn save_waits(store: &crate::state::Store, r: &Resumes) -> rusqlite::Result<()> {
+    store.set(KEY, &serde_json::to_string(r.waiting()).unwrap_or_default())
 }
 
 /// The switch, read again right before anything is typed.
@@ -179,9 +183,14 @@ pub fn switched(app: &tauri::AppHandle, on: bool) {
     }
 }
 
+/// The saved waits; an unreadable list is not saved over (row 881).
+fn held_waits(store: &crate::state::Store) -> Vec<Waiting> {
+    crate::orchestration::kept::or_default_held(store, KEY)
+}
+
 /// Loads the previous run's waits.
 pub fn restore_from(app: &tauri::AppHandle, store: &crate::state::Store) {
-    let list: Vec<Waiting> = crate::orchestration::kept::or_default_held(store, KEY);
+    let list = held_waits(store);
     if !list.is_empty() {
         with(app, |r| r.restore(list, crate::claude_key::now_ms()));
     }
@@ -224,6 +233,21 @@ mod tests {
 
     fn limit(kind: &str, used: f64, resets_at: Option<i64>) -> Limit {
         Limit { kind: kind.into(), used_percent: used, resets_at }
+    }
+
+    #[test]
+    fn card16c_waits_that_could_not_be_read_or_kept_aside_are_never_saved_over() {
+        let dir = std::env::temp_dir().join(format!("krs-resume-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        let broken = "[{\"pane_key\": 3, tru";
+        store.set(KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(held_waits(&store).is_empty(), "the caller still starts with nothing waiting");
+        assert!(save_waits(&store, &Resumes::default()).is_err(), "the blind save after the failed read is refused");
+        assert_eq!(store.get(KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

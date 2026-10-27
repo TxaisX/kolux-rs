@@ -313,7 +313,7 @@ pub fn file_stamps(paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fen
 /// ACCT-055: Open a file shows the system picker here, so only the file the user chose is
 /// granted (never its folder); none when the picker was cancelled.
 #[tauri::command]
-pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Option<String>, String> {
+pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let mut pick = app.dialog().file().set_title("Open a file");
     if let Some(dir) = default_path {
@@ -321,16 +321,20 @@ pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fenc
     }
     let Some(chosen) = pick.blocking_pick_file() else { return Ok(None) };
     let path = chosen.into_path().map_err(|e| e.to_string())?;
-    let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(Some(finish_pick(&fence, &store, &path)))
+    finish_pick(&fence, &store, &git, &path).map(Some)
 }
 
-/// A grant that could not be saved (a poisoned grants key) still holds in memory this run, so the pick stands.
-fn finish_pick(fence: &crate::fence::Fence, store: &crate::state::Store, path: &Path) -> String {
-    if let Err(e) = fence.grant(path, store) {
+/// A pick the fence refuses outright (share, no drive, unresolvable, not a file) is an Err. A grant
+/// that only failed to save (a poisoned grants key) still holds in memory this run, so the pick stands.
+fn finish_pick(fence: &crate::fence::Fence, store: &std::sync::Mutex<crate::state::Store>, git: &crate::git::Git, path: &Path) -> Result<String, String> {
+    let granted = fence.grant(path, &*store.lock().map_err(|e| e.to_string())?);
+    let picked = path.to_string_lossy().into_owned();
+    if let Err(e) = granted {
+        // grant only touches memory before its save, so a live grant means the save was what failed.
+        fence.allow(&picked, store, git, true).map_err(|_| e.clone())?;
         eprintln!("kolux-rs: the picked file's grant was not saved: {e}");
     }
-    path.to_string_lossy().into_owned()
+    Ok(picked)
 }
 
 /// The worktree's markdown files for the Mod+Shift+O picker (EDIT-012), at most 2000 of them.
@@ -786,10 +790,25 @@ mod tests {
         store.lock().unwrap().set("file_grants", "[\"C:/picked.txt\", tru").unwrap();
         crate::orchestration::kept::refuse_copies(&db);
         let fence = crate::fence::Fence::load(&store);
+        let git = crate::git::Git { version: String::new() };
         let picked = d.join("picked.txt");
         fs::write(&picked, "p").unwrap();
-        let got = finish_pick(&fence, &store.lock().unwrap(), &picked);
+        let got = finish_pick(&fence, &store, &git, &picked).unwrap();
         assert_eq!(got, picked.to_string_lossy());
+        assert!(fence.allow(&got, &store, &git, true).is_ok(), "the grant lives in memory this run");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn card16c_a_pick_the_fence_refuses_is_an_error_not_a_returned_path() {
+        let d = temp_dir("pick-refused");
+        let store = std::sync::Mutex::new(crate::state::Store::open(&d.join("data")).unwrap());
+        let fence = crate::fence::Fence::load(&store);
+        let git = crate::git::Git { version: String::new() };
+        let share = Path::new(r"\\server\share\a.txt");
+        assert!(finish_pick(&fence, &store, &git, share).is_err(), "a share");
+        assert!(finish_pick(&fence, &store, &git, &d.join("gone.txt")).is_err(), "a path that does not resolve");
+        assert!(finish_pick(&fence, &store, &git, &d).is_err(), "a folder is not grantable");
         let _ = fs::remove_dir_all(&d);
     }
 
