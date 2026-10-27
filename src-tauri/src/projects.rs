@@ -125,22 +125,22 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     let mut projects = load_projects_for_write(store)?;
     let gone: Vec<String> = projects.iter().filter(|p| ids.contains(&p.id)).map(|p| p.path.clone()).collect();
     projects.retain(|p| !ids.contains(&p.id));
-    // Empty runs of the two cleanups below read what they will touch (kept::load keeps a corrupt blob
-    // aside when the copy succeeds), so a refused read stops here with the project still listed.
-    crate::folder_projects::unflag(store, &[])?;
-    crate::setup::prune_setup(store, &[], &[])?;
-    save_projects(store, &projects)?;
+    // Row 890: every read comes first and every write lands in one transaction, so a failure
+    // anywhere leaves the project listed with its icon, folder flag and setup state untouched.
+    let mut writes = vec![(PROJECTS_KEY.to_string(), serde_json::to_string(&projects).map_err(|e| e.to_string())?)];
     // PROJ-019: a forgotten project's icon choice goes with it.
     let mut icons = project_icons(store);
     let before = icons.len();
     icons.retain(|id, _| !ids.contains(id));
     if icons.len() != before {
-        save_icons(store, &icons)?;
+        writes.push((ICONS_KEY.to_string(), serde_json::to_string(&icons).map_err(|e| e.to_string())?));
     }
     // PROJ-005: a folder project's flag goes with it.
-    crate::folder_projects::unflag(store, ids)?;
+    writes.extend(crate::folder_projects::unflag_write(store, ids)?);
     // PROJ-035: and so do its dismissed setup card and its saved local setup.
-    crate::setup::prune_setup(store, ids, &gone)
+    writes.extend(crate::setup::prune_setup_writes(store, ids, &gone)?);
+    let pairs: Vec<(&str, &str)> = writes.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    store.set_all(&pairs).map_err(|e| e.to_string())
 }
 
 /// PROJ-008: drops the retired suggested names kept for one workspaces folder.
@@ -5398,6 +5398,32 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         drop(conn);
         drop(store);
         let _ = fs::remove_dir_all(profile);
+    }
+
+    /// Row 890: a write that fails after the project list's own save used to leave the list without
+    /// the project but its icon, folder flag or setup state behind. All of them land together or none.
+    #[test]
+    fn row890_a_failing_cleanup_write_leaves_the_project_listed_and_everything_else_untouched() {
+        for (tag, key, value) in [("icon", "projectIcons", r#"{"p890":"icon:bug"}"#), ("folder", "folderProjects", r#"["p890"]"#), ("dismissed", "setupCardDismissed", r#"["p890","keep"]"#)] {
+            let profile = temp(&format!("row890-{tag}"));
+            let store = Store::open(&profile).unwrap();
+            let project = project_at("p890", &profile);
+            save_projects(&store, std::slice::from_ref(&project)).unwrap();
+            store.set(key, value).unwrap();
+            let before = store.get(PROJECTS_KEY).unwrap();
+            let conn = rusqlite::Connection::open(profile.join("state.db")).unwrap();
+            conn.execute_batch(&format!("CREATE TRIGGER no_cleanup BEFORE UPDATE ON kv WHEN NEW.key = '{key}' BEGIN SELECT RAISE(ABORT, 'disk full'); END;")).unwrap();
+            let err = forget_projects(&store, std::slice::from_ref(&project.id)).unwrap_err();
+            assert!(err.contains("disk full"), "{tag}: {err}");
+            assert_eq!(store.get(PROJECTS_KEY).unwrap(), before, "{tag}: the project is still listed, byte for byte");
+            assert_eq!(store.get(key).unwrap().as_deref(), Some(value), "{tag}: the failing key is untouched");
+            conn.execute_batch("DROP TRIGGER no_cleanup;").unwrap();
+            forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
+            assert!(load_projects(&store).is_empty(), "{tag}: a retry finishes the job");
+            drop(conn);
+            drop(store);
+            let _ = fs::remove_dir_all(profile);
+        }
     }
 
     /// The saved-setup half of row 882 (`prune_setup`): its key unreadable and the copy refused.

@@ -1042,12 +1042,26 @@ fn dismissed_ids(store: &crate::state::Store) -> Vec<String> {
 }
 
 /// A forgotten project's card state goes with it: its dismissal (by id) and its saved local setup
-/// (by the folder it lived in).
+/// (by the folder it lived in). Production goes through `prune_setup_writes`; this lands them alone.
+#[cfg(test)]
 pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]) -> Result<(), String> {
+    let writes = prune_setup_writes(store, ids, roots)?;
+    let pairs: Vec<(&str, &str)> = writes.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    store.set_all(&pairs).map_err(|e| e.to_string())
+}
+
+/// What `prune_setup` would save, as (key, value) pairs, so a caller can land them in the same
+/// transaction as its own writes (row 890). Only reads; a key with nothing to drop is left out.
+fn as_json<T: serde::Serialize>(v: &T) -> Result<String, String> {
+    serde_json::to_string(v).map_err(|e| e.to_string())
+}
+
+pub(crate) fn prune_setup_writes(store: &crate::state::Store, ids: &[String], roots: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
     let before: Vec<String> = crate::orchestration::kept::load(store, DISMISSED_KEY)?;
     let kept: Vec<String> = before.iter().filter(|i| !ids.contains(i)).cloned().collect();
     if kept.len() != before.len() {
-        store.set(DISMISSED_KEY, &serde_json::to_string(&kept).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        out.push((DISMISSED_KEY.to_string(), as_json(&kept)?));
     }
     let mut all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::load(store, LOCAL_KEY)?;
     let count = all.len();
@@ -1055,7 +1069,7 @@ pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]
         all.remove(&crate::projects::name_key(r));
     }
     if all.len() != count {
-        store.set(LOCAL_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        out.push((LOCAL_KEY.to_string(), as_json(&all)?));
     }
     // SET-033: its own policy and wait choice go with it
     let keys: Vec<String> = roots.iter().map(|r| crate::projects::name_key(r)).collect();
@@ -1063,21 +1077,21 @@ pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]
     let before = policies.len();
     policies.retain(|k, _| !keys.contains(k));
     if policies.len() != before {
-        put_repo_map(store, POLICIES_KEY, &policies)?;
+        out.push((POLICIES_KEY.to_string(), as_json(&policies)?));
     }
     let mut waits = repo_map_to_change::<bool>(store, WAITS_KEY)?;
     let before = waits.len();
     waits.retain(|k, _| !keys.contains(k));
     if waits.len() != before {
-        put_repo_map(store, WAITS_KEY, &waits)?;
+        out.push((WAITS_KEY.to_string(), as_json(&waits)?));
     }
     let mut modes = repo_map_to_change::<String>(store, MODES_KEY)?;
     let before = modes.len();
     modes.retain(|k, _| !keys.contains(k));
     if modes.len() != before {
-        put_repo_map(store, MODES_KEY, &modes)?;
+        out.push((MODES_KEY.to_string(), as_json(&modes)?));
     }
-    Ok(())
+    Ok(out)
 }
 
 pub fn card_dismissed(store: &crate::state::Store, project_id: &str) -> bool {
