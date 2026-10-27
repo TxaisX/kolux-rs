@@ -9,6 +9,7 @@ import { writerOf } from "./generate";
 import SearchPick from "../editor/SearchPick";
 import { needsOneClick, realPorts, startOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
+import { applyDraft, draftOffered, draftPrText } from "./prDraft";
 import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
 type Props = { dir: string; onCreated: (pr: Pr) => void };
@@ -23,6 +24,9 @@ export default function PrStart({ dir, onCreated }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [branches, setBranches] = useState<string[]>([]); // EDIT-048: the Base box suggests from these
+  const [aiOffered, setAiOffered] = useState(false); // GIT-024: the AI draft button follows the Source Control writer switches
+  const [writing, setWriting] = useState(false);
+  const [writeNote, setWriteNote] = useState<string | null>(null);
   const going = useOneClick(dir);
   const asking = useRef(dir);
   asking.current = dir;
@@ -43,6 +47,7 @@ export default function PrStart({ dir, onCreated }: Props) {
   useEffect(() => {
     setDraft(null);
     setSeen(null);
+    setWriteNote(null);
     void check();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir]);
@@ -65,6 +70,26 @@ export default function PrStart({ dir, onCreated }: Props) {
     if (!now || now.ready.reason !== null) return tick((n) => n + 1);
     setDraft({ title: "", body: "", base: (now.status.base ?? "").replace(/^origin\//, ""), draft: false });
     invoke<string[]>("worktree_branches", { path: dir }).then((b) => asking.current === dir && setBranches(b), () => setBranches([]));
+    setAiOffered(false);
+    setWriteNote(null);
+    void offerDraft();
+  };
+  const offerDraft = async () => {
+    const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => ({}));
+    const repo = await invoke<{ owner: string; name: string } | null>("scm_github_repo", { worktree: dir }).catch(() => null);
+    if (asking.current === dir) setAiOffered(draftOffered(settings, repo ? `${repo.owner}/${repo.name}` : null));
+  };
+  // GIT-024: the writer fills title and description; a failure is shown and the typed text stays.
+  const write = async (base: string) => {
+    setWriting(true);
+    setWriteNote(null);
+    const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => ({}));
+    const result = await draftPrText(dir, base.trim(), settings);
+    if (asking.current === dir) {
+      if (result.state === "failed") setWriteNote(result.message);
+      setDraft((cur) => cur && applyDraft(cur, result));
+    }
+    setWriting(false);
   };
   const create = async (d: Draft, push: "none" | "publish" | "push") => {
     setBusy(true);
@@ -118,6 +143,18 @@ export default function PrStart({ dir, onCreated }: Props) {
         <div className="scm-ask scm-pr" role="dialog" aria-label="Create pull request">
           <input className="field" aria-label="pull request title" placeholder="Title" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
           <textarea className="field multi" aria-label="pull request description" placeholder="Description" value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
+          {aiOffered && (
+            <div className="btn-row">
+              <button className="btn" data-pr-draft disabled={writing || busy || !draft.base.trim()} title="Write the title and description from this branch's changes" onClick={() => void write(draft.base)}>
+                {writing ? "Writing…" : "Write with AI"}
+              </button>
+            </div>
+          )}
+          {writeNote && (
+            <div className="note warn" role="status">
+              {writeNote}
+            </div>
+          )}
           <label className="scm-pr-base">
             <span>Base</span>
             <SearchPick items={branches} label="base branch" value={draft.base} onChange={(base) => setDraft({ ...draft, base })} />
@@ -130,7 +167,7 @@ export default function PrStart({ dir, onCreated }: Props) {
             <button className="btn primary" data-pr-create disabled={busy || !draft.title.trim() || !draft.base.trim()} title={!draft.title.trim() ? "Write a title first" : undefined} onClick={() => void create(draft, push)}>
               {busy ? "Creating…" : `${push === "none" ? "Create" : "Push and create"}${draft.draft ? " draft" : ""} pull request`}
             </button>
-            <button className="btn" onClick={() => setDraft(null)}>
+            <button className="btn" onClick={() => (setDraft(null), setWriteNote(null))}>
               Cancel
             </button>
           </div>
