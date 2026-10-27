@@ -393,8 +393,8 @@ tail=${JSON.stringify(tail)}`).toBe(true);
       }
     }
     const ms = performance.now() - t0;
-    // Notes the view cannot spell (a fence in an item, a blank line inside a list item) refuse more: random selections tear their fences. Ordinary notes mix several loose and nested lists now: 2% was the round 6 bar, 3% holds with the new shapes.
-    if (!R12) expect(refused, "refused on ordinary notes").toBeLessThanOrEqual(N / 35);
+    // Notes the view cannot spell (a fence in an item, a blank line inside a list item) refuse more: random selections tear their fences. Ordinary notes mix several loose and nested lists now: 2% was the round 6 bar, 3% held with the new shapes. Round 12: the invariant reads a 2-space sub-list by lines, so an edit that makes the view re-indent its siblings now refuses (it saved them respelt before): seeds 1-200 refuse 12-23 of 400, 6% bounds that.
+    if (!R12) expect(refused, "refused on ordinary notes").toBeLessThanOrEqual(N / 16);
     if (!R12) expect(refusedHard, "refused on notes with a nested fence or a loose nested list").toBeLessThanOrEqual(N / 8);
     // Shown with --silent=false: how often each path holds.
     console.log(`fuzz seed ${seed}${R12 ? " (round 12 shapes)" : ""}: invariant refusals ${placeStats.invariant}, ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, mismatched 0, ${ms.toFixed(0)} ms`);
