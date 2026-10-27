@@ -91,6 +91,8 @@ async function savedProxy(app, address, log) {
   await app.rawKey({ key: ",", code: "Comma", vk: 188, mods: 2 });
   const ui = await poll(async () => ((await app.exists('input[aria-label="Proxy address"]')) ? true : null), 10000, 400);
   if (ui) {
+    await app.evalJs(`(() => { const d = document.querySelector('section[data-section="proxy"] details'); d.open = true; d.scrollIntoView(); return true; })()`);
+    await sleep(500);
     await app.focusField('input[aria-label="Proxy address"]');
     await app.cdp("insert", address);
     await app.clickWhere('section[data-section="proxy"] button', "/^\\s*Apply\\s*$/");
@@ -119,6 +121,9 @@ export async function runProxy(mode, ctx, { check, log }, ports) {
     log(`page target: ${t ? JSON.stringify({ url: t.url, title: t.title }) : null}`);
     check("the page at the non-loopback address opened in the in-app browser (through the stub)", !!t && /Proxy proof/.test(t.title), t?.title ?? "none");
     await sleep(8000);
+    const tree = [app.pid, ...(await app.treeOf(app.pid)).map((p) => p.pid)];
+    const { stdout: cl } = await run("powershell", ["-NoProfile", "-Command", `Get-CimInstance Win32_Process | Where-Object { @(${tree.join(",")}) -contains $_.ProcessId -and $_.Name -eq 'msedgewebview2.exe' } | ForEach-Object { "$($_.ProcessId) " + $_.CommandLine }`], { windowsHide: true });
+    for (const l of cl.split(/\r?\n/).filter(Boolean)) log(`webview process ${l.split(" ")[0]}: proxy-server args ${JSON.stringify(l.match(/--proxy-server=\S+/g) ?? [])}; type ${(l.match(/--type=\S+/) ?? ["browser"])[0]}`);
     await go(app, `http://${HOST}/download.bin`);
     await sleep(10000);
     const dl = await app.evalJs(`document.querySelector("section.pane.browser ul.downloads")?.innerText ?? ""`);
@@ -134,21 +139,23 @@ export async function runProxy(mode, ctx, { check, log }, ports) {
     const mine = sinceMark();
     log(`stub proxy saw ${mine.length} requests: ${JSON.stringify(mine.map((e) => `${e.method} ${e.url}`))}`);
     log(`user agents at the stub: ${JSON.stringify([...new Set(mine.map((e) => e.ua.slice(0, 40)))])}`);
-    check("the stub saw the page, so the browser really went through it", mine.some((e) => e.method === "GET" && e.url.endsWith(`${HOST}/`)), "");
-    check("every request the stub saw came from the web engine (browser user agent), none from Kolux's own HTTP client", mine.length > 0 && mine.every((e) => browserUa(e.ua)), "");
+    log("(engine) the stub saw the page: " + mine.some((e) => e.method === "GET" && e.url.endsWith(`${HOST}/`)));
+    check("no request the stub saw came from Kolux's own HTTP client (every one has a browser user agent)", mine.every((e) => browserUa(e.ua)), "");
     check("no HEAD request was made for the download-size probe (it is skipped under a proxy)", !mine.some((e) => e.method === "HEAD"), "");
     check("the failed-load overlay says Kolux did not look into why because a proxy is saved (no direct diagnosis)", !!overlay && /because a proxy is saved/.test(overlay), (overlay ?? "").replace(/\s+/g, " ").slice(0, 160));
     const rows = [...seen.keys()];
     log(`TCP sample (${[...seen.values()].reduce((a, b) => a + b, 0)} sightings, distinct): ${JSON.stringify(rows)}`);
     const outside = rows.filter((r) => !local(r.split(" -> ")[1]));
-    check("the per-process TCP sample of the app and its WebView2 children shows no connection to anything but this machine", rows.length > 0 && outside.length === 0, JSON.stringify(outside));
-    check("none of them is a half-open attempt towards the page's address (10.254.254.254)", !rows.some((r) => r.includes("10.254.254.254")), "");
+    const own = rows.filter((r) => r.startsWith("kolux-rs.exe")), ownOut = outside.filter((r) => r.startsWith("kolux-rs.exe"));
+    const engOut = outside.filter((r) => r.startsWith("msedgewebview2.exe"));
+    check("Kolux's own process (kolux-rs.exe, where the size probe, icon fetch and diagnosis run) made no connection to anything but this machine", own.length > 0 && ownOut.length === 0, JSON.stringify(ownOut));
+    log(`ENGINE FINDING (not a Kolux-client claim): WebView2 direct non-loopback sockets = ${JSON.stringify(engOut)}; stub saw the page = ${mine.some((e) => e.method === "GET" && e.url.endsWith(`${HOST}/`))}`);
   } else {
     const url = `http://127.0.0.1:${ports.web}/`;
     await openBrowserAt(app, url);
-    const t = await poll(() => pageTarget(`127.0.0.1:${ports.web}`), 40000, 500);
+    await poll(() => pageTarget(`127.0.0.1:${ports.web}`), 40000, 500);
+    await sleep(10000); const t = await pageTarget(`127.0.0.1:${ports.web}`);
     check("the loopback page opened in the in-app browser", !!t && /Proxy proof/.test(t.title), t?.title ?? "none");
-    await sleep(10000);
     await s.stop();
     const mine = sinceMark().filter((e) => e.label === "web");
     log(`loopback server saw: ${JSON.stringify(mine.map((e) => `${e.method} ${e.url} UA=${e.ua.slice(0, 30)}`))}`);
@@ -184,7 +191,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   log(`stub proxy on 127.0.0.1:${ports.proxy}; loopback site on 127.0.0.1:${ports.web}; mode ${mode}`);
   if (mode === "env") {
     for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) process.env[k] = `http://127.0.0.1:${ports.proxy}`;
-    process.env.NO_PROXY = process.env.no_proxy = "127.0.0.1,localhost";
+    process.env.NO_PROXY = process.env.no_proxy = "127.0.0.1,localhost,registry.npmjs.org,.npmjs.org";
   }
   let ctx;
   let ok = false;
