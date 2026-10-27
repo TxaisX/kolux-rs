@@ -1,5 +1,5 @@
 /* T-142: the workspace board (PROJ-085, VIEW-027). */
-.board { display: flex; flex-direction: column; width: min(96vw, 1600px); height: min(88vh, 900px); background: var(--pane-bg); border: 1px solid var(--line); border-radius: 8px; outline: none; min-width: 0; }
+.ws-board { display: flex; flex-direction: column; width: min(96vw, 1600px); height: min(88vh, 900px); background: var(--pane-bg); border: 1px solid var(--line); border-radius: 8px; outline: none; min-width: 0; }
 .board-head { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line-subtle); }
 .board-head h2 { margin: 0; font-size: 14px; flex: none; }
 .board-search { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
