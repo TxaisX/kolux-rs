@@ -863,9 +863,72 @@ pub fn hand_off(from: &Url, location: Option<&str>, app: Option<&Url>) -> Option
 
 /// T-323-c: whether an icon may be fetched. The icon clients connect directly (their public-only name
 /// lookup would not see a proxy's side), so a saved proxy, or one that cannot be read, means no icon
-/// rather than a connection around the user's proxy.
+/// rather than a connection around the user's proxy. An empty setting means "the system's proxy"
+/// (OD-18): it allows the fetch only while [`system_proxy_in_use`] says there is none (T-323-e).
 pub fn icon_fetch_allowed(saved: &Result<Option<String>, String>) -> bool {
-    matches!(saved, Ok(p) if matches!(proxy_of(p.as_deref()), Ok(None)))
+    matches!(saved, Ok(p) if matches!(proxy_of(p.as_deref()), Ok(None))) && !system_proxy_in_use()
+}
+
+/// T-323-e: whether the system names a proxy: the Windows per-user proxy (`ProxyEnable` 1 with a
+/// `ProxyServer`) or a PAC script (`AutoConfigURL`), or a proxy environment variable on any platform.
+/// ponytail: "Automatically detect settings" (WPAD) alone is not counted: it is on by default on most
+/// Windows machines, so failing closed on it would remove icons for nearly everyone. A WPAD-only
+/// proxy still goes unseen, as do macOS and Linux desktop proxy settings (no process spawned per check).
+pub(crate) fn system_proxy_from(enable: Option<u32>, server: Option<&str>, pac: Option<&str>, env: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |v: Option<&str>| v.is_some_and(|v| !v.trim().is_empty());
+    (enable == Some(1) && set(server))
+        || set(pac)
+        || ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"].iter().any(|n| set(env(n).as_deref()))
+}
+
+/// The machine's proxy settings, read now. A read error or a missing key (the normal case) is "not in use".
+fn read_system_proxy() -> bool {
+    #[cfg(windows)]
+    let (enable, server, pac) = {
+        use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+        const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+        let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let (key, name) = (wide(KEY), wide("ProxyEnable"));
+        let (mut value, mut bytes) = (0u32, 4u32);
+        // SAFETY: both strings are NUL-terminated and outlive the call; `value` holds the 4 bytes a DWORD needs.
+        let rc = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_DWORD, std::ptr::null_mut(), (&mut value as *mut u32).cast(), &mut bytes) };
+        let reg = |v: &str| crate::agents::registry_string(HKEY_CURRENT_USER, KEY, v);
+        ((rc == 0).then_some(value), reg("ProxyServer"), reg("AutoConfigURL"))
+    };
+    #[cfg(not(windows))]
+    let (enable, server, pac) = (None, None, None);
+    system_proxy_from(enable, server.as_deref(), pac.as_deref(), |n| std::env::var(n).ok())
+}
+
+/// [`read_system_proxy`], remembered for 30 s: icons and HEADs fire often and there is no watcher.
+#[cfg(not(test))]
+fn system_proxy_in_use() -> bool {
+    static SEEN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    match *seen {
+        Some((at, v)) if at.elapsed() < Duration::from_secs(30) => v,
+        _ => {
+            let v = read_system_proxy();
+            *seen = Some((Instant::now(), v));
+            v
+        }
+    }
+}
+
+// Tests never read this machine's registry or environment: the answer is set per test thread.
+#[cfg(test)]
+thread_local! {
+    static SYSTEM_PROXY_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn system_proxy_in_use() -> bool {
+    SYSTEM_PROXY_FOR_TEST.with(|c| c.get())
+}
+
+#[cfg(test)]
+fn set_system_proxy_for_test(on: bool) {
+    SYSTEM_PROXY_FOR_TEST.with(|c| c.set(on));
 }
 
 /// The sealed proxy setting as saved (None without a store or a value).
@@ -2037,7 +2100,7 @@ fn io_kind(e: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> 
 /// the public-only client otherwise, both without a proxy and under the icon redirect rule. Nothing
 /// of the body is read. This one asks unconditionally; `head` is the way in for the app, because
 /// it never goes around a saved proxy (T-323-d): a connection Kolux makes itself is made direct, so
-/// under a saved (or unreadable, or unusable) proxy only this machine's own addresses are asked
+/// under a saved (or unreadable, or unusable, or in-use system) proxy only this machine's own addresses are asked
 /// (a proxy never carries them: the dev-server check, a download from `localhost`); every other
 /// address, the local network included, is skipped with [`PROXY_SKIPPED`] and no connection
 /// (the browser pane sets no bypass list, so its own local-network traffic goes through the proxy).
@@ -2052,7 +2115,7 @@ pub async fn head_with(clients: &IconClients, url: &Url, near: bool, wait: Durat
 /// T-323-d: what a skipped request says; the diagnosis tells it from a real failure by this text.
 pub const PROXY_SKIPPED: &str = "skipped: a proxy is saved, so Kolux made no direct request";
 
-/// Whether the request may be made at all: without a saved proxy always, with one (or one that cannot
+/// Whether the request may be made at all: without a proxy (saved, or the system's when the setting is empty: T-323-e) always, with one (or one that cannot
 /// be read or used) only to this machine's own addresses, which no proxy carries.
 pub fn head_gate(saved: &Result<Option<String>, String>, url: &Url) -> Result<(), Failed> {
     if icon_fetch_allowed(saved) || url.host_str().is_some_and(popup::loopback) {
@@ -2915,6 +2978,68 @@ mod tests {
         assert_eq!(ask(&free, &lan, true), seen, "without a proxy the request goes as before");
         assert_eq!(ask(&unusable, &u(&format!("http://localhost:{port}/")), true), seen);
         server.join().unwrap();
+    }
+
+    // T-323-e: an EMPTY setting means "the system's proxy" (OD-18): when one is in use, the gate fails closed too.
+    #[test]
+    fn t323e_system_proxy_decision_rows() {
+        let none = |_: &str| None;
+        let env = |name: &'static str| move |n: &str| (n == name).then(|| "http://proxy.test:3128".to_string());
+        assert!(system_proxy_from(Some(1), Some("proxy.test:3128"), None, none), "enabled with a server");
+        assert!(!system_proxy_from(Some(1), Some(""), None, none), "enabled, no server");
+        assert!(!system_proxy_from(Some(1), Some("  "), None, none), "enabled, blank server");
+        assert!(!system_proxy_from(Some(0), Some("proxy.test:3128"), None, none), "a server left behind, switched off");
+        assert!(!system_proxy_from(None, Some("proxy.test:3128"), None, none), "no ProxyEnable value");
+        assert!(system_proxy_from(None, None, Some("http://wpad.corp/proxy.pac"), none), "a PAC script");
+        assert!(system_proxy_from(Some(0), None, Some("http://wpad.corp/proxy.pac"), none), "a PAC script needs no ProxyEnable");
+        assert!(!system_proxy_from(None, None, Some(" "), none), "a blank PAC address");
+        assert!(!system_proxy_from(None, None, None, none), "nothing set (WPAD auto-detect alone is not counted)");
+        for name in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+            assert!(system_proxy_from(None, None, None, env(name)), "{name}");
+        }
+        assert!(!system_proxy_from(None, None, None, |_| Some(String::new())), "an empty variable is not a proxy");
+        assert!(!system_proxy_from(None, None, None, env("NO_PROXY")), "NO_PROXY is not a proxy");
+        // The real reader never panics, whatever this machine has (a missing key is the normal case).
+        let _ = read_system_proxy();
+    }
+
+    #[test]
+    fn t323e_an_empty_setting_with_a_system_proxy_makes_no_direct_request() {
+        use std::io::{Read, Write};
+        let u = |s: &str| Url::parse(s).unwrap();
+        let empty: Result<Option<String>, String> = Ok(None);
+        let blank: Result<Option<String>, String> = Ok(Some("  ".into()));
+        set_system_proxy_for_test(false);
+        assert!(icon_fetch_allowed(&empty) && icon_fetch_allowed(&blank) && head_gate(&empty, &u("https://example.com/")).is_ok());
+        set_system_proxy_for_test(true);
+        assert!(!icon_fetch_allowed(&empty) && !icon_fetch_allowed(&blank), "a system proxy closes the icon gate");
+        for own in ["http://127.0.0.1:3000/", "http://localhost:3000/", "http://[::1]:3000/"] {
+            assert!(head_gate(&empty, &u(own)).is_ok(), "{own} is this machine's: a proxy never carries it");
+        }
+        for other in ["https://example.com/a.zip", "http://192.168.1.5/", "http://nas.lan/"] {
+            let f = head_gate(&empty, &u(other)).unwrap_err();
+            assert!(proxy_skipped(&f), "{other} must be skipped");
+        }
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        l.set_nonblocking(true).unwrap();
+        let clients = icon_clients(None, |_| Ok(vec![IpAddr::from([127, 0, 0, 1])])).unwrap();
+        let ask = |saved: &Result<Option<String>, String>, url: &Url, near: bool| tauri::async_runtime::block_on(head_unless_proxied(saved, &clients, url, near, DIAGNOSE_WAIT));
+        let public = u(&format!("http://files.example.com:{port}/big.zip"));
+        assert!(proxy_skipped(&ask(&empty, &public, false).unwrap_err()));
+        let icon = u(&format!("http://files.example.com:{port}/favicon.ico"));
+        assert_eq!(tauri::async_runtime::block_on(fetch_icon_unless_proxied(&empty, &clients, false, icon, None)), None);
+        assert!(l.accept().is_err(), "a connection reached the host under the system proxy");
+        l.set_nonblocking(false).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = s.read(&mut [0u8; 4096]);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\n");
+        });
+        let seen = Ok(Answer { status: 200, length: Some(42) });
+        assert_eq!(ask(&empty, &u(&format!("http://127.0.0.1:{port}/")), true), seen, "a loopback address still connects");
+        server.join().unwrap();
+        set_system_proxy_for_test(false);
     }
 
     #[test]

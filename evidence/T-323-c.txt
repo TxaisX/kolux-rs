@@ -63,3 +63,23 @@ LIVE PROOF PENDING (batched): Settings > save an HTTP proxy address (any unreach
   blocked/refused public address: the failure overlay says "...Kolux did not look into why, because a proxy is saved." (not a
   cause). Start a download from a public site: its row shows no total size, the download itself goes through the proxy. With
   the proxy cleared, the same page shows a real cause (refused/timeout/...) and the download shows its size.
+
+T-323-e (lane browser, branch lane/browser-proxy; after-list row 908): an EMPTY proxy setting means "the system's proxy" (OD-18).
+  icon_fetch_allowed (and head_gate through it) now also fails closed while system_proxy_in_use() is true, so icon fetches and
+  Kolux's own HEAD requests no longer go direct on a machine whose browser pane goes through a system proxy.
+  IN USE: Windows HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings: ProxyEnable DWORD 1 with a non-empty ProxyServer,
+  OR a non-empty AutoConfigURL (PAC). Every platform: a non-empty HTTPS_PROXY / HTTP_PROXY / ALL_PROXY (either case).
+  NOT COUNTED: "Automatically detect settings" (WPAD) alone (on by default on most Windows machines; failing closed would remove icons
+  for nearly everyone); a read error or missing key = not in use. Answer cached 30 s (no watcher).
+  THE REST (after-list LOW row): macOS (scutil) and Linux desktop (gsettings) proxy settings, and WPAD-only proxies: reading them
+  needs a process per check (EDR rule in v3-common), so they stay uncovered; their env vars are covered.
+  Pure decision: system_proxy_from(enable, server, pac, env). Tests: t323e_system_proxy_decision_rows (9 registry/PAC rows, 6 env names,
+  empty var, NO_PROXY), t323e_an_empty_setting_with_a_system_proxy_makes_no_direct_request (system proxy injected per test thread, real
+  registry never read in tests: empty and blank setting close the icon gate, public/LAN head skipped with 0 connections, icon fetch
+  None, loopback still connects). Written before the code (did not compile until system_proxy_from existed; no separate red run).
+  PROXY_SKIPPED text unchanged (loadState.ts matches the skipped kind, wording "a proxy is saved" is slightly off for the system proxy).
+GATES: cargo test --lib browser 227 ok (225 + 2 new); cargo clippy --all-targets -D warnings clean; plan-check OK.
+LIVE PROOF PENDING (batched): on a machine with Windows Settings > Network > Proxy > "Use a proxy server" on (any unreachable address),
+  proxy field in Kolux empty: open a blocked/refused public address in the built-in browser: the overlay says Kolux did not look
+  into why, because a proxy is saved; a download shows no size; no page icons fetch. Switch the Windows proxy off (or clear the
+  environment variable), wait 30 s: icons and download sizes return.
