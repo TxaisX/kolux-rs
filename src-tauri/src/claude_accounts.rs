@@ -241,6 +241,8 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     let creds = dir.join(CREDENTIALS);
     let vault = profile.join(secrets::VAULT).join(format!("claude-{id}.json"));
     let before = read(&creds);
+    // Row 938: a live file that exists but cannot be read (a lock, bad UTF-8) gives no `before`, yet it may be the only copy of the earlier login.
+    let had_live = creds.exists();
     let undo = |before: &Option<String>| {
         if existing {
             let earlier = before.clone().or_else(|| secrets::read_file(&vault, profile).ok().flatten());
@@ -248,8 +250,9 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
                 Some(e) => {
                     let _ = fs::write(&creds, e);
                 }
-                // Row 932: no earlier bytes anywhere, so the live file can only hold the refused login.
-                None => remove_refused_login(&creds),
+                // Row 932: no earlier bytes anywhere, so the live file can only hold the refused login; row 938: unless a live file was there before the login.
+                None if !had_live => remove_refused_login(&creds),
+                None => {}
             }
         } else {
             let _ = fs::remove_dir_all(&dir);
@@ -316,7 +319,7 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         // Row 932: unless the earlier sealed bytes are still in memory; those are opened and written live instead.
         if existing && before.is_none() && !restored {
             let back = matches!(&prior, Some(Some(bytes)) if write_live_from_sealed(&creds, bytes));
-            if !back {
+            if !back && !had_live {
                 remove_refused_login(&creds);
             }
         } else {
@@ -976,6 +979,42 @@ mod tests {
         assert_eq!(fs::read(&vault).unwrap(), orphan, "the orphan is byte-identical");
         assert!(dir.join(secrets::VAULT).join(format!("claude-{}.json", got.id)).is_file());
         assert_eq!(load(&store.lock().unwrap()).len(), 2);
+    }
+
+    // Row 938 (1): a live file that exists but cannot be read is the only copy of the earlier login, so a login that never started must not delete it.
+    #[test]
+    fn row938_a_not_started_re_sign_in_leaves_an_unreadable_live_file_alone() {
+        let (dir, store) = profile("row938-live");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::remove_file(&vault).unwrap();
+        let bytes = [0xffu8, 0xfe, 0x00, 0x80, b'x'];
+        fs::write(&live, bytes).unwrap();
+        let got = sign_in(&store, &dir, "a1", true, 9, |_: &Path| (String::new(), Ended::NotStarted("no claude".into())), |_| None);
+        assert!(got.is_err());
+        assert_eq!(fs::read(&live).unwrap(), bytes, "the unreadable live file is byte-identical");
+    }
+
+    // Row 938 (1): the same file survives the refused-save path, where no earlier bytes can be put back.
+    #[test]
+    fn row938_a_refused_save_leaves_an_unreadable_live_file_alone() {
+        let (dir, store) = profile("row938-refused");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::remove_file(&vault).unwrap();
+        let bytes = [0xffu8, 0xfe, 0x00, 0x80, b'x'];
+        fs::write(&live, bytes).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        // The login leaves the unreadable file as it is and the list breaks as it ends.
+        let login = |_: &Path| {
+            store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+            crate::orchestration::kept::refuse_copies(&dir);
+            (String::new(), Ended::Exited(Some(0)))
+        };
+        let _ = sign_in(&store, &dir, "a1", true, 9, login, |_| Some(SIGNED_IN.into()));
+        assert_eq!(fs::read(&live).unwrap(), bytes, "the unreadable live file is byte-identical");
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
