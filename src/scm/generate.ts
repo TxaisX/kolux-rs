@@ -65,6 +65,10 @@ export function writerOf(s: Record<string, unknown>): Writer {
   return { ...DEFAULT_WRITER, agent, model: text(s[WRITER_MODEL_KEY]) || null, effort: text(s[WRITER_EFFORT_KEY]) || null, instructions };
 }
 
+/** GIT-019 / row 76: can this writer actually run: a recipe, a custom command, or an agent that is installed. One rule for the panel and the pull request composer. */
+export const writerUsable = (writer: Writer, agents: ReadonlyArray<{ id: string; installed: boolean }>, recipe: Recipe | null): boolean =>
+  recipe !== null || writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed));
+
 /** The arguments the back end takes to know who writes. */
 export const writerArgs = (w: Writer) => (w.mode === "custom" ? { command: w.command } : w.mode === "agent" ? { agent: w.agent, model: w.model, effort: w.effort } : {});
 

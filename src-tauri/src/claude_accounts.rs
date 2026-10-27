@@ -63,28 +63,13 @@ pub fn load(store: &Store) -> Vec<Account> {
     load_kept(store, LIST_KEY)
 }
 
-/// Row 193: the saved value under `key`, or its default. A value that no longer reads is never
-/// loaded as empty and then saved over: its bytes are copied to `<key>.corrupt-<ms>` (a free name,
-/// -2, -3 on a same-millisecond clash) in the same transaction that starts `key` fresh, so the
-/// original survives and the next read does not set anything aside again. Absent and cleared
-/// (`null`) values are the default with no copy. A store that cannot be read at all gives the
-/// default and changes nothing. Coordinator default (Txais may overrule): keep aside and start
-/// fresh, rather than refusing every save.
+/// Row 193: the saved value under `key`, or its default. A value that no longer reads is kept
+/// aside (`<key>.corrupt-<ms>`) and the key starts fresh, in one step of the store that never
+/// replaces an existing copy or a value that changed since it was read (row 888); a store that
+/// cannot be read gives the default and changes nothing. Coordinator default (Txais may overrule):
+/// keep aside and start fresh, rather than refusing every save.
 pub(crate) fn load_kept<T: serde::de::DeserializeOwned + serde::Serialize + Default>(store: &Store, key: &str) -> T {
-    let Some(text) = store.get(key).ok().flatten().filter(|t| t.trim() != "null") else { return T::default() };
-    if let Ok(v) = serde_json::from_str(&text) {
-        return v;
-    }
-    let fresh = T::default();
-    let (Ok(fresh_text), base) = (serde_json::to_string(&fresh), format!("{key}.corrupt-{}", crate::artifacts::now_ms())) else { return fresh };
-    let mut aside = base.clone();
-    let mut n = 1;
-    while store.get(&aside).ok().flatten().is_some() {
-        n += 1;
-        aside = format!("{base}-{n}");
-    }
-    let _ = store.set_all(&[(aside.as_str(), text.as_str()), (key, fresh_text.as_str())]);
-    fresh
+    crate::orchestration::kept::or_default(store, key)
 }
 
 fn save(store: &Store, list: &[Account]) -> Result<(), String> {
@@ -238,9 +223,16 @@ pub fn login_command(program: &Path, dir: &Path) -> CommandBuilder {
 #[allow(clippy::too_many_arguments)]
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended), status: impl FnOnce(&Path) -> Option<String>) -> Result<Account, Attention> {
     let dir = profile.join(FOLDER).join(id);
+    let (id, dir) = if existing {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        (id.to_string(), dir)
+    } else {
+        let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
+        claim_new_folder(profile, FOLDER, "claude", &listed, id)?
+    };
+    let id = id.as_str();
     let creds = dir.join(CREDENTIALS);
     let vault = profile.join(secrets::VAULT).join(format!("claude-{id}.json"));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let before = read(&creds);
     let undo = |before: &Option<String>| {
         if existing {
@@ -273,19 +265,103 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
             return Err(Attention::new("unknown", format!("{who} is already in the list, so nothing was added.")));
         }
     }
+    // Row 921: the sealed copy as it was (None = unreadable, Some(None) = absent), put back if the list save is refused.
+    let prior_vault = existing.then(|| match fs::read(&vault) {
+        Ok(b) => Some(Some(b)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+        Err(_) => None,
+    });
     if let Err(e) = secrets::write_file(&vault, &fresh) {
         undo(&before);
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
     let account = Account { id: id.into(), email, organization, config_dir: dir.to_string_lossy().into_owned(), last_sign_in: now, stale: false };
     let store = store.lock().map_err(|e| e.to_string())?;
-    let mut list = load(&store);
-    match list.iter_mut().find(|a| a.id == id) {
-        Some(a) => *a = account.clone(),
-        None => list.push(account.clone()),
+    // Row 916: a list that cannot be read or saved leaves no credentials behind for an account that was never listed.
+    let listed = (|| {
+        let mut list: Vec<Account> = crate::orchestration::kept::load(&store, LIST_KEY)?;
+        match list.iter_mut().find(|a| a.id == id) {
+            Some(a) => *a = account.clone(),
+            None => list.push(account.clone()),
+        }
+        save(&store, &list)
+    })();
+    if let Err(e) = listed {
+        // Row 923: the vault goes back first, so undo's fallback copy to the live file reads the earlier credentials.
+        let restored = match prior_vault.flatten() {
+            _ if !existing => {
+                remove_sealed_copy(&vault);
+                false
+            }
+            Some(Some(bytes)) => restore_sealed_copy(&vault, &bytes),
+            Some(None) => {
+                remove_sealed_copy(&vault);
+                false
+            }
+            None => false,
+        };
+        // Row 929: with no live file and no earlier bytes put back, the live file can only hold the refused login, so it goes.
+        if existing && before.is_none() && !restored {
+            if let Err(e) = fs::remove_file(&creds) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("kolux-rs: could not delete the refused sign-in {} ({:?})", creds.display(), e.kind());
+                }
+            }
+        } else {
+            undo(&before);
+        }
+        return Err(e.into());
     }
-    save(&store, &list)?;
     Ok(account)
+}
+
+/// Row 921: makes the folder of a NEW account (`agent` is the sealed copy's name prefix) and never reuses a taken id (listed, a folder or a sealed copy
+/// already there); a taken id moves to the next free one, so a refused sign-in can only delete what it made.
+pub(crate) fn claim_new_folder(profile: &Path, folder: &str, agent: &str, listed: &[String], id: &str) -> Result<(String, PathBuf), String> {
+    let parent = profile.join(folder);
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+    let start = u128::from_str_radix(id, 16).ok();
+    for step in 0..CLAIM_TRIES {
+        let candidate = match (step, start) {
+            (0, _) => id.to_string(),
+            (_, Some(n)) => format!("{:x}", n + u128::from(step)),
+            _ => break,
+        };
+        if listed.contains(&candidate) || profile.join(secrets::VAULT).join(format!("{agent}-{candidate}.json")).exists() {
+            continue;
+        }
+        let dir = parent.join(&candidate);
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok((candidate, dir)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("Kolux could not find a free folder for the new account; try again.".into())
+}
+
+const CLAIM_TRIES: u32 = 8;
+
+/// Row 923: puts earlier sealed bytes back through a temp file and a rename, so a crash never leaves a truncated copy; a failure is logged by path and kind only. True when the bytes are back.
+fn restore_sealed_copy(path: &Path, bytes: &[u8]) -> bool {
+    let tmp = path.with_extension("tmp");
+    match fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, path)) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("kolux-rs: could not put the sealed copy back {} ({:?})", path.display(), e.kind());
+            let _ = fs::remove_file(&tmp);
+            false
+        }
+    }
+}
+
+/// Deletes a sealed vault copy; a copy that is already gone is fine, any other failure is logged by path only.
+pub(crate) fn remove_sealed_copy(path: &Path) {
+    if let Err(e) = fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("kolux-rs: could not delete the sealed copy {} ({:?})", path.display(), e.kind());
+        }
+    }
 }
 
 /// The one sign-in that may run, and what the last one left behind.
@@ -456,7 +532,7 @@ pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Sto
 /// hands new panes back to the system default when it was the active one. Only a folder inside
 /// Kolux's own accounts folder is ever deleted.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
-    let mut list = load(store);
+    let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(at) = list.iter().position(|a| a.id == id) else {
         return Err("That Claude account is no longer listed.".into());
     };
@@ -486,7 +562,7 @@ pub fn claude_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store
 
 /// Marks an account stale or fresh (ACCT-012); true when that changed anything.
 pub fn mark_stale(store: &Store, id: &str, stale: bool) -> Result<bool, String> {
-    let mut list = load(store);
+    let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(a) = list.iter_mut().find(|a| a.id == id && a.stale != stale) else {
         return Ok(false);
     };
@@ -655,6 +731,201 @@ mod tests {
             crate::claude_key::mark_refused(&store, now);
         }
         assert!(expired(&store));
+    }
+
+    // Row 888: the account list goes through the store's own keep-aside step, once, and resets the key.
+    #[test]
+    fn row888_an_undecodable_account_list_is_kept_aside_exactly_once_and_the_key_is_reset() {
+        let (_dir, store) = profile("row888-once");
+        let store = store.lock().unwrap();
+        for broken in ["{\"not\": \"a list\"}", "[{\"id\":", "7"] {
+            store.set(LIST_KEY, broken).unwrap();
+            assert!(load(&store).is_empty());
+            assert!(load(&store).is_empty(), "a second read sets nothing aside again");
+            assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some("[]"), "the key starts fresh");
+            assert!(crate::orchestration::kept::asides(&store, LIST_KEY).contains(&broken.to_string()), "{broken}: byte-identical copy");
+        }
+        assert_eq!(crate::orchestration::kept::asides(&store, LIST_KEY).len(), 3, "one copy per broken value, none replaced");
+    }
+
+    // Row 888: a write that lands while the copy is being made is never overwritten by the reset.
+    #[test]
+    fn row888_the_list_is_not_reset_when_it_changes_during_the_keep_aside() {
+        let (dir, store) = profile("row888-changed");
+        let store = store.lock().unwrap();
+        let broken = "[{\"id\":\"a1\",";
+        store.set(LIST_KEY, broken).unwrap();
+        // Another process saves a new list at the moment the copy is written.
+        let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        side.execute_batch(&format!(
+            "CREATE TRIGGER other_writer AFTER INSERT ON kv WHEN NEW.key LIKE '%.corrupt-%' BEGIN UPDATE kv SET value = '[]' || ' ' WHERE key = '{LIST_KEY}'; END;"
+        ))
+        .unwrap();
+        assert!(load(&store).is_empty());
+        assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the reset was refused: nothing was changed");
+        assert!(crate::orchestration::kept::asides(&store, LIST_KEY).is_empty(), "the copy rolled back with the refused reset");
+    }
+
+    // Row 912: a list that could not be read or kept aside is never saved over by a sign-in.
+    #[test]
+    fn row912_a_sign_in_cannot_save_over_a_list_that_could_not_be_kept_aside() {
+        let (dir, store) = profile("row912");
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let got = sign_in(&store, &dir, "a9", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into()));
+        assert!(got.is_err(), "the save is refused, not made over an empty list");
+        assert!(!dir.join(secrets::VAULT).join("claude-a9.json").exists(), "a refused sign-in leaves no sealed copy");
+        assert!(!dir.join(FOLDER).join("a9").exists(), "and no account folder");
+        let store = store.lock().unwrap();
+        assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the stored list is byte-identical");
+    }
+
+    // Row 916: a read that failed for a moment poisons nothing; the same sign-in works once the store reads again.
+    #[test]
+    fn row916_a_sign_in_works_again_once_the_store_can_be_read() {
+        let (dir, store) = profile("row916");
+        let old = Account { id: "a1".into(), email: Some("old@example.com".into()), organization: None, config_dir: "x".into(), last_sign_in: 1, stale: false };
+        store.lock().unwrap().set(LIST_KEY, &serde_json::to_string(&vec![old]).unwrap()).unwrap();
+        let side = crate::orchestration::kept::Unreadable::new(&dir);
+        assert!(sign_in(&store, &dir, "a9", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(!dir.join(secrets::VAULT).join("claude-a9.json").exists(), "no sealed copy left behind");
+        assert!(!dir.join(FOLDER).join("a9").exists(), "no account folder left behind");
+        side.restore();
+        let got = sign_in(&store, &dir, "a10", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into()));
+        assert!(got.is_ok(), "{:?}", got.err());
+        assert_eq!(load(&store.lock().unwrap()).len(), 2, "the old account stays and the new one is added");
+    }
+
+    // Row 916: remove and mark_stale answer an honest Err while the store is unreadable, and work after.
+    #[test]
+    fn row916_remove_and_mark_stale_work_again_once_the_store_can_be_read() {
+        let (dir, store) = profile("row916-rm");
+        let a = Account { id: "a1".into(), email: None, organization: None, config_dir: "x".into(), last_sign_in: 1, stale: false };
+        let store = store.lock().unwrap();
+        store.set(LIST_KEY, &serde_json::to_string(&vec![a]).unwrap()).unwrap();
+        let side = crate::orchestration::kept::Unreadable::new(&dir);
+        assert!(mark_stale(&store, "a1", true).is_err());
+        assert!(remove(&store, &dir, "a1").is_err());
+        side.restore();
+        assert_eq!(mark_stale(&store, "a1", true), Ok(true));
+        assert!(remove(&store, &dir, "a1").is_ok());
+        assert!(load(&store).is_empty());
+    }
+
+    // Row 921 (1): a new sign-in whose id is already taken never touches that account's folder or sealed copy.
+    #[test]
+    fn row921_a_refused_new_sign_in_on_a_taken_id_leaves_the_listed_account_whole() {
+        let (dir, store) = profile("row921-id");
+        let listed = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let sealed = fs::read(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"kim@example.com","orgName":"Other Org"}"#;
+        let got = sign_in(&store, &dir, "a1", false, 8, writes(r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#, Ended::Exited(Some(0))), |_| Some(other.into()));
+        assert!(got.is_err(), "the list save is refused");
+        assert!(Path::new(&listed.config_dir).join(CREDENTIALS).is_file(), "the listed account's folder survives");
+        assert_eq!(fs::read_to_string(Path::new(&listed.config_dir).join(CREDENTIALS)).unwrap(), CREDS, "with its own sign-in");
+        assert_eq!(fs::read(&vault).unwrap(), sealed, "and its sealed copy");
+    }
+
+    // Row 921 (1): a taken id (listed, or a folder or sealed copy already there) moves the new account to the next free id.
+    #[test]
+    fn row921_a_new_sign_in_on_a_taken_id_takes_the_next_free_one() {
+        let (dir, store) = profile("row921-bump");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        fs::create_dir_all(dir.join(FOLDER).join("a2")).unwrap();
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"kim@example.com","orgName":"Other Org"}"#;
+        let got = sign_in(&store, &dir, "a1", false, 8, writes(CREDS, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
+        assert_eq!(got.id, "a3", "a1 is listed and a2 has a folder");
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
+        assert!(dir.join(secrets::VAULT).join("claude-a3.json").is_file());
+        assert!(dir.join(secrets::VAULT).join("claude-a1.json").is_file());
+    }
+
+    // Row 921 (2): a refused re-sign-in puts the sealed copy back as well as the live file.
+    #[test]
+    fn row921_a_refused_re_sign_in_puts_the_earlier_sealed_copy_back() {
+        let (dir, store) = profile("row921-vault");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let sealed = fs::read(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert_eq!(fs::read(&vault).unwrap(), sealed, "the sealed copy is the earlier one again");
+        assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS));
+        assert_eq!(fs::read_to_string(Path::new(&a.config_dir).join(CREDENTIALS)).unwrap(), CREDS, "and so is the live file");
+    }
+
+    // Row 923 (1): with the live file gone, a refused re-sign-in leaves neither the vault nor the live file on the new sign-in.
+    #[test]
+    fn row923_a_refused_re_sign_in_with_no_live_file_does_not_leave_the_new_credentials() {
+        let (dir, store) = profile("row923-order");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::remove_file(&live).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS), "the vault holds the earlier sign-in");
+        assert_ne!(fs::read_to_string(&live).ok().as_deref(), Some(new), "the live file is not the new sign-in");
+        assert_eq!(fs::read_to_string(&live).unwrap(), CREDS, "undo copied the earlier sealed credentials back");
+    }
+
+    // Row 923 (1): an existing account with no sealed copy gets none from a refused re-sign-in.
+    #[test]
+    fn row923_a_refused_re_sign_in_with_no_earlier_sealed_copy_leaves_none() {
+        let (dir, store) = profile("row923-novault");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        fs::remove_file(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(!vault.exists(), "no sealed copy appears");
+    }
+
+    // Row 929: no live file and no earlier sealed copy means no earlier credentials, so a refused re-sign-in leaves none live.
+    #[test]
+    fn row929_a_refused_re_sign_in_with_no_live_file_and_no_sealed_copy_leaves_no_live_file() {
+        let (dir, store) = profile("row929-none");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::remove_file(&live).unwrap();
+        fs::remove_file(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(!live.exists(), "the refused login is not left live");
+        assert!(!vault.exists(), "and no sealed copy appears");
+    }
+
+    // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
+    #[test]
+    fn row912_a_read_only_load_gives_the_default_and_poisons_nothing() {
+        let (dir, store) = profile("row912-ro");
+        let store = store.lock().unwrap();
+        store.set(LIST_KEY, "[{\"id\":").unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(load(&store).is_empty());
+        assert!(active(&store).is_none());
+        store.set("unrelated.key", "1").unwrap();
+        store.set(ACTIVE_KEY, "").unwrap();
+        assert!(store.set(LIST_KEY, "[]").is_ok(), "the read-only load poisoned nothing");
+        store.set("unrelated.key", "2").unwrap();
     }
 
     #[test]

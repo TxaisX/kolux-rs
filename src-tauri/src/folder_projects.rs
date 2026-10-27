@@ -34,12 +34,20 @@ pub fn is_folder(store: &Store, id: &str) -> bool {
 
 /// Drops projects from the folder list (removed, or now Git projects).
 pub(crate) fn unflag(store: &Store, ids: &[String]) -> Result<(), String> {
+    match unflag_write(store, ids)? {
+        Some((key, json)) => store.set(&key, &json).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// The folder list `unflag` would save, or None when nothing changes. Only reads.
+pub(crate) fn unflag_write(store: &Store, ids: &[String]) -> Result<Option<(String, String)>, String> {
     let before = ids_to_change(store)?;
     let kept: Vec<String> = before.iter().filter(|i| !ids.contains(i)).cloned().collect();
     if kept.len() == before.len() {
-        return Ok(());
+        return Ok(None);
     }
-    put_ids(store, &kept)
+    Ok(Some((FOLDERS_KEY.to_string(), serde_json::to_string(&kept).map_err(|e| e.to_string())?)))
 }
 
 /// What Kolux remembered about this project's path: the suggested names retired in its workspaces
@@ -87,7 +95,7 @@ pub(crate) fn folder_only(store: &Store, project: &Project) -> Option<Worktree> 
 /// One already added is handed back; a Git repository is refused (it is added the usual way).
 pub fn add_folder(store: &Store, folder: &Path) -> Result<Project, String> {
     projects::plain_folder(folder)?;
-    let mut list = projects::load_projects(store);
+    let mut list = projects::load_projects_for_write(store)?;
     if let Some(existing) = list.iter().find(|p| projects::same_folder(Path::new(&p.path), folder)) {
         return Ok(existing.clone());
     }
@@ -254,6 +262,22 @@ mod tests {
         let p = Project { id: "p".into(), name: "p".into(), path: "C:/work/p".into(), workspaces_dir: None, base: None, display_name: None };
         let dirs = session_dirs(&p, &["C:/work/p".to_string(), "C:/ws/p/a".to_string(), "C:/ws/p/a".to_string()]);
         assert_eq!(dirs, vec![PathBuf::from("C:/work/p"), PathBuf::from("C:/ws/p/a")]);
+    }
+
+    #[test]
+    fn row895_adding_a_folder_refuses_rather_than_wiping_an_unreadable_project_list() {
+        let base = temp("row895");
+        let store = store(&base);
+        let list = r#"[{"id":"keep-1","name":"keep","path":"C:/keep"},{"id":"ke"#;
+        store.set("projects", list).unwrap();
+        crate::orchestration::kept::refuse_copies(&base.join("db"));
+        let folder = base.join("notes");
+        fs::create_dir_all(&folder).unwrap();
+        let err = add_folder(&store, &folder).unwrap_err();
+        assert!(err.contains("projects could not be kept aside"), "{err}");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(list), "no one-project list replaced it");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

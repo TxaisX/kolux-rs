@@ -3546,7 +3546,13 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             // Card 15: the receipt is saved after the lane lock is gone, so a same-request retry waits here for it.
             let retry_turn = retry.as_deref().map(retry_turn);
-            let _retry_turn = retry_turn.as_ref().map(|t| t.lock().unwrap_or_else(|p| p.into_inner()));
+            let mut retry_turn = retry_turn.as_ref().map(|t| t.lock().unwrap_or_else(|p| p.into_inner()));
+            // Row 883: an earlier send of this request typed but could not save its receipt; the memo stands in for it.
+            if let Some((_, sent)) = retry_turn.as_deref().and_then(Option::as_ref) {
+                let mut again = sent.clone();
+                again["retried"] = json!(true);
+                return Ok(again);
+            }
             if let Some(key) = &retry {
                 // ORCH-055: the receipt lasts in the store, so a retry after a restart sends nothing.
                 // Card 13b: unreadable receipts refuse here, before anything is typed, so a retry never types twice.
@@ -3626,10 +3632,20 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 out["warnings"] = json!(warnings);
             }
             if let Some(key) = retry {
-                let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                let mut receipts = so::Receipts::try_load(&store).map_err(|e| Fail::new("failed", e))?;
-                receipts.record(&key, now_ms(), out.clone());
-                receipts.save(&store).map_err(|e| Fail::new("failed", e))?;
+                // Row 883: the text is already typed, so a receipt that cannot be saved is a warning, never "failed".
+                let saved = ctx.store.lock().map_err(|e| e.to_string()).and_then(|store| {
+                    let mut receipts = so::Receipts::try_load(&store)?;
+                    receipts.record(&key, now_ms(), out.clone());
+                    receipts.save(&store)
+                });
+                if let Err(why) = saved {
+                    let mut warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+                    warnings.push(json!(format!("the receipt for this send was not saved ({why}); a retry in this run types nothing, but one after a restart would type again")));
+                    out["warnings"] = json!(warnings);
+                    if let Some(memo) = retry_turn.as_deref_mut() {
+                        *memo = Some((now_ms(), out.clone()));
+                    }
+                }
             }
             Ok(out)
         }
@@ -3719,11 +3735,35 @@ mod typed {
     }
 }
 
-/// One lock per in-flight `terminal send` retry key; idle keys are dropped on the next call.
-fn retry_turn(key: &str) -> std::sync::Arc<Mutex<()>> {
-    static TURNS: Mutex<BTreeMap<String, std::sync::Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
-    let mut turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
-    turns.retain(|k, t| k == key || std::sync::Arc::strong_count(t) > 1);
+/// One lock per in-flight `terminal send` retry key; idle keys are dropped on the next call. It holds
+/// the answer (and when it was given) of a send whose receipt could not be saved, until the receipt TTL.
+type RetryTurn = std::sync::Arc<Mutex<Option<(u64, Value)>>>;
+
+fn retry_turn(key: &str) -> RetryTurn {
+    static TURNS: Mutex<BTreeMap<String, RetryTurn>> = Mutex::new(BTreeMap::new());
+    retry_turn_in(&mut TURNS.lock().unwrap_or_else(|p| p.into_inner()), key, now_ms())
+}
+
+/// When this key's send memo was made; `None` while a send holds the key. A poisoned lock is read through.
+fn memo_at(t: &RetryTurn) -> Option<Option<u64>> {
+    match t.try_lock() {
+        Ok(memo) => Some(memo.as_ref().map(|(at, _)| *at)),
+        Err(std::sync::TryLockError::Poisoned(p)) => Some(p.into_inner().as_ref().map(|(at, _)| *at)),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
+fn retry_turn_in(turns: &mut BTreeMap<String, RetryTurn>, key: &str, now: u64) -> RetryTurn {
+    let remembered = |t: &RetryTurn| memo_at(t).is_none_or(|at| at.is_some_and(|at| now.saturating_sub(at) <= so::RECEIPT_TTL_MS));
+    turns.retain(|k, t| k == key || std::sync::Arc::strong_count(t) > 1 || remembered(t));
+    // The idle memos are capped like the saved receipts, oldest first.
+    let mut idle: Vec<(u64, String)> = turns.iter().filter(|(k, t)| *k != key && std::sync::Arc::strong_count(t) == 1).filter_map(|(k, t)| Some((memo_at(t)??, k.clone()))).collect();
+    if idle.len() > so::RECEIPTS_KEPT {
+        idle.sort();
+        for (_, k) in idle.drain(..idle.len() - so::RECEIPTS_KEPT) {
+            turns.remove(&k);
+        }
+    }
     turns.entry(key.to_string()).or_default().clone()
 }
 
@@ -4968,6 +5008,43 @@ fn caller_distro(args: &mut Map<String, Value>, distro: Option<String>) {
 mod tests {
     use super::*;
 
+    fn memo_turn(at: u64) -> RetryTurn {
+        std::sync::Arc::new(Mutex::new(Some((at, Value::Null))))
+    }
+
+    #[test]
+    fn row909_the_retry_memos_are_capped_and_the_oldest_idle_one_goes_first() {
+        let now = 10 * so::RECEIPT_TTL_MS;
+        let mut turns = BTreeMap::new();
+        for n in 0..=so::RECEIPTS_KEPT as u64 {
+            turns.insert(format!("k{n}"), memo_turn(now - 1000 + n));
+        }
+        let busy = memo_turn(now - 5000);
+        let _held = busy.clone();
+        turns.insert("busy".into(), busy);
+        retry_turn_in(&mut turns, "fresh", now);
+        assert!(!turns.contains_key("k0"), "the oldest idle memo went");
+        assert!(turns.contains_key(&format!("k{}", so::RECEIPTS_KEPT)), "the newest is kept");
+        assert!(turns.contains_key("busy"), "a key in use is never dropped, however old");
+        let idle = turns.iter().filter(|(k, t)| k.starts_with('k') && t.try_lock().is_ok_and(|m| m.is_some())).count();
+        assert_eq!(idle, so::RECEIPTS_KEPT);
+    }
+
+    #[test]
+    fn row909_a_poisoned_retry_memo_is_read_through() {
+        let now = 10 * so::RECEIPT_TTL_MS;
+        let old = memo_turn(now - so::RECEIPT_TTL_MS - 1);
+        let held = old.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = held.lock().unwrap();
+            panic!("poison the memo");
+        })
+        .join();
+        let mut turns = BTreeMap::from([("old".to_string(), old)]);
+        retry_turn_in(&mut turns, "fresh", now);
+        assert!(!turns.contains_key("old"), "an expired memo is dropped even when its lock was poisoned");
+    }
+
     #[test]
     fn row220_the_client_sends_the_wsl_distribution_it_runs_in() {
         let mut a = Map::new();
@@ -5574,6 +5651,35 @@ mod tests {
         });
         assert_eq!(typed::count(5314), 1, "the text went in once");
         assert_eq!(outs.iter().filter(|o| o["retried"] == true).count(), 1, "the other answered from the receipt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Row 883: the text is already typed when the receipt is saved, so a failed save is a warning, never "failed".
+    #[test]
+    fn row883_a_receipt_that_cannot_be_saved_after_typing_is_a_warning_and_a_retry_types_nothing() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-r883-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        terminals.fake_session(5316, &dir.display().to_string(), None);
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.send".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-5316", "text": "hello", "retryRequest": "r883" }), pane: None, cli: VERSION.into(), arrived: None };
+        // The receipts can be read (nothing there yet) but a write to their key is refused, as a full disk would.
+        let conn = rusqlite::Connection::open(dir.join("data").join("state.db")).unwrap();
+        conn.execute_batch(&format!("CREATE TRIGGER no_sends BEFORE INSERT ON kv WHEN NEW.key = '{k}' BEGIN SELECT RAISE(ABORT, 'disk full'); END; CREATE TRIGGER no_sends_up BEFORE UPDATE ON kv WHEN NEW.key = '{k}' BEGIN SELECT RAISE(ABORT, 'disk full'); END;", k = so::KEY)).unwrap();
+        let first = dispatch(&ctx, &req).expect("the text was typed, so the caller is not told it failed");
+        assert_eq!(typed::count(5316), 1, "the text went in once");
+        assert!(first["retried"].is_null());
+        let warnings = first["warnings"].as_array().expect("a warning says the receipt was not saved");
+        assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("receipt") && w.contains("not saved"))), "{warnings:?}");
+        // Same run, same retry key: nothing more is typed, even though no receipt could be kept.
+        let again = dispatch(&ctx, &req).expect("the retry answers");
+        assert_eq!(again["retried"], true);
+        assert_eq!(typed::count(5316), 1, "a retry of a send whose receipt was not saved types nothing");
+        drop(conn);
+        drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -876,11 +876,16 @@ pub(crate) fn jsonl_in(dir: &Path) -> impl Iterator<Item = PathBuf> {
     fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
 }
 
+/// A day folder's mtime lags its newest file by up to a day; a time too far out to add that to is kept.
+fn touched_since(modified: SystemTime, since: SystemTime) -> bool {
+    modified.checked_add(Duration::from_secs(86_400)).is_none_or(|m| m >= since)
+}
+
 /// Every Codex rollout under `home` that may have been written since `since`: sessions/YYYY/MM/DD,
 /// only day folders touched since the session began are opened.
 pub(crate) fn codex_rollouts(home: &Path, since: SystemTime) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    let fresh = |p: &Path| modified(p).is_some_and(|m| m + Duration::from_secs(86_400) >= since);
+    let fresh = |p: &Path| modified(p).is_some_and(|m| touched_since(m, since));
     for y in fs::read_dir(home.join("sessions")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
         for m in fs::read_dir(&y).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
             for d in fs::read_dir(&m).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
@@ -1392,6 +1397,21 @@ mod tests {
         assert!(!p.open);
         let last = p.items().last().unwrap();
         assert_eq!((last.role, last.kind, last.text.as_str()), ("status", "interrupted", "Interrupted"));
+    }
+
+    #[test]
+    fn row907_a_day_folder_with_a_far_future_mtime_is_kept_without_a_panic() {
+        // The latest time this platform can hold, within a second.
+        let (mut far, mut step) = (SystemTime::UNIX_EPOCH, 1u64 << 62);
+        while step > 0 {
+            far = far.checked_add(Duration::from_secs(step)).unwrap_or(far);
+            step >>= 1;
+        }
+        assert!(far.checked_add(Duration::from_secs(86_400)).is_none(), "the day cannot be added to it: the branch under test");
+        assert!(touched_since(far, SystemTime::now()), "a folder dated past the end of time is opened");
+        assert!(touched_since(far, far), "also when `since` is the same far time");
+        let now = SystemTime::now();
+        assert!(touched_since(now, now) && !touched_since(now - Duration::from_secs(2 * 86_400), now), "ordinary times still compare by the day");
     }
 
     #[test]

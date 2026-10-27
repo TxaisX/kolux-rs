@@ -67,7 +67,7 @@ pub struct Place {
     pub refresh: bool,
 }
 
-const PROJECTS_KEY: &str = "projects";
+pub(crate) const PROJECTS_KEY: &str = "projects";
 /// Typed workspace names by folder (PROJ-021): the branch and folder carry the cleaned form,
 /// the row shows exactly what was typed.
 const NAMES_KEY: &str = "workspaceNames";
@@ -102,8 +102,14 @@ pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
+/// For display and lookup only: an unreadable list shows empty (after being kept aside).
 pub fn load_projects(store: &Store) -> Vec<Project> {
-    store.get(PROJECTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, PROJECTS_KEY)
+}
+
+/// The list a save starts from (row 895): a store or copy that fails is an error, never an empty list.
+pub(crate) fn load_projects_for_write(store: &Store) -> Result<Vec<Project>, String> {
+    crate::orchestration::kept::load(store, PROJECTS_KEY)
 }
 
 pub(crate) fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
@@ -116,25 +122,25 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     if ids.is_empty() {
         return Ok(());
     }
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     let gone: Vec<String> = projects.iter().filter(|p| ids.contains(&p.id)).map(|p| p.path.clone()).collect();
     projects.retain(|p| !ids.contains(&p.id));
-    // Empty runs of the two cleanups below read what they will touch (kept::load keeps a corrupt blob
-    // aside when the copy succeeds), so a refused read stops here with the project still listed.
-    crate::folder_projects::unflag(store, &[])?;
-    crate::setup::prune_setup(store, &[], &[])?;
-    save_projects(store, &projects)?;
+    // Row 890: every read comes first and every write lands in one transaction, so a failure
+    // anywhere leaves the project listed with its icon, folder flag and setup state untouched.
+    let mut writes = vec![(PROJECTS_KEY.to_string(), serde_json::to_string(&projects).map_err(|e| e.to_string())?)];
     // PROJ-019: a forgotten project's icon choice goes with it.
     let mut icons = project_icons(store);
     let before = icons.len();
     icons.retain(|id, _| !ids.contains(id));
     if icons.len() != before {
-        save_icons(store, &icons)?;
+        writes.push((ICONS_KEY.to_string(), serde_json::to_string(&icons).map_err(|e| e.to_string())?));
     }
     // PROJ-005: a folder project's flag goes with it.
-    crate::folder_projects::unflag(store, ids)?;
+    writes.extend(crate::folder_projects::unflag_write(store, ids)?);
     // PROJ-035: and so do its dismissed setup card and its saved local setup.
-    crate::setup::prune_setup(store, ids, &gone)
+    writes.extend(crate::setup::prune_setup_writes(store, ids, &gone)?);
+    let pairs: Vec<(&str, &str)> = writes.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    store.set_all(&pairs).map_err(|e| e.to_string())
 }
 
 /// PROJ-008: drops the retired suggested names kept for one workspaces folder.
@@ -584,7 +590,7 @@ pub fn locate_repo(git: &Git, path: &Path) -> Result<(PathBuf, PathBuf), String>
 
 /// The store half of `add_project`, over what `locate_repo` found.
 pub fn register_project(store: &Store, (top, main): (PathBuf, PathBuf)) -> Result<Project, String> {
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     if let Some(existing) = projects.iter().find(|p| same_folder(Path::new(&p.path), &main) || same_folder(Path::new(&p.path), &top)) {
         return Ok(existing.clone());
     }
@@ -2212,7 +2218,7 @@ pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, projec
 /// PROJ-028 / CLI-015: saves the ref new workspaces of project `id` start from; None goes back to
 /// the default branch Git reports.
 pub fn set_base(store: &Store, id: &str, base: Option<&str>) -> Result<Project, String> {
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     let project = projects.iter_mut().find(|p| p.id == id).ok_or("that project is no longer registered")?;
     project.base = base.map(String::from);
     let project = project.clone();
@@ -2223,15 +2229,18 @@ pub fn set_base(store: &Store, id: &str, base: Option<&str>) -> Result<Project, 
 /// PROJ-025 / PROJ-028: a project's own workspaces folder and base ref; empty clears either.
 #[tauri::command]
 pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: String, base: String) -> Result<Project, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let mut projects = load_projects(&store);
+    set_project_options(&*store.lock().map_err(|e| e.to_string())?, &project_id, &workspaces_dir, &base)
+}
+
+fn set_project_options(store: &Store, project_id: &str, workspaces_dir: &str, base: &str) -> Result<Project, String> {
+    let mut projects = load_projects_for_write(store)?;
     let project = projects.iter_mut().find(|p| p.id == project_id).ok_or("that project is no longer registered")?;
     let clean = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
-    project.workspaces_dir = clean(&workspaces_dir);
-    project.base = clean(&base);
+    project.workspaces_dir = clean(workspaces_dir);
+    project.base = clean(base);
     let project = project.clone();
-    save_projects(&store, &projects)?;
-    remember_dir(&store, &workspaces_dir)?;
+    save_projects(store, &projects)?;
+    remember_dir(store, workspaces_dir)?;
     Ok(project)
 }
 
@@ -2250,7 +2259,7 @@ pub fn clean_display_name(raw: &str) -> Option<String> {
 /// SET-033: saves (or with a blank `raw` clears) the display name of project `id`. The folder, the
 /// base and every other field of the project stay as they are.
 pub fn set_display_name(store: &Store, id: &str, raw: &str) -> Result<Project, String> {
-    let mut projects = load_projects(store);
+    let mut projects = load_projects_for_write(store)?;
     let project = projects.iter_mut().find(|p| p.id == id).ok_or("that project is no longer registered")?;
     project.display_name = clean_display_name(raw);
     let project = project.clone();
@@ -5391,6 +5400,32 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         let _ = fs::remove_dir_all(profile);
     }
 
+    /// Row 890: a write that fails after the project list's own save used to leave the list without
+    /// the project but its icon, folder flag or setup state behind. All of them land together or none.
+    #[test]
+    fn row890_a_failing_cleanup_write_leaves_the_project_listed_and_everything_else_untouched() {
+        for (tag, key, value) in [("icon", "projectIcons", r#"{"p890":"icon:bug"}"#), ("folder", "folderProjects", r#"["p890"]"#), ("dismissed", "setupCardDismissed", r#"["p890","keep"]"#)] {
+            let profile = temp(&format!("row890-{tag}"));
+            let store = Store::open(&profile).unwrap();
+            let project = project_at("p890", &profile);
+            save_projects(&store, std::slice::from_ref(&project)).unwrap();
+            store.set(key, value).unwrap();
+            let before = store.get(PROJECTS_KEY).unwrap();
+            let conn = rusqlite::Connection::open(profile.join("state.db")).unwrap();
+            conn.execute_batch(&format!("CREATE TRIGGER no_cleanup BEFORE UPDATE ON kv WHEN NEW.key = '{key}' BEGIN SELECT RAISE(ABORT, 'disk full'); END;")).unwrap();
+            let err = forget_projects(&store, std::slice::from_ref(&project.id)).unwrap_err();
+            assert!(err.contains("disk full"), "{tag}: {err}");
+            assert_eq!(store.get(PROJECTS_KEY).unwrap(), before, "{tag}: the project is still listed, byte for byte");
+            assert_eq!(store.get(key).unwrap().as_deref(), Some(value), "{tag}: the failing key is untouched");
+            conn.execute_batch("DROP TRIGGER no_cleanup;").unwrap();
+            forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
+            assert!(load_projects(&store).is_empty(), "{tag}: a retry finishes the job");
+            drop(conn);
+            drop(store);
+            let _ = fs::remove_dir_all(profile);
+        }
+    }
+
     /// The saved-setup half of row 882 (`prune_setup`): its key unreadable and the copy refused.
     #[test]
     fn row882_a_refused_setup_read_leaves_the_project_listed() {
@@ -5412,6 +5447,77 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert_eq!(crate::orchestration::kept::asides(&store, "localSetups"), vec!["{not json".to_string()], "the unreadable blob was kept aside byte for byte on the retry");
         store.set("localSetups", "{}").unwrap();
         drop(conn);
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    /// after-list row 895: a project list that does not read must never be saved over by a
+    /// read-then-save (forget, add, edit); the blob stays byte for byte, or is kept aside first.
+    const BROKEN_LIST: &str = r#"[{"id":"keep-1","name":"keep","path":"C:/keep"},{"id":"keep-2","na"#;
+
+    fn broken_list_store(tag: &str, refuse_copy: bool) -> (Store, PathBuf) {
+        let profile = temp(tag);
+        let store = Store::open(&profile).unwrap();
+        store.set("projects", BROKEN_LIST).unwrap();
+        if refuse_copy {
+            crate::orchestration::kept::refuse_copies(&profile);
+        }
+        (store, profile)
+    }
+
+    /// The wording kept::load returns when the copy cannot be made.
+    const NOT_KEPT_ASIDE: &str = "projects could not be kept aside";
+
+    #[test]
+    fn row895_forget_refuses_when_the_project_list_does_not_read_and_cannot_be_kept_aside() {
+        let (store, profile) = broken_list_store("row895-forget", true);
+        let err = forget_projects(&store, &["keep-1".to_string()]).unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE) && err.contains("nothing was changed"), "{err}");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST), "the list blob is byte for byte what it was");
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn row895_forget_keeps_an_unreadable_list_aside_before_it_saves() {
+        let (store, profile) = broken_list_store("row895-aside", false);
+        forget_projects(&store, &["keep-1".to_string()]).unwrap();
+        assert_eq!(crate::orchestration::kept::asides(&store, "projects"), vec![BROKEN_LIST.to_string()], "the unreadable list survives under a corrupt- name");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some("[]"), "the key starts fresh once the copy is safe");
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn row895_adding_a_project_refuses_rather_than_wiping_an_unreadable_list() {
+        let (store, profile) = broken_list_store("row895-add", true);
+        let repo = temp("row895-add-repo");
+        let err = register_project(&store, (repo.clone(), repo.clone())).unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "{err}");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST), "no one-project list replaced it");
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn row895_editing_a_project_refuses_rather_than_wiping_an_unreadable_list() {
+        let (store, profile) = broken_list_store("row895-edit", true);
+        let err = set_base(&store, "keep-1", Some("main")).unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "an unreadable list is not 'no longer registered': {err}");
+        let err = set_display_name(&store, "keep-1", "Shop").unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "{err}");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST));
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn row895_setting_a_project_folder_and_base_refuses_rather_than_wiping_an_unreadable_list() {
+        let (store, profile) = broken_list_store("row895-set", true);
+        let err = set_project_options(&store, "keep-1", "D:/ws", "main").unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "{err}");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST));
         drop(store);
         let _ = fs::remove_dir_all(profile);
     }

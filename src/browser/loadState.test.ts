@@ -65,6 +65,13 @@ describe("BROW-008: a page that fails to load", () => {
       expect(m.switchHttps).toBeNull();
       expect(m.openExternally).toBe(true);
     });
+    it("a skipped diagnosis (a proxy is saved) says nothing was checked, gives no local advice and keeps Open Externally", () => {
+      const m = overlayModel({ kind: "failed", url: "http://nas.lan/" }, { kind: "skipped", local: true, https: null });
+      expect(m.text).toMatch(/proxy/i);
+      expect(m.text).toContain("nas.lan");
+      expect(m.advice).toBeNull();
+      expect(m.openExternally).toBe(true);
+    });
     it("an unknown host hides Open Externally and offers no HTTPS switch", () => {
       const m = overlayModel({ kind: "failed", url: "http://no.such.host.invalid/" }, { kind: "unknown-host", local: false, https: null });
       expect(m.text).toMatch(/could not find/i);

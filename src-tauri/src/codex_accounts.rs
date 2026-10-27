@@ -58,7 +58,7 @@ pub const LABEL_MAX: usize = 40;
 
 /// Names an account (trimmed, at most LABEL_MAX characters); a blank name clears it.
 pub fn set_label(store: &Store, id: &str, label: &str) -> Result<(), String> {
-    let mut list = load(store);
+    let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(a) = list.iter_mut().find(|a| a.id == id) else {
         return Err("That Codex account is no longer listed.".into());
     };
@@ -86,7 +86,7 @@ pub fn active_account(store: &Store) -> Option<Account> {
 
 /// Flags or clears an account's sign-in error (ACCT-012); true when that changed anything.
 pub fn mark_sign_in_error(store: &Store, id: &str, error: bool) -> Result<bool, String> {
-    let mut list = load(store);
+    let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(a) = list.iter_mut().find(|a| a.id == id && a.sign_in_error != error) else {
         return Ok(false);
     };
@@ -294,10 +294,19 @@ pub fn login_command(program: &Path, home: &Path, device: bool) -> CommandBuilde
 /// success a new account is listed and made active, a listed one updated in place, and the
 /// sign-in sealed into the vault; only a sign-in the login changed counts. On failure the home is
 /// removed, unless it already holds a working sign-in.
-pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
-    let home = profile.join(FOLDER).join(id);
+pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
+    // Row 923: a NEW account never reuses a taken id, so a clash cannot overwrite a listed account's home or sealed copy.
+    // Row 929: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id.
+    let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
+    let (id, home) = if existing && listed.iter().any(|l| l == id) {
+        let home = profile.join(FOLDER).join(id);
+        fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+        (id.to_string(), home)
+    } else {
+        crate::claude_accounts::claim_new_folder(profile, FOLDER, "codex", &listed, id)?
+    };
+    let id = id.as_str();
     let auth = home.join("auth.json");
-    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     fs::write(home.join("config.toml"), HOME_CONFIG).map_err(|e| e.to_string())?;
     // ACCT-019: only a home with no sign-in file at all is removed; one that cannot be read (a
     // locked file) may still hold a working sign-in.
@@ -314,20 +323,41 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
         return Err(failure(&ended, &output, code.as_deref()));
     }
     let text = fs::read_to_string(&auth).map_err(|e| e.to_string())?;
-    if let Err(e) = secrets::write_file(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")), &text) {
+    let vault = profile.join(secrets::VAULT).join(format!("codex-{id}.json"));
+    let vault_was_there = vault.exists();
+    if let Err(e) = secrets::write_file(&vault, &text) {
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
     let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now, sign_in_error: false, label: None };
     let store = store.lock().map_err(|e| e.to_string())?;
-    let mut list = load(&store);
+    // Row 916: the home stays (ACCT-019), but a sealed copy made for an account that never got listed is deleted.
+    let drop_new_copy = || {
+        if !vault_was_there {
+            crate::claude_accounts::remove_sealed_copy(&vault);
+        }
+    };
+    let mut list: Vec<Account> = match crate::orchestration::kept::load(&store, LIST_KEY) {
+        Ok(l) => l,
+        Err(e) => {
+            drop_new_copy();
+            return Err(e.into());
+        }
+    };
+    let listed = list.iter().any(|a| a.id == id);
     match list.iter_mut().find(|a| a.id == id) {
         Some(a) => *a = Account { label: a.label.take(), ..account.clone() },
-        None => {
-            list.push(account.clone());
-            store.set(ACTIVE_KEY, id).map_err(|e| e.to_string())?;
-        }
+        None => list.push(account.clone()),
     }
-    store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    // A new account is listed and made active in one transaction, so a refused save leaves neither.
+    let saved = serde_json::to_string(&list).map_err(|e| e.to_string()).and_then(|json| {
+        if listed { store.set(LIST_KEY, &json) } else { store.set_all(&[(LIST_KEY, &json), (ACTIVE_KEY, id)]) }.map_err(|e| e.to_string())
+    });
+    if let Err(e) = saved {
+        if !listed {
+            drop_new_copy();
+        }
+        return Err(e.into());
+    }
     Ok(account)
 }
 
@@ -446,8 +476,9 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
     let _ = app.emit(EVENT, ());
     std::thread::spawn(move || {
         let store = app.state::<Mutex<Store>>();
+        let existing = again.is_some();
         let id = again.unwrap_or_else(|| format!("{:x}", crate::claude_key::now_ms()));
-        let result = sign_in(&store, &profile, &id, crate::claude_key::now_ms(), |home| {
+        let result = sign_in(&store, &profile, &id, existing, crate::claude_key::now_ms(), |home| {
             let seen: Arc<Mutex<Option<(String, String)>>> = Arc::default();
             let peek = seen.clone();
             let peek_app = app.clone();
@@ -815,7 +846,7 @@ pub fn codex_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Stor
 /// Takes the account off the list, deletes its home (only one inside Kolux's own folder) and
 /// sealed copy, and hands new panes back to the system default when it was the active one.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
-    let mut list = load(store);
+    let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(at) = list.iter().position(|a| a.id == id) else {
         return Err("That Codex account is no longer listed.".into());
     };
@@ -911,6 +942,82 @@ mod tests {
         crate::test_dir::temp(&format!("codex-acct-{name}"))
     }
 
+    // Row 912: a list that could not be read or kept aside is never saved over by a sign-in.
+    #[test]
+    fn row912_a_codex_sign_in_cannot_save_over_a_list_that_could_not_be_kept_aside() {
+        let profile = temp("row912");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let broken = "[{\"id\":\"c1\",\"email\":\"sam@exa\u{0}\u{fffd} half";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&profile);
+        let got = sign_in(&store, &profile, "c9", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        });
+        assert!(got.is_err(), "the save is refused, not made over an empty list");
+        assert!(!profile.join(secrets::VAULT).join("codex-c9.json").exists(), "a refused sign-in leaves no sealed copy");
+        assert!(profile.join(FOLDER).join("c9").join("auth.json").exists(), "the home keeps its sign-in (ACCT-019)");
+        let store = store.lock().unwrap();
+        assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some(broken), "the stored list is byte-identical");
+        assert_eq!(store.get(ACTIVE_KEY).unwrap(), None, "no account became active for a list that was not saved");
+    }
+
+    // Row 916: a read that failed for a moment poisons nothing; the same sign-in works once the store reads again.
+    #[test]
+    fn row916_a_codex_sign_in_works_again_once_the_store_can_be_read() {
+        let profile = temp("row916");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
+        let login = |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        let side = crate::orchestration::kept::Unreadable::new(&profile);
+        assert!(sign_in(&store, &profile, "c9", false, 1, login).is_err());
+        side.restore();
+        let got = sign_in(&store, &profile, "c10", false, 1, login);
+        assert!(got.is_ok(), "{:?}", got.err());
+        let store = store.lock().unwrap();
+        assert_eq!(load(&store).len(), 1);
+        assert_eq!(store.get(ACTIVE_KEY).unwrap().as_deref(), Some("c10"));
+    }
+
+    // Row 916 L3: a new account's list and active choice land together or not at all.
+    #[test]
+    fn row916_a_new_account_is_listed_and_made_active_in_one_save() {
+        let profile = temp("row916-set-all");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
+        store.lock().unwrap().poison(ACTIVE_KEY);
+        let got = sign_in(&store, &profile, "c9", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        });
+        assert!(got.is_err(), "the active choice cannot be saved");
+        let store = store.lock().unwrap();
+        assert_eq!(store.get(LIST_KEY).unwrap().as_deref(), Some("[]"), "the list did not change either");
+        assert_eq!(store.get(ACTIVE_KEY).unwrap(), None);
+        assert!(!profile.join(secrets::VAULT).join("codex-c9.json").exists());
+    }
+
+    // Row 916: label, flag and remove answer an honest Err while the store is unreadable, and work after.
+    #[test]
+    fn row916_label_flag_and_remove_work_again_once_the_store_can_be_read() {
+        let profile = temp("row916-rm");
+        let store = Store::open(&profile).unwrap();
+        let a = Account { id: "c1".into(), email: None, home: "x".into(), last_sign_in: 1, sign_in_error: false, label: None };
+        store.set(LIST_KEY, &serde_json::to_string(&vec![a]).unwrap()).unwrap();
+        let side = crate::orchestration::kept::Unreadable::new(&profile);
+        assert!(set_label(&store, "c1", "Work").is_err());
+        assert!(mark_sign_in_error(&store, "c1", true).is_err());
+        assert!(remove(&store, &profile, "c1").is_err());
+        side.restore();
+        assert!(set_label(&store, "c1", "Work").is_ok());
+        assert_eq!(mark_sign_in_error(&store, "c1", true), Ok(true));
+        assert!(remove(&store, &profile, "c1").is_ok());
+        assert!(load(&store).is_empty());
+    }
+
     // Row 193 (audit-a193-1): the Codex list is kept aside when it no longer reads, never saved over.
     #[test]
     fn row193_an_unreadable_codex_list_is_kept_aside_and_a_label_save_cannot_wipe_it() {
@@ -993,8 +1100,8 @@ mod tests {
             fs::write(home.join("auth.json"), token(email)).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
-        sign_in(&store, &profile, "c2", 2, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", false, 2, ok("kim@example.com")).unwrap();
         let s = store.lock().unwrap();
         assert_eq!(load(&s).len(), 2, "one email can be two accounts (a personal and a business workspace)");
         assert_eq!(active_account(&s).unwrap().id, "c2");
@@ -1016,8 +1123,8 @@ mod tests {
             fs::write(home.join("auth.json"), token(email)).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
-        sign_in(&store, &profile, "c2", 2, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", false, 2, ok("kim@example.com")).unwrap();
         {
             let s = store.lock().unwrap();
             set_label(&s, "c1", "  Personal  ").unwrap();
@@ -1027,7 +1134,7 @@ mod tests {
             assert_eq!(list[1].label.as_ref().map(|l| l.chars().count()), Some(LABEL_MAX), "capped");
             assert!(set_label(&s, "gone", "x").is_err());
         }
-        sign_in(&store, &profile, "c1", 3, ok("kim.new@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", true, 3, ok("kim.new@example.com")).unwrap();
         let s = store.lock().unwrap();
         assert_eq!(load(&s)[0].label.as_deref(), Some("Personal"), "signing in again keeps the name");
         set_label(&s, "c1", "   ").unwrap();
@@ -1067,7 +1174,7 @@ mod tests {
         let before = fs::read(own.join("auth.json")).unwrap();
         let store = Mutex::new(Store::open(&profile).unwrap());
         for (id, who) in [("c1", "kim@example.com"), ("c2", "lee@example.com")] {
-            sign_in(&store, &profile, id, 7, |home| {
+            sign_in(&store, &profile, id, false, 7, |home| {
                 fs::write(home.join("auth.json"), token(who)).unwrap();
                 ("Successfully logged in".into(), Ended::Exited(Some(0)), None)
             })
@@ -1094,7 +1201,7 @@ mod tests {
     fn a_new_sign_in_lands_in_its_own_home_and_becomes_active() {
         let profile = temp("ok");
         let store = Mutex::new(Store::open(&profile).unwrap());
-        let a = sign_in(&store, &profile, "c1", 7, |home| {
+        let a = sign_in(&store, &profile, "c1", false, 7, |home| {
             assert!(home.ends_with("codex-accounts/c1") || home.ends_with("codex-accounts\\c1"));
             assert!(fs::read_to_string(home.join("config.toml")).unwrap().contains("\"file\""));
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
@@ -1128,7 +1235,7 @@ mod tests {
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok).unwrap();
         let s = store.lock().unwrap();
         assert!(!flag_printed(&s, "nobody").unwrap(), "an unlisted id (the system default) is never flagged");
         assert!(flag_printed(&s, "c1").unwrap());
@@ -1147,8 +1254,8 @@ mod tests {
             fs::write(home.join("auth.json"), token(email)).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
-        sign_in(&store, &profile, "c2", 2, ok("lee@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", false, 2, ok("lee@example.com")).unwrap();
         {
             let s = store.lock().unwrap();
             assert!(mark_sign_in_error(&s, "c1", true).unwrap());
@@ -1156,10 +1263,10 @@ mod tests {
             assert_eq!(active_account(&s).unwrap().id, "c2");
         }
         // a login that leaves the old sign-in untouched does not count, and keeps the home
-        let e = sign_in(&store, &profile, "c1", 3, |_| (String::new(), Ended::Exited(Some(0)), None)).unwrap_err();
+        let e = sign_in(&store, &profile, "c1", true, 3, |_| (String::new(), Ended::Exited(Some(0)), None)).unwrap_err();
         assert_eq!(e.reason, "sign-in-refused");
         assert!(profile.join(FOLDER).join("c1").join("auth.json").exists());
-        sign_in(&store, &profile, "c1", 4, ok("kim2@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", true, 4, ok("kim2@example.com")).unwrap();
         let s = store.lock().unwrap();
         let list = load(&s);
         assert_eq!(list.len(), 2, "updated in place, not added");
@@ -1171,10 +1278,10 @@ mod tests {
     fn a_failed_sign_in_keeps_nothing_but_never_deletes_a_working_home() {
         let profile = temp("fail");
         let store = Mutex::new(Store::open(&profile).unwrap());
-        let e = sign_in(&store, &profile, "c2", 1, |_| ("Enter this one-time code: WXYZ-9876\nError: device code expired".into(), Ended::Exited(Some(1)), Some("WXYZ-9876".into()))).unwrap_err();
+        let e = sign_in(&store, &profile, "c2", false, 1, |_| ("Enter this one-time code: WXYZ-9876\nError: device code expired".into(), Ended::Exited(Some(1)), Some("WXYZ-9876".into()))).unwrap_err();
         assert!(!e.message.contains("WXYZ-9876") && !e.message.contains("https://"), "{e}");
         assert!(!profile.join(FOLDER).join("c2").exists());
-        let e = sign_in(&store, &profile, "c3", 1, |home| {
+        let e = sign_in(&store, &profile, "c3", false, 1, |home| {
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Cancelled, None)
         })
@@ -1182,6 +1289,47 @@ mod tests {
         assert_eq!(e, "Sign-in cancelled.");
         assert!(profile.join(FOLDER).join("c3").join("auth.json").exists(), "a home with a working sign-in stays");
         assert!(load(&store.lock().unwrap()).is_empty());
+    }
+
+    // Row 923 (4): a new sign-in whose id is already listed takes the next free id and leaves the listed account's home and sealed copy as they were.
+    #[test]
+    fn row923_a_new_codex_sign_in_on_a_taken_id_never_touches_the_listed_account() {
+        let profile = temp("row923-id");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        let first = sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        let (home, vault) = (profile.join(FOLDER).join("c1"), profile.join(secrets::VAULT).join("codex-c1.json"));
+        let (auth_before, sealed_before) = (fs::read(home.join("auth.json")).unwrap(), fs::read(&vault).unwrap());
+        let second = sign_in(&store, &profile, "c1", false, 2, ok("lee@example.com")).unwrap();
+        assert_eq!(first.id, "c1");
+        assert_eq!(second.id, "c2", "c1 is listed, so the new account takes the next id");
+        assert_eq!(second.home, profile.join(FOLDER).join("c2").to_string_lossy(), "its home follows the claimed id");
+        assert!(profile.join(secrets::VAULT).join("codex-c2.json").is_file());
+        assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth_before, "the listed home is byte-identical");
+        assert_eq!(fs::read(&vault).unwrap(), sealed_before, "and so is its sealed copy");
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
+    }
+
+    // Row 929: existing:true at an id that is not listed (a stale screen) is a new account, so an orphan sealed copy at that id is never overwritten.
+    #[test]
+    fn row929_an_existing_codex_sign_in_at_an_unlisted_id_claims_a_free_one() {
+        let profile = temp("row929-stale");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let vault = profile.join(secrets::VAULT).join("codex-c7.json");
+        secrets::write_file(&vault, "orphan sealed text").unwrap();
+        let orphan = fs::read(&vault).unwrap();
+        let got = sign_in(&store, &profile, "c7", true, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
+        assert_ne!(got.id, "c7", "the unlisted id is taken by an orphan copy, so the account gets another");
+        assert_eq!(fs::read(&vault).unwrap(), orphan, "the orphan is byte-identical");
+        assert!(profile.join(secrets::VAULT).join(format!("codex-{}.json", got.id)).is_file());
+        assert_eq!(got.home, profile.join(FOLDER).join(&got.id).to_string_lossy());
     }
 
     #[test]

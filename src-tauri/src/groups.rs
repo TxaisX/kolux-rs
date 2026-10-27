@@ -25,6 +25,10 @@ pub struct Groups {
     /// Counts every change, so the sidebar keeps the newer of two answers that cross.
     #[serde(default)]
     pub rev: u64,
+    /// Row 887: fields a newer build wrote, carried through a save. Flatten also makes a non-object
+    /// blob (`[]`) a decode failure, so it is kept aside, not read as empty.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 const KEY: &str = "projectGroups";
@@ -191,6 +195,33 @@ mod tests {
         assert_eq!(load(&s).groups.len(), 1);
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row887_groups_from_a_newer_build_keep_their_unknown_fields_through_a_change() {
+        let (s, dir) = store("newer");
+        let blob = r#"{"groups":[{"id":"g-1","name":"Work","color":"red"}],"members":{"p-1":"g-1"},"rev":3,"future":{"a":[1,2]}}"#;
+        s.set(KEY, blob).unwrap();
+        change(&s, |g| g.create("Fresh", None)).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&s.get(KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(saved["future"], serde_json::json!({ "a": [1, 2] }), "the unknown top-level field survives the save");
+        assert_eq!(saved["rev"], 4);
+        assert!(crate::orchestration::kept::asides(&s, KEY).is_empty(), "a readable newer blob is not kept aside");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row887_a_groups_blob_of_the_wrong_type_is_kept_aside_never_read_as_empty() {
+        for (i, blob) in ["[]", "\"x\"", "7", "[1,2]", "true"].into_iter().enumerate() {
+            let (s, dir) = store(&format!("wrongtype{i}"));
+            s.set(KEY, blob).unwrap();
+            change(&s, |g| g.create("Fresh", None)).unwrap();
+            assert_eq!(crate::orchestration::kept::asides(&s, KEY), vec![blob.to_string()], "{blob}: a byte-identical copy is kept");
+            assert_eq!(load(&s).groups.len(), 1, "{blob}: the change started from a fresh set");
+            drop(s);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
