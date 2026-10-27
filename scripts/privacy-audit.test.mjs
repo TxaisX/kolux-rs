@@ -22,6 +22,7 @@ const ALLOWED = {
   "src-tauri/src/update.rs": [/tauri_plugin_updater/], // GitHub Releases
   "src-tauri/src/lib.rs": [/tauri_plugin_updater/],
   "src-tauri/src/cli.rs": [/TcpStream::connect/], // kolux-dev talking to the app on 127.0.0.1
+  "src-tauri/src/pty_service.rs": [/TcpStream::connect/], // pty_service.rs:514 Client::connect: the host is the literal [127,0,0,1], only the port comes from the service's endpoint file
 };
 // The one loopback call each file may make, as exact text: it is cut out before the scan, so any
 // other fetch in the same file is still caught (an ALLOWED entry would pass the whole file).
@@ -40,8 +41,12 @@ const PINNED = {
     [/\breqwest::/g, 11],
     [/\bicon_client_for\b/g, 4],
   ],
+  // pty_service.rs holds exactly one loopback connect (its ALLOWED line); a second one fails the audit.
+  "src-tauri/src/pty_service.rs": [[/TcpStream::connect/g, 1]],
 };
 const EXACT = {
+  // browser.rs:285 the page script wraps the open PAGE's own XHR (offline/intercept/extra headers); it opens no connection of its own, so the page's requests stay "the sites you open in the browser pane"
+  "src-tauri/src/browser.rs": /\bXMLHttpRequest\.prototype\b/g,
   "src-tauri/src/agent_hooks/vendors.rs": /\bfetch\(`http:\/\/127\.0\.0\.1:\$\{port\}\/amp`/g, // the Amp status plugin posting to Kolux on 127.0.0.1
 };
 
@@ -56,8 +61,10 @@ const shipped = (text) => {
 const pinnedProblems = (rel, text) => (PINNED[rel] ?? []).filter(([what, n]) => count(text, what) !== n).map(([what, n]) => `${rel}: ${String(what)} x${count(text, what)}, want ${n}`);
 
 test("app070: no network client in the shipped source beyond the connections the statement names", () => {
-  // scripts/evidence drives a dev build over loopback for proofs and never ships.
-  const files = [...walk(path.join(root, "src")), ...walk(path.join(root, "src-tauri/src")), ...walk(path.join(root, "scripts")).filter((f) => !f.includes(`${path.sep}evidence${path.sep}`))];
+  // scripts/evidence, scripts/prove and scripts/stress drive a hidden dev build over loopback CDP for proofs and
+  // never ship: tauri.conf.json bundles only ../dist (no resources), package.json is private, nothing in src or src-tauri imports them.
+  const harness = ["evidence", "prove", "stress"].map((d) => `${path.sep}scripts${path.sep}${d}${path.sep}`);
+  const files = [...walk(path.join(root, "src")), ...walk(path.join(root, "src-tauri/src")), ...walk(path.join(root, "scripts")).filter((f) => !harness.some((h) => f.includes(h)))];
   expect(files.length).toBeGreaterThan(50);
   const found = [];
   for (const f of files) {
