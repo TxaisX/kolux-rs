@@ -311,6 +311,10 @@ function itemFates(prev: string, out: string, starts: number[]): ("before" | "af
   const markerOf = (l: string) => ITEM.exec(l)?.[0];
   const inPrev = pl.map((_, i) => i).filter((i) => i >= p && i < hi && markerOf(pl[i]));
   const inOut = ol.map((_, i) => i).filter((i) => i >= p && i < ol.length - s && markerOf(ol[i]));
+  const pRaw = prev.split("\n");
+  const oRaw = out.split("\n");
+  const oRow = oRaw.flatMap((l, i) => (/\S/.test(l) ? [i] : [])); // the raw line of each non-blank line of `out`
+  const gapAt = (raw: string[], i: number) => i > 0 && !/\S/.test(raw[i - 1]);
   const fates: ("before" | "after" | "cut")[] = [];
   let row = 0;
   let at = 0;
@@ -319,7 +323,10 @@ function itemFates(prev: string, out: string, starts: number[]): ("before" | "af
     const line = kept[row];
     const k = inPrev.indexOf(line);
     const intact = k >= 0 && inPrev.length === inOut.length && markerOf(pl[line]) === markerOf(ol[inOut[k]]);
-    fates.push(line < p ? "before" : line >= hi ? "after" : (line === p && ol.length - s > p && col >= marker) || intact ? "before" : "cut");
+    const fate = line < p ? "before" : line >= hi ? "after" : (line === p && ol.length - s > p && col >= marker) || intact ? "before" : "cut";
+    // A blank line the edit put above the item or took away from it changes what the item is (a list item, or indented code), so it is cut.
+    const o = line < p ? line : line >= hi ? line + ol.length - pl.length : intact ? inOut[k] : line;
+    fates.push(fate !== "cut" && gapAt(pRaw, row) !== gapAt(oRaw, oRow[o] ?? -1) ? "cut" : fate);
   }
   return fates;
 }
