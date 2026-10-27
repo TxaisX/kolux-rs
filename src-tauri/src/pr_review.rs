@@ -216,6 +216,21 @@ pub fn review_args(host: &str, owner: &str, repo: &str, number: u64) -> Vec<Stri
     ["api", "graphql", "--hostname", host, "-f", &format!("query={REVIEW_QUERY}"), "-f", &format!("o={owner}"), "-f", &format!("r={repo}"), "-F", &format!("n={number}")].iter().map(|s| s.to_string()).collect()
 }
 
+/// The GraphQL name of a REST reaction name (the inverse of `rest_reaction`).
+fn graphql_reaction(rest: &str) -> Option<&'static str> {
+    Some(match rest {
+        "+1" => "THUMBS_UP",
+        "-1" => "THUMBS_DOWN",
+        "laugh" => "LAUGH",
+        "confused" => "CONFUSED",
+        "heart" => "HEART",
+        "hooray" => "HOORAY",
+        "rocket" => "ROCKET",
+        "eyes" => "EYES",
+        _ => return None,
+    })
+}
+
 /// GraphQL names a reaction THUMBS_UP; the REST calls (and the buttons) say +1.
 fn rest_reaction(graphql: &str) -> Option<&'static str> {
     Some(match graphql {
@@ -293,6 +308,8 @@ pub enum Act<'a> {
     React(u64, &'a str),
     /// A reaction on a comment of the plain conversation (an issue comment, not a review comment).
     ReactTalk(u64, &'a str),
+    /// Takes back the viewer's reaction: the comment's GraphQL node id and the REST name. GraphQL needs no reaction id.
+    Unreact(&'a str, &'a str),
 }
 
 const REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
@@ -319,6 +336,14 @@ pub fn act_args(host: &str, owner: &str, repo: &str, number: u64, act: &Act) -> 
             }
             let kind = if matches!(act, Act::ReactTalk(..)) { "issues" } else { "pulls" };
             s(&["api", &format!("repos/{owner}/{repo}/{kind}/comments/{id}/reactions"), "-f", &format!("content={what}")])
+        }
+        Act::Unreact(node, what) => {
+            let content = graphql_reaction(what).ok_or_else(|| format!("{what} is not a reaction GitHub offers"))?;
+            if node.trim().is_empty() {
+                return Err("That comment has no id".into());
+            }
+            let q = "mutation($s:ID!,$c:ReactionContent!){removeReaction(input:{subjectId:$s,content:$c}){reaction{content}}}";
+            s(&["api", "graphql", "-f", &format!("query={q}"), "-f", &format!("s={node}"), "-f", &format!("c={content}")])
         }
     })
 }
@@ -416,7 +441,7 @@ pub async fn scm_review_read(worktree: String, url: String, bots: Vec<String>) -
 }
 
 /// GIT-030: add, reply, edit, delete, resolve or react; every change lands on GitHub.
-/// `kind` is comment, reply, edit, delete, resolve, unresolve, react or react_talk.
+/// `kind` is comment, reply, edit, delete, resolve, unresolve, react, react_talk or unreact (id is the node id, text the reaction).
 #[tauri::command]
 pub async fn scm_review_act(worktree: String, url: String, kind: String, id: String, text: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -432,6 +457,7 @@ pub async fn scm_review_act(worktree: String, url: String, kind: String, id: Str
             "unresolve" => Act::Resolve(&id, false),
             "react" => Act::React(num()?, &t),
             "react_talk" => Act::ReactTalk(num()?, &t),
+            "unreact" => Act::Unreact(&id, &t),
             other => return Err(format!("Unknown action {other}")),
         };
         let a = act_args(&h, &o, &r, n, &act)?;
@@ -769,6 +795,20 @@ mod tests {
         assert_eq!(a(Act::React(5, "heart"))[3], "repos/o/r/pulls/comments/5/reactions");
         assert_eq!(a(Act::ReactTalk(5, "+1"))[3], "repos/o/r/issues/comments/5/reactions");
         assert!(act_args("h.com", "o", "r", 7, &Act::React(5, "banana")).is_err());
+    }
+
+    #[test]
+    fn git_030_a_reaction_can_be_taken_back_by_its_comment_node_id() {
+        let a = |id: &str, what: &str| act_args("h.com", "o", "r", 7, &Act::Unreact(id, what));
+        let ok = a("IC_9", "+1").unwrap();
+        assert_eq!(ok[..4], ["api", "--hostname", "h.com", "graphql"]);
+        assert!(ok[5].starts_with("query=mutation") && ok[5].contains("removeReaction"));
+        assert_eq!((ok[7].as_str(), ok[9].as_str()), ("s=IC_9", "c=THUMBS_UP"));
+        assert!(a("IC_9", "banana").is_err());
+        assert!(a("  ", "heart").is_err());
+        for r in REACTIONS {
+            assert_eq!(rest_reaction(graphql_reaction(r).unwrap()), Some(r), "{r} round-trips");
+        }
     }
 
     #[test]

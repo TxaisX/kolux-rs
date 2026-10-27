@@ -29,3 +29,12 @@ export const botsText = (list: unknown): string => (Array.isArray(list) ? list.f
 
 /** Whether an author is on the list (same rule as the backend: the whole name, any case). */
 export const onBotList = (author: string, list: readonly string[]): boolean => list.some((b) => b.toLowerCase() === author.toLowerCase());
+
+/** The list with one more author (tidied like typed names, once whatever its case); a name that does not tidy to one changes nothing. */
+export function withBot(list: readonly string[], author: string): string[] {
+  const one = parseBots(author);
+  return one.length === 1 && !onBotList(one[0], list) ? parseBots([...list, one[0]].join(" ")) : [...list];
+}
+
+/** The list without that author, whatever its case. */
+export const withoutBot = (list: readonly string[], author: string): string[] => list.filter((b) => b.toLowerCase() !== author.toLowerCase());

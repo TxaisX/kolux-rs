@@ -145,3 +145,14 @@ it("GIT-032: a conflict lists files; a clean local merge says GitHub may be stal
   expect(stale.commands[0]).toBe("git fetch origin main");
   expect(conflictView(null).kind).toBe("unknown");
 });
+
+import { reactionCall } from "./review";
+
+it("GIT-030: pressing a reaction you gave takes it back by the comment's node id, otherwise adds it", () => {
+  const c = { id: "IC_1", db_id: 42, author: "ann", bot: false, body: "x", at: "" };
+  expect(reactionCall(c, { content: "heart", count: 2, mine: true }, true)).toEqual({ kind: "unreact", id: "IC_1", text: "heart" });
+  expect(reactionCall(c, { content: "heart", count: 2, mine: true }, false)).toEqual({ kind: "unreact", id: "IC_1", text: "heart" });
+  expect(reactionCall(c, { content: "+1", count: 1, mine: false }, true)).toEqual({ kind: "react", id: "42", text: "+1" });
+  expect(reactionCall(c, { content: "+1", count: 1, mine: false }, false)).toEqual({ kind: "react_talk", id: "42", text: "+1" });
+  expect(reactionCall({ ...c, db_id: null }, { content: "+1", count: 1, mine: false }, true)).toBeNull();
+});

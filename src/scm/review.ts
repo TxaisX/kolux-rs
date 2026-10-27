@@ -141,6 +141,15 @@ export const botNames = (v: unknown): string[] => (Array.isArray(v) ? v.filter((
 /** The REST kind a reaction goes by: review comments and conversation comments use different calls. */
 export const reactKind = (inThread: boolean): "react" | "react_talk" => (inThread ? "react" : "react_talk");
 
+/**
+ * GIT-030: what pressing a reaction chip sends. A reaction you gave is taken back by the comment's node id
+ * (GraphQL needs no reaction id); any other is added by the comment's database id. Null: no id to send.
+ */
+export function reactionCall(c: Pick<Comment, "id" | "db_id">, r: Reaction, inThread: boolean): { kind: string; id: string; text: string } | null {
+  if (r.mine) return c.id ? { kind: "unreact", id: c.id, text: r.content } : null;
+  return c.db_id === null ? null : { kind: reactKind(inThread), id: String(c.db_id), text: r.content };
+}
+
 /** What a card says about its place: the file and line of a thread, nothing for the conversation. */
 export const placeOf = (t: Pick<Thread, "path" | "line">): string => (t.path ? (t.line ? `${t.path}:${t.line}` : t.path) : "");
 

@@ -4,6 +4,7 @@
 // (pr_review.rs) reads and writes GitHub; review.ts decides what is shown.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { onBotList, withBot, withoutBot } from "../settings/reviewBots";
 import { useSettings } from "../settings/useSettings";
 import "./comments.css";
 import {
@@ -17,6 +18,7 @@ import {
   moreNote,
   placeOf,
   reactKind,
+  reactionCall,
   relativeTime,
   repliable,
   reviewPrompt,
@@ -73,7 +75,7 @@ function Composer({ label, send, cancel }: { label: string; send: (text: string)
 }
 
 export default function CommentsPanel({ dir, url, visible, extra }: Props) {
-  const { settings } = useSettings();
+  const { settings, save } = useSettings();
   const bots = botNames(settings?.[REVIEW_BOTS_KEY]);
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,10 +93,10 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
   const asking = useRef("");
   asking.current = `${dir}|${url}`;
 
-  const load = () => {
+  const load = (botList: string[] = bots) => {
     const key = asking.current;
     setLoading(true);
-    invoke<Review>("scm_review_read", { worktree: dir, url, bots })
+    invoke<Review>("scm_review_read", { worktree: dir, url, bots: botList })
       .then((r) => {
         if (asking.current !== key) return;
         setReview(r);
@@ -122,6 +124,12 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
         throw e;
       },
     );
+  };
+
+  /** GIT-030: puts an author on (or takes one off) the bot list setting, then reads again so their cards sit apart. */
+  const toggleBot = (author: string) => {
+    const next = onBotList(author, bots) ? withoutBot(bots, author) : withBot(bots, author);
+    void save({ [REVIEW_BOTS_KEY]: next }).then(() => load(next));
   };
 
   const queued = review ? review.threads.filter((t) => queue.includes(t.id) && !t.resolved) : [];
@@ -167,9 +175,12 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
         <button
           key={r.content}
           className={`cm-react${r.mine ? " mine" : ""}`}
-          title={r.mine ? "You reacted" : "React the same"}
-          disabled={c.db_id === null}
-          onClick={() => c.db_id !== null && void act(reactKind(inThread), String(c.db_id), r.content).catch(() => {})}
+          title={r.mine ? "You reacted: press to take it back" : "React the same"}
+          disabled={reactionCall(c, r, inThread) === null}
+          onClick={() => {
+            const call = reactionCall(c, r, inThread);
+            if (call) void act(call.kind, call.id, call.text).catch(() => {});
+          }}
         >
           {emojiOf(r.content)} {r.count}
         </button>
@@ -203,6 +214,9 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
       <div className="cm-meta">
         <span className="cm-author">{c.author}</span>
         {c.bot && <span className="cm-tag">bot</span>}
+        <button className="cm-link" title={onBotList(c.author, bots) ? `Show ${c.author} as a person again` : `Treat ${c.author} as a bot (Settings > Git lists them)`} onClick={() => toggleBot(c.author)}>
+          {onBotList(c.author, bots) ? "Not a bot" : "Mark as bot"}
+        </button>
         <span className="cm-time" title={c.at}>
           {relativeTime(c.at, Date.now())}
         </span>
@@ -276,7 +290,7 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
           <button className="btn" aria-pressed={hideBots} onClick={() => setHideBots(!hideBots)} title="Hide comments from bots">
             {hideBots ? "Show bots" : "Hide bots"}
           </button>
-          <button className="btn" onClick={load} disabled={loading} title="Read the comments again">
+          <button className="btn" onClick={() => load()} disabled={loading} title="Read the comments again">
             {loading ? "Reading…" : "Refresh"}
           </button>
           <button className="btn" onClick={() => setAdding(!adding)}>

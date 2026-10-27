@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { botsText, MAX_BOTS, onBotList, parseBots } from "./reviewBots";
+import { botsText, MAX_BOTS, onBotList, parseBots, withBot, withoutBot } from "./reviewBots";
 
 test("ACCT-058: typed names become a tidy list: @ and [bot] dropped, repeats once, junk skipped", () => {
   expect(parseBots("@Dependabot[bot], renovate  ci-bot;\nDEPENDABOT")).toEqual(["Dependabot", "renovate", "ci-bot"]);
@@ -20,4 +20,12 @@ test("ACCT-058: the field shows the saved list; a list on it marks the author as
   expect(onBotList("reviewbot", list)).toBe(true);
   expect(onBotList("alice", list)).toBe(false);
   expect(onBotList("reviewbot2", list)).toBe(false);
+});
+
+test("marking one author from a card adds a name once, tidied, and takes it off in any case", () => {
+  expect(withBot(["ci"], "@Dependabot[bot]")).toEqual(["ci", "Dependabot"]);
+  expect(withBot(["ci", "Dependabot"], "dependabot")).toEqual(["ci", "Dependabot"]);
+  expect(withBot([], "not a name")).toEqual([]);
+  expect(withoutBot(["ci", "Dependabot"], "DEPENDABOT")).toEqual(["ci"]);
+  expect(withoutBot(["ci"], "ann")).toEqual(["ci"]);
 });

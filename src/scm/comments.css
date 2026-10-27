@@ -15,6 +15,8 @@
 .cm-meta { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
 .cm-author { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .cm-tag { font-size: 11px; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+.cm-link { border: 0; background: none; color: var(--fg-label, inherit); font: inherit; font-size: 11px; padding: 0; cursor: pointer; text-decoration: underline; opacity: 0; }
+.cm-comment:hover .cm-link, .cm-link:focus-visible { opacity: 1; }
 .cm-time { color: var(--fg-label, inherit); margin-left: auto; }
 .cm-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .cm-reactions { position: relative; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
