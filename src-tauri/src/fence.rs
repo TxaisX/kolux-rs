@@ -154,6 +154,10 @@ impl Fence {
         if !grantable(&real) {
             return Err(GrantError::Refused(refused(path)));
         }
+        // A link can resolve to a name that is not valid Unicode; the saved list could not hold it.
+        if real.to_str().is_none() {
+            return Err(GrantError::Refused(format!("{} resolves to a name Kolux cannot save", path.display())));
+        }
         let mut g = self.grants.lock().map_err(|e| GrantError::Refused(e.to_string()))?;
         g.retain(|x| *x != real);
         g.push_back(real);
@@ -327,6 +331,24 @@ mod tests {
         }
         assert_eq!(f.grants.lock().unwrap().len(), GRANT_CAP);
         assert!(!f.grants.lock().unwrap().contains(&t.0.join("outside/picked.txt").canonicalize().unwrap()), "the oldest grant went first");
+    }
+
+    // A valid-Unicode link that resolves to a non-Unicode name must not be granted: serde could not save it.
+    #[cfg(windows)]
+    #[test]
+    fn row909_a_link_that_resolves_to_a_non_unicode_name_is_refused() {
+        use std::os::windows::ffi::OsStringExt;
+        let t = temp("nonunicode");
+        let store = Store::open(&t.0.join("data")).unwrap();
+        let f = Fence::default();
+        let odd = t.0.join(std::ffi::OsString::from_wide(&[0x61, 0xD800, 0x2E, 0x64]));
+        fs::create_dir_all(&odd).unwrap();
+        fs::write(odd.join("f.txt"), "x").unwrap();
+        let link = t.0.join("link");
+        std::os::windows::fs::symlink_dir(&odd, &link).expect("symlink_dir needs developer mode or admin");
+        assert!(link.to_str().is_some());
+        assert!(matches!(f.grant(&link.join("f.txt"), &store), Err(GrantError::Refused(_))));
+        assert!(f.grants.lock().unwrap().is_empty(), "nothing was granted");
     }
 
     #[test]

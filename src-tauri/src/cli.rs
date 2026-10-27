@@ -3741,13 +3741,29 @@ type RetryTurn = std::sync::Arc<Mutex<Option<(u64, Value)>>>;
 
 fn retry_turn(key: &str) -> RetryTurn {
     static TURNS: Mutex<BTreeMap<String, RetryTurn>> = Mutex::new(BTreeMap::new());
-    let mut turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
-    let now = now_ms();
-    let remembered = |t: &RetryTurn| match t.try_lock() {
-        Ok(memo) => memo.as_ref().is_some_and(|(at, _)| now.saturating_sub(*at) <= so::RECEIPT_TTL_MS),
-        Err(_) => true,
-    };
+    retry_turn_in(&mut TURNS.lock().unwrap_or_else(|p| p.into_inner()), key, now_ms())
+}
+
+/// When this key's send memo was made; `None` while a send holds the key. A poisoned lock is read through.
+fn memo_at(t: &RetryTurn) -> Option<Option<u64>> {
+    match t.try_lock() {
+        Ok(memo) => Some(memo.as_ref().map(|(at, _)| *at)),
+        Err(std::sync::TryLockError::Poisoned(p)) => Some(p.into_inner().as_ref().map(|(at, _)| *at)),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
+fn retry_turn_in(turns: &mut BTreeMap<String, RetryTurn>, key: &str, now: u64) -> RetryTurn {
+    let remembered = |t: &RetryTurn| memo_at(t).is_none_or(|at| at.is_some_and(|at| now.saturating_sub(at) <= so::RECEIPT_TTL_MS));
     turns.retain(|k, t| k == key || std::sync::Arc::strong_count(t) > 1 || remembered(t));
+    // The idle memos are capped like the saved receipts, oldest first.
+    let mut idle: Vec<(u64, String)> = turns.iter().filter(|(k, t)| *k != key && std::sync::Arc::strong_count(t) == 1).filter_map(|(k, t)| Some((memo_at(t)??, k.clone()))).collect();
+    if idle.len() > so::RECEIPTS_KEPT {
+        idle.sort();
+        for (_, k) in idle.drain(..idle.len() - so::RECEIPTS_KEPT) {
+            turns.remove(&k);
+        }
+    }
     turns.entry(key.to_string()).or_default().clone()
 }
 
@@ -4991,6 +5007,43 @@ fn caller_distro(args: &mut Map<String, Value>, distro: Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn memo_turn(at: u64) -> RetryTurn {
+        std::sync::Arc::new(Mutex::new(Some((at, Value::Null))))
+    }
+
+    #[test]
+    fn row909_the_retry_memos_are_capped_and_the_oldest_idle_one_goes_first() {
+        let now = 10 * so::RECEIPT_TTL_MS;
+        let mut turns = BTreeMap::new();
+        for n in 0..=so::RECEIPTS_KEPT as u64 {
+            turns.insert(format!("k{n}"), memo_turn(now - 1000 + n));
+        }
+        let busy = memo_turn(now - 5000);
+        let _held = busy.clone();
+        turns.insert("busy".into(), busy);
+        retry_turn_in(&mut turns, "fresh", now);
+        assert!(!turns.contains_key("k0"), "the oldest idle memo went");
+        assert!(turns.contains_key(&format!("k{}", so::RECEIPTS_KEPT)), "the newest is kept");
+        assert!(turns.contains_key("busy"), "a key in use is never dropped, however old");
+        let idle = turns.iter().filter(|(k, t)| k.starts_with('k') && t.try_lock().is_ok_and(|m| m.is_some())).count();
+        assert_eq!(idle, so::RECEIPTS_KEPT);
+    }
+
+    #[test]
+    fn row909_a_poisoned_retry_memo_is_read_through() {
+        let now = 10 * so::RECEIPT_TTL_MS;
+        let old = memo_turn(now - so::RECEIPT_TTL_MS - 1);
+        let held = old.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = held.lock().unwrap();
+            panic!("poison the memo");
+        })
+        .join();
+        let mut turns = BTreeMap::from([("old".to_string(), old)]);
+        retry_turn_in(&mut turns, "fresh", now);
+        assert!(!turns.contains_key("old"), "an expired memo is dropped even when its lock was poisoned");
+    }
 
     #[test]
     fn row220_the_client_sends_the_wsl_distribution_it_runs_in() {

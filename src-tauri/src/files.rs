@@ -838,7 +838,8 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
-    /// A file name that is not valid Unicode: an unpaired surrogate on Windows, a stray byte elsewhere.
+    /// A file name that is not valid Unicode: an unpaired surrogate on Windows, a stray byte on Linux (APFS refuses one with EILSEQ).
+    #[cfg(any(windows, target_os = "linux"))]
     fn non_unicode_name() -> std::ffi::OsString {
         #[cfg(windows)]
         {
@@ -852,6 +853,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn row907_a_pick_that_is_not_valid_unicode_is_refused_before_the_fence_grants_it() {
         let d = temp_dir("pick-non-unicode");
