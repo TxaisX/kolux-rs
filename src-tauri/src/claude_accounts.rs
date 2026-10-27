@@ -242,21 +242,33 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     let creds = dir.join(CREDENTIALS);
     let vault = profile.join(secrets::VAULT).join(format!("claude-{id}.json"));
     let before = read(&creds);
-    // Row 938: a live file that exists but cannot be read (a lock, bad UTF-8) gives no `before`, yet it may be the only copy of the earlier login.
-    let had_live = creds.exists();
-    let undo = |before: &Option<String>| {
-        if existing {
-            let earlier = before.clone().or_else(|| secrets::read_file(&vault, profile).ok().flatten());
-            match earlier {
-                Some(e) => {
-                    let _ = fs::write(&creds, e);
-                }
-                // Row 932: no earlier bytes anywhere, so the live file can only hold the refused login; row 938: unless a live file was there before the login.
-                None if !had_live => remove_refused_login(&creds),
-                None => {}
-            }
-        } else {
+    // Row 940: the live file as the login found it, as raw bytes, so a rollback restores even a file that is not UTF-8.
+    let live_before = match fs::read(&creds) {
+        Ok(bytes) => LiveBefore::Bytes(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => LiveBefore::Absent,
+        Err(e) => {
+            eprintln!("kolux-rs: could not read the live sign-in {} ({:?})", creds.display(), e.kind());
+            LiveBefore::Unreadable
+        }
+    };
+    let undo = || {
+        if !existing {
             let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        match &live_before {
+            LiveBefore::Bytes(bytes) => {
+                let _ = fs::write(&creds, bytes);
+            }
+            // Row 938: a file that exists but cannot be read (a lock) may be the only copy of the earlier login, so it is left as it is.
+            LiveBefore::Unreadable => {}
+            // Row 932: no live file before, so the sealed copy is the earlier login; with none, the live file can only hold the refused login.
+            LiveBefore::Absent => match secrets::read_file(&vault, profile).ok().flatten() {
+                Some(earlier) => {
+                    let _ = fs::write(&creds, earlier);
+                }
+                None => remove_refused_login(&creds),
+            },
         }
     };
     let (output, ended) = login(&dir);
@@ -265,17 +277,17 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         _ => None,
     };
     let Some(fresh) = fresh else {
-        undo(&before);
+        undo();
         return Err(failure(&ended, &output));
     };
     let Some((email, organization)) = status(&dir).as_deref().and_then(identity) else {
-        undo(&before);
+        undo();
         return Err(Attention::new("sign-in-refused", "Claude Code did not report a signed-in account after the browser step."));
     };
     if !existing {
         let twin = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().find(|a| same_account(a, email.as_deref(), organization.as_deref()));
         if let Some(t) = twin {
-            undo(&before);
+            undo();
             let who = [t.email, t.organization].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             return Err(Attention::new("unknown", format!("{who} is already in the list, so nothing was added.")));
         }
@@ -287,7 +299,7 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         Err(_) => None,
     });
     if let Err(e) = secrets::write_file(&vault, &fresh) {
-        undo(&before);
+        undo();
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
     let account = Account { id: id.into(), email, organization, config_dir: dir.to_string_lossy().into_owned(), last_sign_in: now, stale: false };
@@ -318,17 +330,24 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         };
         // Row 929: with no live file and no earlier bytes put back, the live file can only hold the refused login, so it goes.
         // Row 932: unless the earlier sealed bytes are still in memory; those are opened and written live instead.
-        if existing && before.is_none() && !restored {
+        if existing && matches!(live_before, LiveBefore::Absent) && !restored {
             let back = matches!(&prior, Some(Some(bytes)) if write_live_from_sealed(&creds, bytes));
-            if !back && !had_live {
+            if !back {
                 remove_refused_login(&creds);
             }
         } else {
-            undo(&before);
+            undo();
         }
         return Err(e.into());
     }
     Ok(account)
+}
+
+/// Row 940: what the live credentials file held before a login; `Unreadable` is a file that is there but cannot be read (a sharing lock).
+enum LiveBefore {
+    Bytes(Vec<u8>),
+    Absent,
+    Unreadable,
 }
 
 /// Row 932: opens earlier sealed bytes and writes them as the live credentials, the way undo writes earlier bytes; false when they cannot be opened or written.
@@ -997,28 +1016,38 @@ mod tests {
         assert_eq!(fs::read(&live).unwrap(), bytes, "the unreadable live file is byte-identical");
     }
 
-    // Row 938 (1): the same file survives the refused-save path, where no earlier bytes can be put back.
-    #[test]
-    fn row938_a_refused_save_leaves_an_unreadable_live_file_alone() {
-        let (dir, store) = profile("row938-refused");
-        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
-        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+    /// A listed account whose live file holds bytes that are not UTF-8 and has no sealed copy; returns (live path, those bytes).
+    fn listed_with_unreadable_live(dir: &Path, store: &Mutex<Store>) -> (PathBuf, [u8; 5]) {
+        let a = sign_in(store, dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        fs::remove_file(dir.join(secrets::VAULT).join("claude-a1.json")).unwrap();
         let live = Path::new(&a.config_dir).join(CREDENTIALS);
-        fs::remove_file(&vault).unwrap();
         let bytes = [0xffu8, 0xfe, 0x00, 0x80, b'x'];
         fs::write(&live, bytes).unwrap();
-        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
-        // The login leaves the unreadable file as it is and the list breaks as it ends.
-        let login = |_: &Path| {
-            store.lock().unwrap().set(LIST_KEY, broken).unwrap();
-            crate::orchestration::kept::refuse_copies(&dir);
-            (String::new(), Ended::Exited(Some(0)))
-        };
-        let _ = sign_in(&store, &dir, "a1", true, 9, login, |_| Some(SIGNED_IN.into()));
-        assert_eq!(fs::read(&live).unwrap(), bytes, "the unreadable live file is byte-identical");
+        (live, bytes)
     }
 
-    // Row 938 (2): with nothing listed at all (a list set aside as corrupt, or a first account) an existing re-sign-in keeps its own id and folder.
+    // Row 940 (1): the refused-save path puts the unreadable live file back byte for byte, over the login that overwrote it.
+    #[test]
+    fn row940_a_refused_save_puts_an_unreadable_live_file_back_exactly() {
+        let (dir, store) = profile("row940-refused");
+        let (live, bytes) = listed_with_unreadable_live(&dir, &store);
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, breaks_list(&store, &dir, broken, new), |_| Some(SIGNED_IN.into())).is_err());
+        assert_eq!(fs::read(&live).unwrap(), bytes, "the unreadable live file is byte-identical, not the refused login");
+    }
+
+    // Row 940 (1): the same when the status step fails after the login wrote its credentials.
+    #[test]
+    fn row940_a_failed_status_puts_an_unreadable_live_file_back_exactly() {
+        let (dir, store) = profile("row940-status");
+        let (live, bytes) = listed_with_unreadable_live(&dir, &store);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| None).is_err());
+        assert_eq!(fs::read(&live).unwrap(), bytes, "the unreadable live file is byte-identical, not the refused login");
+    }
+
+    // Row 940 (2): with nothing listed, an existing sign-in whose account folder is there (a list set aside as corrupt) keeps its own id and folder.
     #[test]
     fn row938_an_existing_sign_in_with_an_empty_list_keeps_its_own_id() {
         let (dir, store) = profile("row938-empty");
@@ -1031,6 +1060,7 @@ mod tests {
         assert_eq!(fs::read_dir(dir.join(FOLDER)).unwrap().count(), 1, "no second account folder");
         assert_eq!(load(&store.lock().unwrap()).len(), 1);
     }
+
 
     // Row 938 (3): a store that cannot be read at the start fails an existing sign-in before the login runs.
     #[test]
