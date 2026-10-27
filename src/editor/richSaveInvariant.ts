@@ -81,12 +81,41 @@ function read(src: string) {
 
 type Read = ReturnType<typeof read>;
 
-// A note longer than this is checked in a slice of this many lines on each side of the edit's window: the bytes outside the window
-// are the same in both texts, so a cut far from the window reads the same in both and the checks stay valid, at a fraction of the lexing.
+// A note longer than this is checked in a slice of about this many lines on each side of the edit's window: the bytes outside the window
+// are the same in both texts, so a cut far from the window reads the same in both and the checks stay valid, at a fraction of the lexing
+// (the whole 1,200-item note costs 60-80 ms a keystroke, over the 50 ms bar).
 const WHOLE_NOTE_LINES = 400;
 const MARGIN_LINES = 60;
-// Lines the slice may start at or end before: a list item (indented up to three) or any line with no indent.
-const CUT = /^ {0,3}([-*+]|\d+[.)])[ \t]|^\S/;
+
+const lineEnds = (s: string) => {
+  let n = 0;
+  for (let i = s.indexOf("\n"); i >= 0; i = s.indexOf("\n", i + 1)) n++;
+  return n;
+};
+
+/** The lines (line ends \n or \r\n) where a top-level block, or an item of a top-level list, starts: the only places a slice may be cut,
+ *  so it never starts inside a fence. Only [0] when the blocks do not add up to the note's lines. */
+function blockStartLines(body: string): number[] {
+  const md = body.replace(/\r\n/g, "\n");
+  const starts: number[] = [];
+  let line = 0;
+  let atLine = true;
+  for (const t of new Lexer().blockTokens(md, [])) {
+    if (atLine) starts.push(line);
+    if (t.type === "list") {
+      let l = line;
+      let itemAtLine = false;
+      for (const x of (t as Token & { items: { raw: string }[] }).items) {
+        if (itemAtLine) starts.push(l);
+        l += lineEnds(x.raw);
+        itemAtLine = x.raw.endsWith("\n");
+      }
+    }
+    line += lineEnds(t.raw);
+    atLine = t.raw.endsWith("\n");
+  }
+  return line === lineEnds(md) ? starts : [0];
+}
 
 /** Why the saved body `next` must be refused for the view edit `prev` -> `out` made in `body`, or null when it passes. */
 export function saveBreaksInvariant(body: string, next: string, prev: string, out: string): string | null {
@@ -107,22 +136,27 @@ export function saveBreaksInvariant(body: string, next: string, prev: string, ou
   };
   const lo0 = before ? lineAt(bw[before - 1].e - 1) : 0;
   const hi0 = after ? lineAt(bw[bw.length - after].s) : BL.length - 1;
-  for (const sliced of BL.length > WHOLE_NOTE_LINES ? [true, false] : [false]) {
-    // The slice starts at a line with no indent and ends before one, so it cuts between top-level lines.
+  // A lone CR is no line end here but is one to the lexer, so such a note is never sliced.
+  const sliceable = BL.length > WHOLE_NOTE_LINES && !/\r(?!\n)/.test(body) && !/\r(?!\n)/.test(next);
+  const cuts = sliceable ? blockStartLines(body) : [];
+  for (const sliced of sliceable ? [true, false] : [false]) {
+    // The slice starts where a top-level block starts and ends before another does, so it never begins inside a fence.
     let a = 0;
     let z = BL.length - 1;
     if (sliced) {
-      a = Math.max(0, lo0 - MARGIN_LINES);
-      while (a > 0 && !CUT.test(BL[a])) a--;
-      z = Math.min(BL.length - 1, hi0 + MARGIN_LINES);
-      while (z < BL.length - 1 && !CUT.test(BL[z + 1])) z++;
+      const from = Math.max(0, lo0 - MARGIN_LINES);
+      const to = hi0 + MARGIN_LINES + 1;
+      a = cuts.reduce((m, c) => (c <= from ? c : m), 0);
+      z = (cuts.find((c) => c >= to) ?? BL.length) - 1;
     }
     const B = read(sliced ? BL.slice(a, z + 1).join("\n") : body);
     const unitOf = (l: number): Unit => B.units.filter((u) => u[0] <= l - a && l - a <= u[1]).sort((x, y) => x[1] - x[0] - (y[1] - y[0]))[0] ?? [l - a, l - a];
     const lo = Math.min(lo0, unitOf(lo0)[0] + a);
     const hi = Math.max(hi0, unitOf(hi0)[1] + a);
-    // A widened window that reaches the cut needs the whole note.
-    if (sliced && ((lo <= a && a > 0) || (hi >= z && z < BL.length - 1))) continue;
+    // A widened window that reaches the cut needs the whole note (blank lines at the slice end belong to its last block).
+    let zText = z;
+    while (zText > a && !BL[zText].trim()) zText--;
+    if (sliced && ((lo <= a && a > 0) || (hi >= zText && z < BL.length - 1))) continue;
     if (!sameOutside(BL, NL, lo, hi)) return `bytes changed outside the edited lines ${lo}-${hi}`;
     const nz = NL.length - 1 - (BL.length - 1 - z);
     return untouchedListsChanged(B, sliced ? NL.slice(a, nz + 1).join("\n") : next, prev, out);
