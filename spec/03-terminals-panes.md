@@ -383,7 +383,7 @@ Rules: saved history is written safely so a crash leaves a usable copy; large hi
   current size, so a pane reopened at a different size shows it approximately; large histories
   are kept to one piece, 256 KB on disk and the newest 128 KB replayed.)
 Acceptance:
-  - [x] After killing the host, reopened panes show their earlier output above a new prompt. (cards live; evidence/cards-TERM-106.txt)
+  - [ ] After killing the host, reopened panes show their earlier output above a new prompt.
   - [x] A tab the user closed on purpose before the crash does not come back. (cards; evidence/cards-TERM-106.txt)
 Compat: —
 Source: D-03-106

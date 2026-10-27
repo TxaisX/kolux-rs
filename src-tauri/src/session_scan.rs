@@ -6,11 +6,13 @@
 //! only when it is already running (a stopped one is never started for a scan).
 use super::list::{Cache, Entry, Summary};
 use serde::{Deserialize, Serialize};
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// Bumped whenever the parsed summary changes shape or meaning, so an older file is ignored.
@@ -53,6 +55,10 @@ pub struct Listing {
     pub report: Report,
 }
 
+// Budget threads started by the calling thread (the scan runs on it), so tests can count them.
+#[cfg(test)]
+thread_local! { pub static SPAWNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 /// A time limit for one scan; `none` never runs out.
 pub struct Budget(Option<Instant>);
 
@@ -66,15 +72,52 @@ impl Budget {
     pub fn spent(&self) -> bool {
         self.0.is_some_and(|t| Instant::now() >= t)
     }
-    /// Runs `read` and waits for it only while the budget lasts: `None` when it ran out first (a
-    /// disk that hangs). The stalled read is left to finish on its own thread. `none` runs inline.
-    pub fn run<T: Send + 'static>(&self, read: impl FnOnce() -> T + Send + 'static) -> Option<T> {
-        let Some(end) = self.0 else { return Some(read()) };
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(read());
+    /// One worker for a whole scan: `work` runs on a single helper thread (started on the first call),
+    /// and each call waits for its answer only while the budget lasts. `none` runs inline.
+    pub fn worker<I: Send + 'static, O: Send + 'static>(&self, work: impl Fn(I) -> O + Send + Sync + 'static) -> Worker<I, O> {
+        Worker { end: self.0, work: std::sync::Arc::new(work), line: RefCell::new(None), stalled: Cell::new(false) }
+    }
+}
+
+type Line<I, O> = (mpsc::Sender<I>, mpsc::Receiver<O>);
+
+/// See [`Budget::worker`]. Calls are one at a time; after the budget runs out on a call the helper is
+/// left to finish on its own and every later call answers `None` at once.
+pub struct Worker<I, O> {
+    end: Option<Instant>,
+    work: std::sync::Arc<dyn Fn(I) -> O + Send + Sync>,
+    line: RefCell<Option<Line<I, O>>>,
+    stalled: Cell<bool>,
+}
+
+impl<I: Send + 'static, O: Send + 'static> Worker<I, O> {
+    /// `None` when the budget ran out first (a disk that hangs).
+    pub fn call(&self, item: I) -> Option<O> {
+        let Some(end) = self.end else { return Some((self.work)(item)) };
+        if self.stalled.get() {
+            return None;
+        }
+        let mut line = self.line.borrow_mut();
+        let (jobs, answers) = line.get_or_insert_with(|| {
+            let (jobs, queue) = mpsc::channel::<I>();
+            let (reply, answers) = mpsc::channel();
+            let work = self.work.clone();
+            #[cfg(test)]
+            SPAWNS.with(|n| n.set(n.get() + 1));
+            std::thread::spawn(move || {
+                for job in queue {
+                    if reply.send(work(job)).is_err() {
+                        break;
+                    }
+                }
+            });
+            (jobs, answers)
         });
-        rx.recv_timeout(end.saturating_duration_since(Instant::now())).ok()
+        let answer = jobs.send(item).ok().and_then(|()| answers.recv_timeout(end.saturating_duration_since(Instant::now())).ok());
+        if answer.is_none() {
+            self.stalled.set(true);
+        }
+        answer
     }
 }
 
@@ -284,6 +327,23 @@ mod tests {
         assert!(got.report.cut_short);
         assert!(got.sessions.len() < 2);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_worker_that_ran_out_of_budget_answers_none_at_once_and_starts_nothing_more() {
+        SPAWNS.with(|n| n.set(0));
+        let w = Budget::within(Duration::from_millis(150)).worker(|ms: u64| {
+            std::thread::sleep(Duration::from_millis(ms));
+            ms
+        });
+        assert_eq!(w.call(1), Some(1));
+        assert_eq!(w.call(2), Some(2));
+        assert_eq!(w.call(2_000), None);
+        let began = Instant::now();
+        assert_eq!(w.call(1), None);
+        assert!(began.elapsed() < Duration::from_millis(100));
+        assert_eq!(SPAWNS.with(|n| n.get()), 1);
+        assert_eq!(Budget::none().worker(|x: u8| x + 1).call(1), Some(2));
     }
 
     /// after-list row 608: a read stalled inside one transcript (a hung network disk) does not hold

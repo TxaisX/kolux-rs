@@ -18,7 +18,7 @@
 // evidence/sessions-T-169-lib.rs.patch (shared file); the allow goes when the patch lands.
 #![allow(dead_code)]
 
-use super::scan::{Budget, Listing, Report};
+use super::scan::{Budget, Listing, Report, Worker};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -235,27 +235,45 @@ pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     s
 }
 
-fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64, report: &mut Report, budget: &Budget) -> Summary {
-    if let Some((m, l, s)) = cache.get(path) {
-        if *m == modified && *l == len {
-            return s.clone();
+type Job = (String, PathBuf, Option<(u64, u64, Summary)>);
+type Found = Option<(u64, u64, Summary, bool)>;
+/// The scan's one budgeted worker.
+type Probe = Worker<Job, Found>;
+
+/// Stats a transcript and, unless the saved summary still matches, reads it (the work of [`probe_file`]),
+/// all on the scan's worker so a hung disk stalls neither step past the budget. `None`: gone,
+/// unreadable, or the budget ran out.
+fn look(cache: &mut Cache, agent: &str, path: &Path, report: &mut Report, probe: &Probe) -> Option<(u64, u64, Summary)> {
+    let Some(found) = probe.call((agent.to_string(), path.to_path_buf(), cache.get(path).cloned())) else {
+        report.cut_short = true;
+        return None;
+    };
+    let (modified, len, s, fresh) = found?;
+    if s.unreadable {
+        return None;
+    }
+    if fresh {
+        report.parsed += 1;
+        cache.insert(path.to_path_buf(), (modified, len, s.clone()));
+    }
+    Some((modified, len, s))
+}
+
+fn probe_file((agent, path, saved): Job) -> Found {
+    let (modified, len) = stat(&path)?;
+    if let Some((m, l, s)) = saved {
+        if m == modified && l == len {
+            return Some((modified, len, s, false));
         }
     }
-    // The read runs apart so a hung disk cannot hold the scan past its budget; the file counts as skipped.
-    let (a, p) = (agent.to_string(), path.to_path_buf());
-    let s = budget.run(move || summarize(&a, &p, len)).unwrap_or_else(|| {
-        report.cut_short = true;
-        Summary { unreadable: true, ..Summary::default() }
-    });
-    if s.unreadable {
-        return s;
-    }
-    report.parsed += 1;
-    cache.insert(path.to_path_buf(), (modified, len, s.clone()));
-    s
+    Some((modified, len, summarize(&agent, &path, len), true))
 }
 
 fn stat(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(test)]
+    if path.file_name().is_some_and(|n| n.to_string_lossy().contains("statstall")) {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
     let meta = fs::metadata(path).ok().filter(|m| m.is_file())?;
     let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
     Some((modified, meta.len()))
@@ -283,7 +301,7 @@ fn title_of(s: &Summary, indexed: Option<&String>) -> String {
 /// Claude sessions: for a folder scope the workspace's own history folder (`sessions::claude_history_dir`
 /// finds it however the drive letter is cased), for All every history folder. Sub-agent transcripts
 /// (`agent-*` files and sidechain sessions) are left out.
-fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &Budget, report: &mut Report) -> Vec<Entry> {
+fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &Budget, probe: &Probe, report: &mut Report) -> Vec<Entry> {
     let mut out = Vec::new();
     for config in roots {
         let projects = config.join("projects");
@@ -306,15 +324,10 @@ fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &
                     report.cut_short = true;
                     return out;
                 }
-                let Some((modified, len)) = stat(&path) else {
+                let Some((modified, len, s)) = look(cache, "claude", &path, report, probe) else {
                     report.skipped += 1;
                     continue;
                 };
-                let s = summary_for(cache, "claude", &path, modified, len, report, budget);
-                if s.unreadable {
-                    report.skipped += 1;
-                    continue;
-                }
                 if s.skip {
                     continue;
                 }
@@ -347,7 +360,7 @@ pub fn codex_files(home: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &Budget, report: &mut Report) -> Vec<Entry> {
+fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &Budget, probe: &Probe, report: &mut Report) -> Vec<Entry> {
     let mut out = Vec::new();
     for home in roots {
         let index = codex_index(home);
@@ -360,15 +373,10 @@ fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &B
                 report.cut_short = true;
                 return out;
             }
-            let Some((modified, len)) = stat(&path) else {
+            let Some((modified, len, s)) = look(cache, "codex", &path, report, probe) else {
                 report.skipped += 1;
                 continue;
             };
-            let s = summary_for(cache, "codex", &path, modified, len, report, budget);
-            if s.unreadable {
-                report.skipped += 1;
-                continue;
-            }
             if s.skip || !in_scope(s.cwd.as_deref(), scope) {
                 continue;
             }
@@ -393,8 +401,9 @@ pub fn list(roots: &Roots, scope: &Scope, cache: &mut Cache, depth: Option<usize
 pub fn list_scan(roots: &Roots, scope: &Scope, cache: &mut Cache, depth: Option<usize>, budget: &Budget) -> Listing {
     let no_sources = roots.claude.iter().all(|c| !c.join("projects").is_dir()) && roots.codex.iter().all(|h| !h.join("sessions").is_dir() && !h.join("archived_sessions").is_dir());
     let mut report = Report { no_sources, ..Report::default() };
-    let mut all = claude_entries(&roots.claude, scope, cache, budget, &mut report);
-    all.extend(codex_entries(&roots.codex, scope, cache, budget, &mut report));
+    let probe = budget.worker(probe_file);
+    let mut all = claude_entries(&roots.claude, scope, cache, budget, &probe, &mut report);
+    all.extend(codex_entries(&roots.codex, scope, cache, budget, &probe, &mut report));
     all.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms).then_with(|| a.agent.cmp(&b.agent)).then_with(|| a.id.cmp(&b.id)));
     let mut seen = HashSet::new();
     all.retain(|e| seen.insert((e.agent.clone(), e.id.clone())));
@@ -695,6 +704,44 @@ mod tests {
             rows.push(json!({ "type": "event_msg", "payload": { "type": "user_message", "message": m } }));
         }
         lines(path, &rows);
+    }
+
+    /// Row 777 follow-up: one budgeted worker per scan, not a thread per transcript.
+    #[test]
+    fn a_warm_budgeted_scan_of_thousands_of_transcripts_starts_at_most_two_threads() {
+        let root = tmp("warmthreads");
+        let dir = root.join("projects").join("C--work-app");
+        for i in 0..2000 {
+            lines(&dir.join(format!("s{i}.jsonl")), &[claude_user("first", r"C:\work\app")]);
+        }
+        let roots = Roots { claude: vec![root.clone()], codex: vec![] };
+        let mut cache = Cache::new();
+        assert_eq!(list_scan(&roots, &Scope::All, &mut cache, None, &Budget::none()).sessions.len(), 2000);
+        super::super::scan::SPAWNS.with(|n| n.set(0));
+        let began = std::time::Instant::now();
+        let got = list_scan(&roots, &Scope::All, &mut cache, None, &Budget::within(std::time::Duration::from_secs(120)));
+        let (took, spawns) = (began.elapsed(), super::super::scan::SPAWNS.with(|n| n.get()));
+        eprintln!("p49 warm scan of 2000 transcripts: {took:?}, {spawns} budget threads");
+        assert_eq!((got.sessions.len(), got.report.parsed, got.report.skipped, got.report.cut_short), (2000, 0, 0, false));
+        assert!(spawns <= 2, "the warm scan started {spawns} threads");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// after-list row 777: a stat that hangs (a dead network disk) counts against the scan budget too.
+    #[test]
+    fn row777_a_stalled_stat_does_not_hold_the_scan_past_its_budget() {
+        let root = tmp("statstall");
+        let dir = root.join("projects").join("C--work-app");
+        lines(&dir.join("a-statstall.jsonl"), &[claude_user("first", r"C:\work\app")]);
+        let sid = "019a0000-0000-7000-8000-0000000007c1";
+        codex_session(&root.join("sessions/2026/10/01").join(format!("rollout-2026-10-01T00-00-00-{sid}-statstall.jsonl")), sid, r"C:\work\app", Value::String("cli".into()), Some("hi"));
+        let both = Roots { claude: vec![root.clone()], codex: vec![root.clone()] };
+        let began = std::time::Instant::now();
+        let got = list_scan(&both, &Scope::All, &mut Cache::new(), None, &Budget::within(std::time::Duration::from_millis(400)));
+        assert!(began.elapsed() < std::time::Duration::from_secs(3), "the scan waited {:?} on the stalled stat", began.elapsed());
+        assert!(got.report.cut_short);
+        assert!(got.sessions.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

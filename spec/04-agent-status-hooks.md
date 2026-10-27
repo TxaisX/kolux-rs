@@ -414,7 +414,7 @@ Tier: P1 · Pushed: 3 · State at 0.15.0: live-unverified
 User does: runs Cursor Agent in a pane.
 User sees: working while it runs, done or interrupted at the end, and no stream of notifications
   from shell or MCP steps.
-Rules: prompt submission, tool, shell and MCP events mean working, and shell or MCP steps never
+Rules: prompt submission and tool events mean working, and shell or MCP steps never
   notify; a stop whose status is anything but completed means interrupted; the after-response event
   counts as done only when the status was already done; install follows Cursor's own command layout
   and keeps the user's entries; Cursor's session-start event is left unhooked on purpose because it
@@ -426,6 +426,7 @@ Compat: Cursor's events, in Cursor's own naming style: before prompt submit, sto
   tool use, tool-use failure, before shell execution, before MCP execution and after agent response
   (the 8 installed); session start and session end are mapped but not installed (COMPAT.md 3.4).
 Source: D-04-012
+Amended 2026-10-26 (kolux-87 ruling, SAFE-009, DT-C49): 5 events installed (before prompt submit, stop, after tool use, tool-use failure, after agent response); the 3 permission events stay mapped for older files but are never installed, because Cursor blocks on any answer outside their schema (Cursor's public hooks documentation).
 
 ### STAT-013 · Droid status
 Tier: P1 · Pushed: 3 · State at 0.15.0: live-unverified
