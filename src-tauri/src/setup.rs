@@ -439,6 +439,9 @@ struct Trust {
     all: bool,
     #[serde(default)]
     scripts: std::collections::BTreeMap<String, String>,
+    /// Row 887: fields a newer build wrote, carried through a save; a non-object blob (`[]`) fails to decode.
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// SAFE-025: what the trust prompt shows: the script that would run, of which kind, for which
@@ -1812,6 +1815,35 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn row887_a_trust_record_from_a_newer_build_keeps_its_unknown_fields_through_a_grant() {
+        let (store, dir, root) = trust_store();
+        let key = format!("{TRUST_PREFIX}{}", trust_project(&store, &root).unwrap().id);
+        store.set(&key, r#"{"all":false,"scripts":{"archive":"abc"},"future":{"a":[1,2]}}"#).unwrap();
+        trust_grant(&store, &root, "setup", "echo shared", false).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&store.get(&key).unwrap().unwrap()).unwrap();
+        assert_eq!(saved["future"], serde_json::json!({ "a": [1, 2] }), "the unknown field survives the save");
+        assert_eq!(saved["scripts"]["archive"], "abc", "the earlier approval is kept");
+        assert!(saved["scripts"]["setup"].is_string());
+        assert!(crate::orchestration::kept::asides(&store, &key).is_empty(), "a readable newer record is not kept aside");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn row887_a_trust_blob_of_the_wrong_type_is_kept_aside_and_never_read_as_an_empty_record() {
+        for blob in ["[]", "\"x\"", "7", "[1,2]", "true"] {
+            let (store, dir, root) = trust_store();
+            let key = format!("{TRUST_PREFIX}{}", trust_project(&store, &root).unwrap().id);
+            store.set(&key, blob).unwrap();
+            trust_grant(&store, &root, "setup", "echo shared", false).unwrap();
+            assert_eq!(crate::orchestration::kept::asides(&store, &key), vec![blob.to_string()], "{blob}: a byte-identical copy is kept");
+            assert_eq!(trust_ask(&store, &root, "setup", "echo shared").unwrap(), None, "{blob}: the grant started a fresh record");
+            let _ = std::fs::remove_dir_all(dir);
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 
     #[test]

@@ -29,6 +29,9 @@ pub struct Waiting {
     /// Not before this time, ms since 1970 (a restored wait settles first).
     #[serde(default)]
     pub not_before: i64,
+    /// Fields a newer version saved, carried through untouched.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What runs in a pane's foreground when the prompt is due.
@@ -72,7 +75,7 @@ impl Resumes {
             return false;
         }
         self.cancel(pane_key);
-        self.waiting.push(Waiting { pane_key, resets_at, not_before: 0 });
+        self.waiting.push(Waiting { pane_key, resets_at, not_before: 0, rest: Default::default() });
         true
     }
 
@@ -251,6 +254,22 @@ mod tests {
     }
 
     #[test]
+    fn row919_a_wait_keeps_the_fields_this_version_does_not_know_when_the_list_is_saved_again() {
+        let dir = std::env::temp_dir().join(format!("krs-resume-rest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        store.set(KEY, r#"[{"pane_key":3,"resets_at":900,"not_before":0,"note":"keep me"}]"#).unwrap();
+        let mut r = Resumes::default();
+        r.restore(held_waits(&store), 1);
+        save_waits(&store, &r).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&store.get(KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(back[0]["pane_key"], 3);
+        assert_eq!(back[0]["note"], "keep me", "the unknown field survived the save");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_reset_time_comes_from_the_event_else_the_weekly_else_the_five_hour_window() {
         let now = 1_000_000;
         let weekly = limit("seven_day", 100.0, Some(now + 5_000));
@@ -316,7 +335,7 @@ mod tests {
     fn restored_waits_skip_past_resets_and_settle_first() {
         let now = 50_000_000;
         let mut r = Resumes::default();
-        r.restore(vec![Waiting { pane_key: 1, resets_at: now - 1, not_before: 0 }, Waiting { pane_key: 2, resets_at: now + 1_000, not_before: 0 }], now);
+        r.restore(vec![Waiting { pane_key: 1, resets_at: now - 1, not_before: 0, rest: Default::default() }, Waiting { pane_key: 2, resets_at: now + 1_000, not_before: 0, rest: Default::default() }], now);
         assert_eq!(r.waiting().len(), 1, "a reset that went by while Kolux was closed is skipped");
         assert_eq!(r.waiting()[0].pane_key, 2);
         assert_eq!(r.waiting()[0].not_before, now + SETTLE_MS);
@@ -325,7 +344,7 @@ mod tests {
         assert_eq!(r.check(due, |_| Foreground::Claude), Vec::<u32>::new(), "a restored pane first waits through the settling time");
         assert_eq!(r.check(now + SETTLE_MS, |_| Foreground::Claude), vec![2]);
         assert!(!r.schedule(2, now + 1_000), "never typed into twice for one reset");
-        let text = serde_json::to_string(&vec![Waiting { pane_key: 3, resets_at: 7, not_before: 0 }]).unwrap();
+        let text = serde_json::to_string(&vec![Waiting { pane_key: 3, resets_at: 7, not_before: 0, rest: Default::default() }]).unwrap();
         let back: Vec<Waiting> = serde_json::from_str(&text).unwrap();
         assert_eq!(back[0].pane_key, 3);
     }

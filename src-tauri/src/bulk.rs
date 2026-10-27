@@ -167,10 +167,13 @@ const STATUS_OF_KEY: &str = "workspaceStatusOf";
 pub struct Status {
     pub id: String,
     pub label: String,
+    /// Fields a newer version saved, carried through untouched.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
 pub fn default_statuses() -> Vec<Status> {
-    [("todo", "To do"), ("in-progress", "In progress"), ("in-review", "In review"), ("done", "Done")].iter().map(|(id, label)| Status { id: id.to_string(), label: label.to_string() }).collect()
+    [("todo", "To do"), ("in-progress", "In progress"), ("in-review", "In review"), ("done", "Done")].iter().map(|(id, label)| Status { id: id.to_string(), label: label.to_string(), rest: Default::default() }).collect()
 }
 
 /// The user's statuses in their order, or the default set when none were saved.
@@ -188,6 +191,7 @@ fn slug(label: &str) -> String {
 /// id it had (\`id\` given); a new one gets an id from its label, made unique. Blank labels drop.
 pub fn set_statuses(store: &Store, list: &[(Option<String>, String)]) -> Result<Vec<Status>, String> {
     let mut out: Vec<Status> = Vec::new();
+    let old: Vec<Status> = crate::orchestration::kept::or_default(store, STATUS_LIST_KEY);
     for (id, label) in list.iter().filter(|(_, l)| !l.trim().is_empty()) {
         let base = id.clone().filter(|i| !i.is_empty()).unwrap_or_else(|| slug(label));
         let mut unique = base.clone();
@@ -196,7 +200,8 @@ pub fn set_statuses(store: &Store, list: &[(Option<String>, String)]) -> Result<
             unique = format!("{base}-{n}");
             n += 1;
         }
-        out.push(Status { id: unique, label: label.trim().to_string() });
+        let rest = id.as_ref().and_then(|i| old.iter().find(|s| s.id == *i)).map(|s| s.rest.clone()).unwrap_or_default();
+        out.push(Status { id: unique, label: label.trim().to_string(), rest });
     }
     let out = if out.is_empty() { default_statuses() } else { out };
     store.set(STATUS_LIST_KEY, &serde_json::to_string(&out).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -555,6 +560,19 @@ mod tests {
         let err = set_statuses(&store, &[(None, "Backlog".into())]).unwrap_err();
         assert!(err.contains(STATUS_LIST_KEY) && err.contains("not saving over it"), "{err}");
         assert_eq!(store.get(STATUS_LIST_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row919_a_status_keeps_the_fields_this_version_does_not_know_when_the_list_is_saved_again() {
+        let dir = temp("row919");
+        let store = Store::open(&dir).unwrap();
+        store.set(STATUS_LIST_KEY, r##"[{"id":"ideas","label":"Ideas","color":"#f00"},{"id":"done","label":"Done"}]"##).unwrap();
+        set_statuses(&store, &[(Some("ideas".into()), "Ideas!".into()), (Some("done".into()), "Done".into())]).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&store.get(STATUS_LIST_KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(back[0]["label"], "Ideas!");
+        assert_eq!(back[0]["color"], "#f00", "the unknown field survived the save");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }

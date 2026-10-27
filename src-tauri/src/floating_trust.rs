@@ -148,7 +148,11 @@ pub fn floating_trusted(store: tauri::State<'_, Mutex<Store>>) -> Result<Vec<Str
 #[tauri::command]
 pub async fn floating_pick(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let Some(chosen) = app.dialog().file().set_title("Choose a folder for the floating workspace").blocking_pick_folder() else { return Ok(None) };
+    // The dialog blocks until closed; keep it off the async runtime's threads.
+    let chosen = tauri::async_runtime::spawn_blocking(move || app.dialog().file().set_title("Choose a folder for the floating workspace").blocking_pick_folder())
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(chosen) = chosen else { return Ok(None) };
     let path = chosen.into_path().map_err(|e| e.to_string())?;
     let s = store.lock().map_err(|e| e.to_string())?;
     trust_picked(&s, &plain(&path), &canonical, &home()).map(Some)
