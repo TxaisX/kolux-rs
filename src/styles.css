@@ -729,6 +729,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 /* ACCT-012 lapsed sign-in notice; ACCT-013 needs-attention reason with its one fix */
 .signin-notice { color: var(--fg); border-color: #7a5a1e; }
 .signin-notice span { color: #f0c27a; }
+.signin-notice .warn { color: var(--warn); }
 .signin-notice .btn { margin-left: auto; }
 .tool-notices { flex: none; display: flex; flex-direction: column; gap: 6px; margin: 8px 8px 0; }
 .tool-notices .notice { margin: 0; }

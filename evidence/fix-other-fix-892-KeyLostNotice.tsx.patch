@@ -1,17 +1,22 @@
 diff --git a/src/settings/KeyLostNotice.test.ts b/src/settings/KeyLostNotice.test.ts
-index 0c3aca4d..bd1f5949 100644
+index 0c3aca4d..44b94d13 100644
 --- a/src/settings/KeyLostNotice.test.ts
 +++ b/src/settings/KeyLostNotice.test.ts
-@@ -2,7 +2,7 @@
- import { expect, test } from "vitest";
+@@ -1,8 +1,11 @@
+ // ACCT-010: the note for a key this computer could no longer open says which and where to reconnect.
+-import { expect, test } from "vitest";
++import { expect, test, vi } from "vitest";
  import { createElement } from "react";
  import { renderToString } from "react-dom/server";
 -import { KeyLostView, lostText } from "./KeyLostNotice";
-+import { KeyLostView, dismissFailure, lostText } from "./KeyLostNotice";
++import { invoke } from "@tauri-apps/api/core";
++import { KeyLostView, dismissFailure, dismissNote, lostText } from "./KeyLostNotice";
++
++vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
  
  test("the note names each cleared key and says where to reconnect it", () => {
    expect(lostText(["claudeOauthToken"])).toBe("Your Claude 1-year key could not be opened on this computer, so it was cleared. Reconnect it in Settings › Accounts & keys.");
-@@ -26,3 +26,17 @@ test("every secret field the app stores has a label in the note", async () => {
+@@ -26,3 +29,37 @@ test("every secret field the app stores has a label in the note", async () => {
    for (const k of SECRET_KEYS) expect(lostText([k]), k).toContain("Your ");
    expect(lostText(["moonshotApiKey", "minimaxApiKey"])).toContain("Moonshot key and MiniMax key");
  });
@@ -29,11 +34,31 @@ index 0c3aca4d..bd1f5949 100644
 +  expect(html).toContain("will show again");
 +  expect(renderToString(createElement(KeyLostView, { names: ["claudeOauthToken"], onOpen: noop, onDismiss: noop }))).not.toContain('role="alert"');
 +});
++
++// AFTER row 912: no DOM library is installed, so the click is the handler the button calls (dismissNote) with the real
++// invoke call shape, and the markup is what that outcome renders.
++test("a refused dismiss keeps the names, shows the reason, and the alert is not inside the status region", async () => {
++  vi.mocked(invoke).mockRejectedValueOnce("poisoned key: not saving over it");
++  const names = ["claudeOauthToken"];
++  const out = await dismissNote(names, () => invoke("secrets_dropped_dismiss"));
++  expect(invoke).toHaveBeenCalledWith("secrets_dropped_dismiss");
++  expect(out.names).toEqual(names);
++  expect(out.error).toContain("poisoned key: not saving over it");
++  const noop = () => {};
++  const html = renderToString(createElement(KeyLostView, { names: out.names, onOpen: noop, onDismiss: noop, error: out.error }));
++  expect(html).toContain("Claude 1-year key");
++  expect(html).toContain("will show again");
++  const status = /<span role="status">[\s\S]*?<\/span>/.exec(html)?.[0] ?? "";
++  expect(status).not.toContain('role="alert"');
++  expect(status).not.toContain("will show again");
++  vi.mocked(invoke).mockResolvedValueOnce(null);
++  expect(await dismissNote(names, () => invoke("secrets_dropped_dismiss"))).toEqual({ names: [], error: null });
++});
 diff --git a/src/settings/KeyLostNotice.tsx b/src/settings/KeyLostNotice.tsx
-index b52128c0..7f5a8110 100644
+index b52128c0..dba3141f 100644
 --- a/src/settings/KeyLostNotice.tsx
 +++ b/src/settings/KeyLostNotice.tsx
-@@ -26,12 +26,27 @@ export function lostText(names: string[]): string | null {
+@@ -26,12 +26,33 @@ export function lostText(names: string[]): string | null {
    return `${subject} could not be opened on this computer, so ${many ? "they were" : "it was"} cleared. Reconnect ${many ? "them" : "it"} in Settings › Accounts & keys.`;
  }
  
@@ -48,12 +73,20 @@ index b52128c0..7f5a8110 100644
 +  }
 +}
 +
++/** What the note shows after a dismiss: the names stay and the reason shows when the app refuses; they go only when it agrees. */
++export async function dismissNote(names: string[], dismiss: () => Promise<unknown>): Promise<{ names: string[]; error: string | null }> {
++  const error = await dismissFailure(dismiss);
++  return { names: error ? names : [], error };
++}
++
 +export function KeyLostView({ names, onOpen, onDismiss, error }: { names: string[]; onOpen: () => void; onDismiss: () => void; error?: string | null }) {
    const text = lostText(names);
    if (!text) return null;
    return (
-     <div className="notice signin-notice key-lost" role="status">
-       <span>{text}</span>
+-    <div className="notice signin-notice key-lost" role="status">
+-      <span>{text}</span>
++    <div className="notice signin-notice key-lost">
++      <span role="status">{text}</span>
 +      {error && (
 +        <span className="warn" role="alert">
 +          {error}
@@ -62,17 +95,31 @@ index b52128c0..7f5a8110 100644
        <button className="btn" onClick={onOpen}>
          Open Accounts &amp; keys
        </button>
-@@ -51,9 +66,12 @@ export default function KeyLostNotice() {
+@@ -44,16 +65,25 @@ export function KeyLostView({ names, onOpen, onDismiss }: { names: string[]; onO
+ 
+ export default function KeyLostNotice() {
+   const [names, setNames] = useState<string[]>([]);
++  const [error, setError] = useState<string | null>(null);
+   useEffect(() => {
+-    const read = () => void invoke<string[]>("secrets_dropped").then(setNames).catch(() => {});
++    const read = () =>
++      void invoke<string[]>("secrets_dropped")
++        .then((n) => {
++          setNames(n);
++          setError(null);
++        })
++        .catch(() => {});
+     read();
+     // Connecting a key again clears its name; the Claude key card and settings saves say so.
      const offs = [listen("claude-key", read), listen("settings-saved", read)];
      return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
    }, []);
-+  const [error, setError] = useState<string | null>(null);
    const dismiss = () => {
 -    setNames([]);
 -    invoke("secrets_dropped_dismiss").catch(() => {});
-+    void dismissFailure(() => invoke("secrets_dropped_dismiss")).then((why) => {
-+      setError(why);
-+      if (!why) setNames([]);
++    void dismissNote(names, () => invoke("secrets_dropped_dismiss")).then((r) => {
++      setNames(r.names);
++      setError(r.error);
 +    });
    };
 -  return <KeyLostView names={names} onOpen={() => openSettings("accounts")} onDismiss={dismiss} />;
