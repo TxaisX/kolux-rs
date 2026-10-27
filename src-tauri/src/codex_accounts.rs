@@ -299,7 +299,8 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     // Row 929: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id.
     // Row 932: a list that cannot be read fails here, before the login; it never routes a listed account to a new id.
     let listed_ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
-    let (id, home) = if existing && listed_ids.iter().any(|l| l == id) {
+    // Row 938: an empty list (a set-aside corrupt list, or a first account) is not a stale screen, so the id keeps its own home.
+    let (id, home) = if existing && (listed_ids.is_empty() || listed_ids.iter().any(|l| l == id)) {
         let home = profile.join(FOLDER).join(id);
         fs::create_dir_all(&home).map_err(|e| e.to_string())?;
         (id.to_string(), home)
@@ -1339,11 +1340,35 @@ mod tests {
         assert_eq!(load(&store.lock().unwrap()).len(), 1);
     }
 
+    // Row 938: with nothing listed at all an existing re-sign-in keeps its own id and home.
+    #[test]
+    fn row938_an_existing_codex_sign_in_with_an_empty_list_keeps_its_own_id() {
+        let profile = temp("row938-empty");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        let first = sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
+        let got = sign_in(&store, &profile, "c1", true, 2, ok("lee@example.com")).unwrap();
+        assert_eq!(got.id, "c1", "the account keeps its id, not c2");
+        assert_eq!(got.home, first.home, "and its home");
+        let homes: Vec<_> = fs::read_dir(profile.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(homes, ["c1"], "no second account home");
+    }
+
     // Row 929: existing:true at an id that is not listed (a stale screen) is a new account, so an orphan sealed copy at that id is never overwritten.
     #[test]
     fn row929_an_existing_codex_sign_in_at_an_unlisted_id_claims_a_free_one() {
         let profile = temp("row929-stale");
         let store = Mutex::new(Store::open(&profile).unwrap());
+        // Row 938: a stale screen means a non-empty list that lacks the id; an empty list keeps the id.
+        sign_in(&store, &profile, "c1", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("lee@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
         let vault = profile.join(secrets::VAULT).join("codex-c7.json");
         secrets::write_file(&vault, "orphan sealed text").unwrap();
         let orphan = fs::read(&vault).unwrap();
