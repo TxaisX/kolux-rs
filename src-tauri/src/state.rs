@@ -33,6 +33,8 @@ impl Store {
     pub fn open(dir: &Path) -> rusqlite::Result<Store> {
         fs::create_dir_all(dir).map_err(|e| rusqlite::Error::InvalidPath(dir.join(e.to_string())))?;
         let conn = Connection::open(dir.join("state.db"))?;
+        // Absorbs a transient SQLITE_BUSY from a second process, so held keys are not poisoned for nothing.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
@@ -90,7 +92,7 @@ impl Store {
         let bad = self.poisoned.lock().unwrap_or_else(|e| e.into_inner());
         match keys.into_iter().find(|k| bad.contains(*k)) {
             None => Ok(()),
-            Some(k) => Err(rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!("{k} could not be read and was not kept aside; not saving over it"))))),
+            Some(k) => Err(rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!("{k} could not be read and was not kept aside; not saving over it. If the failure was temporary, restarting Kolux reads it again"))))),
         }
     }
 
@@ -629,5 +631,26 @@ mod tests {
         assert!(!dir.join("settings.json").exists(), "the only copy of someone's settings is not buried under a new file");
         assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), br#"{"theme":"mine"}"#);
         done(dir, s);
+    }
+
+    #[test]
+    fn card16b_the_store_waits_out_a_busy_second_process() {
+        let dir = temp_dir("busy");
+        let s = Store::open(&dir).unwrap();
+        let ms: i64 = s.conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
+        assert_eq!(ms, 5000);
+        drop(s);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn card16b_a_refused_save_tells_the_user_a_restart_reads_the_key_again() {
+        let dir = temp_dir("refusal");
+        let s = Store::open(&dir).unwrap();
+        s.poison("demo.list");
+        let err = s.set("demo.list", "[]").unwrap_err().to_string();
+        assert!(err.contains("not saving over it") && err.contains("restarting Kolux") && err.contains("temporary"), "{err}");
+        drop(s);
+        let _ = fs::remove_dir_all(dir);
     }
 }

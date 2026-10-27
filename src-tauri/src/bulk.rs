@@ -175,7 +175,7 @@ pub fn default_statuses() -> Vec<Status> {
 
 /// The user's statuses in their order, or the default set when none were saved.
 pub fn statuses(store: &Store) -> Vec<Status> {
-    Some(crate::orchestration::kept::or_default::<Vec<Status>>(store, STATUS_LIST_KEY)).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
+    Some(crate::orchestration::kept::or_default_held::<Vec<Status>>(store, STATUS_LIST_KEY)).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
 }
 
 fn slug(label: &str) -> String {

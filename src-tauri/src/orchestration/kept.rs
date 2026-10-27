@@ -17,20 +17,24 @@ fn now_ms() -> u128 {
 /// The blob under `key`. No blob, or a cleared (`null`) one, is the default. A blob that does not
 /// read is kept aside first (see the module note); the error cases leave the store untouched.
 pub fn load<T: DeserializeOwned + Serialize + Default>(store: &Store, key: &str) -> Result<T, String> {
-    let read = || -> Result<T, String> {
-        let text = store.get(key).map_err(|e| format!("{key} could not be read ({e}); nothing was changed"))?;
-        let Some(text) = text.filter(|t| t.trim() != "null") else { return Ok(T::default()) };
-        match serde_json::from_str(&text) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                let aside = set_aside_at(store, key, &text, &T::default(), now_ms())?;
-                eprintln!("{}", kept_note(key, &aside, &decode_kind(&e)));
-                Ok(T::default())
-            }
+    let text = store.get(key).map_err(|e| format!("{key} could not be read ({e}); nothing was changed"))?;
+    let Some(text) = text.filter(|t| t.trim() != "null") else { return Ok(T::default()) };
+    match serde_json::from_str(&text) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            let aside = set_aside_at(store, key, &text, &T::default(), now_ms())?;
+            eprintln!("{}", kept_note(key, &aside, &decode_kind(&e)));
+            Ok(T::default())
         }
-    };
-    // Row 881: the blob is still in the store, uncopied, so nothing may save over it (see Store::poison).
-    read().inspect_err(|_| store.poison(key))
+    }
+}
+
+/// For callers that keep the default in memory or save a full replacement without re-reading: an Err poisons the key (row 881).
+pub fn or_default_held<T: DeserializeOwned + Serialize + Default>(store: &Store, key: &str) -> T {
+    load(store, key).unwrap_or_else(|_| {
+        store.poison(key);
+        T::default()
+    })
 }
 
 /// For readers with no error path: the blob, or the default when the store itself cannot be read.
@@ -367,7 +371,7 @@ mod tests {
         store.set("demo.list", broken).unwrap();
         store.set("demo.other", "[1]").unwrap();
         refuse_copies(&dir);
-        assert!(load::<Vec<Value>>(&store, "demo.list").is_err());
+        assert!(or_default_held::<Vec<Value>>(&store, "demo.list").is_empty());
         let err = store.set("demo.list", "[]").unwrap_err().to_string();
         assert!(err.contains("demo.list") && err.contains("not kept aside") && err.contains("not saving over it"), "{err}");
         assert!(store.set_all(&[("demo.other", "[2]"), ("demo.list", "[]")]).is_err(), "a batch naming the key is refused whole");
@@ -390,16 +394,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Hides the kv table behind a second connection, as a busy or unreadable store would; the guard puts it back.
+    struct Unreadable(rusqlite::Connection);
+    impl Unreadable {
+        fn new(dir: &std::path::Path) -> Self {
+            let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+            side.execute_batch("ALTER TABLE kv RENAME TO kv_gone").unwrap();
+            Unreadable(side)
+        }
+        fn restore(&self) {
+            self.0.execute_batch("ALTER TABLE kv_gone RENAME TO kv").unwrap();
+        }
+    }
+
     #[test]
-    fn row881_a_store_that_cannot_be_read_poisons_the_key_too() {
+    fn card16b_a_failed_plain_load_does_not_poison_but_a_failed_held_read_does() {
         let (store, dir) = fresh("poison-get");
         store.set("demo.list", "[1]").unwrap();
-        let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
-        side.execute_batch("ALTER TABLE kv RENAME TO kv_gone").unwrap();
+        let side = Unreadable::new(&dir);
         assert!(load::<Vec<Value>>(&store, "demo.list").is_err());
-        side.execute_batch("ALTER TABLE kv_gone RENAME TO kv").unwrap();
-        assert!(store.set("demo.list", "[]").is_err());
-        assert_eq!(store.get("demo.list").unwrap().as_deref(), Some("[1]"));
+        assert!(or_default::<Vec<Value>>(&store, "demo.list").is_empty());
+        side.restore();
+        store.set("demo.list", "[2]").unwrap();
+        assert_eq!(store.get("demo.list").unwrap().as_deref(), Some("[2]"), "a transient read failure poisoned nothing");
+        let side = Unreadable::new(&dir);
+        assert!(or_default_held::<Vec<Value>>(&store, "demo.list").is_empty(), "the caller still gets the default");
+        side.restore();
+        assert!(store.set("demo.list", "[]").is_err(), "a default handed out after a failed read is never saved over the blob");
+        assert_eq!(store.get("demo.list").unwrap().as_deref(), Some("[2]"));
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn card16b_a_good_decode_after_a_failed_held_read_does_not_clear_the_poison() {
+        let (store, dir) = fresh("poison-good");
+        store.set("demo.list", "[1]").unwrap();
+        let side = Unreadable::new(&dir);
+        let _: Vec<Value> = or_default_held(&store, "demo.list");
+        side.restore();
+        let again: Vec<Value> = or_default_held(&store, "demo.list");
+        assert_eq!(again, vec![Value::from(1)], "the blob now decodes fine");
+        assert!(load::<Vec<Value>>(&store, "demo.list").is_ok());
+        assert!(store.set("demo.list", "[]").is_err(), "only a keep-aside clears the poison, not a good read");
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
     }

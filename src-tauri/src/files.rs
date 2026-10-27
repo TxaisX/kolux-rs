@@ -321,8 +321,16 @@ pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fenc
     }
     let Some(chosen) = pick.blocking_pick_file() else { return Ok(None) };
     let path = chosen.into_path().map_err(|e| e.to_string())?;
-    fence.grant(&path, &*store.lock().map_err(|e| e.to_string())?)?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(Some(finish_pick(&fence, &store, &path)))
+}
+
+/// A grant that could not be saved (a poisoned grants key) still holds in memory this run, so the pick stands.
+fn finish_pick(fence: &crate::fence::Fence, store: &crate::state::Store, path: &Path) -> String {
+    if let Err(e) = fence.grant(path, store) {
+        eprintln!("kolux-rs: the picked file's grant was not saved: {e}");
+    }
+    path.to_string_lossy().into_owned()
 }
 
 /// The worktree's markdown files for the Mod+Shift+O picker (EDIT-012), at most 2000 of them.
@@ -768,6 +776,21 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn card16b_a_pick_still_returns_the_path_when_the_grants_list_cannot_be_saved() {
+        let d = temp_dir("pick-poisoned");
+        let db = d.join("data");
+        let store = std::sync::Mutex::new(crate::state::Store::open(&db).unwrap());
+        store.lock().unwrap().set("file_grants", "[\"C:/picked.txt\", tru").unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        let fence = crate::fence::Fence::load(&store);
+        let picked = d.join("picked.txt");
+        fs::write(&picked, "p").unwrap();
+        let got = finish_pick(&fence, &store.lock().unwrap(), &picked);
+        assert_eq!(got, picked.to_string_lossy());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

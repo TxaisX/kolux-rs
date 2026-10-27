@@ -181,7 +181,7 @@ pub fn switched(app: &tauri::AppHandle, on: bool) {
 
 /// Loads the previous run's waits.
 pub fn restore_from(app: &tauri::AppHandle, store: &crate::state::Store) {
-    let list: Vec<Waiting> = crate::orchestration::kept::or_default(store, KEY);
+    let list: Vec<Waiting> = crate::orchestration::kept::or_default_held(store, KEY);
     if !list.is_empty() {
         with(app, |r| r.restore(list, crate::claude_key::now_ms()));
     }

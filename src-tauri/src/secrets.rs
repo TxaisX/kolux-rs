@@ -270,7 +270,7 @@ pub fn drop_unreadable(store: &Store, dir: &Path) -> Vec<String> {
 
 /// ACCT-010: the secret fields waiting for a reconnect, for the note in the main window.
 pub fn dropped(store: &Store) -> Vec<String> {
-    crate::orchestration::kept::or_default(store, DROPPED_KEY)
+    crate::orchestration::kept::or_default_held(store, DROPPED_KEY)
 }
 
 pub fn dismiss_dropped(store: &Store) -> Result<(), String> {
