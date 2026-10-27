@@ -27,55 +27,45 @@ type ListToken = Token & { items: (Token & { text: string; tokens: Token[]; raw:
 
 /** The lists (document order), their items, and the line ranges that are one unit each (an item's own lines, or a top-level block). */
 function read(src: string) {
+  // A lone CR is a line end to the lexer and none to the callers' line numbers: such a note cannot be read, so it is refused.
+  if (/\r(?!\n)/.test(src)) throw new Error("a lone CR");
   const md = src.replace(/\r\n/g, "\n");
   const lists: ListInfo[] = [];
   const items: ItemInfo[] = [];
   const units: Unit[] = [];
-  const starts = [0];
-  for (let i = md.indexOf("\n"); i >= 0; i = md.indexOf("\n", i + 1)) starts.push(i + 1);
-  const lineAt = (off: number) => {
-    let lo = 0;
-    let hi = starts.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (starts[mid] <= off) lo = mid;
-      else hi = mid - 1;
-    }
-    return lo;
-  };
-  const span = (s: number, raw: string): Unit => [lineAt(s), lineAt(s + Math.max(0, raw.replace(/\s+$/, "").length - 1))];
-  const walk = (ts: Token[], d: number, from: number, top: boolean) => {
-    let at = from;
+  // Positions are line numbers counted from the raw text of the blocks before: a nested block's raw has its parent's indent stripped,
+  // so it cannot be searched for in the note, but it holds the same number of lines.
+  const ends = (raw: string) => lineEnds(raw.replace(/\s+$/, ""));
+  const walk = (ts: Token[], d: number, line0: number, top: boolean) => {
+    let ln = line0;
     for (const t of ts) {
-      const s = md.indexOf(t.raw, at);
-      if (s >= 0) at = s + t.raw.length;
       if (t.type === "list") {
         const l = t as ListToken;
         const marks = l.items.map((x) => markerOf(x.raw));
         const first = l.items.map((x) => spell(String(x.text).split("\n")[0].trim()));
         lists.push({ depth: d, loose: !!l.loose, key: d + "|" + first.join("\u0001"), markers: marks.join("") });
         const li = lists.length - 1;
-        let cur = s;
+        let il = ln;
         l.items.forEach((x, i) => {
           items.push({ key: d + "|" + first[i], marker: marks[i], list: li, idx: i, gap: i > 0 && /\n[ \t]*\n$/.test(l.items[i - 1].raw) });
-          const st = cur >= 0 ? md.indexOf(x.raw, cur) : -1;
-          if (st >= 0) {
-            cur = st + x.raw.length;
-            const kid = x.tokens.find((k) => k.type === "list");
-            const kidAt = kid ? md.indexOf(kid.raw, st) : -1;
-            units.push(span(st, kidAt > st ? md.slice(st, kidAt) : x.raw));
-          }
-          walk(x.tokens, d + 1, st >= 0 ? st : 0, false);
+          const kid = x.tokens.findIndex((k) => k.type === "list");
+          const inner = (kid < 0 ? x.tokens : x.tokens.slice(0, kid)).map((k) => k.raw).join("");
+          if (ends(x.tokens.map((k) => k.raw).join("")) !== ends(x.raw)) throw new Error("an item's blocks do not add up to its lines");
+          units.push([il, il + (kid < 0 ? ends(x.raw) : ends(inner))]);
+          walk(x.tokens, d + 1, il, false);
+          il += lineEnds(x.raw);
         });
-        continue;
+      } else {
+        if (top && t.type !== "space" && t.raw.trim()) units.push([ln, ln + ends(t.raw)]);
+        const k = t as { tokens?: Token[] };
+        if (k.tokens && t.type !== "blockquote") walk(k.tokens, d, ln, false);
       }
-      if (top && s >= 0 && t.type !== "space") units.push(span(s, t.raw));
-      const k = t as { tokens?: Token[] };
-      if (k.tokens && t.type !== "blockquote") walk(k.tokens, d, s >= 0 ? s : at, false);
+      ln += lineEnds(t.raw);
     }
+    if (top && ln !== lineEnds(md)) throw new Error("the blocks do not add up to the note's lines");
   };
   // Block tokens only: inline lexing (emphasis, links) is most of the cost and holds no list.
-  walk(new Lexer().blockTokens(md.replace(/\r/g, "\n"), []), 0, 0, true);
+  walk(new Lexer().blockTokens(md, []), 0, 0, true);
   return { lists, items, units };
 }
 
@@ -118,7 +108,7 @@ function blockStartLines(body: string): number[] {
 }
 
 /** Why the saved body `next` must be refused for the view edit `prev` -> `out` made in `body`, or null when it passes. */
-export function saveBreaksInvariant(body: string, next: string, prev: string, out: string): string | null {
+function check(body: string, next: string, prev: string, out: string): string | null {
   if (next === body) return null;
   const e = changeBetween(prev, out);
   if (!e) return null;
@@ -249,4 +239,13 @@ function untouchedListsChanged(B: Read, next: string, prev: string, out: string)
     if (loose(v0) === loose(v1)) return `a list holding an untouched item went loose: ${JSON.stringify(a.key.slice(0, 40))}`;
   }
   return null;
+}
+
+/** The same, with a failure of the check itself (a note the lexer's line counts cannot be reconciled with) read as a refusal. */
+export function saveBreaksInvariant(body: string, next: string, prev: string, out: string): string | null {
+  try {
+    return check(body, next, prev, out);
+  } catch (e) {
+    return `the invariant could not be checked: ${e instanceof Error ? e.message : String(e)}`;
+  }
 }

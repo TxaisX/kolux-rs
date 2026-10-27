@@ -116,4 +116,62 @@ describe("round 12", () => {
       expect(tight || mid === (want + TAIL_PARA).replace(/\n$/, "")).toBe(true);
     });
   });
+
+
+  describe("a list nested by two spaces keeps the siblings of the edited sub-item", () => {
+    const NOTE = "- one\n  - sub _a_\n  - two words\n  - more\n- three\n";
+    const VIEW = "- one\n    - sub *a*\n    - two words\n    - more\n- three";
+    const crlf = (s: string) => s.replace(/\n/g, "\r\n");
+    // The save is a refusal, or it is the note with only the edited line changed.
+    const expectKept = (now: string, prev: string, out: string, want: string) => {
+      const got = saved(now, prev, out);
+      expect(got === null || got === want, JSON.stringify(got)).toBe(true);
+    };
+    it("view text of the note is as expected", () => {
+      expect(roundTrip(NOTE)).toBe(VIEW);
+    });
+    it("adding a sub-item", () => {
+      expectKept(NOTE, VIEW, VIEW.replace("    - more", "    - added\n    - more"), "- one\n  - sub _a_\n  - two words\n  - added\n  - more\n- three\n");
+    });
+    it("splitting a sub-item (Enter in the middle)", () => {
+      expectKept(NOTE, VIEW, VIEW.replace("two words", "two\n    - words"), "- one\n  - sub _a_\n  - two\n  - words\n  - more\n- three\n");
+    });
+    it("adding a sub-item in a CRLF note", () => {
+      expectKept(crlf(NOTE), VIEW, VIEW.replace("    - more", "    - added\n    - more"), crlf("- one\n  - sub _a_\n  - two words\n  - added\n  - more\n- three\n"));
+    });
+    it("splitting a sub-item in a CRLF note", () => {
+      expectKept(crlf(NOTE), VIEW, VIEW.replace("two words", "two\n    - words"), crlf("- one\n  - sub _a_\n  - two\n  - words\n  - more\n- three\n"));
+    });
+    it("adding a sub-item under front matter with no final line end", () => {
+      const now = "---\ntitle: x\n---\n" + NOTE.replace(/\n$/, "");
+      const got = saved(now, VIEW, VIEW.replace("    - more", "    - added\n    - more"));
+      expect(got === null || got === "---\ntitle: x\n---\n- one\n  - sub _a_\n  - two words\n  - added\n  - more\n- three", JSON.stringify(got)).toBe(true);
+    });
+    it("splitting a sub-item under front matter with no final line end", () => {
+      const now = "---\ntitle: x\n---\n" + NOTE.replace(/\n$/, "");
+      const got = saved(now, VIEW, VIEW.replace("two words", "two\n    - words"));
+      expect(got === null || got === "---\ntitle: x\n---\n- one\n  - sub _a_\n  - two\n  - words\n  - more\n- three", JSON.stringify(got)).toBe(true);
+    });
+    it("control: four-space nesting keeps the siblings", () => {
+      const four = "- one\n    - sub _a_\n    - two words\n    - more\n- three\n";
+      expectKept(four, VIEW, VIEW.replace("    - more", "    - added\n    - more"), "- one\n    - sub _a_\n    - two words\n    - added\n    - more\n- three\n");
+    });
+  });
+  describe("a lone CR and a failing check", () => {
+    const lone = "- a\n- b\rc\n- d\n\nTail para here.\n";
+    const more = (s: string) => s.replace("Tail para here.", "Tail para here, and more.");
+    it("a note holding a lone CR outside the edit is refused, never passed", () => {
+      expect(saveBreaksInvariant(lone, more(lone), "- a\n- b\n- d\n\nTail para here.", more("- a\n- b\n- d\n\nTail para here."))).not.toBeNull();
+    });
+    it("richChange on that note refuses or keeps every byte outside the edit", () => {
+      const prev = roundTrip(lone) ?? "";
+      const got = richChange(lone, more(prev), prev);
+      if (got) expect(lone.slice(0, got.from) + got.insert + lone.slice(got.to)).toContain("- b\rc\n- d\n");
+    });
+    it("a check that throws is a refusal", () => {
+      const clean = lone.replace(/\n$/, "");
+      const r = saveBreaksInvariant(lone, more(lone), clean, more(clean));
+      expect(r).toContain("could not be checked");
+    });
+  });
 });

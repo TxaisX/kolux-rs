@@ -41,7 +41,7 @@ export function richChange(now: string, out: string, prev?: string, refused?: ()
   // Code lines keep their CR in the view, so the CRLF spelling is used only where the view reads it as it read the added lines.
   const insert = crlf !== c.insert && same(body.slice(0, c.from) + crlf + body.slice(c.to), next) ? crlf : c.insert;
   // Round 11: whatever the placement did, a save must leave every byte and every untouched list outside the edit as it was.
-  if (prev !== undefined && saveBreaksInvariant(body, body.slice(0, c.from) + insert + body.slice(c.to), prev, out) !== null) return placeStats.refused++, refused?.(), null;
+  if (prev !== undefined && saveBreaksInvariant(body, body.slice(0, c.from) + insert + body.slice(c.to), prev, out) !== null) return placeStats.refused++, placeStats.invariant++, refused?.(), null;
   return { from: c.from + front.length, to: c.to + front.length, insert };
 }
 
@@ -72,7 +72,7 @@ type Edit = { from: number; to: number; insert: string };
 
 /** How each rich edit was placed (the fuzz test reads it): by word number, by retyping the touched blocks, or refused;
  *  `whole` counts the placements that needed a whole list or section, not just its touched item or child. */
-export const placeStats = { fast: 0, block: 0, refused: 0, whole: 0 };
+export const placeStats = { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0 };
 
 /** The body with the rich edit (`prev` -> `out`) made in it, or null when the edit cannot be placed for sure.
  *  Round 3 of row 94: the word-mapped placement keeps every byte, but the word check cannot see a marker or a line break

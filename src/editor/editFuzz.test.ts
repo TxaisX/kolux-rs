@@ -318,7 +318,7 @@ function structureProblem(body: string, saved: string, prev: string, out: string
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
   it.each(SEEDS)("400 chained edits (seed %i)", (seed) => {
     const r = rng(seed);
-    Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0 });
+    Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0 });
     const N = 400;
     let edits = 0;
     let refused = 0;
