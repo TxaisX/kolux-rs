@@ -1952,7 +1952,8 @@ mod agent_tests {
 /// Why an address failed, for the overlay's wording (BROW-008).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Diagnosis {
-    /// `unknown-host`, `refused`, `timeout`, `unreachable`, `certificate` or `unknown`.
+    /// `unknown-host`, `refused`, `timeout`, `unreachable`, `certificate`, `unknown`, or `skipped`
+    /// (a proxy is saved, so nothing was asked: T-323-d).
     pub kind: &'static str,
     /// The address is this computer's (local-server advice makes sense).
     pub local: bool,
@@ -2033,9 +2034,14 @@ fn io_kind(e: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> 
 /// APP-070: every request Kolux itself makes outside the page (a download's size, a dev server's
 /// check, the failed-load diagnosis, the update check's installer) is one HEAD through the icon
 /// clients, the one approved way out: `near` for an address on this machine or the local network,
-/// the public-only client otherwise, both without a proxy and under the icon redirect rule (an icon
-/// fetch itself is skipped under a saved proxy, T-323-c; a caller of this checks `icon_fetch_allowed` first when it must not go around one). Nothing
-/// of the body is read.
+/// the public-only client otherwise, both without a proxy and under the icon redirect rule. Nothing
+/// of the body is read. This one asks unconditionally; `head` is the way in for the app, because
+/// it never goes around a saved proxy (T-323-d): a connection Kolux makes itself is made direct, so
+/// under a saved (or unreadable, or unusable) proxy only this machine's own addresses are asked
+/// (a proxy never carries them: the dev-server check, a download from `localhost`); every other
+/// address, the local network included, is skipped with [`PROXY_SKIPPED`] and no connection
+/// (the browser pane sets no bypass list, so its own local-network traffic goes through the proxy).
+/// The callers then show no download size, no diagnosis ("skipped") and no installer check.
 pub async fn head_with(clients: &IconClients, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
     match if near { &clients.near } else { &clients.far }.head(url.clone()).timeout(wait).send().await {
         Ok(r) => Ok(Answer { status: r.status().as_u16(), length: r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok()) }),
@@ -2043,12 +2049,34 @@ pub async fn head_with(clients: &IconClients, url: &Url, near: bool, wait: Durat
     }
 }
 
-/// `head_with` through the clients the app shares.
+/// T-323-d: what a skipped request says; the diagnosis tells it from a real failure by this text.
+pub const PROXY_SKIPPED: &str = "skipped: a proxy is saved, so Kolux made no direct request";
+
+/// Whether the request may be made at all: without a saved proxy always, with one (or one that cannot
+/// be read or used) only to this machine's own addresses, which no proxy carries.
+pub fn head_gate(saved: &Result<Option<String>, String>, url: &Url) -> Result<(), Failed> {
+    if icon_fetch_allowed(saved) || url.host_str().is_some_and(popup::loopback) {
+        return Ok(());
+    }
+    Err(Failed { text: PROXY_SKIPPED.into(), timeout: false, io: None })
+}
+
+pub fn proxy_skipped(f: &Failed) -> bool {
+    f.text == PROXY_SKIPPED
+}
+
+/// `head_with` unless a proxy is saved: then no connection is made.
+pub(crate) async fn head_unless_proxied(saved: &Result<Option<String>, String>, clients: &IconClients, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
+    head_gate(saved, url)?;
+    head_with(clients, url, near, wait).await
+}
+
+/// `head_unless_proxied` through the clients the app shares: the one way the app asks anything directly.
 pub async fn head(app: &AppHandle, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
     let Some(clients) = icon_client(app_origin(app)) else {
         return Err(Failed { text: "no network client".into(), timeout: false, io: None });
     };
-    head_with(clients, url, near, wait).await
+    head_unless_proxied(&saved_proxy(app), clients, url, near, wait).await
 }
 
 /// What a failed diagnosis request says, as `failure_kind`'s connection and TLS inputs: a
@@ -2078,6 +2106,11 @@ fn error_text(e: &(dyn std::error::Error + 'static)) -> String {
     out
 }
 
+/// The diagnosis when `head_gate` would skip every probe of `url`: no request is made for it.
+pub fn skipped_diagnosis(saved: &Result<Option<String>, String>, url: &Url) -> Option<Diagnosis> {
+    head_gate(saved, url).err().map(|_| Diagnosis { kind: "skipped", local: local_host(url), https: https_twin(url) })
+}
+
 /// Looks at why `url` failed to load, for the overlay's wording. The address passes the same
 /// check as a page load (`allowed`), so a page cannot aim this at the user's own network.
 #[tauri::command]
@@ -2085,6 +2118,10 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
     let url = parse(&url)?;
     allowed(&url, app_origin(&app).as_ref())?;
     let (local, https) = (local_host(&url), https_twin(&url));
+    // T-323-d: under a saved proxy nothing is asked, not even the name lookup (it would go around the proxy).
+    if let Some(d) = skipped_diagnosis(&saved_proxy(&app), &url) {
+        return Ok(d);
+    }
     let probe = url.clone();
     let ips = tauri::async_runtime::spawn_blocking(move || lookup(&probe)).await.map_err(|e| e.to_string())?;
     let (tcp, tls) = if ips.is_empty() {
@@ -2093,6 +2130,8 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
         // An address that looks up to this machine or the local network goes through the near client.
         match head(&app, &url, ips.iter().any(|ip| local_ip(*ip)), DIAGNOSE_WAIT).await {
             Ok(_) => (None, None),
+            // A proxy saved since the check above: still no answer of its own.
+            Err(f) if proxy_skipped(&f) => return Ok(Diagnosis { kind: "skipped", local, https }),
             Err(f) => failed_parts(url.scheme() == "https", &f),
         }
     };
@@ -2824,6 +2863,74 @@ mod tests {
         let got = tauri::async_runtime::block_on(fetch_icon_unless_proxied(&Ok(None), &clients, true, url, None));
         assert_eq!(got, Some("data:image/png;base64,BwcH".into()), "without a proxy the icon is fetched as before");
         server.join().unwrap();
+    }
+
+    // T-323-d: every other direct request Kolux makes (download size, diagnosis, update probe) follows the same rule.
+    #[test]
+    fn t323d_with_a_saved_proxy_no_head_goes_direct() {
+        use std::io::{Read, Write};
+        let u = |s: &str| Url::parse(s).unwrap();
+        let proxied: Result<Option<String>, String> = Ok(Some("http://127.0.0.1:8080".into()));
+        let unusable: Result<Option<String>, String> = Ok(Some("not a url".into()));
+        let unreadable: Result<Option<String>, String> = Err("sealed value unreadable".into());
+        let free: Result<Option<String>, String> = Ok(None);
+        // The gate, per address: only this machine's own addresses skip a proxy (the engine never sends them to one).
+        for saved in [&proxied, &unusable, &unreadable] {
+            for own in ["http://127.0.0.1:3000/", "http://localhost:3000/", "http://[::1]:3000/", "http://127.9.9.9/"] {
+                assert!(head_gate(saved, &u(own)).is_ok(), "{own} is this machine's: a proxy never carries it");
+            }
+            // The browser pane sets no bypass list, so its own LAN traffic goes through the proxy: so does the rule here.
+            for other in ["https://example.com/a.zip", "http://192.168.1.5/", "http://10.0.0.2:8080/", "http://nas.lan/", "http://intranet/", "http://0.0.0.0:80/"] {
+                let f = head_gate(saved, &u(other)).unwrap_err();
+                assert!(proxy_skipped(&f) && f.text.contains("proxy is saved") && !f.timeout && f.io.is_none(), "{other} must be skipped");
+            }
+        }
+        for any in ["https://example.com/", "http://192.168.1.5/", "http://127.0.0.1/"] {
+            assert!(head_gate(&free, &u(any)).is_ok(), "without a proxy {any} is asked as before");
+        }
+        assert!(!proxy_skipped(&Failed { text: "connect error".into(), timeout: false, io: None }));
+        // The real sockets: a host that would be reached (the lookup says this machine) sees 0 connections under a proxy.
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        l.set_nonblocking(true).unwrap();
+        let clients = icon_clients(None, |_| Ok(vec![IpAddr::from([127, 0, 0, 1])])).unwrap();
+        let ask = |saved: &Result<Option<String>, String>, url: &Url, near: bool| tauri::async_runtime::block_on(head_unless_proxied(saved, &clients, url, near, DIAGNOSE_WAIT));
+        let lan = u(&format!("http://nas.lan:{port}/big.zip"));
+        let public = u(&format!("http://files.example.com:{port}/big.zip"));
+        for saved in [&proxied, &unusable, &unreadable] {
+            assert!(proxy_skipped(&ask(saved, &lan, true).unwrap_err()));
+            assert!(proxy_skipped(&ask(saved, &public, false).unwrap_err()));
+        }
+        assert!(l.accept().is_err(), "a connection reached the host under a saved proxy");
+        l.set_nonblocking(false).unwrap();
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut s, _) = l.accept().unwrap();
+                let _ = s.read(&mut [0u8; 4096]);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let seen = Ok(Answer { status: 200, length: Some(42) });
+        assert_eq!(ask(&proxied, &u(&format!("http://127.0.0.1:{port}/")), true), seen, "a loopback address still connects under a proxy");
+        assert_eq!(ask(&free, &lan, true), seen, "without a proxy the request goes as before");
+        assert_eq!(ask(&unusable, &u(&format!("http://localhost:{port}/")), true), seen);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn t323d_the_diagnosis_under_a_proxy_is_skipped_not_probed() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        let proxied: Result<Option<String>, String> = Ok(Some("socks5://proxy.test:1080".into()));
+        assert_eq!(skipped_diagnosis(&proxied, &u("http://example.com/a")), Some(Diagnosis { kind: "skipped", local: false, https: Some("https://example.com/a".into()) }));
+        assert_eq!(skipped_diagnosis(&proxied, &u("http://nas.lan/")).map(|d| (d.kind, d.local)), Some(("skipped", true)));
+        assert_eq!(skipped_diagnosis(&Err("sealed value unreadable".into()), &u("https://example.com/")).map(|d| d.kind), Some("skipped"));
+        assert_eq!(skipped_diagnosis(&proxied, &u("http://localhost:3000/")), None);
+        assert_eq!(skipped_diagnosis(&Ok(None), &u("https://example.com/")), None);
+        assert_eq!(serde_json::to_string(&skipped_diagnosis(&proxied, &u("https://example.com/")).unwrap()).unwrap(), r#"{"kind":"skipped","local":false,"https":null}"#);
+        // Every caller goes through the one gate in `head`.
+        let src = include_str!("browser.rs");
+        let body = &src[src.find("pub async fn head(app").unwrap()..];
+        assert!(body[..body.find("\n}\n").unwrap()].contains("head_unless_proxied(&saved_proxy(app)"));
     }
 
     // Council FIX-3, AFTER 2: one overall time limit, however the fetch goes.
