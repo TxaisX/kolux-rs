@@ -23,6 +23,7 @@ const ALLOWED = {
   "src-tauri/src/lib.rs": [/tauri_plugin_updater/],
   "src-tauri/src/cli.rs": [/TcpStream::connect/], // kolux-dev talking to the app on 127.0.0.1
   "src-tauri/src/pty_service.rs": [/TcpStream::connect/], // pty_service.rs:514 Client::connect: the host is the literal [127,0,0,1], only the port comes from the service's endpoint file
+  "src-tauri/src/labels.rs": [/TcpStream::connect/], // labels.rs:180 the label proxy to a workspace dev server: its only target comes from target_of (labels.rs:75), which refuses any host that is not a loopback IP or localhost
 };
 // The one loopback call each file may make, as exact text: it is cut out before the scan, so any
 // other fetch in the same file is still caught (an ALLOWED entry would pass the whole file).
@@ -43,6 +44,8 @@ const PINNED = {
   ],
   // pty_service.rs holds exactly one loopback connect (its ALLOWED line); a second one fails the audit.
   "src-tauri/src/pty_service.rs": [[/TcpStream::connect/g, 1]],
+  // labels.rs holds exactly one connect, behind the loopback guard in target_of; a second one fails the audit.
+  "src-tauri/src/labels.rs": [[/TcpStream::connect/g, 1]],
 };
 const EXACT = {
   // browser.rs:285 the page script wraps the open PAGE's own XHR (offline/intercept/extra headers); it opens no connection of its own, so the page's requests stay "the sites you open in the browser pane"

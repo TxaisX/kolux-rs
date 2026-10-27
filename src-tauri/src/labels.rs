@@ -61,7 +61,7 @@ pub fn loopback(addr: &str) -> String {
 }
 
 /// The `host:port` to connect to for a target (`3000`, `0.0.0.0:3000`, `http://[::]:3000/`); None
-/// when the target is not plain http.
+/// when the target is not plain http or not on this PC (loopback IP or `localhost` only).
 pub fn target_of(target: &str) -> Option<String> {
     let t = target.trim();
     if t.starts_with("https://") { return None }
@@ -72,7 +72,12 @@ pub fn target_of(target: &str) -> Option<String> {
         _ => ("0.0.0.0", t),
     };
     let port: u16 = port.parse().ok()?;
-    let host = loopback(host);
+    // The one guard every connect passes: only this PC, decided from the text (no DNS lookup).
+    let host = match loopback(host).as_str() {
+        "localhost" => "127.0.0.1".to_string(),
+        h if h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) => h.to_string(),
+        _ => return None,
+    };
     Some(if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") })
 }
 
@@ -218,6 +223,19 @@ mod tests {
         assert_eq!(loopback("[::]"), "::1");
     }
 
+    #[test]
+    fn proj088_a_target_off_this_pc_is_refused_and_loopback_ones_are_kept() {
+        for off in ["192.168.1.5:3000", "http://example.com:80/", "10.0.0.1:8080", "devbox:3000", "[2001:db8::1]:80", "127.0.0.1.evil.com:80"] {
+            assert_eq!(target_of(off), None, "{off} is not on this PC");
+        }
+        assert_eq!(target_of("3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("0.0.0.0:3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("127.0.0.1:3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("localhost:3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("[::]:3000"), Some("[::1]:3000".into()));
+        assert_eq!(target_of("[::1]:3000"), Some("[::1]:3000".into()));
+    }
+
     fn fake_server(body: &'static str) -> (u16, std::thread::JoinHandle<Vec<u8>>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
@@ -244,7 +262,7 @@ mod tests {
     #[test]
     fn proj088_a_label_address_serves_the_workspaces_dev_server_unchanged_and_others_are_refused() {
         let (port, server) = fake_server("hi from a");
-        let table = std::sync::Mutex::new(vec![("a".to_string(), format!("0.0.0.0:{port}")), ("tls".to_string(), "https://0.0.0.0:1".to_string())]);
+        let table = std::sync::Mutex::new(vec![("a".to_string(), format!("0.0.0.0:{port}")), ("tls".to_string(), "https://0.0.0.0:1".to_string()), ("lan".to_string(), "192.168.1.5:3000".to_string())]);
         let resolve: Resolve = Arc::new(move |label| table.lock().unwrap().iter().find(|(l, _)| l == label).map(|(_, t)| t.clone()));
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let proxy = l.local_addr().unwrap().port();
@@ -262,6 +280,9 @@ mod tests {
 
         assert!(ask(proxy, &format!("nobody.localhost:{proxy}")).starts_with("HTTP/1.1 502"), "an unknown label is refused");
         assert!(ask(proxy, &format!("tls.localhost:{proxy}")).starts_with("HTTP/1.1 502"), "an https target is not served");
+        let t = std::time::Instant::now();
+        assert!(ask(proxy, &format!("lan.localhost:{proxy}")).starts_with("HTTP/1.1 502"), "a target off this PC is refused");
+        assert!(t.elapsed() < Duration::from_secs(2), "refused before any connect attempt");
         assert!(ask(proxy, "localhost").starts_with("HTTP/1.1 400"), "a bare host is not a label");
     }
 }
