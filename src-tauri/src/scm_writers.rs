@@ -545,20 +545,31 @@ pub fn ask(writer: &WriterArg, prompt: &str, dir: &Path, key: &str, limit: std::
 #[tauri::command]
 pub async fn scm_name_branch(worktree: String, task: String, writer: Option<WriterArg>) -> Result<Renamed, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = Path::new(&worktree);
-        let folder = dir.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        let old = crate::git::run(&["symbolic-ref", "--short", "-q", "HEAD"], Some(dir)).map_err(|_| "no branch checked out".to_string())?.trim().to_string();
-        if !is_placeholder(&old, &folder) {
-            return Ok(skipped(&old, "The branch already has a name of its own"));
-        }
-        let answer = ask(&writer.unwrap_or_default(), &name_prompt(&task), dir, &format!("name:{worktree}"), std::time::Duration::from_secs(60)).unwrap_or_default();
-        match new_branch_name(&old, &answer, &task) {
-            Some(name) => rename_branch(dir, &name),
-            None => Ok(skipped(&old, "Nothing in the task could name a branch")),
-        }
+        let key = format!("name:{worktree}");
+        name_branch_with(Path::new(&worktree), &task, writer.as_ref(), &|w, prompt| ask(w, prompt, Path::new(&worktree), &key, std::time::Duration::from_secs(60)))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Whether the front end named a writer at all. Unlike `ask`, branch naming never falls back to Claude
+/// Code: no writer means the user turned AI off, so no agent runs and the task's own words name it.
+pub(crate) fn writer_chosen(w: &WriterArg) -> bool {
+    w.agent.is_some() || w.command.as_deref().is_some_and(|c| !c.trim().is_empty())
+}
+
+/// `scm_name_branch` with the asking injected, so a test can prove no agent is started.
+fn name_branch_with(dir: &Path, task: &str, writer: Option<&WriterArg>, asker: &dyn Fn(&WriterArg, &str) -> Result<String, String>) -> Result<Renamed, String> {
+    let folder = dir.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    let old = crate::git::run(&["symbolic-ref", "--short", "-q", "HEAD"], Some(dir)).map_err(|_| "no branch checked out".to_string())?.trim().to_string();
+    if !is_placeholder(&old, &folder) {
+        return Ok(skipped(&old, "The branch already has a name of its own"));
+    }
+    let answer = writer.filter(|w| writer_chosen(w)).map(|w| asker(w, &name_prompt(task)).unwrap_or_default()).unwrap_or_default();
+    match new_branch_name(&old, &answer, task) {
+        Some(name) => rename_branch(dir, &name),
+        None => Ok(skipped(&old, "Nothing in the task could name a branch")),
+    }
 }
 
 #[cfg(test)]
@@ -703,5 +714,59 @@ mod tests {
         let kept = rename_branch(&tmp, "kolux/other").unwrap();
         assert!(!kept.renamed && kept.reason.unwrap().contains("tracks"));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn placeholder_repo(tag: &str) -> std::path::PathBuf {
+        let tmp = std::env::temp_dir().join(format!("kolux-rs-name931-{tag}-{}", std::process::id())).join("amber-otter");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let g = |a: &[&str]| crate::git::run(a, Some(&tmp)).unwrap();
+        g(&["init", "-q", "-b", "kolux/amber-otter"]);
+        g(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-q", "-m", "one"]);
+        tmp
+    }
+
+    #[test]
+    fn row931_a_branch_with_no_writer_is_named_from_the_task_and_no_agent_is_started() {
+        let calls = std::cell::Cell::new(0);
+        let asker = |_: &WriterArg, _: &str| -> Result<String, String> {
+            calls.set(calls.get() + 1);
+            Ok("never-used".into())
+        };
+        let dir = placeholder_repo("none");
+        let r = name_branch_with(&dir, "Add dark mode toggle", None, &asker).unwrap();
+        assert!(r.renamed && r.branch == "kolux/add-dark-mode-toggle", "{r:?}");
+        assert_eq!(calls.get(), 0, "writer None must not ask");
+        let dir2 = placeholder_repo("empty");
+        let r = name_branch_with(&dir2, "Add dark mode toggle", Some(&WriterArg::default()), &asker).unwrap();
+        assert!(r.renamed && r.branch == "kolux/add-dark-mode-toggle", "{r:?}");
+        let blank = WriterArg { command: Some("  ".into()), ..Default::default() };
+        let dir3 = placeholder_repo("blank");
+        assert!(name_branch_with(&dir3, "Add dark mode toggle", Some(&blank), &asker).unwrap().renamed);
+        assert_eq!(calls.get(), 0, "a writer with no agent and no command must not ask (Claude is not a default here)");
+        for d in [dir, dir2, dir3] {
+            let _ = std::fs::remove_dir_all(d.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn row931_a_chosen_agent_or_command_is_asked_once_and_its_answer_names_the_branch() {
+        let calls = std::cell::Cell::new(0);
+        let asker = |_: &WriterArg, _: &str| -> Result<String, String> {
+            calls.set(calls.get() + 1);
+            Ok("Fix Poll Loop".into())
+        };
+        let dir = placeholder_repo("agent");
+        let w = WriterArg { agent: Some("claude".into()), ..Default::default() };
+        let r = name_branch_with(&dir, "task words", Some(&w), &asker).unwrap();
+        assert!(r.renamed && r.branch == "kolux/fix-poll-loop", "{r:?}");
+        assert_eq!(calls.get(), 1);
+        let dir2 = placeholder_repo("cmd");
+        let c = WriterArg { command: Some("my-writer --x".into()), ..Default::default() };
+        assert!(name_branch_with(&dir2, "task words", Some(&c), &asker).unwrap().renamed);
+        assert_eq!(calls.get(), 2);
+        for d in [dir, dir2] {
+            let _ = std::fs::remove_dir_all(d.parent().unwrap());
+        }
     }
 }

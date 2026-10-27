@@ -3,7 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { writerOf, writerUsable } from "./generate";
 import { realPorts, startOneClick, type Ports, type Run } from "./oneClick";
-import { aiShownFor } from "./recipes";
+import { aiShownFor, type RepoRef } from "./recipes";
+import { readRepoRef } from "./repoId";
 
 export type DraftResult = { state: "filled"; title: string; body: string } | { state: "failed"; message: string } | { state: "busy" } | { state: "off" };
 
@@ -22,21 +23,21 @@ export const draftSubscribe = (f: () => void) => {
 };
 export const draftVersion = () => version;
 
-export type DraftGate = { repo: string | null; agents: ReadonlyArray<{ id: string; installed: boolean }> };
+export type DraftGate = { repo: RepoRef | null; agents: ReadonlyArray<{ id: string; installed: boolean }> };
 
 /** What the gate sees when the settings cannot be read: the writer is off, so neither the draft button nor the one-click flow sends a diff anywhere. */
-const CLOSED_SETTINGS: Record<string, unknown> = { commitWriter: "off" };
+export const CLOSED_SETTINGS: Record<string, unknown> = { commitWriter: "off" };
 
 /** The gate, read fresh each time: settings, the repository and the installed agents can all change while the composer is open. A settings read that fails shuts it (never "no settings = AI on"). */
 export async function readDraftGate(dir: string): Promise<{ settings: Record<string, unknown>; gate: DraftGate }> {
   const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => CLOSED_SETTINGS);
-  const repo = await invoke<{ owner: string; name: string } | null>("scm_github_repo", { worktree: dir }).catch(() => null);
+  const repo = await readRepoRef(dir);
   const agents = await invoke<DraftGate["agents"]>("agent_list").catch(() => []);
-  return { settings, gate: { repo: repo ? `${repo.owner}/${repo.name}` : null, agents } };
+  return { settings, gate: { repo, agents } };
 }
 
 /** The button shows under the Source Control writer rules: the AI switch for this repository, a writer that is not off, and that writer usable (agent installed or custom command). */
-export const draftOffered = (settings: Record<string, unknown>, repo: string | null, agents: DraftGate["agents"]): boolean =>
+export const draftOffered = (settings: Record<string, unknown>, repo: RepoRef | null, agents: DraftGate["agents"]): boolean =>
   aiShownFor(settings, repo) && writerUsable(writerOf(settings), agents, null);
 
 /** Row 915: the one-click flow under the same fresh gate as the draft button; with it closed neither writer is called (oneClick.ts). */

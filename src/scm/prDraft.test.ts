@@ -286,3 +286,51 @@ describe("draft running state is shared, never stuck", () => {
     off();
   });
 });
+
+// Row 917: the gate keys the per-repository switch by the provider-neutral id, and fails closed over a saved off.
+describe("readDraftGate repository id", () => {
+  const agents = [{ id: "claude", installed: true }];
+  const answer = (settings: Record<string, unknown>, id: unknown) => (cmd: string) => {
+    if (cmd === "get_settings") return settings;
+    if (cmd === "agent_list") return agents;
+    if (cmd === "scm_repo_id") {
+      if (id instanceof Error) throw id;
+      return id;
+    }
+    return null;
+  };
+  beforeEach(() => {
+    calls.length = 0;
+    clearOneClick();
+  });
+  it("a GitLab repository switched off is honoured by the draft button", async () => {
+    reply = answer({ scmRepoAi: { "gitlab.com/g/app": "off" } }, { id: "gitlab.com/g/app", legacy: null });
+    const { settings, gate } = await readDraftGate("C:/w");
+    expect(calls.filter((c) => c.cmd === "scm_repo_id")).toHaveLength(1);
+    expect(draftOffered(settings, gate.repo, gate.agents)).toBe(false);
+    expect((await draftPrText("C:/w", "main", settings, gate)).state).toBe("off");
+    expect(textCalls()).toHaveLength(0);
+  });
+  it("a repository with no remote is keyed by its root path", async () => {
+    reply = answer({ scmRepoAi: { "C:/work/proj": "off" } }, { id: "C:/work/proj", legacy: null });
+    const { settings, gate } = await readDraftGate("C:/work/proj");
+    expect(draftOffered(settings, gate.repo, gate.agents)).toBe(false);
+  });
+  it("an off saved under the old GitHub key is still honoured", async () => {
+    reply = answer({ scmRepoAi: { "Acme/app": "off" } }, { id: "github.com/Acme/app", legacy: "Acme/app" });
+    const { settings, gate } = await readDraftGate("C:/w");
+    expect(draftOffered(settings, gate.repo, gate.agents)).toBe(false);
+  });
+  it("an id read that fails keeps AI off while any repository is switched off", async () => {
+    reply = answer({ scmRepoAi: { "gitlab.com/g/app": "off" } }, new Error("git failed"));
+    const { settings, gate } = await readDraftGate("C:/w");
+    expect(gate.repo).toBeNull();
+    expect(draftOffered(settings, gate.repo, gate.agents)).toBe(false);
+    expect((await draftPrText("C:/w", "main", settings, gate)).state).toBe("off");
+  });
+  it("an id read that fails with nothing switched off follows the global switch", async () => {
+    reply = answer({}, new Error("git failed"));
+    const { settings, gate } = await readDraftGate("C:/w");
+    expect(draftOffered(settings, gate.repo, gate.agents)).toBe(true);
+  });
+});

@@ -24,7 +24,7 @@ User sees: the selection moves on the same click; every workspace keeps its own 
   terminals.
 Rules: removing a workspace clears its tabs, open files and browser tabs.
 Acceptance:
-  - [ ] Switch from A to B and back → A's terminals and tabs are as they were.
+  - [x] Switch from A to B and back → A's terminals and tabs are as they were. (cards live; evidence/cards-PROJ-066.txt)
   - [x] Delete a workspace → none of its tabs remain anywhere. (cards; evidence/cards-PROJ-066.txt)
 Compat: —
 Source: D-01-066
@@ -73,10 +73,10 @@ Rules: the shortcut is Mod+N, and Mod+Shift+N is bound as well; terminals in the
   header has one-click New workspace and Add project buttons, and New workspace works even before
   any project exists.
 Acceptance:
-  - [ ] Create a workspace called fix-login → its branch and folder exist, its terminal starts in
-        that folder, and going back to the main checkout keeps the two terminals apart.
-  - [ ] Start a create and move to another workspace → the create finishes in the background without
-        taking focus.
+  - [x] Create a workspace called fix-login → its branch and folder exist, its terminal starts in
+        that folder, and going back to the main checkout keeps the two terminals apart. (cards live; evidence/cards-PROJ-020.txt)
+  - [x] Start a create and move to another workspace → the create finishes in the background without
+        taking focus. (cards live; evidence/cards-PROJ-020.txt)
 Compat: Keybinding id workspace.create.
   (Kolux RS, T-013-fix-a: with no project, Mod+N and the New workspace button open the add-project
   form; T-013-c built the overtaken-create and stand-in tab rules: a create made with Create more
@@ -137,8 +137,8 @@ Rules: a choice made for this one workspace always takes priority; a saved base 
   and review refs are passed along untouched; the fallback dialog waits until other dialogs close
   and lines up several notices one after another.
 Acceptance:
-  - [ ] Delete the saved base branch on the remote, then create a workspace → it starts from the
-        default branch and a fallback notice appears.
+  - [x] Delete the saved base branch on the remote, then create a workspace → it starts from the
+        default branch and a fallback notice appears. (cards live; evidence/cards-PROJ-028.txt)
   - [x] Pick a full commit id as the start → the workspace starts there and no fetch happens. (cards; evidence/cards-PROJ-028.txt)
 Compat: —
 Source: D-01-028
@@ -154,8 +154,8 @@ Rules: the agent runs in the startup tab made for it, not in an extra default ta
   is installed, else the first installed agent in catalogue order, and only when a prompt was
   given; a create with no prompt and no agent makes the worktree and opens no agent tab.)
 Acceptance:
-  - [ ] Create with Claude and the prompt hello → the first tab runs Claude with that prompt.
-  - [ ] Create with an agent and a prompt → no additional empty default tab is opened.
+  - [x] Create with Claude and the prompt hello → the first tab runs Claude with that prompt. (cards live; evidence/cards-PROJ-038.txt)
+  - [x] Create with an agent and a prompt → no additional empty default tab is opened. (cards live; evidence/cards-PROJ-038.txt)
 Compat: —
 Source: D-01-038
 
@@ -169,7 +169,7 @@ Rules: rm also answers to remove and delete and is marked as destructive; create
 Acceptance:
   - [x] Create one with a name, an agent, a prompt and JSON output → the JSON includes the new
         folder path; remove it by name → it is gone. (cards; evidence/cards-PROJ-077.txt)
-  - [ ] Create with setup skipped → no setup script runs for it.
+  - [x] Create with setup skipped → no setup script runs for it. (cards live; evidence/cards-PROJ-077.txt)
 Compat: kolux worktree create takes --name plus optional --repo, --agent, --prompt, --setup (run,
   skip or inherit), --base-branch, --issue, --comment, --parent-worktree or --no-parent, --activate,
   --run-hooks (the older spelling that runs setup and activates) and --json; kolux worktree rm (also
@@ -217,7 +217,7 @@ Rules: unread can be switched by hand, even on the active row; switching branch 
 Acceptance:
   - [x] An agent in a background workspace asks for permission → its row shows the permission state
         ahead of other activity. (cards; evidence/cards-PROJ-063.txt)
-  - [ ] Switch branch in a workspace's terminal → the row shows the new branch.
+  - [x] Switch branch in a workspace's terminal → the row shows the new branch. (cards live; evidence/cards-PROJ-063.txt)
 Compat: —
 Source: D-01-063
 
