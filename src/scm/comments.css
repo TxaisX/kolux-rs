@@ -22,7 +22,7 @@
 .cm-body .md p { margin: 0 0 6px; white-space: pre-wrap; }
 .cm-body .md-h { font-size: 14px; margin-bottom: 4px; }
 .cm-body .md code, .cm-body .md-code { font-size: 12px; }
-.cm-body .md-code { overflow-x: auto; padding: 6px; border-radius: 6px; background: rgba(128, 128, 128, 0.15); margin: 0 0 6px; }
+.cm-body .md-code { overflow-x: auto; padding: 6px; border-radius: 6px; background: var(--chip-bg); margin: 0 0 6px; }
 .cm-body .md blockquote { margin: 0 0 6px; padding-left: 10px; border-left: 3px solid var(--line-subtle); opacity: 0.85; }
 .cm-body .md ul, .cm-body .md ol { margin: 0 0 6px; padding-left: 20px; }
 .cm-reactions { position: relative; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }

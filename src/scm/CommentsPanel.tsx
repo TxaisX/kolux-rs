@@ -4,7 +4,7 @@
 // (pr_review.rs) reads and writes GitHub; review.ts decides what is shown.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { onBotList, withBot, withoutBot } from "../settings/reviewBots";
+import { botToggle, relabelAsBot, toggleBotIn } from "../settings/reviewBots";
 import { useSettings } from "../settings/useSettings";
 import Markdown from "../tasks/MarkdownView";
 import "./comments.css";
@@ -79,6 +79,8 @@ function Composer({ label, send, cancel, initial }: { label: string; send: (text
 export default function CommentsPanel({ dir, url, visible, extra }: Props) {
   const { settings, save } = useSettings();
   const bots = botNames(settings?.[REVIEW_BOTS_KEY]);
+  const botCell = useRef<{ current: readonly string[] }>({ current: bots });
+  botCell.current.current = bots;
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -132,8 +134,11 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
 
   /** GIT-030: puts an author on (or takes one off) the bot list setting, then reads again so their cards sit apart. */
   const toggleBot = (author: string) => {
-    const next = onBotList(author, bots) ? withoutBot(bots, author) : withBot(bots, author);
-    void save({ [REVIEW_BOTS_KEY]: next }).then(() => load(next));
+    const r = toggleBotIn(botCell.current, author);
+    if (r.note) return setNote(r.note);
+    setNote(null);
+    // A mark relabels the cards here; taking one off needs the read, since GitHub's own bot flag is not on the card.
+    void save({ [REVIEW_BOTS_KEY]: r.list }).then(() => (r.marked ? setReview((cur) => cur && relabelAsBot(cur, author)) : load(r.list)));
   };
 
   const queued = review ? review.threads.filter((t) => queue.includes(t.id) && !t.resolved) : [];
@@ -221,9 +226,11 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
       <div className="cm-meta">
         <span className="cm-author">{c.author}</span>
         {c.bot && <span className="cm-tag">bot</span>}
-        <button className="cm-link" title={onBotList(c.author, bots) ? `Show ${c.author} as a person again` : `Treat ${c.author} as a bot (Settings > Git lists them)`} onClick={() => toggleBot(c.author)}>
-          {onBotList(c.author, bots) ? "Not a bot" : "Mark as bot"}
-        </button>
+        {botToggle(c.bot, c.author, bots) && (
+          <button className="cm-link" title={botToggle(c.bot, c.author, bots) === "unmark" ? `Show ${c.author} as a person again` : `Treat ${c.author} as a bot (Settings > Git lists them)`} onClick={() => toggleBot(c.author)}>
+            {botToggle(c.bot, c.author, bots) === "unmark" ? "Not a bot" : "Mark as bot"}
+          </button>
+        )}
         <span className="cm-time" title={c.at}>
           {relativeTime(c.at, Date.now())}
         </span>

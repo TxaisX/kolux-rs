@@ -38,3 +38,37 @@ export function withBot(list: readonly string[], author: string): string[] {
 
 /** The list without that author, whatever its case. */
 export const withoutBot = (list: readonly string[], author: string): string[] => list.filter((b) => b.toLowerCase() !== author.toLowerCase());
+
+/** What the control on a comment card offers. GitHub's own bots (a card marked bot whose author is not on the list) offer nothing. */
+export function botToggle(cardIsBot: boolean, author: string, list: readonly string[]): "mark" | "unmark" | null {
+  if (onBotList(author, list)) return "unmark";
+  return cardIsBot ? null : "mark";
+}
+
+/** The list as of the latest click, so two clicks before the page redraws both count. */
+export type BotCell = { current: readonly string[] };
+
+/** One Mark as bot / Not a bot click on `cell`. A mark the list cannot take says why and changes nothing. */
+export function toggleBotIn(cell: BotCell, author: string): { list: string[]; changed: boolean; marked: boolean; note: string | null } {
+  const was = [...cell.current];
+  if (onBotList(author, was)) {
+    cell.current = withoutBot(was, author);
+    return { list: [...cell.current], changed: true, marked: false, note: null };
+  }
+  const next = withBot(was, author);
+  if (next.length === was.length) {
+    const note = was.length >= MAX_BOTS ? `The bot list is full (${MAX_BOTS} names): take one off in Settings > Git first.` : `"${author}" cannot be added to the bot list.`;
+    return { list: was, changed: false, marked: true, note };
+  }
+  cell.current = next;
+  return { list: next, changed: true, marked: true, note: null };
+}
+
+type Carded = { author: string; bot: boolean };
+
+/** A read review with every card by `author` (any case) shown as a bot, without reading it again; the input is not changed. */
+export function relabelAsBot<R extends { threads: { comments: Carded[] }[]; talk: Carded[] }>(review: R, author: string): R {
+  const same = (a: string) => a.toLowerCase() === author.toLowerCase();
+  const mark = <C extends Carded>(c: C): C => (same(c.author) ? { ...c, bot: true } : c);
+  return { ...review, threads: review.threads.map((t) => ({ ...t, comments: t.comments.map(mark) })), talk: review.talk.map(mark) };
+}
