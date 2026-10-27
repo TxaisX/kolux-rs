@@ -205,8 +205,8 @@ export function hookEventsInstalled(settingsFile) {
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
 
 // ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
-export const LIVE_BASE = "G:/Temp/live-v3";
-export const LIVE_LOGS = "G:/Temp/live-v3-logs";
+export const LIVE_BASE = "G:/Temp/live-v4";
+export const LIVE_LOGS = "G:/Temp/live-v4-logs";
 export const TERM = "section.pane[data-agent]";
 export const SHELL = 'section.pane[data-agent="shell"]';
 
@@ -269,6 +269,12 @@ export async function startPlain(id, opts) {
   // uiLook is written down: a profile with any setting reads as Classic, and the clean (New) look is what a new install shows.
   const seeded = { confirmCloseRunning: false, agentStatusHooks: true, uiLook: "new", ...(opts.settings ?? {}) };
   if (opts.standin) seeded.agentOptions = { claude: { command: writeStandinClaude(join(TEMP, "standin"), opts.standin) } };
+  // opts.trace: a folder GIT_TRACE2 points at for the app, so each git process the app starts leaves one trace file there.
+  if (opts.trace) {
+    rmSync(opts.trace, { recursive: true, force: true });
+    mkdirSync(opts.trace, { recursive: true });
+    process.env.GIT_TRACE2 = opts.trace;
+  }
   await app.launch({
     prepare: () => {
       rmSync(profile, { recursive: true, force: true });
@@ -276,6 +282,7 @@ export async function startPlain(id, opts) {
       writeFileSync(join(profile, "settings.json"), JSON.stringify(seeded, null, 2));
     },
   });
+  delete process.env.GIT_TRACE2;
   const { evalJs, cdp, click, clickWhere, exists, shown, focusPane, focusField, waitFor: wf } = app;
   await wf("the sidebar add button", () => exists('.sb-foot button[title^="Add a project by path"]'), 30000);
   if (!opts.noProject) {

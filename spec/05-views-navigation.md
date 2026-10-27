@@ -33,10 +33,10 @@ User sees: the live terminal moves into the card; on close it returns to its exa
   grid.
 Rules: the process and scrollback are kept; only the view moves.
 Acceptance:
-  - [ ] Expand a card, type a command, collapse → the grid pane shows the same output in the same
-        position.
-  - [ ] Close the expanded card → the terminal is back in its grid slot and its process is still
-        running.
+  - [x] Expand a card, type a command, collapse → the grid pane shows the same output in the same
+        position. (cards live; evidence/cards-VIEW-026.txt)
+  - [x] Close the expanded card → the terminal is back in its grid slot and its process is still
+        running. (cards live; evidence/cards-VIEW-026.txt)
 Compat: —
 Source: D-05-026
 

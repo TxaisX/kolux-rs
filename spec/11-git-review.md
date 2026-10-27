@@ -49,9 +49,9 @@ Rules: the shortcut acts only while focus is inside Source Control and the main 
   the error output.
 Acceptance:
   - [x] Stage a file, type a message, press Ctrl+Enter → exactly one new commit and a clean panel. (cards; evidence/cards-GIT-004.txt)
-  - [ ] Type a draft, switch to another workspace and come back → the draft is still there.
-  - [ ] Install a pre-commit hook that exits with 1 → the notice says blocked and shows what the
-        hook printed.
+  - [x] Type a draft, switch to another workspace and come back → the draft is still there. (cards live; evidence/cards-GIT-004.txt)
+  - [x] Install a pre-commit hook that exits with 1 → the notice says blocked and shows what the
+        hook printed. (cards live; evidence/cards-GIT-004.txt)
 Compat: —
 Source: D-11-004
 
@@ -87,8 +87,8 @@ Rules: fetch refreshes remote refs and merges nothing; publish pushes to origin 
   already set up.
 Acceptance:
   - [x] Make two local commits → the menu offers to push 2 commits; push → the counts fall to zero. (cards; evidence/cards-GIT-007.txt)
-  - [ ] Leave an unpublished branch open for ten minutes → git traces show no repeating remote
-        checks.
+  - [x] Leave an unpublished branch open for ten minutes → git traces show no repeating remote
+        checks. (cards live; evidence/cards-GIT-007.txt)
 Compat: —
 Source: D-11-007
 
@@ -135,8 +135,8 @@ Rules: only Git workspaces get the panel, plain folders do not; a header menu fl
 Acceptance:
   - [x] Edit a tracked file, stage a second one and add a new one → three sections with the right
         counts and line totals. (cards; evidence/cards-GIT-001.txt)
-  - [ ] Switch to tree view, close the panel and reopen it → it is still a tree.
-  - [ ] Commit from a terminal → the panel clears with no manual refresh.
+  - [x] Switch to tree view, close the panel and reopen it → it is still a tree. (cards live; evidence/cards-GIT-001.txt)
+  - [x] Commit from a terminal → the panel clears with no manual refresh. (cards live; evidence/cards-GIT-001.txt)
 Compat: the panel's toggle command defaults to Mod+Shift+G; existing keybinding files that rebind it
   must still load (its command id is an allowlist candidate).
 Source: D-11-001
@@ -167,8 +167,8 @@ Rules: the staged and unstaged versions of one file open in separate tabs; a sin
   a diff while it loads never crashes the editor; reopening a file whose diff is already open
   refreshes that tab; a deleted image shows its last committed version.
 Acceptance:
-  - [ ] Click an unstaged file → its diff tab opens; press F7 → the cursor moves to the next hunk.
-  - [ ] Single-click one file, then another → the second replaces the first in the same preview tab.
+  - [x] Click an unstaged file → its diff tab opens; press F7 → the cursor moves to the next hunk. (cards live; evidence/cards-GIT-037.txt)
+  - [x] Single-click one file, then another → the second replaces the first in the same preview tab. (cards live; evidence/cards-GIT-037.txt)
 Compat: next change defaults to F7 and previous change to Shift+F7 (their command ids are allowlist
   candidates).
 Source: D-11-037
@@ -183,9 +183,9 @@ Rules: inline layout, no wrap, whitespace hidden and tree hidden are the default
   position survives switching to another tab and back; files changing underneath do not freeze the
   view; the branch diff uses a snapshot of the base, so it holds still during a review.
 Acceptance:
-  - [ ] Change 10 files and open all changes → 10 sections; scroll to the seventh, switch tabs and
-        back → still at the seventh.
-  - [ ] Turn on side-by-side and whitespace → the layout and markers change at once.
+  - [x] Change 10 files and open all changes → 10 sections; scroll to the seventh, switch tabs and
+        back → still at the seventh. (cards live; evidence/cards-GIT-038.txt)
+  - [x] Turn on side-by-side and whitespace → the layout and markers change at once. (cards live; evidence/cards-GIT-038.txt)
 Compat: —
 Source: D-11-038
 
@@ -201,7 +201,7 @@ Rules: notes attach only to lines present in the diff; edits are trimmed and an 
 Acceptance:
   - [x] Add a note on line 12 → the card sits under line 12; switch to side-by-side → still under
         line 12. (cards; evidence/cards-GIT-040.txt)
-  - [ ] Edit the note → the open card updates; click trash → it is gone.
+  - [x] Edit the note → the open card updates; click trash → it is gone. (cards live; evidence/cards-GIT-040.txt)
 Compat: Add Review Note defaults to Mod+Shift+A (its command id is an allowlist candidate).
 Source: D-11-040
 
@@ -241,8 +241,8 @@ Rules: every version warns that there is no undo; the confirm button is named fo
 Acceptance:
   - [x] Discard an untracked file → the dialog says it is removed for good; confirm → the file is
         gone. (cards; evidence/cards-GIT-003.txt)
-  - [ ] Discard a section with 40 untracked files → the dialog gives the number 40 and its buttons
-        can be reached without resizing.
+  - [x] Discard a section with 40 untracked files → the dialog gives the number 40 and its buttons
+        can be reached without resizing. (cards live; evidence/cards-GIT-003.txt)
   - [x] Discard a change to a symbolic link aimed at a file beyond the repository → that file is
         left alone. (cards; evidence/cards-GIT-003.txt)
 Compat: —

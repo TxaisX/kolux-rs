@@ -3,6 +3,12 @@
 // Hidden app, one shell pane, over CDP.
 import { reporter, startPlain, finish, sleep, waitFor, TERM, snap, pickScreen, checker } from "./live-views-dom.mjs";
 
+// The card buttons are icon-only, so they are found by title.
+const clickTitle = async (app, re) => {
+  const r = await app.evalJs(`(() => { const b = [...document.querySelectorAll("section.pane.card button")].find((x) => new RegExp(${JSON.stringify(re)}).test(x.title)); if (!b) return "missing"; b.click(); return "clicked"; })()`);
+  if (r !== "clicked") throw new Error(`no card button titled ${re}`);
+};
+
 const rep = reporter();
 const { log, lines: ev } = rep;
 const { check, allPassed } = checker(log);
@@ -31,7 +37,7 @@ try {
   if (!clickable) throw new Error("Board card is not usable (see the check above); stopping before the expand step");
 
   // Expand it and type.
-  await app.clickWhere("section.pane.card button", "/^Expand: show this session/");
+  await clickTitle(app, "^Expand: show this session");
   await sleep(1500);
   const c1 = await cardInfo();
   log(`Board card, expanded: ${JSON.stringify(c1)}`);
@@ -45,14 +51,21 @@ try {
     return r.lines.map((l) => l.trim()).lastIndexOf(M);
   };
   await waitFor("the marker in the expanded card", async () => ((await ctx.text(0)) ?? "").split("\n").some((l) => l.trim() === M), 30000, 500);
+  // The shell prints its prompt after the output: let the buffer settle before it is recorded.
+  for (let i = 0, prev = ""; i < 12; i++) {
+    const cur = ((await ctx.lines(0))?.lines ?? []).map((l) => l.trimEnd()).join("\n");
+    if (cur === prev) break;
+    prev = cur;
+    await sleep(800);
+  }
   const before = await ctx.lines(0);
   const rowBefore = before.lines.map((l) => l.trim()).lastIndexOf(M);
-  const fullBefore = before.lines.map((l) => l.trimEnd()).join("\n");
+  const fullBefore = before.lines.map((l) => l.trimEnd()).join("\n").trimEnd(); // blank rows under the prompt follow the pane height
   log(`marker typed in the card: buffer row ${rowBefore} of ${before.lines.length} rows`);
   log(`screenshot: ${await ctx.shot("VIEW-026-board-expanded")}`);
 
   // Collapse (box 1: the grid pane shows the same output in the same position).
-  await app.clickWhere("section.pane.card button", "/^Collapse: the terminal goes back/");
+  await clickTitle(app, "^Collapse: the terminal goes back");
   await sleep(1500);
   const c2 = await cardInfo();
   log(`Board card, collapsed again: ${JSON.stringify(c2)}`);
@@ -62,18 +75,20 @@ try {
   const s = await snap(app);
   const after = await ctx.lines(0);
   const rowAfter = after ? after.lines.map((l) => l.trim()).lastIndexOf(M) : -1;
-  const fullAfter = after ? after.lines.map((l) => l.trimEnd()).join("\n") : "";
+  const fullAfter = after ? after.lines.map((l) => l.trimEnd()).join("\n").trimEnd() : "";
   log(`grid pane: ${JSON.stringify(s)}; marker at buffer row ${rowAfter} of ${after?.lines.length}`);
   check("box 1: the grid pane shows the same output (marker present) in the same position (same buffer row)", rowAfter >= 0 && rowAfter === rowBefore, `row ${rowBefore} -> ${rowAfter}`);
+  if (fullBefore !== fullAfter) log(`buffer before: ${JSON.stringify(fullBefore)}
+buffer after:  ${JSON.stringify(fullAfter)}`);
   check("box 1: the whole buffer is the same text", fullBefore === fullAfter, `${fullBefore.length} -> ${fullAfter.length} chars`);
   log(`screenshot: ${await ctx.shot("VIEW-026-grid")}`);
 
   // Box 2: close the expanded card -> terminal back in its grid slot, process still running.
   await pickScreen(app, "Board");
   await sleep(1200);
-  await app.clickWhere("section.pane.card button", "/^Expand: show this session/");
+  await clickTitle(app, "^Expand: show this session");
   await sleep(1200);
-  await app.clickWhere("section.pane.card button", "/^Collapse: the terminal goes back/");
+  await clickTitle(app, "^Collapse: the terminal goes back");
   await sleep(1200);
   await pickScreen(app, "Terminals");
   await sleep(2500);
