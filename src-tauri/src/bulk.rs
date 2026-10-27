@@ -624,6 +624,7 @@ mod tests {
         // A duplicate's suffix also steps over an id a later row keeps.
         let out = set_statuses(&store, &[(Some("a".into()), "A".into()), (Some("a".into()), "A again".into()), (Some("a-2".into()), "Two".into())]).unwrap();
         assert_eq!(out.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["a", "a-3", "a-2"]);
+        assert!(out[1].rest.is_empty(), "the duplicate a-3 takes no stored fields");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }
