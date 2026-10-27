@@ -774,6 +774,17 @@ mod tests {
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn row887_an_unknown_top_level_field_survives_a_load_and_a_save() {
+        let (s, dir) = store("future");
+        s.set(KEY, r#"{"version":7,"step":1,"future":{"a":[1,2]}}"#).unwrap();
+        save(&s, &load(&s).unwrap()).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&s.get(KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(saved["future"], serde_json::json!({ "a": [1, 2] }));
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// ONB-008 (T-208-c): older wizards' progress lands on the same visible screen, or on screen one.
     #[test]
     fn older_wizard_progress_maps_onto_the_four_screens() {
