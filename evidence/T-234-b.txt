@@ -121,3 +121,17 @@ LIVE PROOF PENDING (batched) - after the resolver applies both patches:
 3. Copy a screenshot, click in the note (rich or Source), paste: pasted-<date>.png appears beside the note and the link is inserted.
 4. Toolbar picture button, choose a picture from another folder: a copy appears beside the note and the link is relative.
 STILL OPEN IN T-234-b: code colouring (no highlighter library on main), equal-share new column width (not expressible in markdown).
+
+CLOSE-OUT (lane/editor-close from 281ac8c7, 2026-10-26)
+- Code blocks: ALREADY BUILT since this file's last line. After-list row 494 (commit 7bb4d92d) put highlight.js colouring on main:
+  src/editor/richCodeColour.ts (registered from markdown.ts). Checked against the card text: language label + Plain text choice =
+  CodeLabel.tsx / richCode.ts (piece 7); "colouring redone only where it changed" = registerCodeColour keeps a per-block cache keyed
+  by block key and (language, text), so an edit re-highlights only the block whose text or label changed and drops blocks that
+  went away; an unknown or absent language stays uncoloured (richCodeColour.test.ts "leaves an unknown, absent or plain-text
+  language uncoloured"); a block over 20000 characters stays plain. Nothing missing, nothing built.
+- Equal-share new column: NOT WRITABLE in markdown. A GFM table holds cells only, no widths. The rich view already lays every column
+  out equal by itself (editor-extras.css .md-rich table.md-table { table-layout: fixed; width: 100% }), so a new column takes an
+  equal share with no stored width and nothing for undo to restore. Coordinator ruling: do not strike it here; proposed strike
+  written as DECISIONS line DT-COLUMN-WIDTH in evidence/editor-T-234-b-DECISIONS.md.patch (git apply --check ok on 281ac8c7),
+  and the piece stays open in PLAN T-234-b-rest until Txais confirms.
+- PLAN: T-234-b ticked (everything buildable is built; live proofs stay batched); T-234-b-rest holds only the column-width strike.
