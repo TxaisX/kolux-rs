@@ -478,7 +478,10 @@ fn stat_012_cursor_install_drops_old_permission_entries_and_keeps_the_users() {
     let old = old_cursor_file(&home, &file, Some(user));
     fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
     assert_eq!(old["hooks"].as_object().unwrap().len(), 8, "the file starts with eight Kolux events");
-    assert_eq!(inspect_cursor(&file).0, "installed", "the status row judges the five");
+    let (state, why) = inspect_cursor(&file);
+    assert_eq!(state, "partial", "an older file's permission entries are not the current install");
+    let why = why.unwrap();
+    assert!(why.starts_with("an old Kolux entry under ") && ["preToolUse", "beforeShellExecution", "beforeMCPExecution"].iter().all(|e| why.contains(e)), "{why}");
     assert!(install_cursor(&home, &file).unwrap(), "the old entries go");
     let v: Value = serde_json::from_str(&read(&file)).unwrap();
     assert_eq!(v["hooks"]["beforeShellExecution"], json!([{ "command": user }]), "only the user's entry is left, unchanged");
@@ -487,6 +490,46 @@ fn stat_012_cursor_install_drops_old_permission_entries_and_keeps_the_users() {
     assert!(["preToolUse", "beforeMCPExecution", "beforeShellExecution"].iter().all(|e| !v["hooks"][e].as_array().is_some_and(|l| l.iter().any(names_mine))));
     assert!(CURSOR_EVENTS.iter().all(|e| v["hooks"][e].as_array().unwrap().iter().filter(|h| names_mine(h)).count() == 1));
     assert!(!install_cursor(&home, &file).unwrap(), "a second install changes nothing");
+    assert_eq!(inspect_cursor(&file), ("installed", None), "and the row is whole again");
+}
+
+/// A user's own empty event key survives install and removal; only a key Kolux's strip emptied goes.
+#[test]
+fn stat_012_cursor_install_and_remove_leave_the_users_empty_keys() {
+    let home = scratch("cursor-empty");
+    let file = cursor_file(&home);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{
+  \"version\": 1,
+  \"hooks\": {
+    \"afterFileEdit\": [],
+    \"beforeShellExecution\": []
+  }
+}
+";
+    fs::write(&file, original).unwrap();
+    assert!(install_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["hooks"]["afterFileEdit"], json!([]), "install keeps the user's empty key");
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([]));
+    assert!(!install_cursor(&home, &file).unwrap(), "and a second install changes nothing");
+    assert!(remove_cursor(&home, &file).unwrap());
+    assert_eq!(read(&file), original, "removal gives the user's file back byte for byte, empty keys included");
+}
+
+/// Removal on an older eight-event file leaves no Kolux entry under any key, and the user's own stay.
+#[test]
+fn stat_012_cursor_remove_clears_an_older_files_permission_entries() {
+    let home = scratch("cursor-old-remove");
+    let file = cursor_file(&home);
+    let user = "./my-gate.sh";
+    let old = old_cursor_file(&home, &file, Some(user));
+    fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+    assert!(remove_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert!(v["hooks"].as_object().unwrap().values().filter_map(Value::as_array).flatten().all(|h| !names_mine(h)), "no Kolux entry under any key");
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([{ "command": user }]), "the user's entry stays");
+    assert!(v["hooks"].get("preToolUse").is_none() && v["hooks"].get("stop").is_none(), "keys Kolux emptied go");
 }
 
 #[test]
@@ -531,7 +574,10 @@ fn stat_014_command_code_install_writes_three_groups_and_keeps_the_users_and_rem
         assert_eq!(mine[0]["hooks"][0]["type"], "command", "{e}");
         assert_eq!(mine[0]["hooks"][0]["timeout"], 10, "{e}");
     }
-    assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], "*");
+    // Command Code's doc: omit the matcher to match every tool; "*" is not listed and may not compile as a pattern.
+    for e in ["PreToolUse", "PostToolUse"] {
+        assert!(v["hooks"][e][0].get("matcher").is_none(), "{e} carries no matcher key");
+    }
     assert!(home.join(SCRIPT_DIR_FOR_TESTS).join(COMMAND_CODE_SCRIPT).is_file());
     assert!(!install_command_code(&home, &file).unwrap(), "a second install changes nothing");
     assert_eq!(inspect_command_code(&file), ("installed", None));
