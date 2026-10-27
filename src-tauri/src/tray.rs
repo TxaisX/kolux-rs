@@ -14,6 +14,7 @@
 
 
 use crate::menu::Os;
+#[cfg(any(debug_assertions, test))]
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -64,27 +65,6 @@ pub struct Dot {
     hidden: bool,
 }
 
-/// STAT-047: the icon file the tray shows; a development copy keeps its DEV marker when the
-/// attention version is swapped in. (From the watch lane's T-125 model; this lane paints the same
-/// four states in code with `paint`, so nothing calls it yet.)
-#[cfg_attr(not(test), allow(dead_code))] // only tests reach it; folded in or dropped in the bug-fix phase (kolux-rs-after.md)
-pub fn icon(dev: bool, dot: bool) -> &'static str {
-    match (dev, dot) {
-        (false, false) => "tray.png",
-        (false, true) => "tray-dot.png",
-        (true, false) => "tray-dev.png",
-        (true, true) => "tray-dev-dot.png",
-    }
-}
-
-/// STAT-047: closing the window hides it to the tray only when the user turned that on; the saved
-/// choice carries over, the default is off. (From the watch lane's T-125 model; this lane's live
-/// rule is `close_hides`.)
-#[cfg_attr(not(test), allow(dead_code))] // only tests reach it; folded in or dropped in the bug-fix phase (kolux-rs-after.md)
-pub fn close_to_tray(saved: Option<bool>) -> bool {
-    saved == Some(true)
-}
-
 impl Dot {
     pub fn window_hidden(&mut self) {
         self.hidden = true;
@@ -129,6 +109,7 @@ pub fn click_opens(os: Os, left: bool, released: bool) -> bool {
 }
 
 /// APP-008: the branch a Git HEAD file names; a detached HEAD shows the short commit.
+#[cfg(any(debug_assertions, test))]
 pub fn branch_from_head(head: &str) -> Option<String> {
     let head = head.trim();
     if head.is_empty() {
@@ -142,6 +123,7 @@ pub fn branch_from_head(head: &str) -> Option<String> {
 
 /// Where a checkout keeps its HEAD: inside `.git` when that is a folder, or inside the folder a
 /// `.git` file names (a worktree), read relative to the checkout.
+#[cfg(any(debug_assertions, test))]
 pub fn git_head_file(checkout: &Path) -> Option<PathBuf> {
     let dot_git = checkout.join(".git");
     let dir = if dot_git.is_dir() {
@@ -846,14 +828,5 @@ mod tests {
         d.window_shown();
         assert!(!d.on);
         assert!(!d.ping(Ping::AgentFinished), "visible again: a finish leaves no dot");
-    }
-
-    #[test]
-    fn stat047_dev_copies_keep_their_marker_on_the_attention_icon_and_close_to_tray_is_off_by_default() {
-        assert_eq!(icon(false, true), "tray-dot.png");
-        assert_eq!(icon(true, false), "tray-dev.png");
-        assert_eq!(icon(true, true), "tray-dev-dot.png");
-        assert!(!close_to_tray(None) && !close_to_tray(Some(false)));
-        assert!(close_to_tray(Some(true)), "a saved choice carries over");
     }
 }

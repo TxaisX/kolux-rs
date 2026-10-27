@@ -72,8 +72,13 @@ pub struct Receipts {
 
 impl Receipts {
     pub fn load(store: &crate::state::Store) -> Receipts {
-        let items = crate::orchestration::kept::or_default::<Vec<Value>>(store, KEY);
-        Receipts { items: items.into_iter().filter_map(|v| Some((v["key"].as_str()?.to_string(), v["at"].as_u64()?, v["receipt"].clone()))).collect() }
+        Self::try_load(store).unwrap_or_default()
+    }
+
+    /// For a writer: a store that cannot be read or kept aside is an Err, never an empty list.
+    pub fn try_load(store: &crate::state::Store) -> Result<Receipts, String> {
+        let items: Vec<Value> = crate::orchestration::kept::load(store, KEY)?;
+        Ok(Receipts { items: items.into_iter().filter_map(|v| Some((v["key"].as_str()?.to_string(), v["at"].as_u64()?, v["receipt"].clone()))).collect() })
     }
 
     pub fn save(&self, store: &crate::state::Store) -> Result<(), String> {
@@ -627,6 +632,21 @@ mod tests {
         assert_eq!(r.len(), RECEIPTS_KEPT);
         assert_eq!(r.find("term-2|req-0"), None);
         assert!(r.find(&format!("term-2|req-{}", RECEIPTS_KEPT + 4)).is_some());
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13_receipts_that_could_not_be_kept_aside_are_never_saved_over() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-sendonce-c13-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        let broken = "[{\"key\": \"term-1|r\", \"at\": 5";
+        store.set(KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(Receipts::try_load(&store).unwrap_err().contains(KEY));
+        assert!(Receipts::load(&store).is_empty(), "a read still answers");
+        assert_eq!(store.get(KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -120,16 +120,6 @@ pub fn workspace_remove_many(git: State<'_, Git>, store: StoreState<'_>, termina
     Ok(Batch { items, summary })
 }
 
-/// The later delete of a branch kept at removal: only while it still points where it did.
-#[tauri::command(async)]
-pub fn workspace_kept_branch_delete(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, commit: String) -> Result<bool, String> {
-    let project = {
-        let store = store.lock().map_err(|e| e.to_string())?;
-        find_project(&store, &project_id)?
-    };
-    git.delete_branch_if_at(Path::new(&project.path), &branch, &commit)
-}
-
 // ---- PROJ-076: forget a workspace locally -----------------------------------------------------------
 
 /// Whether the workspace at \`path\` may be forgotten: never a project's root, and while its project
@@ -151,9 +141,21 @@ pub fn forget_check(project: Option<&Project>, path: &str, folder_exists: bool) 
 #[tauri::command(async)]
 pub fn workspace_forget(store: StoreState<'_>, project_id: Option<String>, path: String) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    let project = project_id.and_then(|id| find_project(&store, &id).ok());
-    forget_check(project.as_ref(), &path, Path::new(&path).exists())?;
+    forget_verdict(&store, project_id.as_deref(), &path)?;
     crate::projects::forget_workspace(&store, &path)
+}
+
+/// The verdict `workspace_forget` acts on, read from the store and the disk.
+fn forget_verdict(store: &Store, project_id: Option<&str>, path: &str) -> Result<(), String> {
+    let project = project_id.and_then(|id| find_project(store, id).ok());
+    forget_check(project.as_ref(), path, Path::new(path).exists())
+}
+
+/// Why `workspace_forget` would refuse this workspace, or none; the panel asks before it offers "Take out".
+#[tauri::command(async)]
+pub fn workspace_forget_check(store: StoreState<'_>, project_id: Option<String>, path: String) -> Result<Option<String>, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(forget_verdict(&store, project_id.as_deref(), &path).err())
 }
 
 // ---- PROJ-084: the status workflow ----------------------------------------------------------------
@@ -173,7 +175,7 @@ pub fn default_statuses() -> Vec<Status> {
 
 /// The user's statuses in their order, or the default set when none were saved.
 pub fn statuses(store: &Store) -> Vec<Status> {
-    Some(crate::orchestration::kept::or_default::<Vec<Status>>(store, STATUS_LIST_KEY)).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
+    Some(crate::orchestration::kept::or_default_held::<Vec<Status>>(store, STATUS_LIST_KEY)).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
 }
 
 fn slug(label: &str) -> String {
@@ -205,6 +207,11 @@ fn status_map(store: &Store) -> HashMap<String, String> {
     crate::orchestration::kept::or_default(store, STATUS_OF_KEY)
 }
 
+/// Card 13: the map a save starts from; a store or copy that fails is an error, never an empty map.
+fn status_map_to_change(store: &Store) -> Result<HashMap<String, String>, String> {
+    crate::orchestration::kept::load(store, STATUS_OF_KEY)
+}
+
 /// The status id of the workspace at \`path\`; one with none, or whose status was deleted, is in the first.
 pub fn status_of(store: &Store, path: &str) -> String {
     let list = statuses(store);
@@ -215,13 +222,13 @@ pub fn set_status(store: &Store, path: &str, id: &str) -> Result<(), String> {
     if !statuses(store).iter().any(|s| s.id == id) {
         return Err(format!("There is no status {id}"));
     }
-    let mut map = status_map(store);
+    let mut map = status_map_to_change(store)?;
     map.insert(name_key(path), id.to_string());
     store.set(STATUS_OF_KEY, &serde_json::to_string(&map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 pub fn clear_status(store: &Store, path: &str) -> Result<(), String> {
-    let mut map = status_map(store);
+    let mut map = status_map_to_change(store)?;
     if map.remove(&name_key(path)).is_none() {
         return Ok(());
     }
@@ -420,6 +427,24 @@ mod tests {
     }
 
     #[test]
+    fn the_forget_question_is_asked_with_the_same_verdict_the_forget_acts_on() {
+        let dir = temp("forgetv");
+        let (repo, here, gone) = (dir.join("repo"), dir.join("ws-here"), dir.join("ws-gone"));
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&here).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        let project = crate::projects::register_project(&store, (repo.clone(), repo.clone())).unwrap();
+        let (here, gone, repo) = (here.display().to_string(), gone.display().to_string(), repo.display().to_string());
+        let id = Some(project.id.as_str());
+        assert!(forget_verdict(&store, id, &here).unwrap_err().contains("still there"), "an existing folder of an open project is refused");
+        assert!(forget_verdict(&store, id, &repo).unwrap_err().contains("root"));
+        assert!(forget_verdict(&store, id, &gone).is_ok(), "a folder that is gone may be forgotten");
+        assert!(forget_verdict(&store, Some("no-such-project"), &here).is_ok(), "the project was removed: anything goes");
+        assert!(forget_verdict(&store, None, &here).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn statuses_keep_every_label_in_order_and_a_workspace_without_one_is_in_the_first() {
         let dir = temp("status");
         let store = Store::open(&dir).unwrap();
@@ -499,5 +524,38 @@ mod tests {
         assert_eq!(saved_space(&store, "p").len(), 1, "a folder deleted since is not shown");
         drop(store);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn card13_a_status_map_that_could_not_be_kept_aside_is_never_saved_over() {
+        let dir = temp("c13");
+        let db = dir.join("db");
+        let store = Store::open(&db).unwrap();
+        let broken = "{\"C:/a\": \"s-1\"";
+        store.set(STATUS_OF_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        let first = statuses(&store)[0].id.clone();
+        let err = set_status(&store, "C:/a", &first).unwrap_err();
+        assert!(err.contains(STATUS_OF_KEY) && !err.contains("s-1"), "{err}");
+        assert!(clear_status(&store, "C:/a").is_err());
+        assert_eq!(store.get(STATUS_OF_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row881_a_status_list_that_could_not_be_kept_aside_is_never_saved_over() {
+        let dir = temp("r881");
+        let db = dir.join("db");
+        let store = Store::open(&db).unwrap();
+        let broken = "[{\"id\": \"mine\", \"label\": \"Mine\"";
+        store.set(STATUS_LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        assert_eq!(statuses(&store), default_statuses(), "the page shows the defaults");
+        let err = set_statuses(&store, &[(None, "Backlog".into())]).unwrap_err();
+        assert!(err.contains(STATUS_LIST_KEY) && err.contains("not saving over it"), "{err}");
+        assert_eq!(store.get(STATUS_LIST_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

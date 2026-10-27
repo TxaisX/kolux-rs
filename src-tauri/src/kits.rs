@@ -224,8 +224,7 @@ pub fn kit_prepare(store: State<'_, Mutex<Store>>, dir: String, kit: String, tit
     let started = now_ms();
     let out = prepare(&path, RunRecord { kit: kit.clone(), title: title.clone(), started, roles }, &earlier_name);
     if let Ok(s) = store.lock() {
-        let list = remember_run(load_history(&s), Past { dir, kit, title, started, collected: None });
-        let _ = save_history(&s, &list);
+        let _ = record_started(&s, Past { dir, kit, title, started, collected: None });
     }
     Ok(out)
 }
@@ -309,6 +308,18 @@ fn mark_collected(list: &mut [Past], run: &Past, folder: &str) {
 
 pub fn load_history(store: &Store) -> Vec<Past> {
     crate::orchestration::kept::or_default(store, HISTORY_KEY)
+}
+
+/// A history that could not be read or kept aside is an Err and is left alone, never saved over.
+fn record_started(store: &Store, run: Past) -> Result<(), String> {
+    let old = crate::orchestration::kept::load(store, HISTORY_KEY)?;
+    save_history(store, &remember_run(old, run))
+}
+
+fn record_collected(store: &Store, run: &Past, folder: &str) -> Result<(), String> {
+    let mut list = remember_run(crate::orchestration::kept::load(store, HISTORY_KEY)?, run.clone());
+    mark_collected(&mut list, run, folder);
+    save_history(store, &list)
 }
 
 fn save_history(store: &Store, list: &[Past]) -> Result<(), String> {
@@ -554,9 +565,7 @@ pub fn kit_collect(store: State<'_, Mutex<Store>>, dir: String, roles: Vec<Colle
     let dir = guard(&store, &dir)?;
     let (done, run) = collect(&dir, &roles, &name)?;
     let store = store.lock().map_err(|e| e.to_string())?;
-    let mut list = remember_run(load_history(&store), run.clone());
-    mark_collected(&mut list, &run, &done.folder);
-    save_history(&store, &list)?;
+    record_collected(&store, &run, &done.folder)?;
     Ok(done)
 }
 
@@ -789,5 +798,20 @@ mod tests {
         assert!(kit_folder("shop", &projects, &samples).unwrap_err().contains("full folder path"));
         assert!(known_kit("sales").is_ok() && known_kit("nope").unwrap_err().contains("no kit called nope"));
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn card13_a_run_history_that_could_not_be_kept_aside_is_never_saved_over() {
+        let dir = temp("c13");
+        let store = Store::open(&dir).unwrap();
+        let broken = "[{\"dir\": \"C:/a\", \"kit\"";
+        store.set(HISTORY_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let run = Past { dir: "C:/a".into(), kit: "k".into(), title: "t".into(), started: 1, collected: None };
+        assert!(record_started(&store, run.clone()).unwrap_err().contains(HISTORY_KEY));
+        assert!(record_collected(&store, &run, "out").unwrap_err().contains(HISTORY_KEY));
+        assert_eq!(store.get(HISTORY_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

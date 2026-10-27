@@ -47,7 +47,7 @@ export function keyCard(s: KeyStatus | null): KeyCard {
   if (s.connected) {
     const month = s.expiresAt !== null ? monthYear(s.expiresAt) : null;
     if (s.expired) {
-      return { state: "expired", headline: "Connected · 1-year key ran out", detail: `The key ran out${month ? ` in ${month}` : ""}. Renew it to keep Claude connected.`, attention: s.attention, actions: ["renew", "disconnect"] };
+      return { state: "expired", headline: "Connected · 1-year key ran out", detail: (s.daysLeft ?? 0) > 0 ? "Claude stopped accepting the key before its date. Renew it to keep Claude connected." : `The key ran out${month ? ` in ${month}` : ""}. Renew it to keep Claude connected.`, attention: s.attention, actions: ["renew", "disconnect"] };
     }
     if (s.renewDue) {
       const days = s.daysLeft === 1 ? "1 day" : `${s.daysLeft ?? 0} days`;

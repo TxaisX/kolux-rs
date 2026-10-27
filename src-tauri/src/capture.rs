@@ -175,7 +175,7 @@ fn keep(app: &tauri::AppHandle, p: Publish, started: u64) {
     }
     let project = p.cwd.as_deref().and_then(|c| Path::new(c).file_name()).map(|n| n.to_string_lossy().into_owned());
     let from = Origin { origin: p.url, source: "claude", project, session: p.session, at };
-    match app.state::<Library>().add(Path::new(&p.path), from, &artifacts::fetch_script) {
+    match app.state::<Library>().add(Path::new(&p.path), from, &|u| artifacts::fetch_script(app, u)) {
         Ok(_) => {
             let _ = app.emit(EVENT, ());
         }

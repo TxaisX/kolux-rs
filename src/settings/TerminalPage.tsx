@@ -19,6 +19,7 @@ import { InputCard, PowerShellCard } from "./InputCards";
 import { detectPlatform } from "../keys/keymap";
 import { readLook } from "./general";
 import TerminalImport from "./TerminalImport";
+import { openSettings } from "./pages";
 import { useSettings } from "./useSettings";
 import { DENSITIES, DENSITY_FIELD, readDensity } from "../shell/paneChrome";
 import { KOLUX_FIELD, switchPatch } from "../shell/linkAsk";
@@ -188,6 +189,18 @@ export default function TerminalPage() {
       )}
       {settings && <TerminalImport settings={settings} save={save} />}
       {settings && <InputCard settings={settings} platform={platform} onSave={save} />}
+      {settings && (
+        <section className="conn-card" data-section="keys">
+          <h2 className="conn-name">Keys in terminals</h2>
+          <p className="conn-detail">
+            Which keys reach the terminal and which Kolux keeps for itself is set in{" "}
+            <button className="btn link" onClick={() => openSettings("shortcuts", "terminal-first")}>
+              Shortcuts settings
+            </button>
+            .
+          </p>
+        </section>
+      )}
       {settings && shells && (
         <section className="conn-card" data-section="shell">
           <h2 className="conn-name">Default shell</h2>

@@ -131,7 +131,7 @@ export function resolve(file: unknown, platform: Platform, ignore: readonly stri
   }
   const clashes: Clash[] = [];
   dropConflicts(bindings, errors, platform, new Set(ignore), clashes);
-  yieldToUser(bindings, new Set(ignore), warnings);
+  yieldToUser(bindings, new Set(ignore), warnings, clashes);
   return { platform, bindings, errors, warnings, clashes };
 }
 
@@ -209,9 +209,9 @@ function dropConflicts(bindings: Map<string, Binding>, errors: string[], platfor
   }
 }
 
-/** A chord the user bound takes it from the built-in defaults that held it in the same place
- *  (coordinator default; Txais may overrule): the default loses that chord and a warning says so. */
-function yieldToUser(bindings: Map<string, Binding>, ignore: Set<string>, warnings: string[]) {
+/** A chord the user bound takes it from the built-in defaults that held it in the same place: the
+ *  default loses that chord, a warning says so, and a clash lists both so the rows show Conflicts (DT-C48). */
+function yieldToUser(bindings: Map<string, Binding>, ignore: Set<string>, warnings: string[], clashes: Clash[]) {
   const owner = new Map<string, Binding>();
   for (const b of bindings.values()) {
     if (!b.custom || ignore.has(b.action.id)) continue;
@@ -226,6 +226,10 @@ function yieldToUser(bindings: Map<string, Binding>, ignore: Set<string>, warnin
     for (const chord of lost) {
       const user = buckets(b.action).map((bucket) => owner.get(`${bucket}|${chord}`)).find((x) => x);
       warnings.push(`"${user?.action.title}" uses ${chord} from your shortcuts file, so "${b.action.title}" no longer has it.`);
+      if (!user) continue;
+      const shared = clashes.find((c) => c.chord === chord && c.ids[0] === user.action.id);
+      if (shared) shared.ids.push(b.action.id);
+      else clashes.push({ chord, ids: [user.action.id, b.action.id] });
     }
   }
 }

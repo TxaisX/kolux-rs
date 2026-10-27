@@ -209,6 +209,8 @@ pub fn write_setting(store: &Store, key: &str, plain: &str) -> Result<(), String
     }
     check_api_key(key, plain)?;
     let sealed = seal(plain).map_err(|e| format!("{e}; nothing was saved"))?;
+    // Card 13: the reconnect note is read first, so a note that cannot be kept aside refuses before the key is stored.
+    let mut left: Vec<String> = crate::orchestration::kept::load(store, DROPPED_KEY).map_err(|e| format!("{e}; nothing was saved"))?;
     let mut settings = store.settings();
     if !settings.is_object() {
         settings = serde_json::json!({});
@@ -216,7 +218,7 @@ pub fn write_setting(store: &Store, key: &str, plain: &str) -> Result<(), String
     settings[key] = Value::String(sealed);
     store.save_settings(&settings).map_err(|e| e.to_string())?;
     // ACCT-010: a key stored again is no longer one to reconnect.
-    let left: Vec<String> = dropped(store).into_iter().filter(|k| k != key).collect();
+    left.retain(|k| k != key);
     let _ = store.set(DROPPED_KEY, &Value::from(left).to_string());
     Ok(())
 }
@@ -241,6 +243,14 @@ pub fn drop_unreadable(store: &Store, dir: &Path) -> Vec<String> {
         log(dir, "secrets: the system secret store is not answering; stored keys are left sealed as they are");
         return Vec::new();
     }
+    // Card 13: the note is read before anything is cleared, so a note that cannot be kept aside leaves the keys sealed as they are.
+    let mut all: Vec<String> = match crate::orchestration::kept::load(store, DROPPED_KEY) {
+        Ok(all) => all,
+        Err(e) => {
+            log(dir, &format!("secrets: {e}; keys that cannot be opened are left as they are"));
+            return Vec::new();
+        }
+    };
     for k in &gone {
         obj.remove(k);
     }
@@ -248,7 +258,6 @@ pub fn drop_unreadable(store: &Store, dir: &Path) -> Vec<String> {
         log(dir, &format!("secrets: could not clear a key that cannot be opened ({e})"));
         return Vec::new();
     }
-    let mut all = dropped(store);
     for k in &gone {
         log(dir, &format!("secrets: {k} could not be opened on this computer; cleared, reconnect it"));
         if !all.contains(k) {
@@ -261,23 +270,26 @@ pub fn drop_unreadable(store: &Store, dir: &Path) -> Vec<String> {
 
 /// ACCT-010: the secret fields waiting for a reconnect, for the note in the main window.
 pub fn dropped(store: &Store) -> Vec<String> {
-    crate::orchestration::kept::or_default(store, DROPPED_KEY)
+    crate::orchestration::kept::or_default_held(store, DROPPED_KEY)
 }
 
-pub fn dismiss_dropped(store: &Store) {
-    let _ = store.set(DROPPED_KEY, "[]");
+pub fn dismiss_dropped(store: &Store) -> Result<(), String> {
+    store.set(DROPPED_KEY, "[]").map_err(|e| e.to_string())
 }
 
 /// ACCT-011: every Claude key in `line` (`sk-ant-` and the URL-safe characters after it)
 /// becomes `sk-ant-[masked]`.
 pub fn mask(line: &str) -> String {
     const KEY: &str = "sk-ant-";
+    const DONE: &str = "[masked]";
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(i) = rest.find(KEY) {
         out.push_str(&rest[..i]);
         out.push_str("sk-ant-[masked]");
-        rest = rest[i + KEY.len()..].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        // The mask itself starts with the key prefix: swallow an existing mask so mask(mask(x)) == mask(x).
+        let after = &rest[i + KEY.len()..];
+        rest = after.strip_prefix(DONE).unwrap_or(after).trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     }
     out.push_str(rest);
     out
@@ -505,15 +517,19 @@ mod dpapi {
 
 /// Whether a secret settings field is set (never its value).
 /// ACCT-010: the secret fields to reconnect, by name.
-#[tauri::command]
-pub fn secrets_dropped(store: tauri::State<'_, Mutex<Store>>) -> Result<Vec<String>, String> {
+pub fn secrets_dropped_on(store: &Mutex<Store>) -> Result<Vec<String>, String> {
     Ok(dropped(&*store.lock().map_err(|e| e.to_string())?))
+}
+
+/// Async so the wait for the store lock (up to 290 ms behind a background save) is not spent on the UI thread.
+#[tauri::command]
+pub async fn secrets_dropped(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || secrets_dropped_on(&tauri::Manager::state::<Mutex<Store>>(&app))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub fn secrets_dropped_dismiss(store: tauri::State<'_, Mutex<Store>>) -> Result<(), String> {
-    dismiss_dropped(&*store.lock().map_err(|e| e.to_string())?);
-    Ok(())
+    dismiss_dropped(&*store.lock().map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -648,8 +664,28 @@ mod tests {
         s["xaiApiKey"] = Value::String(format!("{PREFIX}BBBB"));
         store.save_settings(&s).unwrap();
         assert_eq!(drop_unreadable(&store, &dir), ["xaiApiKey"]);
-        dismiss_dropped(&store);
+        dismiss_dropped(&store).unwrap();
         assert!(dropped(&store).is_empty());
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn card13_a_reconnect_note_that_cannot_be_kept_aside_is_never_saved_over() {
+        let dir = temp_dir("noteaside");
+        let store = Store::open(&dir).unwrap();
+        let broken = "[\"claudeOauthTok";
+        store.set(DROPPED_KEY, broken).unwrap();
+        let mut s = store.settings();
+        s["claudeOauthToken"] = Value::String(format!("{PREFIX}AAAA"));
+        store.save_settings(&s).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        assert!(drop_unreadable(&store, &dir).is_empty(), "nothing is cleared while the note cannot be read");
+        assert_eq!(store.settings()["claudeOauthToken"].as_str(), Some(format!("{PREFIX}AAAA").as_str()), "the key stays as it was");
+        let err = write_setting(&store, "xaiApiKey", "xai-NEW").unwrap_err();
+        assert!(err.contains(DROPPED_KEY) && err.contains("nothing was saved"), "{err}");
+        assert!(store.settings().get("xaiApiKey").is_none());
+        assert_eq!(store.get(DROPPED_KEY).unwrap().as_deref(), Some(broken), "the note blob is byte-identical");
         drop(store);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -775,6 +811,24 @@ mod tests {
     }
 
     #[test]
+    fn masking_a_claude_key_twice_gives_the_same_text_and_still_hides_every_key() {
+        for text in [
+            "key sk-ant-api03-SECRET123 end",
+            "sk-ant-a sk-ant-b",
+            "sk-ant-[masked]",
+            "sk-ant-[masked]SECRETTAIL and sk-ant-oat01-ZZZ",
+            "sk-ant-sk-ant-SECRET",
+            "x sk-ant-SECRET[masked] y",
+        ] {
+            let once = mask(text);
+            assert_eq!(mask(&once), once, "mask changed an already masked text: {text:?}");
+            assert!(!once.contains("SECRET") && !once.contains("ZZZ"), "{once}");
+        }
+        assert_eq!(mask("sk-ant-api03-SECRET123"), "sk-ant-[masked]");
+        assert_eq!(mask("sk-ant-[masked]"), "sk-ant-[masked]");
+    }
+
+    #[test]
     fn written_secrets_are_sealed_and_unopenable_files_move_aside() {
         let dir = temp_dir("write");
         let store = Store::open(&dir).unwrap();
@@ -799,5 +853,21 @@ mod tests {
         assert!(fs::read_to_string(dir.join("logs").join("kolux.log")).unwrap().contains("moved to"));
         drop(store);
         fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod secrets_dropped_async_tests {
+    use super::*;
+
+    fn is_async<F: std::future::Future>(_: fn(tauri::AppHandle) -> F) {}
+
+    #[test]
+    fn secrets_dropped_is_an_async_command_that_matches_the_sync_one() {
+        is_async(secrets_dropped);
+        let store = Mutex::new(Store::open(&crate::test_dir::temp("secrets-dropped-async")).unwrap());
+        store.lock().unwrap().set(DROPPED_KEY, "[\"moonshotApiKey\"]").unwrap();
+        assert_eq!(secrets_dropped_on(&store), Ok(vec!["moonshotApiKey".to_string()]));
+        assert_eq!(secrets_dropped_on(&store), Ok(dropped(&store.lock().unwrap())));
     }
 }

@@ -1,0 +1,3 @@
+box 1: not proven (second half, no trust menu, needs a real Claude) — status REAL-AGENT; the measurable half (one call records all six, one write) is src-tauri/tests/cards_10.rs::safe024_box1_six_worktrees_are_covered_by_one_call_and_one_write — ok
+box 2: src-tauri/tests/cards_10.rs::safe024_box2_thirteen_folders_are_refused_before_any_path_is_worked_out — cargo test --manifest-path src-tauri/Cargo.toml --test cards_10 (env CLAUDE_CONFIG_DIR/CODEX_HOME/HOME/USERPROFILE = G:\Temp\cards-v3\{tmp,home}) — test safe024_box2_... ... ok; test result: ok. 5 passed; 0 failed (cards_10)
+  asserts: 13 nonexistent paths -> error names 12 and 13, never mentions a path; no file written; 12 real folders -> 12 recorded

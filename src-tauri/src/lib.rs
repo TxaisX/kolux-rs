@@ -4,8 +4,8 @@ mod repo_scan;
 mod activity;
 pub mod agents;
 mod app_look;
-mod artifacts;
-mod automations;
+pub mod artifacts;
+pub mod automations;
 mod badge;
 mod awake;
 mod capture;
@@ -17,36 +17,36 @@ mod cleanup;
 mod cap;
 pub mod cli;
 mod cli_accounts;
-mod claude_accounts;
-mod claude_key;
-mod codex_accounts;
-mod codex_usage;
+pub mod claude_accounts;
+pub mod claude_key;
+pub mod codex_accounts;
+pub mod codex_usage;
 mod creatures;
-mod diag;
+pub mod diag;
 mod editor_drafts;
 mod editor_search;
-mod fence;
-mod files;
+pub mod fence;
+pub mod files;
 pub mod final_save;
-mod fsops;
+pub mod fsops;
 mod fonts;
 pub mod git;
 mod github;
 mod groups;
-mod hooks;
+pub mod hooks;
 mod include;
 mod import;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
 #[cfg_attr(not(test), allow(dead_code))]
 mod keychain;
 mod agent_creds;
-mod grok;
+pub mod grok;
 mod grok_status;
-mod install;
+pub mod install;
 mod keybindings;
 mod kits;
 mod edit_menu;
-mod links;
+pub mod links;
 mod login_env;
 mod lifecycle;
 mod menu;
@@ -59,8 +59,10 @@ mod onboarding;
 pub mod orchestration;
 mod foreground;
 pub mod procs;
-mod protected;
-mod protected_custom;
+pub mod protected;
+#[cfg(test)]
+mod s9_fuzz_tests;
+pub mod protected_custom;
 mod ports;
 mod labels;
 mod tidy;
@@ -79,10 +81,10 @@ mod pasted_image;
 mod pr_checkout;
 pub mod pty;
 mod setup;
-mod routing;
-mod schedule;
+pub mod routing;
+pub mod schedule;
 mod resume;
-mod secrets;
+pub mod secrets;
 mod settings_sync;
 mod session_rows;
 mod sessions;
@@ -90,7 +92,7 @@ mod shell_marks;
 mod shell_history;
 mod skill_delete;
 pub mod state;
-mod status;
+pub mod status;
 mod sub_work;
 mod term_import;
 mod sysmem;
@@ -100,7 +102,7 @@ mod test_dir;
 mod tools;
 mod token_usage;
 mod tray;
-mod trust;
+pub mod trust;
 mod update;
 mod visibility;
 mod web_icon;
@@ -648,7 +650,7 @@ pub fn run() {
             setup::script_trust_grant,
             setup::setup_imports_list,
             setup::setup_import,
-            agents::agent_list,
+            agents::list_command::agent_list,
             models::agent_models,
             agents::agent_start_line,
             agents::agent_prompt_send,
@@ -734,7 +736,7 @@ pub fn run() {
             pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
             pr_review::scm_review_read, pr_review::scm_review_act, pr_review::scm_review_send, pr_review::scm_pr_conflicts,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
-            bulk::workspace_remove_many, bulk::workspace_kept_branch_delete, bulk::workspace_forget,
+            bulk::workspace_remove_many, bulk::workspace_forget, bulk::workspace_forget_check,
             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
             bulk::space_scan, bulk::space_saved,
             ports::ports_list, ports::ports_stop,

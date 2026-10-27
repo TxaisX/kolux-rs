@@ -1,6 +1,7 @@
 // ONB-014 Setup Guide, ONB-022 Explore Kolux and ONB-027 / ONB-028 startup tips. Mounted once in
 // the window; the help menu and the tips open the guides through openGuide / openExplore.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import type { Rect } from "./tour";
 import { invoke } from "@tauri-apps/api/core";
 import { Close, EyeOff } from "../chrome/icons";
 import { useKeymap } from "../keys/KeymapContext";
@@ -376,9 +377,47 @@ function StartupTip() {
   }, []);
   if (!tip) return null;
   const close = () => (setTip(null), setSetup(false));
+  return <TipDocked tip={tip} cli={cli} setup={setup} onSetup={() => setSetup(true)} onClose={close} />;
+}
+
+function TipDocked(props: Omit<Parameters<typeof TipView>[0], "dock">) {
+  return <TipView {...props} dock={useTipDock()} />;
+}
+
+/** Where the tip sits: over the left sidebar column when it is open and at least 240 wide, so a restored
+ *  terminal grid stays uncovered; else the bottom right. Always clear of the status bar (ONB-027 timing is unchanged). */
+export function tipDock(sidebar: Rect | null, statusTop: number, viewport: { width: number; height: number }): CSSProperties {
+  const bottom = Math.max(0, viewport.height - statusTop + 16);
+  if (!sidebar || sidebar.width < 240 || sidebar.left + sidebar.width <= 0) return { right: 16, bottom: 40 };
+  const width = Math.min(sidebar.width, Math.max(240, Math.min(420, sidebar.width - 16)));
+  return { left: sidebar.left + Math.min(8, (sidebar.width - width) / 2), right: "auto", bottom, width };
+}
+
+/** The tip's dock style from the live sidebar and status bar; follows window and sidebar resizes. */
+function useTipDock(): CSSProperties {
+  const [style, setStyle] = useState<CSSProperties>({ right: 16, bottom: 40 });
+  useEffect(() => {
+    const aside = document.querySelector('aside.sidebar[aria-label="Sidebar"]');
+    const read = () => {
+      const sb = aside?.getBoundingClientRect();
+      const st = document.querySelector("footer.statusbar")?.getBoundingClientRect();
+      const next = tipDock(sb && sb.width > 0 && sb.height > 0 ? { left: sb.left, top: sb.top, width: sb.width, height: sb.height } : null, st && st.height > 0 ? st.top : window.innerHeight - 24, { width: window.innerWidth, height: window.innerHeight });
+      setStyle((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+    };
+    read();
+    window.addEventListener("resize", read);
+    const ro = aside && typeof ResizeObserver !== "undefined" ? new ResizeObserver(read) : null;
+    if (aside) ro?.observe(aside);
+    return () => (window.removeEventListener("resize", read), ro?.disconnect());
+  }, []);
+  return style;
+}
+
+/** The tip's markup, apart from the launch timing above. */
+export function TipView({ tip, cli, setup, onSetup, onClose: close, dock = { right: 16, bottom: 40 } }: { tip: TipId; cli: CliStatus | null; setup: boolean; onSetup: () => void; onClose: () => void; dock?: CSSProperties }) {
   return (
-    <div className="ask-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className="tip" role="dialog" aria-modal="true" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
+    <div className="tip-dock" style={dock} data-docked={dock.left !== undefined ? "" : undefined}>
+      <div className="tip-card" role="dialog" aria-modal="false" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
         <span className="tip-badge">Tip</span>
         {tip !== "cli" && tip !== "palette" ? (
           <>
@@ -386,7 +425,7 @@ function StartupTip() {
             <p>{MOVED.find((m) => m.id === tip)?.text}</p>
             <div className="btn-row">
               <span className="spacer" />
-              <button className="btn primary" onClick={close} autoFocus>
+              <button className="btn primary" onClick={close}>
                 Got it
               </button>
             </div>
@@ -402,11 +441,11 @@ function StartupTip() {
             {cli?.installed && !cli.onPath && <p className="tip-warn">Needs attention: the kolux command is installed, but terminals outside Kolux cannot find it.</p>}
             {setup && <TipSetup />}
             <div className="btn-row">
-              <button className="btn" onClick={close} autoFocus>
+              <button className="btn" onClick={close}>
                 {setup ? "Close" : "Not now"}
               </button>
               {!setup && (
-                <button className="btn primary" onClick={() => setSetup(true)}>
+                <button className="btn primary" onClick={onSetup}>
                   Install CLI &amp; Skills
                 </button>
               )}
@@ -421,7 +460,7 @@ function StartupTip() {
             <p>Type part of a name to switch, or a new name to create a workspace. Change the keys in Settings › Shortcuts.</p>
             <div className="btn-row">
               <span className="spacer" />
-              <button className="btn primary" onClick={close} autoFocus>
+              <button className="btn primary" onClick={close}>
                 Got it
               </button>
             </div>

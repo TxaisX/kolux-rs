@@ -276,7 +276,7 @@ fn trash_confirmed(trash: &Path) -> bool {
 
 /// PROJ-074: moves `dest` into a hidden trash folder beside it (same volume, so it is one rename
 /// and the row can vanish at once). Fails, leaving `dest` where it was, when Windows will not
-/// let go of the folder; the caller then deletes it the slow way.
+/// let go of the folder (see `move_to_trash_patiently`).
 pub(crate) fn move_to_trash(dest: &Path) -> Result<PathBuf, String> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -287,6 +287,24 @@ pub(crate) fn move_to_trash(dest: &Path) -> Result<PathBuf, String> {
     std::fs::rename(long_path(dest), long_path(&trash)).map_err(|e| format!("{} could not be moved to the trash: {e}", dest.display()))?;
     hide_folder(&trash);
     Ok(trash)
+}
+
+/// Row 110: a folder with a file held open cannot be renamed, and Windows lets go a moment after
+/// the program ends, so it gets a few more tries. Still held, the removal is refused here with
+/// nothing touched: `git worktree remove` would drop Git's record and delete part of the folder
+/// before it failed on the held file.
+fn move_to_trash_patiently(dest: &Path) -> Result<PathBuf, String> {
+    let mut last = String::new();
+    for attempt in 0..4 {
+        match move_to_trash(dest) {
+            Ok(trash) => return Ok(trash),
+            Err(e) => last = e,
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    }
+    Err(format!("{last}; nothing was deleted: close the programs that have files open in the folder and try again"))
 }
 
 /// PROJ-074: the undo of `move_to_trash`: the folder goes back to where Git expects it. A folder
@@ -623,7 +641,8 @@ impl Git {
         let mut trashed: Option<(PathBuf, crate::projects::SetAside)> = None;
         if !dest.exists() {
             let _ = crate::projects::forget_record(repo, &dest_s);
-        } else if let Ok(trash) = move_to_trash(dest) {
+        } else {
+            let trash = move_to_trash_patiently(dest)?;
             match crate::projects::set_aside_record(repo, &dest_s) {
                 Ok(record) => trashed = Some((trash, record)),
                 // Git's record could not be dropped (a lock, say): the folder goes back and the
@@ -1439,6 +1458,39 @@ mod tests {
         assert_eq!(left, vec!["on-usb".to_string()], "no trash folder left behind");
         run(&["worktree", "unlock", &dest.to_string_lossy()], Some(&repo)).unwrap();
         let _ = git.worktree_remove(&repo, &dest, Some("on-usb"));
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    // Windows only: a handle opened with no share mode is what stops a rename or delete under it.
+    #[cfg(windows)]
+    #[test]
+    fn row110_a_file_held_open_by_another_program_stops_the_removal_with_everything_still_there() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("r110h");
+        let dest = std::env::temp_dir().join(format!("kolux-rs-git-r110h-ws-{}", std::process::id())).join("held");
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
+        git.worktree_add(&repo, &dest, "held", "HEAD").unwrap();
+        fs::create_dir_all(dest.join("a/b")).unwrap();
+        let files = ["work.txt", "a/one.txt", "a/b/two.txt", "a/b/held.txt", "a/b/three.txt"];
+        for f in files {
+            fs::write(dest.join(f), "uncommitted work").unwrap();
+        }
+        let holder = fs::OpenOptions::new().read(true).write(true).share_mode(0).open(dest.join("a/b/held.txt")).unwrap();
+        let outcome = git.worktree_remove(&repo, &dest, Some("held"));
+        drop(holder);
+        let err = outcome.unwrap_err();
+        assert!(err.contains("nothing was deleted"), "the refusal says nothing was touched: {err}");
+        for f in files {
+            assert!(dest.join(f).is_file(), "{f} must still be there: nothing is deleted piecemeal");
+        }
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 2, "Git still lists it");
+        assert!(git.dirty(&dest).unwrap(), "the folder is still a workspace Git can read");
+        let left: Vec<String> = fs::read_dir(dest.parent().unwrap()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, vec!["held".to_string()], "no trash folder left behind");
+        git.worktree_remove(&repo, &dest, Some("held")).unwrap();
+        assert!(!dest.exists(), "once the program lets go, the removal goes through");
         let _ = fs::remove_dir_all(dest.parent().unwrap());
         let _ = fs::remove_dir_all(&repo);
     }

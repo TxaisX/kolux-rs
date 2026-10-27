@@ -44,7 +44,7 @@ Rules: before launch, Kolux records the folder as trusted in each agent's own co
 Acceptance:
   - [ ] Create a worktree and launch Claude Code with a prompt → no trust menu, and the prompt
         reaches the agent.
-  - [ ] Launch again in the same folder → the agent's trust configuration does not change at all.
+  - [x] Launch again in the same folder → the agent's trust configuration does not change at all. (cards; evidence/cards-SAFE-023.txt)
 Compat: the agents' own configuration is their public interface and the rebuild writes the same
   places: Cursor's per-project trust marker, Copilot's trusted-folder list, Codex's project trust
   entry in its configuration, Claude's per-project trust flag in its user configuration.
@@ -67,7 +67,7 @@ Rules: before any agent process starts, Kolux works out every worktree folder th
 Acceptance:
   - [ ] Start six Claude agents in new worktrees at once → a single configuration write covers all
         six folders, and every agent starts without a trust menu.
-  - [ ] Ask to pre-trust 13 names → refused before any folder path is worked out.
+  - [x] Ask to pre-trust 13 names → refused before any folder path is worked out. (cards; evidence/cards-SAFE-024.txt)
 Compat: —
 Source: D-10-024
 
@@ -85,9 +85,9 @@ Rules: the button appears only while the pane's live status holds a plan-approva
   PreToolUse and its PermissionRequest events, each with the whole plan, and either event on its own
   is enough to show the button.
 Acceptance:
-  - [ ] Claude asks to leave plan mode → the review button appears; approve in the terminal instead
-        → the button goes away.
-  - [ ] Claude asks permission for a shell command → no review button.
+  - [x] Claude asks to leave plan mode → the review button appears; approve in the terminal instead
+        → the button goes away. (cards; evidence/cards-SAFE-001.txt)
+  - [x] Claude asks permission for a shell command → no review button. (cards; evidence/cards-SAFE-001.txt)
 Compat: Claude Code sends the plan text inside the tool input of its exit-plan tool, on both the
   PreToolUse and the PermissionRequest event.
 Source: D-10-001
@@ -104,9 +104,9 @@ Rules: a blank line starts a new section, except where the empty line falls with
   section; each section knows its first and last line numbers, counted from 1, and comments are
   labelled with that range; a plan that is empty or only whitespace has no sections.
 Acceptance:
-  - [ ] Three paragraphs, one of them containing a fenced block that has an empty line inside →
-        exactly three sections, with the fenced block kept whole.
-  - [ ] Comment on the second section → the comment shows under it and can be deleted.
+  - [x] Three paragraphs, one of them containing a fenced block that has an empty line inside →
+        exactly three sections, with the fenced block kept whole. (cards; evidence/cards-SAFE-002.txt)
+  - [x] Comment on the second section → the comment shows under it and can be deleted. (cards; evidence/cards-SAFE-002.txt)
 Compat: —
 Source: D-10-002
 
@@ -143,7 +143,7 @@ Rules: the button stays disabled until there is at least one comment or a note t
   quote, the comment itself), then the overall note with outer whitespace removed; sending wipes the
   saved draft.
 Acceptance:
-  - [ ] No comments and an empty note → Request changes is disabled.
+  - [x] No comments and an empty note → Request changes is disabled. (cards; evidence/cards-SAFE-004.txt)
   - [ ] Two comments, then Request changes → Claude gets a single message naming both line ranges
         and comes back with a revised plan.
   - [ ] A pane whose status never updates → the feedback still arrives after about 3 seconds.
@@ -174,9 +174,9 @@ Rules: only Claude Code is guarded, through its PreToolUse hook, and the Safety 
 Acceptance:
   - [ ] Claude force-pushes main → Claude's permission prompt shows the Kolux reason; refuse →
         nothing is pushed.
-  - [ ] Claude asks for the working-tree status → no prompt.
-  - [ ] Switch the matching rule off and try again → the command runs with no prompt.
-  - [ ] Send the hook a garbled body → neutral answer, and Claude carries on.
+  - [x] Claude asks for the working-tree status → no prompt. (cards; evidence/cards-SAFE-009.txt)
+  - [x] Switch the matching rule off and try again → the command runs with no prompt. (cards; evidence/cards-SAFE-009.txt)
+  - [x] Send the hook a garbled body → neutral answer, and Claude carries on. (cards; evidence/cards-SAFE-009.txt)
   - [ ] Run Claude in its automatic permission mode, and again with permission checks skipped, then
         force-push main → record whether the ask still appears (never verified at 0.15.0).
 Compat: Claude Code's PreToolUse protocol: the reply is either an empty object, meaning no opinion,
@@ -202,10 +202,10 @@ Rules: force means any force flag, including the lease and mirror variants and s
   (Kolux RS, T-058: the force-push and discard rules of the protected-command check; a command is
   split on its plain chain operators, the rest of the chain and wrapper handling is the SAFE-014 task.)
 Acceptance:
-  - [ ] git push -f, git push origin :main, and git push --force origin main → each asks.
-  - [ ] git push -f origin @:main, and git push --force origin @ → each asks.
-  - [ ] A force-push of a feature branch, git push origin main, and git push origin @ → each runs.
-  - [ ] git reset --hard and git clean -fdx → ask; git reset --soft HEAD~1 and git clean -n → run.
+  - [x] git push -f, git push origin :main, and git push --force origin main → each asks. (cards; evidence/cards-SAFE-010.txt)
+  - [x] git push -f origin @:main, and git push --force origin @ → each asks. (cards; evidence/cards-SAFE-010.txt)
+  - [x] A force-push of a feature branch, git push origin main, and git push origin @ → each runs. (cards; evidence/cards-SAFE-010.txt)
+  - [x] git reset --hard and git clean -fdx → ask; git reset --soft HEAD~1 and git clean -n → run. (cards; evidence/cards-SAFE-010.txt)
 Compat: —
 Source: D-10-010
 
@@ -222,10 +222,10 @@ Rules: only database clients count: the Postgres, MySQL, SQLite, SQL Server and 
   (Kolux RS, T-058: the database-drop rule; a Mongo shell command that calls drop, drop-database or
   drop-collection counts as a drop.)
 Acceptance:
-  - [ ] The Postgres client given a drop-table statement on its command line → asks; a truncate
-        statement piped into the Postgres client → asks; dropdb on a production database → asks.
-  - [ ] A commit whose message mentions dropping a table → runs; a text search of the migrations
-        folder for the drop-table keyword → runs.
+  - [x] The Postgres client given a drop-table statement on its command line → asks; a truncate
+        statement piped into the Postgres client → asks; dropdb on a production database → asks. (cards; evidence/cards-SAFE-011.txt)
+  - [x] A commit whose message mentions dropping a table → runs; a text search of the migrations
+        folder for the drop-table keyword → runs. (cards; evidence/cards-SAFE-011.txt)
 Compat: —
 Source: D-10-011
 
@@ -248,11 +248,11 @@ Rules: Stripe: a live secret key or live restricted key anywhere in the command 
   (Kolux RS, T-058: the Stripe, infrastructure and production-deploy rules; a production marker is the word prod or
   production on its own, after a dash, or as the value of a flag or assignment on the command.)
 Acceptance:
-  - [ ] Cancelling a subscription with the Stripe CLI → asks; stripe listen, and listing customers →
-        run; a text search of the source folder for the live-key prefix → runs.
-  - [ ] terraform apply -auto-approve → asks; npx cdk deploy → asks; terraform plan → runs.
-  - [ ] vercel --prod → asks; a Wrangler deploy with --env production → asks; vercel deploy with no
-        production flag → runs; npm install --production → runs.
+  - [x] Cancelling a subscription with the Stripe CLI → asks; stripe listen, and listing customers →
+        run; a text search of the source folder for the live-key prefix → runs. (cards; evidence/cards-SAFE-012.txt)
+  - [x] terraform apply -auto-approve → asks; npx cdk deploy → asks; terraform plan → runs. (cards; evidence/cards-SAFE-012.txt)
+  - [x] vercel --prod → asks; a Wrangler deploy with --env production → asks; vercel deploy with no
+        production flag → runs; npm install --production → runs. (cards; evidence/cards-SAFE-012.txt)
 Compat: —
 Source: D-10-012
 
@@ -278,15 +278,15 @@ Rules: recursive deletes are rm with a recursive flag; rd, rmdir, del and erase 
   hook cwd, which a Kolux pane makes the worktree folder, DT-C23; a temp root wins over the
   workspace test, so a repository kept under TEMP is not protected from its own deletes.)
 Acceptance:
-  - [ ] rm -rf on the filesystem root, on a folder in the user's documents, on .., on ., on .git, or
-        on a path held in a shell variable → each asks.
-  - [ ] cd to the home variable and then rm -rf build; a bare cd and then rm -rf build; popd and
-        then rm -rf build; a find piped through xargs into rm -rf → each asks.
-  - [ ] Remove-Item with recurse and force on the home folder; a directory listing piped into
-        Remove-Item with recurse; rd /s /q on the documents folder → each asks.
-  - [ ] rm -rf of the dependency and build folders inside the worktree, of everything under a build
+  - [x] rm -rf on the filesystem root, on a folder in the user's documents, on .., on ., on .git, or
+        on a path held in a shell variable → each asks. (cards; evidence/cards-SAFE-013.txt)
+  - [x] cd to the home variable and then rm -rf build; a bare cd and then rm -rf build; popd and
+        then rm -rf build; a find piped through xargs into rm -rf → each asks. (cards; evidence/cards-SAFE-013.txt)
+  - [x] Remove-Item with recurse and force on the home folder; a directory listing piped into
+        Remove-Item with recurse; rd /s /q on the documents folder → each asks. (cards; evidence/cards-SAFE-013.txt)
+  - [x] rm -rf of the dependency and build folders inside the worktree, of everything under a build
         folder, from a package subfolder after a cd into it, or of a scratch folder in /tmp; rd /s
-        /q of the dependency folder → each runs.
+        /q of the dependency folder → each runs. (cards; evidence/cards-SAFE-013.txt)
 Compat: —
 Source: D-10-013
 
@@ -314,18 +314,18 @@ Rules: every program in a chain is inspected (semicolons, ampersands, pipes, and
   PowerShell -File script, a shell reading stdin, and the commands find runs through its exec flag
   are not read, and the window title of a start command is skipped only when it is empty quotes.)
 Acceptance:
-  - [ ] bash -c wrapping rm -rf / → asks; rm -rf / inside a $( ) substitution → asks; cmd /c
-        wrapping rd /s /q on the Users folder → asks.
-  - [ ] powershell -ExecutionPolicy Bypass -Command wrapping terraform apply -auto-approve → asks;
+  - [x] bash -c wrapping rm -rf / → asks; rm -rf / inside a $( ) substitution → asks; cmd /c
+        wrapping rd /s /q on the Users folder → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] powershell -ExecutionPolicy Bypass -Command wrapping terraform apply -auto-approve → asks;
         the same with -ep bypass, -WindowStyle Hidden, -of text, or as a base64-encoded command →
-        asks.
-  - [ ] A powershell -File run, then a semicolon, then terraform apply -auto-approve → asks.
-  - [ ] cmd //c wrapping rd /s /q on the Windows folder → asks; rd /s/q on the Windows folder →
-        asks; del /q/s on a file under the Windows folder → asks.
-  - [ ] sudo -u root, sudo -uroot, nice -n 10, env -u NAME, or timeout 5 placed before rm -rf on a
-        system folder → each asks; timeout 30s terraform apply -auto-approve → asks.
-  - [ ] sudo -u root ls build, timeout 5 ls, nice -n 10 echo hi, powershell -ExecutionPolicy Bypass
-        -Command printing hi, rd /s/q build, and echoing the text rm -rf / → each runs.
+        asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] A powershell -File run, then a semicolon, then terraform apply -auto-approve → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] cmd //c wrapping rd /s /q on the Windows folder → asks; rd /s/q on the Windows folder →
+        asks; del /q/s on a file under the Windows folder → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] sudo -u root, sudo -uroot, nice -n 10, env -u NAME, or timeout 5 placed before rm -rf on a
+        system folder → each asks; timeout 30s terraform apply -auto-approve → asks. (cards; evidence/cards-SAFE-014.txt)
+  - [x] sudo -u root ls build, timeout 5 ls, nice -n 10 echo hi, powershell -ExecutionPolicy Bypass
+        -Command printing hi, rd /s/q build, and echoing the text rm -rf / → each runs. (cards; evidence/cards-SAFE-014.txt)
 Compat: —
 Source: D-10-014
 
@@ -342,9 +342,9 @@ Rules: with the master switch off no rule ever asks, and it is on by default; th
   on at any time; settings search finds the section; in the rebuild the section sits on the kept
   Safety page.
 Acceptance:
-  - [ ] Switch the force-push rule off → Claude's next force-push of main runs with no prompt;
-        switch it on → it asks again.
-  - [ ] Turn the master switch off → no protected command asks.
+  - [x] Switch the force-push rule off → Claude's next force-push of main runs with no prompt;
+        switch it on → it asks again. (cards; evidence/cards-SAFE-015.txt)
+  - [x] Turn the master switch off → no protected command asks. (cards; evidence/cards-SAFE-015.txt)
 Compat: importing settings from the old app must carry over the master switch, the list of
   turned-off built-ins, the custom rules and the per-project overrides.
 Source: D-10-015
@@ -362,10 +362,10 @@ Rules: Stripe live and test secret keys, restricted keys and webhook signing sec
   the value attached; Stripe values that are already masked pass through the second pass untouched;
   the raw key never reaches the attempts list.
 Acceptance:
-  - [ ] A paused command holding a live Stripe key → the list shows only the prefix, four dots and
-        the last four characters.
-  - [ ] A MySQL client with the password stuck to its short flag, a command with a token flag, and a
-        Postgres connection URL carrying a user and password → all three are masked.
+  - [x] A paused command holding a live Stripe key → the list shows only the prefix, four dots and
+        the last four characters. (cards; evidence/cards-SAFE-019.txt)
+  - [x] A MySQL client with the password stuck to its short flag, a command with a token flag, and a
+        Postgres connection URL carrying a user and password → all three are masked. (cards; evidence/cards-SAFE-019.txt)
 Compat: —
 Source: D-10-019
 
@@ -393,15 +393,15 @@ Rules: a host path is any share written with a leading double backslash or doubl
   roots are the projects and the workspaces folder; terminal and note links are not built yet and
   will call the same functions; no grant flow exists yet, so the exact-file grant rule is T-062's.)
 Acceptance:
-  - [ ] Ctrl-click a terminal link to a double-slash share path, or to a file URL naming another
-        host → nothing opens and no connection to that host is tried.
-  - [ ] A long-path local-drive form that climbs up into a UNC path on a host → treated as a host
-        path and refused.
-  - [ ] A link to a WSL path → opens; a share path inside a registered repository → still checked as
-        usual.
-  - [ ] Grant access to a folder → no file under it is granted.
-  - [ ] A folder in a repository that is a symbolic link to the home folder → granting it never
-        exposes anything beneath it, such as the SSH key folder.
+  - [x] Ctrl-click a terminal link to a double-slash share path, or to a file URL naming another
+        host → nothing opens and no connection to that host is tried. (cards; evidence/cards-SAFE-021.txt)
+  - [x] A long-path local-drive form that climbs up into a UNC path on a host → treated as a host
+        path and refused. (cards; evidence/cards-SAFE-021.txt)
+  - [x] A link to a WSL path → opens; a share path inside a registered repository → still checked as
+        usual. (cards; evidence/cards-SAFE-021.txt)
+  - [x] Grant access to a folder → no file under it is granted. (cards; evidence/cards-SAFE-021.txt)
+  - [x] A folder in a repository that is a symbolic link to the home folder → granting it never
+        exposes anything beneath it, such as the SSH key folder. (cards; evidence/cards-SAFE-021.txt)
 Compat: —
 Source: D-10-021
 
@@ -421,11 +421,11 @@ Rules: around a hundred program and script-like file types count, including unus
   shape is a stem of up to eight characters holding a tilde followed by a digit with an extension
   of up to three; on Linux the reveal opens the folder without selecting the file.)
 Acceptance:
-  - [ ] Shift-click open on a link to a batch file, a JavaScript file, a Windows program or a
-        shortcut → its folder is revealed and nothing runs.
-  - [ ] A name that ends with a program type followed by a stream suffix, or by a trailing dot →
-        still treated as a program.
-  - [ ] A link to a plain text file → opens normally.
+  - [x] Shift-click open on a link to a batch file, a JavaScript file, a Windows program or a
+        shortcut → its folder is revealed and nothing runs. (cards; evidence/cards-SAFE-022.txt)
+  - [x] A name that ends with a program type followed by a stream suffix, or by a trailing dot →
+        still treated as a program. (cards; evidence/cards-SAFE-022.txt)
+  - [x] A link to a plain text file → opens normally. (cards; evidence/cards-SAFE-022.txt)
 Compat: —
 Source: D-10-022
 

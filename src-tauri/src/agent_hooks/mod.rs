@@ -26,7 +26,7 @@ const LOCK_STALE: Duration = Duration::from_secs(30);
 const LOCK_WAIT: Duration = Duration::from_secs(35);
 
 /// The agents whose hooks Kolux manages, by catalogue id.
-pub const MANAGED: [&str; 13] = ["claude", "codex", "gemini", "antigravity", "amp", "cursor", "droid", "kimi", "copilot", "grok", "devin", "pi", "hermes"];
+pub const MANAGED: [&str; 14] = ["claude", "codex", "gemini", "antigravity", "amp", "cursor", "droid", "kimi", "copilot", "grok", "devin", "pi", "hermes", "command-code"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Plan {
@@ -584,7 +584,7 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
         // T-120-b: Gemini CLI, Antigravity and Amp.
         (id @ ("gemini" | "antigravity" | "amp"), Plan::Install | Plan::Remove) => vendors::apply(home, profile, id, plan),
         // T-121: Cursor Agent, Droid, Kimi Code and Hermes; T-122: Copilot CLI, Grok, Devin and Pi.
-        (id @ ("cursor" | "droid" | "kimi" | "copilot" | "grok" | "devin" | "pi" | "hermes"), Plan::Install | Plan::Remove) => more::apply(home, profile, id, plan),
+        (id @ ("cursor" | "droid" | "command-code" | "kimi" | "copilot" | "grok" | "devin" | "pi" | "hermes"), Plan::Install | Plan::Remove) => more::apply(home, profile, id, plan),
         _ => Ok("left as it was"),
     }
 }

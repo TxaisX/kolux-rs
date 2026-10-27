@@ -1,0 +1,5 @@
+{
+  "addError": "could not read missing.html: The system cannot find the file specified. (os error 2)",
+  "script": "document.addEventListener(\"click\",function(e){var a=e.target&&e.target.closest&&e.target.closest(\"a[href]\");if(!a)return;var u=new URL(a.getAttribute(\"href\"),location.href);if(u.protocol===location.protocol&&u.host===location.host){if(u.pathname.indexOf(\"/1799e3fbc6690be3/\")!==0)e.preventDefault();return}e.preventDefault();parent.postMessage({koluxOpen:u.href},\"*\")},true)",
+  "id": "1799e3fbc6690be3"
+}

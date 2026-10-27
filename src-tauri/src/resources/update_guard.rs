@@ -665,7 +665,20 @@ mod tests {
         let plain = dir.join("plain.exe");
         std::fs::write(&plain, &bytes).unwrap();
         let held = HeldCopy::create_at(&dir.join("held.exe"), &bytes).unwrap();
-        let (a, b) = (check_file(&plain), check_file(held.path()));
+        // Load flake fix: on a loaded PC either read can run past the tool's 20 s limit, which says
+        // nothing about sharing. A read that came back Unknown is asked again (up to 6 reads); a held
+        // copy the tool cannot open stays Unknown on every read, so it still differs from plain.
+        let settled = |p: &Path| {
+            let mut s = check_file(p);
+            for _ in 0..5 {
+                if !matches!(s, SignState::Unknown(_)) {
+                    break;
+                }
+                s = check_file(p);
+            }
+            s
+        };
+        let (a, b) = (settled(&plain), settled(held.path()));
         drop(held);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(b, a, "held {b:?} vs plain {a:?}");

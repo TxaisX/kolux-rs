@@ -1,0 +1,10 @@
+env: CLAUDE_CONFIG_DIR=CODEX_HOME=<scratch>\cards-v3\tmp USERPROFILE=<scratch>\cards-v3\home HOME=<scratch>/cards-v3/home TEMP=TMP=<scratch>\cards-v3\tmp (scratch root G:\Temp\cards-v3, .kolux-rs-scratch markers)
+cargo test --manifest-path src-tauri/Cargo.toml --test cards_04
+box 2: src-tauri/tests/cards_04.rs::stat001_box2_a_permission_request_changes_the_pane_to_needs_you — cargo test --manifest-path src-tauri/Cargo.toml --test cards_04
+test stat001_box2_a_permission_request_changes_the_pane_to_needs_you ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+box 2 (word shown for the state): src/terminal/status.test.ts 'the hooks feed the header while the program still runs: needs you ...' — pnpm exec vitest run src/status/__cards__/STAT-041.test.ts src/status/__cards__/STAT-007.test.ts src/terminal/status.test.ts
+ Test Files  3 passed (3)
+      Tests  18 passed (18)
+box 1: left open, REAL-AGENT (the 'within about a second' timing needs a real hook script and agent; the working/done mapping is covered by stat007_box3 and stat041 tests)
+box 3: left open, REAL-AGENT (Codex and Gemini CLI on a fresh machine)

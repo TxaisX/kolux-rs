@@ -231,8 +231,10 @@ mod tests {
     fn term122_a_blocker_that_exits_at_once_is_not_counted_as_a_hold() {
         use std::process::{Command, Stdio};
         let quiet = |program: &str, args: &[&str]| Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
-        let (quick, slow) = if cfg!(windows) { (quiet("cmd", &["/C", "exit 0"]), quiet("ping", &["-n", "6", "127.0.0.1"])) } else { (quiet("true", &[]), quiet("sleep", &["5"])) };
-        assert!(running_after(quick, BLOCKER_SETTLE * 3).is_none(), "an exited blocker holds nothing");
+        // Load flake fix: the quick child gets 3 s (not 0.6 s) to start and exit, and the slow one lives
+        // 30 s, so a starved machine can neither keep the quick one "running" nor end the slow one early.
+        let (quick, slow) = if cfg!(windows) { (quiet("cmd", &["/C", "exit 0"]), quiet("ping", &["-n", "31", "127.0.0.1"])) } else { (quiet("true", &[]), quiet("sleep", &["30"])) };
+        assert!(running_after(quick, Duration::from_secs(3)).is_none(), "an exited blocker holds nothing");
         let mut kept = running_after(slow, BLOCKER_SETTLE).expect("a running blocker is a hold");
         let _ = kept.kill();
         let _ = kept.wait();

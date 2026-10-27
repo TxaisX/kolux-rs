@@ -62,14 +62,28 @@ pub(super) fn start(mut reader: impl Read + Send + 'static, first: Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    /// What one call to the sink costs.
+    #[derive(Clone, Copy)]
+    enum Cost {
+        Sleep(Duration),
+        /// Load flake fix: not a clock. The call returns once the reader has made this many reads beyond
+        /// the ones already delivered, so what piles up behind a call is the same on a busy machine
+        /// as on an idle one (the queue holds 4 and the reader 1, so 4 can always be reached).
+        Reads(usize),
+    }
 
     /// A reader that yields `total` bytes of numbered lines in reads of uneven size.
     struct Lines {
         text: Vec<u8>,
         at: usize,
         n: usize,
+        /// Where the text stood after each read.
+        ends: Arc<Mutex<Vec<usize>>>,
+        ended: Arc<AtomicBool>,
     }
 
     impl Lines {
@@ -78,7 +92,7 @@ mod tests {
             for i in 0..lines {
                 text.extend_from_slice(format!("{i:08} {}\n", "x".repeat(90)).as_bytes());
             }
-            Lines { text, at: 0, n: 0 }
+            Lines { text, at: 0, n: 0, ends: Arc::default(), ended: Arc::default() }
         }
     }
 
@@ -88,27 +102,52 @@ mod tests {
             let want = [1, 7, 4096, 8192, 100, 30_000][self.n % 6].min(out.len()).min(self.text.len() - self.at);
             out[..want].copy_from_slice(&self.text[self.at..self.at + want]);
             self.at += want;
+            self.ends.lock().unwrap().push(self.at);
+            if want == 0 {
+                self.ended.store(true, SeqCst);
+            }
             Ok(want)
         }
     }
 
-    fn collect(lines: usize, slow: Duration) -> (Vec<u8>, usize, usize, Duration) {
+    fn collect(lines: usize, cost: Cost) -> (Vec<u8>, usize, usize, Duration) {
         let seen = Arc::new(Mutex::new((Vec::<u8>::new(), 0usize, 0usize)));
         let sink = seen.clone();
         let started = Instant::now();
-        start(Lines::new(lines), Some("note\r\n".into()), move |chunk| {
+        let reader = Lines::new(lines);
+        let (ends, ended) = (reader.ends.clone(), reader.ended.clone());
+        start(reader, Some("note\r\n".into()), move |chunk| {
             let mut s = sink.lock().unwrap();
             s.0.extend_from_slice(chunk);
             s.1 += 1;
             s.2 = s.2.max(chunk.len());
+            let (calls, delivered) = (s.1, s.0.len() - "note\r\n".len());
             drop(s);
-            if !slow.is_zero() {
-                thread::sleep(slow);
+            match cost {
+                Cost::Sleep(d) => thread::sleep(d),
+                // The opening note is delivered before the queue has drained, so the reader cannot move yet.
+                Cost::Reads(_) if calls == 1 => {}
+                Cost::Reads(more) => {
+                    let give_up = Instant::now() + Duration::from_secs(30);
+                    let consumed = ends.lock().unwrap().partition_point(|end| *end <= delivered);
+                    while ends.lock().unwrap().len() < consumed + more && !ended.load(SeqCst) && Instant::now() < give_up {
+                        thread::sleep(Duration::from_micros(100));
+                    }
+                }
             }
         })
         .unwrap();
         let want = lines * 100 + 6;
-        while seen.lock().unwrap().0.len() < want && started.elapsed() < Duration::from_secs(60) {
+        // Load flake fix: gives up only when no byte has arrived for 60 s, not after 60 s in all.
+        let (mut last, mut quiet_since) = (0, Instant::now());
+        loop {
+            let got = seen.lock().unwrap().0.len();
+            if got >= want || quiet_since.elapsed() > Duration::from_secs(60) {
+                break;
+            }
+            if got != last {
+                (last, quiet_since) = (got, Instant::now());
+            }
             thread::sleep(Duration::from_millis(2));
         }
         let s = seen.lock().unwrap();
@@ -119,7 +158,7 @@ mod tests {
     #[test]
     fn after787_a_numbered_stream_arrives_complete_in_order_in_big_batches() {
         let lines = 60_000; // ~6 MB
-        let (got, calls, biggest, took) = collect(lines, Duration::from_micros(200));
+        let (got, calls, biggest, took) = collect(lines, Cost::Sleep(Duration::from_micros(200)));
         let text = String::from_utf8(got).unwrap();
         let mut it = text.lines();
         assert_eq!(it.next(), Some("note"));
@@ -136,7 +175,7 @@ mod tests {
     #[test]
     fn after787_a_sink_that_costs_per_call_sees_far_fewer_calls() {
         let lines = 200_000; // ~20 MB
-        let (got, calls, _, took) = collect(lines, Duration::from_micros(300));
+        let (got, calls, _, took) = collect(lines, Cost::Reads(4));
         assert_eq!(got.len(), lines * 100 + 6);
         let per_8k = got.len() / 8192;
         println!("PUMP per-call-cost sink: 20 MB in {calls} calls ({per_8k} calls at 8 KB), {took:?}");

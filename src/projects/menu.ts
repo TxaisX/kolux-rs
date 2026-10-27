@@ -30,7 +30,7 @@ export function rowMenu(o: MenuFor): MenuItem[] {
   const items: MenuItem[] = [];
   if (!o.isMain) items.push({ id: "delete", label: one ? "Delete" : `Delete ${o.count} workspaces`, danger: true, disabled: o.deleting });
   if (!o.isMain) items.push({ id: o.asleep && one ? "wake" : "sleep", label: o.asleep && one ? "Wake" : "Sleep" });
-  if (o.statuses.length > 0) items.push({ id: "status", label: "Move to status", children: o.statuses.map((s) => ({ id: `status:${s.id}`, label: s.label })) });
+  if (o.statuses.length > 0) items.push({ id: "status", label: "Move to status", children: [...o.statuses.map((s) => ({ id: `status:${s.id}`, label: s.label })), { id: "statuses:edit", label: "Edit statuses…" }] });
   if (one && !o.isMain) items.push({ id: "parent", label: "Set parent…" });
   if (one) items.push({ id: "details", label: "Details…" });
   if (one) {

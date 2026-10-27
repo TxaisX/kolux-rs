@@ -131,7 +131,9 @@ fn with<T>(app: &tauri::AppHandle, f: impl FnOnce(&mut Resumes) -> T) -> Option<
     let out = f(&mut r);
     if let Some(store) = app.try_state::<std::sync::Mutex<crate::state::Store>>() {
         if let Ok(store) = store.lock() {
-            let _ = store.set(KEY, &serde_json::to_string(r.waiting()).unwrap_or_default());
+            if let Err(e) = store.set(KEY, &serde_json::to_string(r.waiting()).unwrap_or_default()) {
+                eprintln!("kolux-rs: resume waits not saved: {e}");
+            }
         }
     }
     Some(out)
@@ -179,7 +181,7 @@ pub fn switched(app: &tauri::AppHandle, on: bool) {
 
 /// Loads the previous run's waits.
 pub fn restore_from(app: &tauri::AppHandle, store: &crate::state::Store) {
-    let list: Vec<Waiting> = crate::orchestration::kept::or_default(store, KEY);
+    let list: Vec<Waiting> = crate::orchestration::kept::or_default_held(store, KEY);
     if !list.is_empty() {
         with(app, |r| r.restore(list, crate::claude_key::now_ms()));
     }

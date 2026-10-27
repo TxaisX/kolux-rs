@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--permission-mode",
+    "auto",
+    "--model",
+    "haiku",
+    "x"
+  ],
+  "extra": [
+    "--model",
+    "haiku"
+  ]
+}

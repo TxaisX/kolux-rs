@@ -120,7 +120,7 @@ export default function WorkspaceBoard({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={boxRef} className="board" role="dialog" aria-modal="true" aria-label="Workspace board" tabIndex={-1} onKeyDown={keys}>
+      <div ref={boxRef} className="ws-board" role="dialog" aria-modal="true" aria-label="Workspace board" tabIndex={-1} onKeyDown={keys}>
         <header className="board-head">
           <h2>Workspace board</h2>
           <label className="board-search">

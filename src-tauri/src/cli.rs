@@ -168,6 +168,8 @@ const MAIL: &[(&str, &str, &[&str])] = &[
 ];
 /// CLI-038: the orchestration changes. Each carries a request id that lasts, so a change whose
 /// answer was lost can be sent again and still take effect no more than once.
+/// Row 877: every orchestration command that saves (check too: it acks what it hands out); an unread mail refuses these before any change.
+const MAIL_WRITES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", ASK, RESET, CHECK, "orchestration.task-create", "orchestration.dispatch", ABANDON, UPDATE, TASK_RESET, STOP, RETAIN, RELEASE, "orchestration.gate-create", "orchestration.gate-resolve"];
 const CHANGES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", "orchestration.task-create", "orchestration.dispatch", WORKER_START];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// CLI-024 / CLI-025: reading, typing into and waiting on a terminal by its handle.
@@ -2109,7 +2111,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let fixed = wsl_fixed(req);
     let req = fixed.as_ref().unwrap_or(req);
     let by_id = if named_dispatch(req) {
-        let dispatches = load_list(&*ctx.store.lock().map_err(|e| e.to_string())?, DISPATCHES_KEY);
+        let dispatches = load_list(&*ctx.store.lock().map_err(|e| e.to_string())?, DISPATCHES_KEY)?;
         by_dispatch(req, &dispatches)?
     } else {
         None
@@ -2570,7 +2572,14 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
     let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs_for_socket(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
     let home = |dir: &str| lists.iter().flat_map(|(_, all, _)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
     let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
-    let dispatches = load_list(&*lock()?, DISPATCHES_KEY);
+    // ps only reads: an unreadable dispatch list degrades to no workers (and says so), it does not fail the listing.
+    let (dispatches, dispatches_unread) = match load_list(&*lock()?, DISPATCHES_KEY) {
+        Ok(d) => (d, false),
+        Err(e) => {
+            eprintln!("kolux-rs: worktree ps: {}", e.message);
+            (Vec::new(), true)
+        }
+    };
     let mut rows = Vec::new();
     for (p, all, degraded) in &lists {
         for w in all {
@@ -2589,7 +2598,10 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
         }
     }
     let worktrees: usize = lists.iter().map(|(_, all, _)| all.len()).sum();
-    let scope = json!({ "repos": repos, "worktrees": worktrees, "shown": rows.len(), "machine": "this computer only", "hosts": hosts() });
+    let mut scope = json!({ "repos": repos, "worktrees": worktrees, "shown": rows.len(), "machine": "this computer only", "hosts": hosts() });
+    if dispatches_unread {
+        scope["workersUnread"] = json!(true);
+    }
     let truncated = limit.is_some_and(|n| rows.len() > n);
     rows.truncate(limit.unwrap_or(usize::MAX));
     let mut out = json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts(), "scope": scope });
@@ -2910,6 +2922,10 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let need = || pane.clone().ok_or_else(unbound);
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut m = Mail::load(&store);
+    // Row 877: a mail that could not be read is refused by every command that saves, before it changes anything.
+    if MAIL_WRITES.contains(&req.command.as_str()) && !(req.command == "orchestration.dispatch" && a["dryRun"] == true) {
+        m.ensure_readable()?;
+    }
     let retry = text("retryRequest").map(|r| format!("{}|{}|{r}", req.command, pane.clone().unwrap_or_default()));
     let out = match req.command.as_str() {
         "orchestration.run-create" => {
@@ -2928,7 +2944,7 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "orchestration.request-show" => m.request_show(&pane.clone().unwrap_or_default(), &text("request").ok_or_else(|| Fail::args("--request is required"))?, u64::from(std::process::id())),
         SEND => {
             let p = need()?;
-            let (mut tasks, mut dispatches) = (load_list(&store, TASKS_KEY), load_list(&store, DISPATCHES_KEY));
+            let (mut tasks, mut dispatches) = (load_list(&store, TASKS_KEY)?, load_list(&store, DISPATCHES_KEY)?);
             let peers = peers(ctx);
             let v = m.once(retry, |m| {
                 let mut v = m.post(&p, a, &dispatches, &peers, now_ms())?;
@@ -2950,7 +2966,7 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         }
         CHECK => {
             let p = need()?;
-            let dispatches = load_list(&store, DISPATCHES_KEY);
+            let dispatches = load_list(&store, DISPATCHES_KEY)?;
             let (reader, boxes) = match (text("terminal"), text("run")) {
                 (Some(t), _) => {
                     seen_from(&m, &p, &t, &dispatches)?;
@@ -2978,13 +2994,13 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let id = text("id").ok_or_else(|| Fail::args("--id is required"))?;
             let body = a["body"].as_str().unwrap_or_default().to_string();
             let run = text("run");
-            let dispatches = load_list(&store, DISPATCHES_KEY);
+            let dispatches = load_list(&store, DISPATCHES_KEY)?;
             let (boxes, mine) = (m.boxes_of(&p, &dispatches), m.run_of(&p, &dispatches));
             m.once(retry, |m| m.reply(&p, &id, &body, run.as_deref(), &boxes, mine.as_deref(), now_ms()))?
         }
         "orchestration.inbox" => {
             let p = need()?;
-            let dispatches = load_list(&store, DISPATCHES_KEY);
+            let dispatches = load_list(&store, DISPATCHES_KEY)?;
             let reader = match text("terminal") {
                 Some(t) => {
                     seen_from(&m, &p, &t, &dispatches)?;
@@ -3001,15 +3017,18 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         }
         ASK => {
             let p = need()?;
-            let dispatches = load_list(&store, DISPATCHES_KEY);
+            let dispatches = load_list(&store, DISPATCHES_KEY)?;
             let peers = peers(ctx);
             m.once(retry, |m| m.ask(&p, a, &dispatches, &peers, now_ms()))?
         }
         "orchestration.task-create" | "orchestration.task-list" | "orchestration.dispatch" | "orchestration.dispatch-show" | ABANDON | UPDATE | TASK_RESET | STOP | WORKER_LIST | RETAIN | RELEASE | WORKER_SHOW | WORKER_READ | "orchestration.gate-create" | "orchestration.gate-resolve" | "orchestration.gate-list" => tasks(ctx, &store, &mut m, req, pane.as_deref(), retry)?,
         other => return Err(Fail::args(format!("unknown command {other}"))),
     };
-    m.save(&store)?;
-    crate::orchestration::pointer::rebind(&m);
+    // Reads on an unread mail answer from the empty mail; there is nothing to save or rebind.
+    if !m.unread {
+        m.save(&store)?;
+        crate::orchestration::pointer::rebind(&m);
+    }
     Ok(out)
 }
 
@@ -3041,10 +3060,12 @@ fn caps(store: &Store, a: &Value) -> (Option<u32>, Option<u32>) {
 
 /// CLI-038: clears one scope of orchestration state, and the remembered answers of its changes.
 fn reset(store: &Store, m: &mut crate::orchestration::Mail, scope: &str) -> Result<Value, Fail> {
+    // Row 193: an unread mail cannot be saved, so refuse before the lists below are cleared.
+    m.ensure_readable()?;
     let (mut tasks, mut dispatches, mut messages, mut runs) = (0, 0, 0, 0);
     if scope != "messages" {
-        tasks = load_list(store, TASKS_KEY).len();
-        dispatches = load_list(store, DISPATCHES_KEY).len();
+        tasks = load_list(store, TASKS_KEY)?.len();
+        dispatches = load_list(store, DISPATCHES_KEY)?.len();
         save_list(store, TASKS_KEY, &[])?;
         save_list(store, DISPATCHES_KEY, &[])?;
     }
@@ -3080,9 +3101,9 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
     if let Some(r) = &named {
         m.run_show(r)?;
     }
-    let mut tasks = load_list(store, TASKS_KEY);
+    let mut tasks = load_list(store, TASKS_KEY)?;
     o::promote(&mut tasks);
-    let mut dispatches = load_list(store, DISPATCHES_KEY);
+    let mut dispatches = load_list(store, DISPATCHES_KEY)?;
     // cli FIX-8: a session the window started after its start gave up is recorded on its row first, so
     // worker-show, worker-stop and worker-release see (and can end) it.
     reconcile_late(&mut dispatches, &|t| ctx.terminals.live(&crate::terminal::handle_of(t)).then(|| mark_program(ctx.terminals, t)));
@@ -3484,14 +3505,14 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 crate::terminal::screen_open(&request);
                 (ctx.notify)(json!({ "emit": crate::terminal::SCREEN_EVENT, "payload": { "id": id, "request": request } }));
                 if let Some(rows) = crate::terminal::screen_wait(&request) {
-                    return Ok(hidden(ctx, json!({ "terminal": handle, "screen": true, "rows": rows })));
+                    return hidden(ctx, json!({ "terminal": handle, "screen": true, "rows": rows }));
                 }
                 let r = ctx.terminals.read(id, None, limit).ok_or_else(gone)?;
                 let mut out = serde_json::to_value(r).unwrap_or_default();
                 out["terminal"] = json!(handle);
                 out["screen"] = json!(false);
                 out["warnings"] = json!([format!("the window did not supply {handle}'s screen; this is its output stream, not a screen")]);
-                return Ok(hidden(ctx, out));
+                return hidden(ctx, out);
             }
             let r = ctx.terminals.read(id, cursor, limit).ok_or_else(gone)?;
             let mut warnings = Vec::new();
@@ -3508,7 +3529,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             out["terminal"] = json!(handle);
             out["screen"] = json!(false);
             out["warnings"] = json!(warnings);
-            Ok(hidden(ctx, out))
+            hidden(ctx, out)
         }
         "terminal.send" => {
             let body = text("text");
@@ -3523,10 +3544,15 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
+            // Card 15: the receipt is saved after the lane lock is gone, so a same-request retry waits here for it.
+            let retry_turn = retry.as_deref().map(retry_turn);
+            let _retry_turn = retry_turn.as_ref().map(|t| t.lock().unwrap_or_else(|p| p.into_inner()));
             if let Some(key) = &retry {
                 // ORCH-055: the receipt lasts in the store, so a retry after a restart sends nothing.
+                // Card 13b: unreadable receipts refuse here, before anything is typed, so a retry never types twice.
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                if let Some(receipt) = so::Receipts::load(&store).find(key) {
+                let receipts = so::Receipts::try_load(&store).map_err(|e| Fail::new("failed", e))?;
+                if let Some(receipt) = receipts.find(key) {
                     let mut again = receipt.clone();
                     again["retried"] = json!(true);
                     return Ok(again);
@@ -3542,7 +3568,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let before = if watching { Some(crate::status::activity(id)) } else { None };
             let output_mark = |r: Option<crate::terminal::Read>| r.map(|r| (r.cursor, r.pending));
             let output_before = output_mark(ctx.terminals.read(id, None, Some(1)));
-            let write = |s: &str| ctx.terminals.write(id, s).map_err(|e| Fail::new("failed", e));
+            let write = |s: &str| type_into(ctx, id, s).map_err(|e| Fail::new("failed", e));
             let mut delivered = Vec::new();
             if interrupt {
                 write("\u{3}")?;
@@ -3601,7 +3627,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             if let Some(key) = retry {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                let mut receipts = so::Receipts::load(&store);
+                let mut receipts = so::Receipts::try_load(&store).map_err(|e| Fail::new("failed", e))?;
                 receipts.record(&key, now_ms(), out.clone());
                 receipts.save(&store).map_err(|e| Fail::new("failed", e))?;
             }
@@ -3670,6 +3696,37 @@ fn held_line(handle: &str, o: &so::Outcome) -> String {
 /// senders: waits for the input box to settle, pastes, holds Enter back for the size-scaled pause and
 /// while a large paste is taken in, and never presses it when another writer, a cancel or a
 /// permission prompt comes between the text and Enter.
+/// Every keystroke `terminal send` types goes through here; tests count the calls.
+fn type_into(ctx: &Ctx, id: u32, data: &str) -> Result<(), String> {
+    #[cfg(test)]
+    typed::bump(id);
+    ctx.terminals.write(id, data)
+}
+
+#[cfg(test)]
+mod typed {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    static COUNTS: Mutex<BTreeMap<u32, usize>> = Mutex::new(BTreeMap::new());
+
+    pub fn bump(id: u32) {
+        *COUNTS.lock().unwrap_or_else(|p| p.into_inner()).entry(id).or_default() += 1;
+    }
+
+    pub fn count(id: u32) -> usize {
+        COUNTS.lock().unwrap_or_else(|p| p.into_inner()).get(&id).copied().unwrap_or(0)
+    }
+}
+
+/// One lock per in-flight `terminal send` retry key; idle keys are dropped on the next call.
+fn retry_turn(key: &str) -> std::sync::Arc<Mutex<()>> {
+    static TURNS: Mutex<BTreeMap<String, std::sync::Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    let mut turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
+    turns.retain(|k, t| k == key || std::sync::Arc::strong_count(t) > 1);
+    turns.entry(key.to_string()).or_default().clone()
+}
+
 fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -> Result<so::Delivery, Fail> {
     let turn = so::lane(id);
     let _turn = turn.lock().unwrap_or_else(|p| p.into_inner());
@@ -3690,7 +3747,7 @@ fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -
             live: ctx.terminals.live(&handle),
         }
     };
-    so::drive(&mut send, text, agent, look, |s| ctx.terminals.write(id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
+    so::drive(&mut send, text, agent, look, |s| type_into(ctx, id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
 }
 
 // ---------------------------------------------------------------- worker start (ORCH-016)
@@ -3707,9 +3764,10 @@ const IDLE: Duration = Duration::from_secs(3);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Row 193: a list that no longer reads is kept aside (orchestration::kept) before it starts empty,
-/// so the next save_list cannot wipe it.
-fn load_list(store: &Store, key: &str) -> Vec<Value> {
-    crate::orchestration::kept::or_default(store, key)
+/// so the next save_list cannot wipe it. A store or copy that fails is an error, never an empty list
+/// (a save would then overwrite the blob that was never kept).
+fn load_list(store: &Store, key: &str) -> Result<Vec<Value>, Fail> {
+    crate::orchestration::kept::load(store, key).map_err(Fail::from)
 }
 
 fn save_list(store: &Store, key: &str, list: &[Value]) -> Result<(), Fail> {
@@ -3735,7 +3793,10 @@ fn keep_transcripts(dispatches: &mut [Value], own: &dyn Fn(u32) -> Option<PathBu
 /// The terminal-exit side of the same: stamps the rows of `terminal` before its sessions are retired.
 /// Called by `terminal.rs` when a pane exits.
 pub(crate) fn keep_transcript_of(store: &Store, terminal: u32) {
-    let mut dispatches = load_list(store, DISPATCHES_KEY);
+    let mut dispatches = match load_list(store, DISPATCHES_KEY) {
+        Ok(d) => d,
+        Err(e) => return eprintln!("kolux-rs: {}", e.message),
+    };
     let mine = |t: u32| (t == terminal).then(|| worker_read::own_transcript(t)).flatten();
     if keep_transcripts(&mut dispatches, &mine) {
         let _ = save_list(store, DISPATCHES_KEY, &dispatches);
@@ -3748,7 +3809,7 @@ pub(crate) fn keep_transcript_of(store: &Store, terminal: u32) {
 /// twice. A dispatch with no Run, from an earlier start of Kolux, or already settled sends nothing.
 pub(crate) fn worker_exited(store: &Store, terminal: u32, code: Option<u32>, now: u64) -> Option<Value> {
     let me = u64::from(std::process::id());
-    let mut dispatches = load_list(store, DISPATCHES_KEY);
+    let mut dispatches = load_list(store, DISPATCHES_KEY).ok()?;
     let d = dispatches.iter_mut().rev().find(|d| d["terminal"].as_u64() == Some(u64::from(terminal)) && d["runtime"].as_u64() == Some(me))?;
     let (id, task_id) = (d["id"].as_str()?.to_string(), d["taskId"].as_str().unwrap_or_default().to_string());
     let run = d["runId"].as_str()?.to_string();
@@ -3761,7 +3822,8 @@ pub(crate) fn worker_exited(store: &Store, terminal: u32, code: Option<u32>, now
     }
     d["exitedAt"] = json!(now);
     let worktree = d["worktree"].as_str().unwrap_or_default().to_string();
-    let tasks = load_list(store, TASKS_KEY);
+    // Only the title comes from the tasks and they are not saved here, so an unreadable list just falls back to the id.
+    let tasks = load_list(store, TASKS_KEY).unwrap_or_default();
     let title = tasks.iter().find(|t| t["id"] == task_id.as_str()).and_then(|t| t["title"].as_str()).filter(|t| !t.trim().is_empty()).unwrap_or(&task_id).to_string();
     let how = code.map(|c| format!("with exit code {c}")).unwrap_or_else(|| "without an exit code".into());
     let body = format!(
@@ -4249,6 +4311,8 @@ fn reuse(ctx: &Ctx, req: &Request, to: &str) -> Result<Value, Fail> {
 /// second worker. A start turned away leaves no receipt; one that timed out keeps its outcome. A
 /// start left pending by an earlier run of Kolux is over (its terminals went with it): it runs fresh.
 fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    // Row 877: an unread mail cannot be saved, so refuse before a task, worktree or terminal is made.
+    crate::orchestration::Mail::load(&*ctx.store.lock().map_err(|e| e.to_string())?).ensure_readable()?;
     // ORCH-017: the same start is the same caller, folder and flags; the CLI gives every send a
     // request id of its own, so that one is left out.
     let start = || {
@@ -4363,10 +4427,13 @@ fn claim_task(tasks: &[Value], dispatches: &mut [Value], i: usize, retry_of: Opt
 /// are missing, so a cut-short archive is never taken for the whole output.
 /// ORCH-067 (T-155-b): a read of a terminal never shows a dispatch pass, echoed in a command line
 /// or sitting typed but unsubmitted in the input box; a warning says when one was hidden.
-fn hidden(ctx: &Ctx, mut out: Value) -> Value {
-    let passes = ctx.store.lock().map(|s| crate::orchestration::passes(&load_list(&s, DISPATCHES_KEY))).unwrap_or_default();
-    crate::orchestration::redact_read(&mut out, &passes);
-    out
+/// Fails closed: when the dispatches cannot be loaded the passes are unknown, so the read is refused and no output is returned.
+fn hidden(ctx: &Ctx, mut out: Value) -> Result<Value, Fail> {
+    let refused = |why: &str| Fail::new("failed", format!("can't check for secrets to hide; read refused ({why})"));
+    let store = ctx.store.lock().map_err(|_| refused("the store is busy"))?;
+    let dispatches = load_list(&store, DISPATCHES_KEY).map_err(|e| refused(&e.message))?;
+    crate::orchestration::redact_read(&mut out, &crate::orchestration::passes(&dispatches));
+    Ok(out)
 }
 
 fn archive_lines(r: crate::terminal::Read) -> Vec<String> {
@@ -4526,14 +4593,14 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     // ORCH-032: a worker may start another only inside the nesting cap; ORCH-033: in its own Run.
     let (depth, cap, run_id) = {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
-        let dispatches = load_list(&store, DISPATCHES_KEY);
+        let dispatches = load_list(&store, DISPATCHES_KEY)?;
         let (asked, configured) = caps(&store, a);
         let (depth, cap) = crate::orchestration::nest(coordinator.as_deref(), &dispatches, asked, configured)?;
         let run_id = start_run(&crate::orchestration::Mail::load(&store), coordinator.as_deref(), text("run").as_deref(), &dispatches)?;
         // cli FIX-4: a task that is not in that Run, or cannot take a worker, is turned away
         // before the agent is looked up (checked again when the task is claimed below).
         if let Some(id) = text("task") {
-            let tasks = load_list(&store, TASKS_KEY);
+            let tasks = load_list(&store, TASKS_KEY)?;
             match text("retryOf") {
                 None => crate::orchestration::start_check(&tasks, &id, run_id.as_deref()).map(drop)?,
                 Some(_) => crate::orchestration::task_in(&tasks, &id, run_id.as_deref()).map(drop)?,
@@ -4566,8 +4633,8 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     // The task: found by id, or made from the brief (ORCH-016's text form creates it).
     let (task, dispatch_id) = {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
-        let mut tasks = load_list(&store, TASKS_KEY);
-        let mut dispatches = load_list(&store, DISPATCHES_KEY);
+        let mut tasks = load_list(&store, TASKS_KEY)?;
+        let mut dispatches = load_list(&store, DISPATCHES_KEY)?;
         let dispatch_id = next_id(&dispatches, "dispatch-");
         let idx = match (text("task"), text("spec")) {
             // orchestration FIX-1 B1: a plain start takes the same check a failed start's way out is
@@ -4695,7 +4762,7 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     });
     {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
-        let mut dispatches = load_list(&store, DISPATCHES_KEY);
+        let mut dispatches = load_list(&store, DISPATCHES_KEY)?;
         let mut row = worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "pass": pass, "retryOf": text("retryOf") }));
         if let Some(g) = terminal.and_then(|t| crate::orchestration::process_generation(ctx.terminals, t)) {
             row[crate::orchestration::PASS_GENERATION] = json!(g);
@@ -4710,7 +4777,7 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
         // offered retry passes start_check; no agent was started.
         {
             let store = ctx.store.lock().map_err(|e| e.to_string())?;
-            let mut tasks = load_list(&store, TASKS_KEY);
+            let mut tasks = load_list(&store, TASKS_KEY)?;
             if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task_id.as_str() && t["dispatchId"] == dispatch_id.as_str()) {
                 t["status"] = json!("failed");
             }
@@ -5365,6 +5432,228 @@ mod tests {
     }
 
     #[test]
+    fn row193_reset_on_an_unread_mail_is_refused_before_it_clears_anything() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row193-reset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let broken = "{\"runs\": [{\"id\": \"run-1\"}], \"messages\": [tru";
+        {
+            let s = store.lock().unwrap();
+            save_list(&s, TASKS_KEY, &[json!({ "id": "task-1" })]).unwrap();
+            save_list(&s, DISPATCHES_KEY, &[json!({ "id": "d-1" })]).unwrap();
+            s.set("orchestration.mail", broken).unwrap();
+        }
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        for scope in SCOPES {
+            let mut args = serde_json::Map::new();
+            args.insert(scope.to_string(), json!(true));
+            let err = dispatch(&ctx, &req("orchestration.reset", Value::Object(args))).unwrap_err();
+            assert!(err.message.contains("orchestration.mail") && err.message.contains("nothing was saved over it"), "{scope}: {}", err.message);
+            let s = store.lock().unwrap();
+            assert_eq!((load_list(&s, TASKS_KEY).unwrap().len(), load_list(&s, DISPATCHES_KEY).unwrap().len()), (1, 1), "{scope}: the lists were not cleared");
+            assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "{scope}: the mail blob is byte-identical");
+        }
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row877_mutating_mail_commands_on_an_unread_mail_are_refused_before_saving_anything() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row877-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let broken = "{\"runs\": [{\"id\": \"run-1\"}], \"messages\": [tru";
+        {
+            let s = store.lock().unwrap();
+            save_list(&s, TASKS_KEY, &[json!({ "id": "task-1", "status": "ready" })]).unwrap();
+            save_list(&s, DISPATCHES_KEY, &[json!({ "id": "d-1" })]).unwrap();
+            s.set("orchestration.mail", broken).unwrap();
+        }
+        let (tasks_before, dispatches_before) = {
+            let s = store.lock().unwrap();
+            (s.get(TASKS_KEY).unwrap(), s.get(DISPATCHES_KEY).unwrap())
+        };
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        for (command, args) in [
+            ("orchestration.task-create", json!({ "spec": "new work" })),
+            ("orchestration.task-update", json!({ "id": "task-1", "status": "blocked" })),
+            ("orchestration.worker-start", json!({ "spec": "x", "terminal": "term-9", "worktree": "current" })),
+            ("orchestration.run-create", json!({ "objective": "ship" })),
+            ("orchestration.dispatch", json!({ "task": "task-1", "to": "term-9" })),
+        ] {
+            let err = dispatch(&ctx, &req(command, args)).unwrap_err();
+            assert!(err.message.contains("orchestration.mail") && err.message.contains("nothing was saved over it"), "{command}: {}", err.message);
+            let s = store.lock().unwrap();
+            assert_eq!((s.get(TASKS_KEY).unwrap(), s.get(DISPATCHES_KEY).unwrap()), (tasks_before.clone(), dispatches_before.clone()), "{command}: the lists are unchanged");
+            assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "{command}: the mail blob is byte-identical");
+        }
+        // Card 13b: check acks what it hands out, so it is refused too (it used to answer "no mail").
+        let err = dispatch(&ctx, &req("orchestration.check", json!({ "ack": "delivery-1" }))).unwrap_err();
+        assert!(err.message.contains("orchestration.mail") && err.message.contains("nothing was saved over it"), "check: {}", err.message);
+        // Reads still answer from the empty mail, and change nothing.
+        for (command, args) in [("orchestration.task-list", json!({})), ("orchestration.run-list", json!({})), ("orchestration.dispatch", json!({ "task": "task-1", "dryRun": true }))] {
+            let err = dispatch(&ctx, &req(command, args)).err();
+            assert!(err.is_none_or(|e| !e.message.contains("nothing was saved over it")), "{command} must not be refused for the unread mail");
+        }
+        let s = store.lock().unwrap();
+        assert_eq!(s.get("orchestration.mail").unwrap().as_deref(), Some(broken), "reads left the mail blob alone");
+        drop(s);
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn card13b_a_send_retry_with_unreadable_receipts_types_nothing_and_a_repaired_one_types_once() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-c13b-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        terminals.fake_session(5313, &dir.display().to_string(), None);
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.send".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-5313", "text": "hello", "retryRequest": "r1" }), pane: None, cli: String::new(), arrived: None };
+        let broken = "[{\"key\": \"term-5313|r0\", \"at\": 1, \"receipt\": {";
+        store.lock().unwrap().set(so::KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let err = dispatch(&ctx, &req).unwrap_err();
+        assert_eq!(err.code, "failed");
+        assert_eq!(typed::count(5313), 0, "nothing was typed before the refusal");
+        assert_eq!(store.lock().unwrap().get(so::KEY).unwrap().as_deref(), Some(broken), "the receipts blob is byte-identical");
+        // Repaired and restarted (row 881: this run refuses to save over the key until then): the same retry types once, then answers from its receipt without typing again.
+        let mut restarted = Store::open(&dir.join("data")).unwrap();
+        restarted.set(so::KEY, "[]").unwrap();
+        std::mem::swap(&mut *store.lock().unwrap(), &mut restarted);
+        drop(restarted);
+        dispatch(&ctx, &req).unwrap();
+        let typed_once = typed::count(5313);
+        assert!(typed_once >= 1);
+        let again = dispatch(&ctx, &req).unwrap();
+        assert_eq!(again["retried"], true);
+        assert_eq!(typed::count(5313), typed_once, "a retry of a recorded send types nothing");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Card 13b note 1: a caller that times out and retries while the first send still waits for the
+    /// input box must not type a second time; the retry waits for the first send's receipt.
+    #[test]
+    fn card15_two_sends_with_the_same_retry_request_type_once() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-c15-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let terminals = Terminals::default();
+        terminals.fake_session(5314, &dir.display().to_string(), None);
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.send".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-5314", "text": "hello", "retryRequest": "same" }), pane: None, cli: VERSION.into(), arrived: None };
+        let lane = so::lane(5314);
+        let held = lane.lock().unwrap();
+        let outs = std::thread::scope(|sc| {
+            let go = || {
+                sc.spawn(|| {
+                    let notify = |_: Value| {};
+                    let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+                    dispatch(&ctx, &req)
+                })
+            };
+            let (a, b) = (go(), go());
+            // Both callers are now past the receipt check (or queued behind the first), waiting for the input box.
+            std::thread::sleep(Duration::from_millis(400));
+            drop(held);
+            [a.join().unwrap().unwrap(), b.join().unwrap().unwrap()]
+        });
+        assert_eq!(typed::count(5314), 1, "the text went in once");
+        assert_eq!(outs.iter().filter(|o| o["retried"] == true).count(), 1, "the other answered from the receipt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hidden_fails_closed_when_the_dispatch_passes_cannot_be_loaded() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-hidden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        terminals.fake_session(41, &dir.display().to_string(), None);
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.read".into(), cwd: dir.display().to_string(), args: json!({ "terminal": "term-41" }), pane: None, cli: String::new(), arrived: None };
+        // Readable dispatches: the read answers.
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[json!({ "id": "d-1", "pass": "pass-SECRET-123" })]).unwrap();
+        assert!(dispatch(&ctx, &req).is_ok());
+        // A list that cannot be read or kept aside: the passes are unknown, so the read is refused (no output).
+        let broken = "[{\"id\": \"d-1\", \"pass\": \"pass-SECRET-123\"}, tru";
+        store.lock().unwrap().set(DISPATCHES_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let err = dispatch(&ctx, &req).unwrap_err();
+        assert!(err.message.contains("can't check for secrets to hide; read refused") && err.message.contains(DISPATCHES_KEY), "{}", err.message);
+        assert!(!err.message.contains("pass-SECRET-123") && !err.data.to_string().contains("pass-SECRET-123"), "the error never carries a pass");
+        assert_eq!(store.lock().unwrap().get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_ps_still_answers_when_the_dispatch_list_cannot_be_read() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-ps-unread-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "worktree.ps".into(), cwd: dir.display().to_string(), args: json!({}), pane: None, cli: String::new(), arrived: None };
+        let broken = "[{\"id\": \"dispatch-3\"}, ";
+        store.lock().unwrap().set(DISPATCHES_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let out = dispatch(&ctx, &req).unwrap();
+        assert_eq!(out["scope"]["workersUnread"], true);
+        assert_eq!(store.lock().unwrap().get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken), "ps changed nothing");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row193_a_task_list_that_cannot_be_kept_aside_is_never_saved_over() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row193-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let (broken_tasks, broken_dispatches) = ("[{\"id\": \"task-7\", \"spec\": \"keep me\"}, tru", "[{\"id\": \"dispatch-3\"}, ");
+        {
+            let s = store.lock().unwrap();
+            s.set(TASKS_KEY, broken_tasks).unwrap();
+            s.set(DISPATCHES_KEY, broken_dispatches).unwrap();
+        }
+        crate::orchestration::kept::refuse_copies(&dir.join("data"));
+        let s = store.lock().unwrap();
+        let (t, d) = (load_list(&s, TASKS_KEY).unwrap_err(), load_list(&s, DISPATCHES_KEY).unwrap_err());
+        assert!(t.message.contains(TASKS_KEY) && d.message.contains(DISPATCHES_KEY), "{} / {}", t.message, d.message);
+        let mut m = crate::orchestration::Mail::default();
+        let made = tasks(&ctx, &s, &mut m, &req("orchestration.task-create", json!({ "spec": "new work" })), Some("term-1"), None).unwrap_err();
+        assert!(made.message.contains(TASKS_KEY), "{}", made.message);
+        assert_eq!(s.get(TASKS_KEY).unwrap().as_deref(), Some(broken_tasks), "the task list is byte-identical");
+        assert_eq!(s.get(DISPATCHES_KEY).unwrap().as_deref(), Some(broken_dispatches), "the dispatch list is byte-identical");
+        drop(s);
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn tasks_need_a_known_creator_and_a_dry_run_needs_no_recipient() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-dry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -5384,11 +5673,11 @@ mod tests {
         assert_eq!(plan["to"], Value::Null);
         let list = dispatch(&ctx, &req("orchestration.task-list", json!({}))).unwrap();
         assert_eq!(list["tasks"][0]["status"], "ready");
-        assert!(load_list(&store.lock().unwrap(), DISPATCHES_KEY).is_empty());
+        assert!(load_list(&store.lock().unwrap(), DISPATCHES_KEY).unwrap().is_empty());
         // CLI-035: reusing a terminal that is not open is refused before any task is made.
         let gone = dispatch(&ctx, &req("orchestration.worker-start", json!({ "spec": "x", "terminal": "term-9", "worktree": "current" }))).unwrap_err();
         assert_eq!(gone.code, "not_found", "{}", gone.message);
-        assert_eq!(load_list(&store.lock().unwrap(), TASKS_KEY).len(), 1);
+        assert_eq!(load_list(&store.lock().unwrap(), TASKS_KEY).unwrap().len(), 1);
         drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5726,7 +6015,7 @@ mod tests {
 
         let v = dispatch(&ctx, &req("orchestration.reset", json!({ "tasks": true }))).unwrap();
         assert_eq!((&v["tasks"], &v["dispatches"], &v["messages"]), (&json!(1), &json!(1), &json!(0)), "{v}");
-        assert!(load_list(&store.lock().unwrap(), TASKS_KEY).is_empty() && load_list(&store.lock().unwrap(), DISPATCHES_KEY).is_empty());
+        assert!(load_list(&store.lock().unwrap(), TASKS_KEY).unwrap().is_empty() && load_list(&store.lock().unwrap(), DISPATCHES_KEY).unwrap().is_empty());
         assert_eq!(show(done)["state"], "absent");
         assert_eq!(show(sent)["state"], "completed", "a tasks reset leaves the messages' answers");
         let said = text_of("orchestration.reset", &v);
@@ -6237,7 +6526,7 @@ mod tests {
             assert!(bad.message.contains("exit code 3"), "{}", bad.message);
             assert!(events.lock().unwrap()[before..].iter().all(|e| e["kind"] != "start"), "no agent starts after a failed setup");
             let task = bad.data["taskId"].as_str().unwrap().to_string();
-            let tasks = load_list(&store.lock().unwrap(), TASKS_KEY);
+            let tasks = load_list(&store.lock().unwrap(), TASKS_KEY).unwrap();
             assert_eq!(tasks.iter().find(|t| t["id"] == task.as_str()).unwrap()["status"], "failed");
             assert!(bad.data["next"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains(&format!("worker-start --task {task}"))), "{}", bad.data["next"]);
             let made = bad.data["worktree"]["path"].as_str().unwrap().to_string();
@@ -6373,7 +6662,7 @@ mod tests {
         assert!(esc[0].subject.contains("Fix the login page"), "{}", esc[0].subject);
         assert!(esc[0].body.contains("exit code 1") && esc[0].body.contains("worker-stop --dispatch dispatch-1` then `kolux-dev orchestration worker-start --task task-1"), "{}", esc[0].body);
         assert!(esc[1].subject.contains("task-2"), "{}", esc[1].subject);
-        let after = load_list(&store, DISPATCHES_KEY);
+        let after = load_list(&store, DISPATCHES_KEY).unwrap();
         assert!(after[0]["exitedAt"].is_u64() && after[3]["exitedAt"].is_null(), "an earlier start's dispatch on the same number is left alone");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
@@ -7315,7 +7604,7 @@ mod tests {
             let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": id }), pane: None, cli: String::new(), arrived: None };
             dispatch(&ctx, &req)
         };
-        let saved = |id: &str| load_list(&store.lock().unwrap(), DISPATCHES_KEY).into_iter().find(|d| d["id"] == id).unwrap();
+        let saved = |id: &str| load_list(&store.lock().unwrap(), DISPATCHES_KEY).unwrap().into_iter().find(|d| d["id"] == id).unwrap();
         // Both starts ended `unknown` without a session; they keep their place for the window.
         for n in [1, 2] {
             let d = format!("dispatch-fix8-a{n}");
@@ -7590,7 +7879,7 @@ mod tests {
         let w = row_of(&r, 1);
         assert_eq!((w["lateAfter"].as_str(), w["latePending"].as_bool().unwrap_or(false)), (Some("stopped"), false), "the list keeps the fact, not the alarm: {w}");
         // A release of a completed row closes the late agent and reads it.
-        let tasks_before = load_list(&store.lock().unwrap(), TASKS_KEY);
+        let tasks_before = load_list(&store.lock().unwrap(), TASKS_KEY).unwrap();
         let r = call(RELEASE, 2);
         assert_eq!(r["terminalState"], "released", "{r}");
         assert!(!terminals.live("term-18"), "release closed the late agent on the completed row");
@@ -7599,7 +7888,7 @@ mod tests {
         // cli FIX-11: and the failed row's; neither release touches a finished task or its result.
         call(RELEASE, 3);
         assert!(!terminals.live("term-19"), "release closed the late agent on the failed row");
-        let tasks_after = load_list(&store.lock().unwrap(), TASKS_KEY);
+        let tasks_after = load_list(&store.lock().unwrap(), TASKS_KEY).unwrap();
         assert_eq!(tasks_after, tasks_before, "a release changes no task");
         assert_eq!((tasks_after[1]["status"].as_str(), tasks_after[1]["result"].as_str()), (Some("completed"), Some("built it")));
         assert_eq!((tasks_after[2]["status"].as_str(), tasks_after[2]["result"].as_str()), (Some("failed"), Some("broke")));
@@ -8011,7 +8300,7 @@ mod tests {
         let r = call(WORKER_LIST);
         assert!(r["lateWorker"].is_null() && r["workers"][0]["latePending"].is_null(), "{r}");
         assert_eq!(r["workers"][0]["lateAfter"], "stopped", "the fact stays: {r}");
-        let rows = load_list(&store.lock().unwrap(), DISPATCHES_KEY);
+        let rows = load_list(&store.lock().unwrap(), DISPATCHES_KEY).unwrap();
         assert!(rows[0]["latePending"].is_null() && rows[0]["lateShown"].is_null() && rows[0]["lateAfter"] == "stopped", "{}", rows[0]);
         forget_stamp("dispatch-fix12a1");
         drop(store);
@@ -8349,7 +8638,7 @@ mod tests {
         assert!(line_of("task-1").contains("  ready  "), "{}", line_of("task-1"));
         assert!(!line_of("task-1").contains("held"));
         // The failed records stay (stamped) and a second reset changes nothing; an unknown task is refused.
-        let kept = load_list(&store.lock().unwrap(), DISPATCHES_KEY);
+        let kept = load_list(&store.lock().unwrap(), DISPATCHES_KEY).unwrap();
         assert_eq!(kept.iter().filter(|d| d["status"] == "failed" && !d["breakerReset"].is_null()).count(), 3);
         let again = dispatch(&ctx, &req("orchestration.task-reset", json!({ "id": "task-1" }))).unwrap();
         assert_eq!(text_of("orchestration.task-reset", &again), "task-1 had no counted failures; it is ready");

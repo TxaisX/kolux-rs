@@ -7,6 +7,8 @@ pub mod crashdump;
 pub mod recovery;
 pub mod renderer_heap;
 pub mod app_proxy;
+/// T-323-b: the saved proxy and the HTTP/1 switch applied to the app's own HTTP clients.
+pub mod app_http;
 /// T-293 (APP-030): the Windows publisher check on a downloaded update.
 pub mod update_guard;
 /// T-199 (APP-028, APP-029, APP-031): install records, the restart watchdog, download problems.

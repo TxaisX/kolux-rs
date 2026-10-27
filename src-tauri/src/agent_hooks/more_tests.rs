@@ -276,10 +276,11 @@ fn stat_015_kimi_file_kolux_created_goes_and_its_script_prints_nothing() {
 fn t_121_rows_name_each_agent() {
     let home = scratch("rows");
     let rows = rows(&home);
-    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi", "copilot", "grok", "devin", "pi", "hermes"]);
+    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "command-code", "kimi", "copilot", "grok", "devin", "pi", "hermes"]);
     assert!(rows.iter().all(|r| r["state"] == "not installed"));
     install_cursor(&home, &cursor_file(&home)).unwrap();
     install_droid(&home, &droid_file(&home)).unwrap();
+    install_command_code(&home, &command_code_file(&home)).unwrap();
     install_kimi(&home, &kimi_file(&home)).unwrap();
     install_copilot(&home, &copilot_file(&home)).unwrap();
     super::grok::install(&home, &super::grok::file(&home)).unwrap();
@@ -436,4 +437,188 @@ fn stat_021_pi_titles_come_from_the_kolux_extension_alone() {
     fs::write(dir.join("run.mjs"), r#"process.env.KOLUX_PANE_KEY='1';process.env.KOLUX_HOOK_IDENTITY='x';const m=await import('./ext.mjs');const on={};let name;const titles=[];m.default({on:(n,h)=>{on[n]=h},getSessionName:()=>name});const ctx={cwd:'C:\\work\\my-app',ui:{setTitle:(t)=>titles.push(t)}};on.session_start({},ctx);name='Fix\nparser';on.session_info_changed({},ctx);console.log(JSON.stringify(titles));"#).unwrap();
     let out = std::process::Command::new("node").arg(dir.join("run.mjs")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[\"\u{3c0} - Fix parser - my-app\"]", "no title before Pi names the session; then session name and folder: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// Kolux's old eight-event Cursor file, built from a fresh install's command plus the three permission events.
+fn old_cursor_file(home: &Path, file: &Path, user_shell: Option<&str>) -> Value {
+    install_cursor(home, file).unwrap();
+    let mut v: Value = serde_json::from_str(&read(file)).unwrap();
+    let mine = v["hooks"]["stop"][0].clone();
+    for e in ["preToolUse", "beforeShellExecution", "beforeMCPExecution"] {
+        v["hooks"][e] = json!([mine.clone()]);
+    }
+    if let Some(cmd) = user_shell {
+        v["hooks"]["beforeShellExecution"].as_array_mut().unwrap().insert(0, json!({ "command": cmd }));
+    }
+    v
+}
+
+/// SAFE-009 / DT-C49: Cursor blocks on any answer outside its permission schema, so the three
+/// permission events are never installed; the other five are.
+#[test]
+fn stat_012_cursor_installs_only_the_five_state_events() {
+    assert_eq!(CURSOR_EVENTS.as_slice(), ["beforeSubmitPrompt", "stop", "postToolUse", "postToolUseFailure", "afterAgentResponse"]);
+    let home = scratch("cursor-five");
+    let file = cursor_file(&home);
+    assert!(install_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    let mut keys: Vec<&str> = v["hooks"].as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let mut want = CURSOR_EVENTS.to_vec();
+    want.sort_unstable();
+    assert_eq!(keys, want, "exactly the five state events");
+    assert_eq!(inspect_cursor(&file), ("installed", None));
+}
+
+#[test]
+fn stat_012_cursor_install_drops_old_permission_entries_and_keeps_the_users() {
+    let home = scratch("cursor-old");
+    let file = cursor_file(&home);
+    let user = "./my-gate.sh";
+    let old = old_cursor_file(&home, &file, Some(user));
+    fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+    assert_eq!(old["hooks"].as_object().unwrap().len(), 8, "the file starts with eight Kolux events");
+    let (state, why) = inspect_cursor(&file);
+    assert_eq!(state, "partial", "an older file's permission entries are not the current install");
+    let why = why.unwrap();
+    assert!(why.starts_with("an old Kolux entry under ") && ["preToolUse", "beforeShellExecution", "beforeMCPExecution"].iter().all(|e| why.contains(e)), "{why}");
+    assert!(install_cursor(&home, &file).unwrap(), "the old entries go");
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([{ "command": user }]), "only the user's entry is left, unchanged");
+    assert_eq!(serde_json::to_string(&v["hooks"]["beforeShellExecution"][0]).unwrap(), serde_json::to_string(&old["hooks"]["beforeShellExecution"][0]).unwrap());
+    assert!(v["hooks"].get("preToolUse").is_none() && v["hooks"].get("beforeMCPExecution").is_none(), "an event key Kolux left empty is dropped");
+    assert!(["preToolUse", "beforeMCPExecution", "beforeShellExecution"].iter().all(|e| !v["hooks"][e].as_array().is_some_and(|l| l.iter().any(names_mine))));
+    assert!(CURSOR_EVENTS.iter().all(|e| v["hooks"][e].as_array().unwrap().iter().filter(|h| names_mine(h)).count() == 1));
+    assert!(!install_cursor(&home, &file).unwrap(), "a second install changes nothing");
+    assert_eq!(inspect_cursor(&file), ("installed", None), "and the row is whole again");
+}
+
+/// A user's own empty event key survives install and removal; only a key Kolux's strip emptied goes.
+#[test]
+fn stat_012_cursor_install_and_remove_leave_the_users_empty_keys() {
+    let home = scratch("cursor-empty");
+    let file = cursor_file(&home);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{
+  \"version\": 1,
+  \"hooks\": {
+    \"afterFileEdit\": [],
+    \"beforeShellExecution\": []
+  }
+}
+";
+    fs::write(&file, original).unwrap();
+    assert!(install_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["hooks"]["afterFileEdit"], json!([]), "install keeps the user's empty key");
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([]));
+    assert!(!install_cursor(&home, &file).unwrap(), "and a second install changes nothing");
+    assert!(remove_cursor(&home, &file).unwrap());
+    assert_eq!(read(&file), original, "removal gives the user's file back byte for byte, empty keys included");
+}
+
+/// Removal on an older eight-event file leaves no Kolux entry under any key, and the user's own stay.
+#[test]
+fn stat_012_cursor_remove_clears_an_older_files_permission_entries() {
+    let home = scratch("cursor-old-remove");
+    let file = cursor_file(&home);
+    let user = "./my-gate.sh";
+    let old = old_cursor_file(&home, &file, Some(user));
+    fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+    assert!(remove_cursor(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert!(v["hooks"].as_object().unwrap().values().filter_map(Value::as_array).flatten().all(|h| !names_mine(h)), "no Kolux entry under any key");
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([{ "command": user }]), "the user's entry stays");
+    assert!(v["hooks"].get("preToolUse").is_none() && v["hooks"].get("stop").is_none(), "keys Kolux emptied go");
+}
+
+#[test]
+fn stat_012_cursor_permission_events_stay_mapped_for_older_files() {
+    let mut m = Memory::default();
+    for event in ["preToolUse", "beforeShellExecution", "beforeMCPExecution"] {
+        let e = normalize_with(&mut m, "/cursor", &json!({"hook_event_name":event,"conversation_id":"c1","tool_name":"search","command":"ls"})).unwrap();
+        assert_eq!(e["hook_event_name"], "PreToolUse", "{event}");
+    }
+}
+
+#[test]
+fn stat_014_command_code_tool_events_are_working_and_stop_is_done() {
+    let (mut s, mut m) = (Session::default(), Memory::default());
+    let p = "/command-code";
+    assert_eq!(agent_of(p), Some("command-code"));
+    assert_eq!(normalize_with(&mut m, p, &json!({"hook_event_name":"SessionStart","session_id":"x1"})), None, "session start fires while idle and is not hooked");
+    assert_eq!(state(&mut s, &mut m, p, json!({"hook_event_name":"PreToolUse","session_id":"x1","tool_name":"shell_command","tool_input":{"command":"ls"}})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, p, json!({"hook_event_name":"PostToolUse","session_id":"x1","tool_name":"shell_command"})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, p, json!({"hook_event_name":"Stop","session_id":"x1"})), Some("done"));
+    assert_eq!(s.resolved(), "done");
+}
+
+#[test]
+fn stat_014_command_code_install_writes_three_groups_and_keeps_the_users_and_removal_takes_only_kolux() {
+    let home = scratch("command-code");
+    let file = command_code_file(&home);
+    assert_eq!(file, home.join(".commandcode").join("settings.json"));
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{\n  \"theme\": \"dark\",\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"./done.sh\"\n          }\n        ]\n      }\n    ]\n  }\n}\n";
+    fs::write(&file, original).unwrap();
+    assert!(install_command_code(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["theme"], "dark");
+    let mut keys: Vec<&str> = v["hooks"].as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["PostToolUse", "PreToolUse", "Stop"], "exactly the three events, not SessionStart");
+    assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "./done.sh", "the user's group stays first");
+    for e in COMMAND_CODE_EVENTS {
+        let mine: Vec<&Value> = v["hooks"][e].as_array().unwrap().iter().filter(|g| g["hooks"].as_array().is_some_and(|h| h.iter().any(names_mine))).collect();
+        assert_eq!(mine.len(), 1, "{e}");
+        assert_eq!(mine[0]["hooks"][0]["type"], "command", "{e}");
+        assert_eq!(mine[0]["hooks"][0]["timeout"], 10, "{e}");
+    }
+    // Command Code's doc: omit the matcher to match every tool; "*" is not listed and may not compile as a pattern.
+    for e in ["PreToolUse", "PostToolUse"] {
+        assert!(v["hooks"][e][0].get("matcher").is_none(), "{e} carries no matcher key");
+    }
+    assert!(home.join(SCRIPT_DIR_FOR_TESTS).join(COMMAND_CODE_SCRIPT).is_file());
+    assert!(!install_command_code(&home, &file).unwrap(), "a second install changes nothing");
+    assert_eq!(inspect_command_code(&file), ("installed", None));
+    // The user adds a group of their own after the install; removal takes only Kolux's.
+    let mut edited = v.clone();
+    edited["hooks"]["PostToolUse"].as_array_mut().unwrap().push(json!({ "hooks": [{ "type": "command", "command": "./after.sh" }] }));
+    fs::write(&file, serde_json::to_string_pretty(&edited).unwrap()).unwrap();
+    assert!(remove_command_code(&home, &file).unwrap());
+    let w: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(w["hooks"]["Stop"][0]["hooks"][0]["command"], "./done.sh");
+    assert_eq!(w["hooks"]["PostToolUse"][0]["hooks"][0]["command"], "./after.sh");
+    assert!(w["hooks"].get("PreToolUse").is_none(), "an event Kolux alone held goes");
+    assert!(![&w["hooks"]["Stop"], &w["hooks"]["PostToolUse"]].iter().any(|l| l.as_array().unwrap().iter().any(|g| g["hooks"].as_array().unwrap().iter().any(names_mine))));
+    assert_eq!(inspect_command_code(&file).0, "not installed");
+    assert!(!remove_command_code(&home, &file).unwrap());
+}
+
+#[test]
+fn stat_014_command_code_untouched_file_comes_back_byte_for_byte_and_a_bad_shape_is_left_alone() {
+    let home = scratch("command-code-bytes");
+    let file = command_code_file(&home);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{\n  \"theme\": \"dark\"\n}\n";
+    fs::write(&file, original).unwrap();
+    assert!(install_command_code(&home, &file).unwrap());
+    assert!(remove_command_code(&home, &file).unwrap());
+    assert_eq!(read(&file), original);
+    for bad in ["[1]", "{\"hooks\": 3}", "{\"hooks\": {\"Stop\": {}}}", "not json"] {
+        fs::write(&file, bad).unwrap();
+        assert!(install_command_code(&home, &file).unwrap_err().contains("left alone"), "{bad}");
+        assert_eq!(read(&file), bad);
+    }
+}
+
+/// A Command Code hook with no output means no opinion and the tool proceeds; the script prints
+/// nothing, so Kolux can never answer a PreToolUse with a block.
+#[test]
+fn stat_014_command_code_script_prints_nothing_so_a_pre_tool_use_is_never_blocked() {
+    let home = scratch("command-code-script");
+    install_command_code(&home, &command_code_file(&home)).unwrap();
+    let written = read(&home.join(SCRIPT_DIR_FOR_TESTS).join(COMMAND_CODE_SCRIPT));
+    assert_eq!(written, script("command-code", "command-code", false));
+    assert_ne!(written, script("command-code", "command-code", true), "the printing variant differs, and Command Code gets the silent one");
 }

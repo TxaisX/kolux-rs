@@ -11,6 +11,7 @@ import { ConnectGrid } from "../settings/ConnectGrid";
 import { ClaudeCard } from "../settings/SettingsPage";
 import CodexCard from "../settings/CodexCard";
 import GrokCard from "../settings/GrokCard";
+import { t } from "../i18n/lookup";
 import { chordFires, escapeLeaves, leaveKey, milestone, SCREENS } from "./firstRun";
 
 const inWizard = (t: EventTarget | null) => t instanceof Element && t.closest(".onb") !== null;
@@ -130,7 +131,7 @@ export function WizardView(p: ViewProps) {
               {secondary}
             </button>
           )}
-          <span className="onb-gap" />
+          {mainOff(p.at, p.connected, p.busy) && p.at === 1 ? <span className="onb-gap onb-why">{t("onboarding.connect.wait")}</span> : <span className="onb-gap" />}
           {p.at > 0 && (
             <button className="btn" onClick={p.onBack} disabled={p.busy}>
               Back

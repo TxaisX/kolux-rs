@@ -241,13 +241,27 @@ fn vendor_scripts(html: &str, tmp: &Path, fetch: &dyn Fn(&str) -> Option<Vec<u8>
     fetched.then_some(page)
 }
 
+/// `b` with the saved proxy plan applied (T-323-b, APP-032). The error never carries the address.
+fn proxied(plan: &crate::resources::app_http::Plan, b: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder, String> {
+    use crate::resources::app_proxy::Route;
+    let b = match &plan.route {
+        Route::Default => b,
+        Route::Direct => b.no_proxy(),
+        Route::Via(p) => b.proxy(reqwest::Proxy::all(p.as_str()).map_err(|_| "the network proxy setting cannot be used by this build; app traffic that needs it stays off until it is cleared".to_string())?),
+    };
+    Ok(if plan.http1 { b.http1_only() } else { b })
+}
+
 /// Fetches one CDN script for an entry, within the size cap; None on any failure.
-pub fn fetch_script(url: &str) -> Option<Vec<u8>> {
+pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
     if !CDNS.iter().any(|c| url.starts_with(c)) {
         return None;
     }
+    // T-323-b (APP-032): through the saved proxy; a setting that cannot be used fetches nothing.
+    let plan = crate::resources::app_http::plan_for(app, &url.parse().ok()?).ok()?;
+    let builder = proxied(&plan, reqwest::Client::builder()).ok()?;
     tauri::async_runtime::block_on(async {
-        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().ok()?;
+        let client = builder.timeout(std::time::Duration::from_secs(20)).build().ok()?;
         let r = client.get(url).send().await.ok()?;
         if !r.status().is_success() || r.content_length().is_some_and(|n| n > MAX_SCRIPT as u64) {
             return None;
@@ -434,7 +448,7 @@ pub fn artifacts_list(lib: tauri::State<'_, Library>) -> Vec<Listed> {
 #[tauri::command]
 pub async fn artifact_add(app: tauri::AppHandle, path: String) -> Result<Entry, String> {
     use tauri::Manager;
-    tauri::async_runtime::spawn_blocking(move || app.state::<Library>().add(Path::new(&path), Origin::hand(Path::new(&path)), &fetch_script)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || app.state::<Library>().add(Path::new(&path), Origin::hand(Path::new(&path)), &|u| fetch_script(&app, u))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -493,6 +507,20 @@ pub(crate) fn system_open(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_032_each_route_reaches_the_client() {
+        use crate::resources::{app_http::Plan, app_proxy::Route};
+        let u = |s: &str| tauri::Url::parse(s).unwrap();
+        assert!(proxied(&Plan { route: Route::Via(u("http://p:8080")), http1: true }, reqwest::Client::builder()).unwrap().build().is_ok());
+        for route in [Route::Default, Route::Direct] {
+            assert!(proxied(&Plan { route, http1: false }, reqwest::Client::builder()).unwrap().build().is_ok());
+        }
+        // socks5 needs reqwest's socks feature, which this build leaves out: that stops the request.
+        if let Err(e) = proxied(&Plan { route: Route::Via(u("socks5://me:SECRET@p:1080")), http1: false }, reqwest::Client::builder()) {
+            assert!(!e.contains("SECRET") && !e.contains("socks5://"), "{e}");
+        }
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("krs-art-{name}-{}", std::process::id()));

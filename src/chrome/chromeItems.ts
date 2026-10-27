@@ -91,8 +91,8 @@ export function menuScreen(id: string): "agents" | "board" | "terminals" | null 
 
 // APP-009 Help / T-248-b: what a help.* menu click does. The page owns these (the guide, the tour and
 // the update card all live in the page), so the click never needs the app shell.
-export type HelpAction = "guide" | "explore" | "updates" | "crash";
-const HELP: Record<string, HelpAction> = { "help.gettingStarted": "guide", "help.explore": "explore", "help.checkUpdates": "updates", "help.reportCrash": "crash" };
+export type HelpAction = "guide" | "explore" | "updates" | "crash" | "about";
+const HELP: Record<string, HelpAction> = { "help.gettingStarted": "guide", "help.explore": "explore", "help.checkUpdates": "updates", "help.reportCrash": "crash", "help.about": "about" };
 export const helpAction = (id: string): HelpAction | null => (Object.prototype.hasOwnProperty.call(HELP, id) ? HELP[id] : null);
 /** Help > Report Crash asks the crash report card (APP-039, T-183) to open the newest report. */
 export const REPORT_CRASH_EVENT = "kolux-report-crash";

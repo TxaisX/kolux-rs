@@ -19,7 +19,7 @@ test("SET-020: Tasks and Automations buttons show and the app name is hidden by 
 test("SET-016: the folded Window & Sidebar header sums up what shows", () => {
   expect(windowSummary({})).toBe("Tasks · Automations · Status bar");
   expect(windowSummary({ titleBarAppName: true, automationsButton: false, statusBarVisible: false })).toBe("App name · Tasks · Status bar hidden");
-  expect(windowSummary({ tasksButton: false, automationsButton: false, statusBarHidden: ["memory"] })).toBe("Status bar, 5 of 6 items");
+  expect(windowSummary({ tasksButton: false, automationsButton: false, statusBarHidden: ["memory"] })).toBe("Status bar, 7 of 8 items");
   expect(windowSummary({ skillsButton: true })).toBe("Tasks · Automations · Skills · Status bar");
 });
 

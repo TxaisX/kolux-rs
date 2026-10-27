@@ -32,6 +32,8 @@ const TOKEN_PREFIX: &str = "sk-ant-oat";
 /// Store key: when a Claude usage limit that was reached lifts (ms since 1970). Written when a
 /// pane stops on a usage limit (STAT-022, T-039); the card shows it until then (ACCT-013).
 pub const LIMIT_KEY: &str = "claudeUsageLimitResetsAt";
+/// Store key: when Claude refused the stored 1-year key (ms since 1970); empty means not refused.
+pub const REFUSED_KEY: &str = "claudeKeyRefusedAt";
 
 /// ACCT-013: why a card needs attention, in plain words, with the reason the window maps to its
 /// one fix. Reasons: browser-blocked, sign-in-refused, plan, not-found, smartscreen, usage-limit,
@@ -198,8 +200,14 @@ pub struct KeyStatus {
     pub attention: Option<Attention>,
 }
 
-/// The card's figures from the settings fields at `now`.
+/// The card's figures from the settings fields at `now`, for a key Claude has not refused.
+#[cfg(test)]
 pub fn status_at(settings: &Value, has_token: bool, now: i64) -> KeyStatus {
+    status_checked(settings, has_token, false, now)
+}
+
+/// `status_at`, plus whether Claude refused the key (ACCT-013 b1).
+pub fn status_checked(settings: &Value, has_token: bool, refused: bool, now: i64) -> KeyStatus {
     let key_mode = settings.get(MODE_FIELD).and_then(Value::as_str) == Some(KEY_MODE);
     if !(key_mode && has_token) {
         return KeyStatus::default();
@@ -213,6 +221,15 @@ pub fn status_at(settings: &Value, has_token: bool, now: i64) -> KeyStatus {
         s.days_left = Some(left.max(0));
         s.expired = now >= end;
         s.renew_due = end - now <= WARN_DAYS * DAY_MS;
+    }
+    if refused {
+        s.expired = true;
+        s.renew_due = true;
+        s.attention = Some(Attention::new("key-expired", "Claude refused the 1-year key. Renew it to keep Claude connected."));
+    } else if s.expired {
+        s.attention = Some(Attention::new("key-expired", "The 1-year key ran out. Renew it to keep Claude connected."));
+    } else if s.renew_due {
+        s.attention = Some(Attention::new("key-expiring", "The 1-year key runs out soon. Renew it before then."));
     }
     s
 }
@@ -235,12 +252,27 @@ pub fn strip_inherited(program: Option<&str>, env: &[(String, String)]) -> bool 
     program.and_then(crate::tools::credited_program) == Some("claude") && !env.iter().any(|(k, _)| k == ENV)
 }
 
+/// Remembers that Claude refused the stored key.
+pub fn mark_refused(store: &Store, now: i64) {
+    let _ = store.set(REFUSED_KEY, &now.to_string());
+}
+
+/// Whether Claude refused the stored key (an empty value is absent: the kv has no delete).
+pub fn is_refused(store: &Store) -> bool {
+    store.get(REFUSED_KEY).ok().flatten().is_some_and(|v| !v.is_empty())
+}
+
+fn clear_refused(store: &Store) {
+    let _ = store.set(REFUSED_KEY, "");
+}
+
 /// Stores a fresh key: sealed, with its creation date and the key-mode marker.
 pub fn keep(store: &Store, token: &str, now: i64) -> Result<(), String> {
     secrets::write_setting(store, TOKEN_FIELD, token)?;
     let mut settings = store.settings();
     settings[MODE_FIELD] = Value::String(KEY_MODE.into());
     settings[CREATED_FIELD] = Value::from(now);
+    clear_refused(store);
     store.save_settings(&settings).map_err(|e| e.to_string())
 }
 
@@ -254,6 +286,7 @@ pub fn forget(store: &Store) -> Result<(), String> {
             obj.remove(MODE_FIELD);
         }
     }
+    clear_refused(store);
     store.save_settings(&settings).map_err(|e| e.to_string())
 }
 
@@ -417,11 +450,12 @@ impl KeySetup {
 
 fn status(store: &Store, setup: &KeySetup) -> KeyStatus {
     let has = secrets::read_setting(store, TOKEN_FIELD).ok().flatten().is_some();
-    let mut s = status_at(&store.settings(), has, now_ms());
+    let mut s = status_checked(&store.settings(), has, is_refused(store), now_ms());
+    let dated = s.attention.take();
     s.setting_up = setup.running.load(Ordering::SeqCst);
     s.in_browser = s.setting_up && setup.in_browser.load(Ordering::SeqCst);
     let limit = store.get(LIMIT_KEY).ok().flatten().and_then(|t| t.parse().ok());
-    s.attention = setup.attention().or_else(|| usage_limit(limit, now_ms()));
+    s.attention = setup.attention().or_else(|| usage_limit(limit, now_ms())).or(dated);
     s
 }
 
@@ -605,6 +639,46 @@ mod tests {
         assert!(s.get(TOKEN_FIELD).is_none() && s.get(MODE_FIELD).is_none() && s.get(CREATED_FIELD).is_none());
     }
 
+    #[test]
+    fn a_refused_key_reads_as_ran_out_before_its_date_and_a_new_key_clears_it() {
+        let now = 1_800_000_000_000_i64;
+        let dir = crate::test_dir::temp("key-refused");
+        let store = Store::open(&dir).unwrap();
+        keep(&store, "sk-ant-oat01-FAKE", now).unwrap();
+        let card = |store: &Store| status_checked(&store.settings(), true, is_refused(store), now);
+        let fresh = card(&store);
+        assert!(!fresh.expired && fresh.attention.is_none());
+        mark_refused(&store, now);
+        let s = card(&store);
+        assert!(s.connected && s.expired && s.renew_due, "refused before its date still reads as ran out");
+        assert_eq!(s.expires_at, Some(now + 365 * DAY_MS));
+        assert_eq!(s.attention.as_ref().map(|a| a.reason), Some("key-expired"));
+        keep(&store, "sk-ant-oat01-FAKE2", now + 1).unwrap();
+        let s = card(&store);
+        assert!(!s.expired && !s.renew_due && s.attention.is_none(), "a new key clears the refusal");
+        mark_refused(&store, now);
+        forget(&store).unwrap();
+        assert!(!is_refused(&store), "disconnecting clears it too");
+    }
+
+    #[test]
+    fn a_refusal_means_nothing_outside_key_mode() {
+        let now = 1_800_000_000_000_i64;
+        let s = status_checked(&json!({ CREATED_FIELD: now }), true, true, now);
+        assert!(!s.connected && !s.expired && s.attention.is_none());
+        let s = status_checked(&json!({ MODE_FIELD: "key", CREATED_FIELD: now }), false, true, now);
+        assert!(!s.connected && s.attention.is_none(), "no key stored, nothing to refuse");
+    }
+
+    #[test]
+    fn the_date_names_its_reason() {
+        let now = 1_800_000_000_000_i64;
+        let at = |days_ago: i64| status_checked(&json!({ MODE_FIELD: "key", CREATED_FIELD: now - days_ago * DAY_MS }), true, false, now).attention.map(|a| a.reason);
+        assert_eq!(at(366), Some("key-expired"));
+        assert_eq!(at(340), Some("key-expiring"));
+        assert_eq!(at(0), None);
+    }
+
     #[cfg(windows)]
     fn ps(script: &str) -> CommandBuilder {
         let mut c = CommandBuilder::new("powershell.exe");
@@ -612,30 +686,34 @@ mod tests {
         c
     }
 
+    /// Load flake fix: every wait below is a ceiling a loaded PC cannot reach (PowerShell took over
+    /// 15 s to start under two parallel builds), never the thing the test measures. A key still ends
+    /// the run while the program has minutes left to sleep, so a run that waited for it times out.
     #[cfg(windows)]
     #[test]
     fn a_hidden_run_reads_the_key_and_one_that_hangs_times_out() {
-        let printed = ps(&format!("Write-Output 'This requires a Claude subscription'; Write-Output 'Open https://example.invalid/x'; Start-Sleep -Milliseconds 600; Write-Output '{KEY}'; Start-Sleep 20"));
+        const CEILING: Duration = Duration::from_secs(180);
+        let printed = ps(&format!("Write-Output 'This requires a Claude subscription'; Write-Output 'Open https://example.invalid/x'; Start-Sleep -Milliseconds 600; Write-Output '{KEY}'; Start-Sleep 600"));
         let seen = Arc::new(AtomicBool::new(false));
         let flag = seen.clone();
         let started = Instant::now();
-        let out = run_setup(printed, Duration::from_secs(15), Arc::new(AtomicBool::new(false)), move || flag.store(true, Ordering::SeqCst));
+        let out = run_setup(printed, CEILING, Arc::new(AtomicBool::new(false)), move || flag.store(true, Ordering::SeqCst));
         assert_eq!(out, Outcome::Key(KEY.into()));
         assert!(seen.load(Ordering::SeqCst), "the browser step was noticed");
-        assert!(started.elapsed() < Duration::from_secs(12), "a key ends the run without waiting for the program");
-        let out = run_setup(ps("Start-Sleep 30"), Duration::from_secs(2), Arc::new(AtomicBool::new(false)), || {});
+        assert!(started.elapsed() < Duration::from_secs(400), "a key ends the run without waiting for the program (it sleeps 600 s)");
+        let out = run_setup(ps("Start-Sleep 600"), Duration::from_secs(2), Arc::new(AtomicBool::new(false)), || {});
         assert_eq!(out, Outcome::TimedOut);
         let cancel = Arc::new(AtomicBool::new(true));
-        assert_eq!(run_setup(ps("Start-Sleep 30"), Duration::from_secs(10), cancel, || {}), Outcome::Cancelled);
+        assert_eq!(run_setup(ps("Start-Sleep 600"), CEILING, cancel, || {}), Outcome::Cancelled);
         // ACCT-015, on quit: every running flow is cancelled and its program stopped.
         assert_eq!(live_runs(), 0);
-        let running = std::thread::spawn(|| run_setup(ps("Start-Sleep 30"), Duration::from_secs(25), Arc::new(AtomicBool::new(false)), || {}));
+        let running = std::thread::spawn(|| run_setup(ps("Start-Sleep 600"), Duration::from_secs(400), Arc::new(AtomicBool::new(false)), || {}));
         while live_runs() == 0 {
             std::thread::sleep(Duration::from_millis(20));
         }
         let asked = Instant::now();
-        assert!(cancel_all(Duration::from_secs(5)), "the run stopped before the deadline");
-        assert!(asked.elapsed() < Duration::from_secs(3));
+        assert!(cancel_all(Duration::from_secs(120)), "the run stopped before the deadline");
+        assert!(asked.elapsed() < Duration::from_secs(100), "the stop did not wait for the program's 600 s sleep");
         assert_eq!(running.join().unwrap(), Outcome::Cancelled);
         assert!(cancel_all(Duration::from_millis(10)), "nothing left to stop");
     }

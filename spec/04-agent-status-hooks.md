@@ -42,7 +42,7 @@ Rules: Kolux adds its own entries to each agent's per-user hook settings so stat
 Acceptance:
   - [ ] Start Claude Code and send a prompt → the pane shows working within about a second, and done
         once the reply ends.
-  - [ ] Make the agent ask for permission to use a tool → the pane changes to needs you.
+  - [x] Make the agent ask for permission to use a tool → the pane changes to needs you. (cards; evidence/cards-STAT-001.txt)
   - [ ] Repeat with Codex and Gemini CLI on a fresh machine → the same changes, with no manual setup.
 Compat: the listener runs on this computer only; each terminal Kolux opens is handed the address,
   token and pane identity the hooks need. The events registered for each agent are on that agent's
@@ -65,10 +65,10 @@ Rules: a submitted prompt or any tool event means working; Stop means done, or i
   shells are still running, the session stays working; OpenClaude gets exactly the same treatment
   in its own settings.
 Acceptance:
-  - [ ] Claude asks a multiple-choice question → needs you; answer it → working again at the next
-        tool step.
-  - [ ] Type /compact → the pane settles with no completion notification.
-  - [ ] Let Claude end its reply while a subagent is still going → the pane stays working.
+  - [x] Claude asks a multiple-choice question → needs you; answer it → working again at the next
+        tool step. (cards; evidence/cards-STAT-007.txt)
+  - [x] Type /compact → the pane settles with no completion notification. (cards; evidence/cards-STAT-007.txt)
+  - [x] Let Claude end its reply while a subagent is still going → the pane stays working. (cards; evidence/cards-STAT-007.txt)
 Compat: Kolux registers SessionStart, UserPromptSubmit, Stop, StopFailure, SubagentStart,
   SubagentStop, TeammateIdle, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest and
   PostCompact in Claude Code's user settings, and follows Claude Code's config-folder override when
@@ -96,8 +96,8 @@ Rules: session start and a submitted prompt mean working; Stop means done and br
 Acceptance:
   - [ ] Launch Codex in a fresh profile → no hook-trust question, and status updates on the first
         prompt.
-  - [ ] Codex wants to run a command → needs you, and Codex still offers its own approve and deny.
-  - [ ] Withdraw approval of a personal Codex hook → it no longer runs in sessions Kolux launches.
+  - [x] Codex wants to run a command → needs you, and Codex still offers its own approve and deny. (cards; evidence/cards-STAT-008.txt)
+  - [x] Withdraw approval of a personal Codex hook → it no longer runs in sessions Kolux launches. (cards; evidence/cards-STAT-008.txt)
 Compat: Codex events: SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse,
   SubagentStart, SubagentStop, Stop; trust is recorded in Codex's own TOML settings.
 Source: D-04-008
@@ -114,10 +114,10 @@ Rules: a child's pending permission clears when that teammate goes idle or when 
   idle never ends the lead's working state, even when Kolux holds no stored status for the lead; a
   child already cleared away as gone never comes back as working.
 Acceptance:
-  - [ ] The lead ends its turn while a subagent still works → the lead shows working until the child
-        finishes.
-  - [ ] A teammate asks for permission → the lead shows needs you; the teammate goes idle → it
-        clears.
+  - [x] The lead ends its turn while a subagent still works → the lead shows working until the child
+        finishes. (cards; evidence/cards-STAT-026.txt)
+  - [x] A teammate asks for permission → the lead shows needs you; the teammate goes idle → it
+        clears. (cards; evidence/cards-STAT-026.txt)
 Compat: —
 Source: D-04-026
 
@@ -133,8 +133,8 @@ Rules: nothing is sent for session boundaries, replayed events, Cursor Agent she
   workspace is not the one on screen; the 'Agent Task Complete' switch controls it and is on by
   default.
 Acceptance:
-  - [ ] Codex finishes in a workspace that is not active → exactly one notification with a preview
-        of its reply.
+  - [x] Codex finishes in a workspace that is not active → exactly one notification with a preview
+        of its reply. (cards; evidence/cards-STAT-041.txt)
   - [ ] Turn 'Agent Task Complete' off → the next finish raises nothing.
 Compat: carry over the user's saved on or off choice; default on.
 Source: D-04-041
@@ -150,9 +150,9 @@ Rules: the default is 10 minutes and 0 switches it off; it fires once per silent
   silent time, such as quiet 12m or quiet 1h (Kolux RS, T-026-a: the alert is built; the tag
   waits for the drawer view and reads `Terminals::silence`).
 Acceptance:
-  - [ ] Set the threshold to 1 minute and stall an agent → one alert after a minute and no more
-        until output resumes and stops again.
-  - [ ] Set the threshold to 0 → no quiet alert however long the agent is silent.
+  - [x] Set the threshold to 1 minute and stall an agent → one alert after a minute and no more
+        until output resumes and stops again. (cards; evidence/cards-STAT-045.txt)
+  - [x] Set the threshold to 0 → no quiet alert however long the agent is silent. (cards; evidence/cards-STAT-045.txt)
 Compat: carry over the user's saved threshold; default 10.
 Source: D-04-045
 
@@ -171,9 +171,9 @@ Rules: prompts that ask for approval are labelled as permissions and the rest as
   item disappears, the selection goes back to the first row; a 'Show Inbox' shortcut exists but has
   no key by default.
 Acceptance:
-  - [ ] Two agents waiting and one finished → two items under needs you and one under done today.
-  - [ ] Press Down with nothing selected → the first row is selected; Enter → it opens.
-  - [ ] A session finished 40 minutes ago → not listed under done today.
+  - [x] Two agents waiting and one finished → two items under needs you and one under done today. (cards; evidence/cards-STAT-050.txt)
+  - [x] Press Down with nothing selected → the first row is selected; Enter → it opens. (cards; evidence/cards-STAT-050.txt)
+  - [x] A session finished 40 minutes ago → not listed under done today. (cards; evidence/cards-STAT-050.txt)
 Compat: the Inbox is its own top-level view; its keybinding command id view.inbox ships with no key.
   (Kolux RS, T-026-c: built; the buttons read Open / Answer and open the terminal pane until the
   Code view exists, DT-C8; line counts, the host line and stale rows wait for their feeders.)
@@ -193,9 +193,9 @@ Rules: blocked and waiting both use the permission look; the Agents view adds st
   the vocabulary, glyphs, spinner and hover are built; the background entry lights with T-123,
   no-recent-update with the Inbox or the Agents view, the Agents view's labels with that view).
 Acceptance:
-  - [ ] Take one agent through working, waiting and done → the glyph and its hover text change each
-        time.
-  - [ ] Turn on reduced motion in the system → spinners stop moving but still read as working.
+  - [x] Take one agent through working, waiting and done → the glyph and its hover text change each
+        time. (cards; evidence/cards-STAT-052.txt)
+  - [x] Turn on reduced motion in the system → spinners stop moving but still read as working. (cards; evidence/cards-STAT-052.txt)
 Compat: —
 Source: D-04-052
 
@@ -207,8 +207,8 @@ User sees: each reasoning message as one collapsed line labelled Thought; a clic
 Rules: the row behaves as a real button, so Enter and Space toggle it; in the new look the Agents
   rail is a card about 268 px wide, otherwise a flat rail about 240 px wide.
 Acceptance:
-  - [ ] Open a session that contains reasoning → its Thought rows start collapsed; press expand-all
-        → all open.
+  - [x] Open a session that contains reasoning → its Thought rows start collapsed; press expand-all
+        → all open. (cards; evidence/cards-STAT-053.txt)
   - [ ] Move keyboard focus to a Thought row and press Space → it opens; press Enter → it closes.
 Compat: —
   (Kolux RS, T-027 deferred to T-326: the rows need the transcript reader and the Agents screen.)
@@ -230,9 +230,9 @@ Rules: rate-limit failures count as limit; authentication failures, an organisat
   have no failure hook, DT-C13. The reset time is filled by T-039-b from the status line; a
   session boundary also drops the cause. The pane header's tooltip carries the same words.)
 Acceptance:
-  - [ ] Simulate a rate-limit failure → the session shows stopped for the limit with its reset time,
-        and no task-complete notification appears.
-  - [ ] Send a new prompt that completes → the stop reason is gone.
+  - [x] Simulate a rate-limit failure → the session shows stopped for the limit with its reset time,
+        and no task-complete notification appears. (cards; evidence/cards-STAT-022.txt)
+  - [x] Send a new prompt that completes → the stop reason is gone. (cards; evidence/cards-STAT-022.txt)
 Compat: —
 Source: D-04-022
 
@@ -248,8 +248,8 @@ Rules: one notification per stop episode, however many failure reports arrive; a
   leaves the state as it was, so no second note is raised; 'Agent Task Complete' no longer
   covers a stop.)
 Acceptance:
-  - [ ] Cause two sign-in failures in the same episode → exactly one notification, naming sign-in.
-  - [ ] Let an agent finish normally → no stopped notification.
+  - [x] Cause two sign-in failures in the same episode → exactly one notification, naming sign-in. (cards; evidence/cards-STAT-023.txt)
+  - [x] Let an agent finish normally → no stopped notification. (cards; evidence/cards-STAT-023.txt)
 Compat: carry over the user's saved on or off choice; default on.
 Source: D-04-023
 
@@ -289,8 +289,8 @@ Rules: the notice names the account whose sign-in lapsed; the button starts the 
   active account is still signed in, `claude_account_check`, so the notice appears without waiting
   for the next window start.)
 Acceptance:
-  - [ ] Let a saved Claude account's sign-in expire → the notice appears; finish signing in → it
-        goes away.
+  - [x] Let a saved Claude account's sign-in expire → the notice appears; finish signing in → it
+        goes away. (cards; evidence/cards-STAT-046.txt)
   - [ ] Two saved accounts, one expired → only the expired one is named.
 Compat: —
 Source: D-04-046
@@ -414,7 +414,7 @@ Tier: P1 · Pushed: 3 · State at 0.15.0: live-unverified
 User does: runs Cursor Agent in a pane.
 User sees: working while it runs, done or interrupted at the end, and no stream of notifications
   from shell or MCP steps.
-Rules: prompt submission, tool, shell and MCP events mean working, and shell or MCP steps never
+Rules: prompt submission and tool events mean working, and shell or MCP steps never
   notify; a stop whose status is anything but completed means interrupted; the after-response event
   counts as done only when the status was already done; install follows Cursor's own command layout
   and keeps the user's entries; Cursor's session-start event is left unhooked on purpose because it
@@ -426,6 +426,7 @@ Compat: Cursor's events, in Cursor's own naming style: before prompt submit, sto
   tool use, tool-use failure, before shell execution, before MCP execution and after agent response
   (the 8 installed); session start and session end are mapped but not installed (COMPAT.md 3.4).
 Source: D-04-012
+Amended 2026-10-26 (kolux-87 ruling, SAFE-009, DT-C49): 5 events installed (before prompt submit, stop, after tool use, tool-use failure, after agent response); the 3 permission events stay mapped for older files but are never installed, because Cursor blocks on any answer outside their schema (Cursor's public hooks documentation).
 
 ### STAT-013 · Droid status
 Tier: P1 · Pushed: 3 · State at 0.15.0: live-unverified

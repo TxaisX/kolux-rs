@@ -308,15 +308,20 @@ pub fn parse_request(r: &mut impl BufRead) -> Option<Request> {
 pub fn identity(header: &str) -> Option<(u32, Option<u32>)> {
     let raw = base64::engine::general_purpose::STANDARD.decode(header.trim()).ok()?;
     let v: Value = serde_json::from_slice(&raw).ok()?;
-    let pane = v.get("paneKey")?.as_u64()? as u32;
-    Some((pane, v.get("terminal").and_then(Value::as_u64).map(|t| t as u32)))
+    // A key above u32::MAX is refused, never cut down to a smaller pane's key.
+    let pane = u32::try_from(v.get("paneKey")?.as_u64()?).ok()?;
+    let terminal = match v.get("terminal").and_then(Value::as_u64) {
+        Some(t) => Some(u32::try_from(t).ok()?),
+        None => None,
+    };
+    Some((pane, terminal))
 }
 
 /// The hook version an identity header was written with (T-167-b); none for an older header without one.
 pub fn identity_version(header: &str) -> Option<u32> {
     let raw = base64::engine::general_purpose::STANDARD.decode(header.trim()).ok()?;
     let v: Value = serde_json::from_slice(&raw).ok()?;
-    v.get("hookVersion")?.as_u64().map(|v| v as u32)
+    u32::try_from(v.get("hookVersion")?.as_u64()?).ok()
 }
 
 /// Answers one hook: `(status code, the status to raise)`.
@@ -366,6 +371,16 @@ pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
     // T-120-b: Antigravity's PreToolUse hook must answer; "allow" hands the call to its own policy.
     if path == "/antigravity/PreToolUse" {
         return json!({ "decision": "allow" }).to_string();
+    }
+    // STAT-012: only an older hooks.json still posts Cursor's shell/MCP permission events (never installed now, DT-C49);
+    // "ask" defers to the user (cursor.com/docs/agent/hooks), never "allow". preToolUse stays `{}`: the doc says ask
+    // "is accepted by the schema but not enforced for preToolUse".
+    if path == "/cursor" && serde_json::from_slice::<Value>(body).ok().is_some_and(|e| matches!(e.get("hook_event_name").and_then(Value::as_str), Some("beforeShellExecution" | "beforeMCPExecution"))) {
+        return json!({ "permission": "ask" }).to_string();
+    }
+    // STAT-012: Cursor's beforeSubmitPrompt output is {"continue": bool} (cursor.com/docs/agent/hooks); the prompt always proceeds.
+    if path == "/cursor" && serde_json::from_slice::<Value>(body).ok().is_some_and(|e| e.get("hook_event_name").and_then(Value::as_str) == Some("beforeSubmitPrompt")) {
+        return json!({ "continue": true }).to_string();
     }
     // T-156-b: the rules in force for the command's folder (built-ins, the user's own, per project)
     // and the recent-attempts list, both in protected_custom.rs.
@@ -427,7 +442,8 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
         .or_else(|| {
             let c = cw.get("current_usage")?;
             let n = |k: &str| c.get(k).and_then(Value::as_u64);
-            Some(n("input_tokens")? + n("cache_creation_input_tokens").unwrap_or(0) + n("cache_read_input_tokens").unwrap_or(0))
+            // A sum past u64 is an absurd reading: dropped (the percentage below may still answer), never wrapped.
+            n("input_tokens")?.checked_add(n("cache_creation_input_tokens").unwrap_or(0))?.checked_add(n("cache_read_input_tokens").unwrap_or(0))
         })
         .or_else(|| Some((cw.get("used_percentage")?.as_f64()? / 100.0 * context_window? as f64).round() as u64));
     let context_window = context_tokens.and(context_window);
@@ -586,7 +602,6 @@ pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Resu
 
 /// T-548-b: the windows one config folder's reports carried, for a pane on another account.
 // Unregistered until lib.rs lists it (evidence/fix-hooks-fix-T-548-b-lib.rs.patch).
-#[allow(dead_code)]
 #[tauri::command]
 pub fn claude_usage_of(store: tauri::State<'_, Mutex<crate::state::Store>>, config_dir: Option<String>) -> Result<Vec<Limit>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
@@ -1312,6 +1327,40 @@ mod tests {
     }
 
     #[test]
+    fn row_828_a_usage_sum_past_u64_is_dropped_not_wrapped() {
+        let id = base64::engine::general_purpose::STANDARD.encode(r#"{"paneKey":4,"terminal":2}"#);
+        let read = |body: &str| {
+            let raw = format!("POST /claude-status HTTP/1.1
+X-Kolux-Token: tok
+X-Kolux-Pane: {id}
+Content-Length: {}
+
+{body}", body.len());
+            usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap()
+        };
+        let u = read(r#"{"session_id":"s","context_window":{"current_usage":{"input_tokens":18446744073709551615,"cache_read_input_tokens":1}}}"#);
+        assert_eq!((u.context_tokens, u.context_window), (None, None));
+        // The percentage still answers when the parts are absurd.
+        let u = read(r#"{"context_window":{"context_window_size":1000,"used_percentage":50,"current_usage":{"input_tokens":18446744073709551615,"cache_read_input_tokens":1}}}"#);
+        assert_eq!((u.context_tokens, u.context_window), (Some(500), Some(1000)));
+        let u = read(r#"{"context_window":{"current_usage":{"input_tokens":18446744073709551615}}}"#);
+        assert_eq!(u.context_tokens, Some(u64::MAX));
+        assert_eq!(read(r#"{"cost":{"total_cost_usd":4294967296}}"#).cost_usd, Some(4_294_967_296.0));
+        assert_eq!(read(r#"{"cost":{"total_cost_usd":-1}}"#).cost_usd, None);
+    }
+
+    #[test]
+    fn row_829_a_pane_key_past_u32_is_rejected_not_aliased() {
+        let enc = |j: &str| base64::engine::general_purpose::STANDARD.encode(j);
+        assert_eq!(identity(&enc(r#"{"paneKey":4294967299}"#)), None, "not read as pane 3");
+        assert_eq!(identity(&enc(r#"{"paneKey":3,"terminal":4294967297}"#)), None, "not read as terminal 1");
+        assert_eq!(identity(&enc(r#"{"paneKey":4294967295,"terminal":4294967295}"#)), Some((u32::MAX, Some(u32::MAX))));
+        assert_eq!(identity(&enc(r#"{"paneKey":3}"#)), Some((3, None)));
+        assert_eq!(identity_version(&enc(r#"{"paneKey":3,"hookVersion":4294967297}"#)), None);
+        assert_eq!(identity_version(&enc(r#"{"paneKey":3,"hookVersion":2}"#)), Some(2));
+    }
+
+    #[test]
     fn the_session_id_rides_along_so_a_pane_can_be_resumed_later() {
         // SESS-030: both agents name their session in every event; a pane remembers the newest.
         let c = claude_change(&ev(r#"{"hook_event_name":"SessionStart","source":"resume","session_id":"11111111-aaaa"}"#)).unwrap();
@@ -1450,6 +1499,35 @@ mod tests {
         // The Claude script prints the answer for Claude to read; Codex's still discards it.
         assert!(claude_script().contains("%KP%/claude\" 2>NUL") && !claude_script().contains("-o NUL"));
         assert!(codex_script().contains("-o NUL"));
+    }
+
+    /// STAT-012 (kolux-87 ruling): a /cursor shell or MCP permission post can only come from an older hooks.json
+    /// that was never reinstalled; it gets "ask", which defers to the user, and never "allow".
+    #[test]
+    fn stat_012_legacy_cursor_shell_and_mcp_permission_hooks_get_ask() {
+        let s = json!({});
+        let ev = |name: &str| format!(r#"{{"hook_event_name":"{name}","conversation_id":"c1","command":"git push -f"}}"#);
+        for name in ["beforeShellExecution", "beforeMCPExecution"] {
+            assert_eq!(reply_body("/cursor", ev(name).as_bytes(), &s), r#"{"permission":"ask"}"#, "{name}");
+        }
+        assert_eq!(reply_body("/cursor", ev("preToolUse").as_bytes(), &s), "{}", "ask is not enforced for preToolUse");
+        assert_eq!(reply_body("/claude", ev("beforeShellExecution").as_bytes(), &s), "{}", "only the Cursor route");
+    }
+
+    /// STAT-012: Cursor's prompt hook is answered in its documented shape and every other state event with
+    /// the neutral `{}`; Kolux never says "allow" to a permission hook (SAFE-009 guards only Claude Code).
+    #[test]
+    fn stat_012_cursor_prompt_hook_gets_continue_and_the_rest_stay_neutral() {
+        let s = json!({});
+        let ev = |name: &str| format!(r#"{{"hook_event_name":"{name}","conversation_id":"c1","command":"git push -f"}}"#);
+        assert_eq!(reply_body("/cursor", ev("beforeSubmitPrompt").as_bytes(), &s), r#"{"continue":true}"#);
+        for name in ["stop", "postToolUse", "postToolUseFailure", "afterAgentResponse", "preToolUse"] {
+            assert_eq!(reply_body("/cursor", ev(name).as_bytes(), &s), "{}", "{name}");
+        }
+        for name in ["beforeShellExecution", "beforeMCPExecution"] {
+            assert_eq!(reply_body("/cursor", ev(name).as_bytes(), &s), r#"{"permission":"ask"}"#, "{name}");
+        }
+        assert_eq!(reply_body("/cursor", b"not json {", &s), "{}");
     }
 
     #[test]

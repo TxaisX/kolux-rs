@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { helpAction, readSynced, REPORT_CRASH_EVENT, type HelpAction, type MenuBarState, type NativeChord } from "./chromeItems";
 import { openExplore, openGuide } from "../onboarding/guide";
 import { requestUpdateCheck } from "../update/UpdateCenter";
+import { openAbout } from "../shell/about";
 
 export function useChrome() {
   const [palette, setPalette] = useState(false); // PROJ-057 / VIEW-037: the worktree palette is open
@@ -46,6 +47,7 @@ export function runHelp(what: HelpAction) {
   if (what === "guide") openGuide();
   else if (what === "explore") openExplore();
   else if (what === "updates") requestUpdateCheck();
+  else if (what === "about") openAbout(); // VIEW-106
   else window.dispatchEvent(new Event(REPORT_CRASH_EVENT));
 }
 

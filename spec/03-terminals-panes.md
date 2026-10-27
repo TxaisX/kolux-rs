@@ -51,8 +51,8 @@ Rules: every existing pane survives a re-arrangement, in its original order; row
   from the pane count so panes stay roughly even; applying a preset keeps each running session
   attached to its pane (no restart).
 Acceptance:
-  - [ ] Applying the 4-pane preset to 4 running sessions keeps the same 4 sessions with the same
-      output.
+  - [x] Applying the 4-pane preset to 4 running sessions keeps the same 4 sessions with the same
+      output. (cards live; evidence/cards-TERM-004.txt)
   - [x] After any re-arrangement every pane is still present, in its original order. (cards; evidence/cards-TERM-004.txt)
 Compat: —
 Source: D-03-004
@@ -66,7 +66,7 @@ Rules: split right: macOS uses Cmd+D, while Windows and Linux use Ctrl+Shift+D; 
   the shell as end-of-input; split needs Shift; the new pane starts in the same folder as the pane
   it was split from; the header split button splits side by side.
 Acceptance:
-  - [ ] Splitting a pane in folder X opens a shell whose working folder is X.
+  - [x] Splitting a pane in folder X opens a shell whose working folder is X. (cards live; evidence/cards-TERM-006.txt)
   - [x] Pressing Ctrl+D in a Linux shell pane sends end-of-input rather than splitting. (cards; evidence/cards-TERM-006.txt)
 Compat: keybinding commands for split right and split down (exact ids held back until allowlisted).
 Source: D-03-006
@@ -94,7 +94,7 @@ Rules: new terminal: Cmd/Ctrl+T; new browser: Cmd/Ctrl+Shift+B; new markdown: Cm
   outside it; if the requested start folder is missing, the terminal starts in the workspace folder;
   an existing folder outside the workspace is kept.
 Acceptance:
-  - [ ] Cmd/Ctrl+T opens a shell in the workspace folder with the cursor ready.
+  - [x] Cmd/Ctrl+T opens a shell in the workspace folder with the cursor ready. (cards live; evidence/cards-TERM-040.txt)
   - [x] Asking for a start folder that does not exist opens the terminal in the workspace folder. (cards; evidence/cards-TERM-040.txt)
 Compat: keybinding commands for new terminal, new browser, new markdown and open markdown tabs
   (exact ids held back until allowlisted).
@@ -107,7 +107,7 @@ User sees: a tab opens with the chosen agent already launching.
 Rules: new default agent: Cmd+Alt+T on macOS; each installed agent also gets its own new tab action,
   unbound by default.
 Acceptance:
-  - [ ] Choosing Claude from the menu opens a tab whose header shows Claude starting.
+  - [x] Choosing Claude from the menu opens a tab whose header shows Claude starting. (cards live; evidence/cards-TERM-041.txt)
   - [x] Each installed agent has its own command for a new tab, with no key until the user assigns
       one. (cards; evidence/cards-TERM-041.txt)
 Compat: keybinding command for a new tab with the default agent, plus one command per installed
@@ -167,7 +167,7 @@ Rules: the age reads just now in the first minute, then minutes ago; it refreshe
   glow clears once the pane is focused; the glow is static (no animation) to avoid constant
   repaints; age uses the same finish time as the Board and sidebar.
 Acceptance:
-  - [ ] A pane that finished 3 minutes ago, unseen, shows Done with 3m and a glow.
+  - [x] A pane that finished 3 minutes ago, unseen, shows Done with 3m and a glow. (cards live; evidence/cards-TERM-023.txt)
   - [x] Clicking into it removes the glow. (cards; evidence/cards-TERM-023.txt)
 Compat: —
 Source: D-03-023
@@ -237,8 +237,8 @@ Rules: in a split tab, the pane fills its tab; a single-pane session window expa
   grid instead; only one expanded group per workspace; it is cleared when restored; expanding and
   collapsing does not restart or clear the terminal.
 Acceptance:
-  - [ ] Expanding then restoring returns every pane to its prior size.
-  - [ ] Scrollback in the expanded pane is unchanged after restore.
+  - [x] Expanding then restoring returns every pane to its prior size. (cards live; evidence/cards-TERM-013.txt)
+  - [x] Scrollback in the expanded pane is unchanged after restore. (cards live; evidence/cards-TERM-013.txt)
 Compat: keybinding command for expanding a pane and restoring it (exact id held back until
   allowlisted).
 Source: D-03-013
@@ -291,7 +291,7 @@ Rules: rounded corners around 14 px with about 8 px gaps; a group with a single 
   existing profiles keep what they had.
 Acceptance:
   - [x] A new install shows rounded session windows with gaps. (cards; evidence/cards-TERM-028.txt)
-  - [ ] In the clean look, a session group holding one tab shows no tab strip.
+  - [x] In the clean look, a session group holding one tab shows no tab strip. (cards live; evidence/cards-TERM-028.txt)
 Compat: —
 Source: D-03-028
 
@@ -304,7 +304,7 @@ Rules: a split, move or preset never respawns an existing session; output from o
   (Kolux RS, T-067: the app keys every cell by its group id and every pane by its pane key, so a split
   or move re-parents the existing terminal host instead of remounting it; nothing respawns.)
 Acceptance:
-  - [ ] After 10 random splits and moves, each pane still shows its own session.
+  - [x] After 10 random splits and moves, each pane still shows its own session. (cards live; evidence/cards-TERM-017.txt)
   - [x] Text printed in one pane never shows up in any other pane after splits and moves. (cards; evidence/cards-TERM-017.txt)
 Compat: —
 Source: D-03-017
@@ -340,9 +340,9 @@ Rules: Auto uses GPU rendering when supported, otherwise plain rendering; on/off
   live WebGL contexts; a lost context frees its slot. Glyph atlas reset after a paste over 2 KB and after a
   heartbeat gap over 30 s. Shells that stall at process start are a terminal-start problem, carried into T-166.)
 Acceptance:
-  - [ ] Opening 10 terminals never shows blank panes.
-  - [ ] With more than 6 terminals visible, the panes beyond the cap draw on the plain path and
-      still show text.
+  - [x] Opening 10 terminals never shows blank panes. (cards live; evidence/cards-TERM-103.txt)
+  - [x] With more than 6 terminals visible, the panes beyond the cap draw on the plain path and
+      still show text. (cards live; evidence/cards-TERM-103.txt)
 Compat: —
 Source: D-03-103
 
@@ -358,8 +358,8 @@ Rules: a background host keeps sessions alive while the app is closed; scrollbac
   background host is built (T-075-b); the window routing its panes through it is T-184-b.)
 Acceptance:
   - [x] Quit with a build running; reopen; the build output continues in the same pane. (cards; evidence/cards-TERM-105.txt)
-  - [ ] Restored panes accept typing at once and the pane that had focus before quitting has it
-      again.
+  - [x] Restored panes accept typing at once and the pane that had focus before quitting has it
+      again. (cards live; evidence/cards-TERM-105.txt)
 Compat: —
 Source: D-03-105
 
@@ -404,7 +404,7 @@ Rules: list shows terminals and can narrow to one worktree, cap how many are ret
   the background, stays alive and is listed.
 Acceptance:
   - [x] kolux terminal send --enter types text and submits it. (cards; evidence/cards-TERM-125.txt)
-  - [ ] kolux terminal close --worktree X --all closes every terminal there.
+  - [x] kolux terminal close --worktree X --all closes every terminal there. (cards; evidence/cards-TERM-125.txt)
 Compat: CLI group kolux terminal with the subcommands list, show, read, send, wait, create, switch
   (also focus), rename, split and close. Flags, alphabetically: --all, --command, --cursor,
   --direction (horizontal or vertical), --enter, --focus, --for (exit or tui-idle),

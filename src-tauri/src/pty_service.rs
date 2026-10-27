@@ -594,6 +594,10 @@ pub enum Probe {
 
 pub fn probe(dir: &Path, wait: Duration) -> Probe {
     let Some(ep) = read_endpoint(dir) else { return Probe::None };
+    // ux card 6: a service killed with its window leaves its record; a dead loopback port takes Windows ~2 s to refuse.
+    if crate::procs::wait_gone(&[ep.pid], Duration::ZERO).is_empty() {
+        return Probe::None;
+    }
     match Client::connect(&ep, wait) {
         Ok(c) => match compatible(c.protocol()) {
             Ok(()) => Probe::Ready(ep, c),
@@ -762,7 +766,8 @@ mod tests {
         // No window attached: a flood is never held (nothing would ever acknowledge it).
         let t = Instant::now();
         hold_within(&flow, false, FLOW_HIGH * 3, Duration::from_secs(5));
-        assert!(t.elapsed() < Duration::from_millis(200), "held with no window: {:?}", t.elapsed());
+        // The wait asked for is 5 s, so 2 s still tells "not held" from "held"; 200 ms flaked under a loaded full run.
+        assert!(t.elapsed() < Duration::from_secs(2), "held with no window: {:?}", t.elapsed());
         // A window attached: past the high mark the reader waits until the window's pane acknowledges.
         let (tx, _rx) = mpsc::channel::<String>();
         service.lock().windows.insert(1, tx);
@@ -799,18 +804,38 @@ mod tests {
     #[test]
     fn after696_an_update_stops_the_service_even_while_it_holds_a_terminal() {
         let dir = scratch("after696");
-        let mut s = start(&dir, PROTOCOL, Duration::from_millis(300));
-        let mut ctl = Client::connect(&s.ep, Duration::from_secs(5)).unwrap();
-        ctl.request(json!({ "op": "spawn", "cols": 80, "rows": 24 }), &mut Vec::new()).unwrap();
-        drop(ctl);
-        std::thread::sleep(Duration::from_millis(900));
-        assert!(!s.thread.as_ref().unwrap().is_finished(), "a held terminal keeps the idle rule from ending it");
-        assert!(stop(&dir, Duration::from_secs(10)), "stop reports the service gone");
+        // Load flake fix: a shell that dies on its own under load (its process refused to start) leaves
+        // no terminal to hold, so the idle exit is right; that attempt is retried (3 at most). The
+        // failure is the service ending while its terminal is still counted.
+        let mut s = None;
+        for attempt in 1..=3 {
+            let running = start(&dir, PROTOCOL, Duration::from_millis(300));
+            let mut ctl = Client::connect(&running.ep, Duration::from_secs(30)).unwrap();
+            ctl.request(json!({ "op": "spawn", "cols": 80, "rows": 24 }), &mut Vec::new()).unwrap();
+            drop(ctl);
+            std::thread::sleep(Duration::from_millis(900));
+            let held = running.service.counts().0 > 0;
+            assert!(!(held && running.thread.as_ref().unwrap().is_finished()), "a held terminal keeps the idle rule from ending it");
+            if held {
+                s = Some(running);
+                break;
+            }
+            assert!(attempt < 3, "the shell ended by itself on all 3 attempts");
+            eprintln!("after696: attempt {attempt}: the shell ended by itself; trying again");
+        }
+        let mut s = s.unwrap();
+        // `stop` can come back early when a loaded machine is slow to answer its probe: ask again, 3 times at most.
         // In-process, `stop` sees the listener go a hair before the run thread has returned.
-        let until = Instant::now() + Duration::from_secs(2);
-        while !s.thread.as_ref().unwrap().is_finished() {
-            assert!(Instant::now() < until, "the run loop ended on the stop request");
-            std::thread::sleep(Duration::from_millis(10));
+        for round in 1..=3 {
+            assert!(stop(&dir, Duration::from_secs(30)), "stop reports the service gone");
+            let until = Instant::now() + Duration::from_secs(10);
+            while !s.thread.as_ref().unwrap().is_finished() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if s.thread.as_ref().unwrap().is_finished() {
+                break;
+            }
+            assert!(round < 3, "the run loop ended on the stop request");
         }
         assert!(matches!(probe(&dir, Duration::from_secs(2)), Probe::None), "nothing answers afterwards");
         s.thread.take().unwrap().join().unwrap();
@@ -913,7 +938,8 @@ mod tests {
         }
         // The window goes away: the terminal stays.
         drop(first);
-        let until = Instant::now() + Duration::from_secs(5);
+        // The daemon notices the dropped connection on its own thread; under a loaded full run that takes seconds.
+        let until = Instant::now() + Duration::from_secs(30);
         while s.service.counts() != (1, 0) {
             assert!(Instant::now() < until, "the closed window was not detached");
             std::thread::sleep(Duration::from_millis(20));
@@ -968,6 +994,21 @@ mod tests {
         remove_endpoint_if_ours(&dir, 42);
         assert!(read_endpoint(&dir).is_none());
         assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "no temporary file left behind");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    /// ux card 6: Windows takes about 2 s to refuse a dead loopback port, and a service killed with its window leaves its
+    /// record behind; a record whose process is gone must read as "no service" at once.
+    #[test]
+    fn ux6_a_recorded_service_whose_process_is_gone_is_not_dialled() {
+        let dir = scratch("ux6gone");
+        let port = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let mut done = if cfg!(windows) { std::process::Command::new("cmd").args(["/C", "exit"]).spawn() } else { std::process::Command::new("true").spawn() }.unwrap();
+        let pid = done.id();
+        done.wait().unwrap();
+        write_endpoint(&dir, &Endpoint { port, token: "t".into(), pid, generation: 1, protocol: PROTOCOL }).unwrap();
+        let t = Instant::now();
+        assert!(matches!(probe(&dir, PROBE_WAIT), Probe::None));
+        assert!(t.elapsed() < Duration::from_millis(500), "took {:?}", t.elapsed());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

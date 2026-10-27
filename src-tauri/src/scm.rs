@@ -2807,20 +2807,38 @@ mod tests {
     fn git070_a_status_read_already_running_is_shared_not_started_again() {
         static R: Running = std::sync::Mutex::new(Vec::new());
         static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let read = || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(Status { ahead: 7, ..Status::default() })
-        };
+        static SECOND_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let dir = Path::new("git070-shared-worktree");
-        let first = std::thread::spawn(move || shared(&R, dir, read));
-        std::thread::sleep(std::time::Duration::from_millis(80));
+        // Load flake fix: no sleep decides who is first. The first read holds until the second
+        // caller has joined it (its share of the answer is counted) or has answered on its own (the
+        // regression: a second git started), with a 60 s ceiling; the second starts only once the
+        // first read is running.
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let first = std::thread::spawn(move || {
+            shared(&R, dir, || {
+                let mine = R.lock().unwrap().iter().find(|(p, _)| p == dir).map(|(_, s)| s.clone()).unwrap();
+                let alone = std::sync::Arc::strong_count(&mine);
+                started_tx.send(()).unwrap();
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                while std::sync::Arc::strong_count(&mine) <= alone && !SECOND_DONE.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < end {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Status { ahead: 7, ..Status::default() })
+            })
+        });
+        started_rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the first read started");
         let second = shared(&R, dir, || Err("a second git was started".into()));
+        SECOND_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(second.unwrap().ahead, 7);
         assert_eq!(first.join().unwrap().unwrap().ahead, 7);
         assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(R.lock().unwrap().is_empty());
-        assert_eq!(shared(&R, dir, read).unwrap().ahead, 7, "a later read runs on its own");
+        let again = || {
+            READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Status { ahead: 7, ..Status::default() })
+        };
+        assert_eq!(shared(&R, dir, again).unwrap().ahead, 7, "a later read runs on its own");
         assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 2);
         // Another worktree is never handed this one's answer.
         assert!(shared(&R, Path::new("other"), || Err("own read".into())).is_err());
@@ -4526,10 +4544,24 @@ mod tests {
         let gh = stand_in_gh(&tools);
         let url = "https://nobody.example/octo/repo.name/pull/3";
         assert!(pr_url_in(url).is_some(), "the link itself is well formed");
-        for e in [merge_info(&gh, &tools, url).unwrap_err(), merge_act(&gh, &tools, url, "close", None).unwrap_err(), pr_link(&gh, &tools, url).unwrap_err(), pr_checks_linked(&gh, &tools, url).unwrap_err()] {
-            assert!(e.contains("is not one of them") && !e.contains("did not answer"), "{e}");
-        }
-        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        // Load flake fix: the gate gives each `gh config get` 5 s, and a loaded PC can take longer
+        // to start one, which refuses the host with "gh did not answer" instead of gh's own
+        // refusal. Such a round says nothing about the gate, so it is asked again (up to 5 times);
+        // the round that is judged is one where gh answered every read, and it must hold in full.
+        let mut round = 0;
+        let calls = loop {
+            round += 1;
+            fs::remove_file(tools.join("calls.txt")).ok();
+            let errs = [merge_info(&gh, &tools, url).unwrap_err(), merge_act(&gh, &tools, url, "close", None).unwrap_err(), pr_link(&gh, &tools, url).unwrap_err(), pr_checks_linked(&gh, &tools, url).unwrap_err()];
+            if errs.iter().any(|e| e.contains("did not answer")) {
+                assert!(round < 5, "gh never answered every config read in time in {round} rounds: {errs:?}");
+                continue;
+            }
+            for e in &errs {
+                assert!(e.contains("is not one of them"), "{e}");
+            }
+            break fs::read_to_string(tools.join("calls.txt")).unwrap();
+        };
         assert_eq!(calls.lines().count(), 4, "{calls}");
         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example user")), "{calls}");
         let _ = fs::remove_dir_all(&tools);
@@ -4635,9 +4667,16 @@ mod tests {
     /// wait being over). Returns gh.cmd.
     #[cfg(windows)]
     fn fix8_fixture(tools: &std::path::Path) -> PathBuf {
+        fix8_fixture_waiting(tools, 6)
+    }
+
+    /// `fix8_fixture` with the wait of `pings` pings (about one second each), for a test whose limit
+    /// has to be wide enough for a loaded PC to start the program first.
+    #[cfg(windows)]
+    fn fix8_fixture_waiting(tools: &std::path::Path, pings: u32) -> PathBuf {
         let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
         fs::copy(system.join("System32").join("PING.EXE"), tools.join("ping.exe")).unwrap();
-        fs::write(tools.join("late.cmd"), "@echo off\r\necho started>\"%~dp0started.txt\"\r\n\"%~dp0ping.exe\" -n 6 127.0.0.1 >nul && echo late>\"%~dp0late.txt\"\r\n").unwrap();
+        fs::write(tools.join("late.cmd"), format!("@echo off\r\necho started>\"%~dp0started.txt\"\r\n\"%~dp0ping.exe\" -n {pings} 127.0.0.1 >nul && echo late>\"%~dp0late.txt\"\r\n")).unwrap();
         let gh = tools.join("gh.cmd");
         fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
         gh
@@ -4672,14 +4711,28 @@ mod tests {
     /// program gh started really started (and tries again, up to three times, when a loaded PC made
     /// the limit run out first), and both halves check that nothing started from the test's own
     /// folder is still alive, so a half-done kill (the batch ended, its wait left running) fails.
+    /// Load flake fix: the limits are wide (10 s, 6 s) so a loaded PC can start the fixture inside
+    /// them, and the program gh starts waits about 60 s, so a kill that did not happen is still
+    /// seen alive 20 s after the call returned (it would live 40 s or more longer).
     #[cfg(windows)]
     #[test]
     fn fix4_a_timeout_ends_the_tree_through_the_job_and_uses_the_tree_kill_only_without_one() {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-job-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
-        let gh = fix8_fixture(&tools);
-        let limit = std::time::Duration::from_secs(1);
+        let gh = fix8_fixture_waiting(&tools, 61);
+        // Polls (up to 20 s) until nothing started from the folder is alive; returns what is left.
+        let settle = || {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                let alive = processes_under(&tools);
+                if alive.is_empty() || std::time::Instant::now() >= end {
+                    return alive;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+        };
+        let limit = std::time::Duration::from_secs(10);
         let asked = std::sync::Mutex::new(Vec::new());
         let mut tried = 0;
         loop {
@@ -4691,22 +4744,23 @@ mod tests {
             let mut cmd = quiet(&gh);
             cmd.current_dir(&tools);
             let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p), &|p| asked.lock().unwrap().push(p)).unwrap_err();
-            assert!(err.contains("did not answer within 1 second"), "{err}");
+            assert!(err.contains("did not answer within 10 seconds"), "{err}");
             assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
-            std::thread::sleep(std::time::Duration::from_secs(8));
             if tools.join("started.txt").exists() {
                 assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
-                assert!(processes_under(&tools).is_empty(), "the job left a program alive: {:?}", processes_under(&tools));
+                let left = settle();
+                assert!(left.is_empty(), "the job left a program alive: {left:?}");
                 break;
             }
             assert!(tried < 3, "fixture did not start: late.cmd never wrote started.txt in {tried} tries, so the job half proved nothing");
         }
         // Without a job the tree kill is the fallback and is asked for gh's pid. gh starts its
-        // second program only after about two seconds, as a loaded PC would, so the limit runs out
-        // before it exists; the tree kill waits (up to 10 s) for its started.txt (FIX-7), so the
-        // walk finds it.
+        // second program only after about nine seconds, past the limit of six, as a loaded PC
+        // would, so the limit runs out before it exists; the tree kill waits (up to 30 s) for its
+        // started.txt (FIX-7), so the walk finds it.
+        let limit = std::time::Duration::from_secs(6);
         fs::remove_file(tools.join("started.txt")).ok();
-        fs::write(&gh, "@echo off\r\nping -n 3 127.0.0.1 >nul\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        fs::write(&gh, "@echo off\r\nping -n 10 127.0.0.1 >nul\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
         let started = tools.join("started.txt");
         let saw_it = std::sync::atomic::AtomicBool::new(false);
         let mut cmd = quiet(&gh);
@@ -4715,7 +4769,7 @@ mod tests {
         let err = run_within_in(cmd, None, limit, false, &|p| {
             asked.lock().unwrap().push(p);
             // The limit has run out, but the walk by parent pid only finds a program that exists.
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while !started.exists() && std::time::Instant::now() < end {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
@@ -4723,12 +4777,12 @@ mod tests {
             crate::procs::kill_tree(p);
         }, &|_| {})
         .unwrap_err();
-        assert!(err.contains("did not answer within 1 second"), "{err}");
+        assert!(err.contains("did not answer within 6 seconds"), "{err}");
         assert_eq!(asked.lock().unwrap().len(), 1, "the fallback tree kill is asked once");
-        assert!(saw_it.load(std::sync::atomic::Ordering::SeqCst), "fixture did not start: gh's second program never wrote started.txt within 10 s");
-        std::thread::sleep(std::time::Duration::from_secs(8));
+        assert!(saw_it.load(std::sync::atomic::Ordering::SeqCst), "fixture did not start: gh's second program never wrote started.txt within 30 s");
         assert!(!tools.join("late.txt").exists(), "the fallback left the program gh started running");
-        assert!(processes_under(&tools).is_empty(), "the fallback tree kill left a program alive: {:?}", processes_under(&tools));
+        let left = settle();
+        assert!(left.is_empty(), "the fallback tree kill left a program alive: {left:?}");
         let _ = fs::remove_dir_all(&tools);
     }
 
@@ -4741,10 +4795,17 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn fix5_without_a_job_a_finished_gh_with_a_holder_asks_only_the_leftover_kill_once_and_still_answers_in_time() {
+        // Load flake fix: the holder outlives the limit by a wide margin (60 s against 8 s) and the
+        // bound on the answer sits between them, so a PC where the kills themselves take seconds
+        // (a taskkill took 6.8 s under two parallel builds) still tells "answered at the limit" from
+        // "waited for the holder". The holder is a copy of ping in the folder, found and ended below.
+        const LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-nojob-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
-        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+        fs::copy(system.join("System32").join("PING.EXE"), tools.join("ping.exe")).unwrap();
+        fs::write(tools.join("late.cmd"), "@echo off\r\n\"%~dp0ping.exe\" -n 61 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
         let gh = tools.join("gh.cmd");
         fs::write(&gh, "@echo off\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\necho octo\r\n").unwrap();
         let tree = std::sync::Mutex::new(Vec::new());
@@ -4752,24 +4813,30 @@ mod tests {
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
         let started = std::time::Instant::now();
-        let got = run_within_in(cmd, None, std::time::Duration::from_secs(3), false, &|p| tree.lock().unwrap().push(p), &|p| {
+        let got = run_within_in(cmd, None, LIMIT, false, &|p| tree.lock().unwrap().push(p), &|p| {
             leftover.lock().unwrap().push(p);
             crate::procs::kill_tree(p);
         })
         .unwrap();
+        let took = started.elapsed();
         assert_eq!(got.1.trim(), "octo");
-        assert!(started.elapsed() < std::time::Duration::from_secs(4), "took {:?}", started.elapsed());
+        assert!(took < std::time::Duration::from_secs(45), "took {took:?} against a limit of {LIMIT:?}: the call waited for the holder");
         assert!(tree.lock().unwrap().is_empty(), "the tree kill was asked for a pid gh had already given up: {:?}", tree.lock().unwrap());
         assert_eq!(leftover.lock().unwrap().len(), 1, "the leftover kill runs once for the holder");
-        // Windows cannot end the leftover without a job, so it is still running: wait (bounded) for
-        // its mark before the folder goes, instead of leaving it behind.
-        let mark = tools.join("late.txt");
-        for _ in 0..100 {
-            if mark.exists() {
+        // Windows cannot end the leftover without a job, so it is still running: end it here, and
+        // wait (bounded) until nothing from the folder is alive before the folder goes.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let alive = processes_under(&tools);
+            if alive.is_empty() || std::time::Instant::now() >= end {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            for pid in alive.iter().filter_map(|l| l.rsplit(' ').next()).filter_map(|p| p.parse::<u32>().ok()) {
+                crate::procs::kill_tree(pid);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
+        assert!(processes_under(&tools).is_empty(), "the holder was left running: {:?}", processes_under(&tools));
         let _ = fs::remove_dir_all(&tools);
     }
 
@@ -4888,6 +4955,11 @@ mod tests {
     /// FIX-3 (review FIX-SOON 3): gh has finished, but a program it started still holds its output;
     /// the answer comes back anyway, within the limit, and the leftover program is stopped (FIX-4:
     /// the answer comes back inside the limit and the leftover leaves no mark).
+    /// Load flake fix: the limit is 20 s so a loaded PC can start gh inside it, the holder waits
+    /// 60 s (its own copy of ping, so it is found by path), and the answer must come within 40 s:
+    /// a call that waited for the holder takes 55 s or more, one that answered at the limit about 1 s
+    /// after gh finished. The holder must be gone within 30 s of the answer (alive 40 s or more
+    /// otherwise).
     #[cfg(windows)]
     #[test]
     fn fix3_a_gh_that_leaves_a_program_holding_its_output_still_answers_in_time() {
@@ -4895,21 +4967,30 @@ mod tests {
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
         // gh prints its answer and exits, leaving a program that holds its output and would leave a
-        // mark about five seconds later.
-        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        // mark about a minute later.
+        let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+        fs::copy(system.join("System32").join("PING.EXE"), tools.join("ping.exe")).unwrap();
+        fs::write(tools.join("late.cmd"), "@echo off\r\n\"%~dp0ping.exe\" -n 61 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
         let gh = tools.join("gh.cmd");
         fs::write(&gh, "@echo off\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\necho octo\r\n").unwrap();
-        let limit = std::time::Duration::from_secs(3);
+        let limit = std::time::Duration::from_secs(20);
         let (tx, rx) = std::sync::mpsc::channel();
         let (g, t) = (gh.clone(), tools.clone());
         let started = std::time::Instant::now();
         std::thread::spawn(move || {
             let _ = tx.send(gh_run_for(&g, &t, &["pr", "view"], None, limit));
         });
-        let got = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the call returns within its bound");
+        let got = rx.recv_timeout(std::time::Duration::from_secs(120)).expect("the call returns within its bound");
+        let took = started.elapsed();
         assert_eq!(got.as_deref(), Ok("octo"));
-        assert!(started.elapsed() < limit + std::time::Duration::from_secs(1), "took {:?}", started.elapsed());
-        std::thread::sleep(std::time::Duration::from_secs(8));
+        assert!(took < std::time::Duration::from_secs(40), "took {took:?} against a limit of {limit:?}: the call waited for the holder");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut left = processes_under(&tools);
+        while !left.is_empty() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            left = processes_under(&tools);
+        }
+        assert!(left.is_empty(), "the leftover program was not stopped: {left:?}");
         assert!(!tools.join("late.txt").exists(), "the leftover program was not stopped");
         let _ = fs::remove_dir_all(&tools);
     }

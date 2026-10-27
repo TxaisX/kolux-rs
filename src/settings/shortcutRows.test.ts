@@ -17,7 +17,7 @@ test("every command is listed under its area with its chords and badges", () => 
   const by = (id: string) => all.find((r) => r.id === id)!;
   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
   expect(by("zoom.reset").badges).toEqual(["Modified"]);
-  expect(by("zoom.in").badges).toEqual(["Disabled"]);
+  expect(by("zoom.in").badges).toEqual(["Unassigned"]);
   expect(by("view.code").badges).toEqual([]);
   expect(by("workspace.openBoard").badges).toEqual(["Unassigned"]);
   expect(by("view.tasks").badges).toEqual(["Unassigned", "Conflicts"]);
@@ -101,4 +101,28 @@ test("commands with no handler yet are not listed, wired ones still are", () => 
   expect(ids).toContain("browser.find");
   expect(ids).toContain("editor.replace");
   expect(ids).toContain("editor.toggleWordWrap");
+});
+
+test("SET-010 box 1: a custom chord on a default's chord flags both rows Conflicts and lists them under Conflicting", () => {
+  const holder = rows().find((r) => r.chords.join() === "Mod+P")!; // the shipped holder of Mod+P
+  expect(holder).toBeDefined();
+  const all = rows({ keybindings: { "workspace.openBoard": "Mod+P" } });
+  const by = (id: string) => all.find((r) => r.id === id)!;
+  expect(by("workspace.openBoard").badges).toEqual(["Modified", "Conflicts"]);
+  expect(by(holder.id).badges).toContain("Conflicts");
+  expect(by(holder.id).hint).toContain("Ctrl+P is also used by Toggle Workspace Board");
+  expect(ids(filterRows(all, "conflicting", "")).sort()).toEqual(["workspace.openBoard", holder.id].sort());
+  // The custom binding still wins the chord (yieldToUser).
+  expect(by("workspace.openBoard").chords).toEqual(["Mod+P"]);
+  expect(by(holder.id).chords).not.toContain("Mod+P");
+});
+
+test("SET-010 box 1: a custom chord that shares nothing with a default raises no Conflicts", () => {
+  const all = rows({ keybindings: { "workspace.openBoard": "Mod+Alt+9" } });
+  expect(filterRows(all, "conflicting", "")).toEqual([]);
+});
+
+test("SET-011 box 1: a null entry shows Unassigned, not Disabled", () => {
+  const row = rows({ keybindings: { "terminal.clear": null } }).find((r) => r.id === "terminal.clear")!;
+  expect([row.labels, row.badges]).toEqual([[], ["Unassigned"]]);
 });

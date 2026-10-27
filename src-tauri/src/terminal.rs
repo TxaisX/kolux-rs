@@ -487,15 +487,16 @@ pub fn screen_owner(prev: u8, chunk: &[u8]) -> u8 {
             continue;
         }
         let mut j = i + 3;
-        let mut n: u32 = 0;
+        // An overflowing mode number is an unknown mode (none), never a wrapped known one.
+        let mut n: Option<u32> = Some(0);
         while j < chunk.len() && chunk[j].is_ascii_digit() {
-            n = n * 10 + u32::from(chunk[j] - b'0');
+            n = n.and_then(|n| n.checked_mul(10)?.checked_add(u32::from(chunk[j] - b'0')));
             j += 1;
         }
         if j < chunk.len() && matches!(chunk[j], b'h' | b'l') {
             let bit = match n {
-                47 | 1047 | 1049 => ALT,
-                1000..=1003 => MOUSE,
+                Some(47 | 1047 | 1049) => ALT,
+                Some(1000..=1003) => MOUSE,
                 _ => 0,
             };
             if chunk[j] == b'h' {
@@ -1110,11 +1111,13 @@ impl Terminals {
                 let mut by_itself = false;
                 let mut tail = None;
                 let mut session = None;
+                let mut removed = None;
                 if let Ok(mut inner) = registry.lock() {
                     // AUTO-014: keep the end of a followed run's output before the log goes.
                     tail = inner.logs.get(&id).map(|l| crate::automations::screen_text(&l.read(None, Some(crate::automations::RUN_OUTPUT_LINES))));
                     session = inner.marks.get(&id).and_then(|m| m.agent).zip(tail.as_ref()).and_then(|(agent, (text, _))| session_id::hint_session(agent, text));
-                    by_itself = inner.sessions.remove(&id).is_some();
+                    removed = inner.sessions.remove(&id);
+                    by_itself = removed.is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
                     inner.keys.remove(&id);
@@ -1127,6 +1130,8 @@ impl Terminals {
                         f.release();
                     }
                 }
+                // Row 784: the PTY closes here, not under the registry the pump needs.
+                drop(removed);
                 // Row 625: a worker's transcript path stays on its dispatch row before its hook sessions go.
                 if let Ok(store) = exit_app.state::<Mutex<crate::state::Store>>().lock() {
                     crate::cli::keep_transcript_of(&store, id);
@@ -1252,19 +1257,23 @@ impl Terminals {
 
     /// Ends one session. Its exit event follows from the waiter thread.
     pub fn kill(&self, id: u32) -> Result<(), String> {
-        let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
-        inner.dirs.remove(&id);
-        inner.marks.remove(&id);
-        inner.keys.remove(&id);
-        inner.hist.remove(&id);
-        // ORCH-059: the screen bits and snapshot go with the handle at once (the log stays for the
-        // waiter, which keeps an automation run's tail and then drops it; `read` already refuses it).
-        inner.owned.remove(&id);
-        inner.snaps.remove(&id);
-        if let Some(f) = inner.flow.remove(&id) {
-            f.release();
-        }
-        if let Some(mut s) = inner.sessions.remove(&id) {
+        let gone = {
+            let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
+            inner.dirs.remove(&id);
+            inner.marks.remove(&id);
+            inner.keys.remove(&id);
+            inner.hist.remove(&id);
+            // ORCH-059: the screen bits and snapshot go with the handle at once (the log stays for the
+            // waiter, which keeps an automation run's tail and then drops it; `read` already refuses it).
+            inner.owned.remove(&id);
+            inner.snaps.remove(&id);
+            if let Some(f) = inner.flow.remove(&id) {
+                f.release();
+            }
+            inner.sessions.remove(&id)
+        };
+        // Row 784: the teardown (ClosePseudoConsole) may wait on the pump, which needs the registry.
+        if let Some(mut s) = gone {
             s.kill();
         }
         Ok(())
@@ -1425,8 +1434,8 @@ impl Terminals {
 
     /// cli FIX-7: a session over a fake writer, for tests in other modules. `program` is the mark
     /// Kolux recorded for it (none for a plain shell); it has been quiet for five seconds.
-    #[cfg(test)]
-    pub(crate) fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
+    #[cfg(any(test, feature = "test-fakes"))]
+    pub fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
         let long_ago = Instant::now() - Duration::from_secs(5);
         let mut inner = self.inner.lock().unwrap();
         inner.fresh_incarnation(id);
@@ -1616,6 +1625,7 @@ impl Terminals {
         if let Some(l) = &link {
             l.detach();
         }
+        let mut gone = Vec::new();
         if let Ok(mut inner) = self.inner.lock() {
             let seen: Vec<(u32, u64)> = inner.sessions.iter().filter_map(|(id, s)| if let Session::Remote(r) = s { Some((r.id, inner.snaps.get(id).map_or(0, |n| n.seq))) } else { None }).collect();
             let dir = self.service.dir.lock().ok().and_then(|d| d.clone());
@@ -1629,10 +1639,12 @@ impl Terminals {
             for (_, f) in inner.flow.drain() {
                 f.release();
             }
-            for (_, s) in inner.sessions.drain() {
-                if let Session::Local(mut s) = s {
-                    s.kill();
-                }
+            gone.extend(inner.sessions.drain().map(|(_, s)| s));
+        }
+        // Row 784: killed after the registry is released (a teardown may wait on the pump).
+        for s in gone {
+            if let Session::Local(mut s) = s {
+                s.kill();
             }
         }
     }
@@ -2073,6 +2085,61 @@ mod tests {
         paste.join().unwrap().expect("the slow write still completes");
     }
 
+    /// Row 784: runs `close` on a pane whose teardown stalls (like ClosePseudoConsole waiting on a
+    /// pipe drain that needs the registry) and says whether a second registry call finished meanwhile.
+    fn registry_free_during_stalled_close(close: impl FnOnce(Arc<Terminals>) + Send + 'static) -> bool {
+        use std::sync::mpsc;
+        struct StallsOnClose(mpsc::Sender<()>, Arc<(Mutex<bool>, Condvar)>);
+        impl std::io::Write for StallsOnClose {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Drop for StallsOnClose {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+                let (open, cv) = &*self.1;
+                let guard = open.lock().unwrap();
+                let _ = cv.wait_timeout_while(guard, Duration::from_secs(10), |o| !*o);
+            }
+        }
+        let t = Arc::new(Terminals::default());
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        t.inner.lock().unwrap().sessions.insert(1, PtySession::fake(Box::new(StallsOnClose(entered_tx, Arc::clone(&gate)))).into());
+        let closer = Arc::clone(&t);
+        let closing = std::thread::spawn(move || close(closer));
+        let stalled = entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        let (done_tx, done_rx) = mpsc::channel();
+        let prober = Arc::clone(&t);
+        let probe = std::thread::spawn(move || {
+            let _ = prober.list();
+            let _ = done_tx.send(());
+        });
+        let free = done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        // Release the stall first, so a failing run still ends both threads.
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        closing.join().unwrap();
+        probe.join().unwrap();
+        assert!(stalled, "the close never reached the stalled teardown");
+        assert!(t.list().is_empty(), "the closed pane is off the registry");
+        free
+    }
+
+    #[test]
+    fn row784_a_stalled_pane_close_does_not_hold_the_registry() {
+        assert!(registry_free_during_stalled_close(|t| t.kill(1).unwrap()), "list() waited behind a stalled kill");
+    }
+
+    #[test]
+    fn row784_a_stalled_quit_close_does_not_hold_the_registry() {
+        assert!(registry_free_during_stalled_close(|t| t.let_go()), "list() waited behind a stalled let_go");
+    }
+
     #[test]
     fn acct_054_a_flood_pauses_the_reader_until_the_pane_acknowledges_and_a_silent_pane_only_for_the_wait() {
         let flow = Arc::new(Flow::default());
@@ -2248,6 +2315,15 @@ mod tests {
         assert!(history_file(&dir, 7).exists());
         assert!(dir.join("history").join("notes.log").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_832_an_overflowing_mode_number_is_an_unknown_mode() {
+        assert_eq!(screen_owner(0, b"[?99999999999h"), 0);
+        assert_eq!(screen_owner(0, b"[?4294968345h"), 0, "4294967296 + 1049 is not 1049");
+        assert_eq!(screen_owner(ALT, b"[?4294968345l"), ALT);
+        assert_eq!(screen_owner(0, b"[?4294968345h[?1049h"), ALT);
+        assert_eq!(screen_owner(0, b"[?1049h"), ALT);
     }
 
     #[test]

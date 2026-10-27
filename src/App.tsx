@@ -209,6 +209,7 @@ import { hooksOn } from "./onboarding/hooksOn";
 import ToolNotices from "./launch/ToolNotices";
 import { AgentsChat } from "./chat/ChatView";
 import { answeredElsewhere } from "./chat/ask";
+import { savedArgs } from "./chat/controls";
 import { fileJump, linksOpenInKolux } from "./chat/chatLinks";
 import { useTeamsHost, withTeams } from "./launch/teams";
 import { deliverPrompt, startWatch } from "./launch/startWatch";
@@ -1109,7 +1110,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     }
     try {
       if (a) await pretrust(a.id, [activeDir]);
-      const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: [], prompt: "" }) : null;
+      const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: savedArgs(a.id), prompt: "" }) : null;
       const pane: Pane = a && line ? { ...base, agent: paneMark(a, line), agentId: a.id, program: line.program ?? a.program, args: line.args, env: line.env, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
       setPanes((ps) => [...ps, pane]);
       setFocused(key);
@@ -1263,9 +1264,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     delete pendingLineup.current[batch];
     void invoke<Record<string, unknown>>("get_settings")
       .then((s) => {
-        const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
+        // Row 794-c: laid over the latest settings (the disk copy lags writes in flight); disk lineups kept too.
+        const { was, next } = applySetting(settingsRef, LAST_LINEUP_KEY, { ...lineupsOf(s), ...lineupsOf(settingsRef.current), [wait.pid]: wait.lineup });
         setSettings(next);
-        return saveChanged(s, next);
+        return saveChanged(was, next);
       })
       .catch((err) => setNotice(String(err)));
   };
@@ -1506,7 +1508,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // pending one before the window closes. The start screen itself is not written back.
   const screenWriter = useRef(
     lastWriter((s: Screen) => {
-      setSettings((x) => ({ ...x, [LAST_SCREEN_FIELD]: s }));
+      // Row 794-d: moves the ref too, so a saveSetting before the next render keeps the last screen.
+      setSettings(applySetting(settingsRef, LAST_SCREEN_FIELD, s).next);
       saveChanged({}, { [LAST_SCREEN_FIELD]: s }).catch((err) => setNotice(String(err)));
     }),
   ).current;
@@ -1849,7 +1852,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     try {
       const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
       // The agent's own start line (its options, permission mode and unpicked model default).
-      if ((await startIn(agent, wt.path, wt.branch, "", true)) === null) return;
+      if ((await startIn(agent, wt.path, wt.branch, "", true, savedArgs(agent.id))) === null) return;
       setRefresh((n) => n + 1);
       setNotice(null);
     } catch (err) {

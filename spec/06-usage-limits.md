@@ -70,9 +70,9 @@ Rules: the footer names the provider, gives its 5-hour percentage and its reset 
   and weekly figures beside its context gauge; the footer sits at the foot of the rail and follows
   the used-or-left display setting, whose Appearance control comes with the used-or-left task.)
 Acceptance:
-  - [ ] Pick a Claude agent at 40% of its 5-hour window → the footer reads Claude 40% with a reset
-        time; switch the display to remaining → the footer reads 60%.
-  - [ ] Session rows that have a context reading show a ring; rows without one show none.
+  - [x] Pick a Claude agent at 40% of its 5-hour window → the footer reads Claude 40% with a reset
+        time; switch the display to remaining → the footer reads 60%. (cards; evidence/cards-USAGE-004.txt)
+  - [x] Session rows that have a context reading show a ring; rows without one show none. (cards; evidence/cards-USAGE-004.txt)
 Compat: —
 Source: D-06-004
 
@@ -195,7 +195,7 @@ Rules: only the weekly window ever appears here, never the 5-hour one; a provide
 Acceptance:
   - [x] Claude and Codex both signed in → both listed with percent left; Claude at 85% used shows
         15% left in yellow. (T-041-a, Claude by a posted report, Codex by unit test)
-  - [ ] Switch off the Codex usage item → Codex drops out of the pill. (the item list is T-148)
+  - [x] Switch off the Codex usage item → Codex drops out of the pill. (the item list is T-148) (cards; evidence/cards-USAGE-008.txt)
   - [x] Hover → the weekly limit and a countdown to its reset. (T-041-a)
 Compat: —
 Source: D-06-008
@@ -269,9 +269,9 @@ Rules: Kolux tries Codex's own usage service first, then a background Codex proc
   figures the background read returns, reset credits included, so nothing is ever taken "from
   the service".)
 Acceptance:
-  - [ ] Signed in on a weekly-only plan → only the weekly figure shows, with its reset time.
-  - [ ] Revoke the Codex sign-in → the figures go, a sign-in-again warning shows, and no Codex
-        window is started.
+  - [x] Signed in on a weekly-only plan → only the weekly figure shows, with its reset time. (cards; evidence/cards-USAGE-022.txt)
+  - [x] Revoke the Codex sign-in → the figures go, a sign-in-again warning shows, and no Codex
+        window is started. (cards; evidence/cards-USAGE-022.txt)
 Compat: Honours Codex's home-folder environment variable, and otherwise Codex's default folder in
   the user's home, when checking sign-in.
 Source: D-06-022
@@ -289,11 +289,11 @@ Rules: an agent pane header always has the ring and the number; until the first 
   reading that turns up late carrying an older value than the one on screen is thrown away; closing
   or clearing the pane forgets its reading.
 Acceptance:
-  - [ ] Start a Claude session → a greyed 0% until the first turn, then a tinted figure that grows
-        with the conversation.
-  - [ ] Take a session beyond 90% of its window → the ring and the number go red.
-  - [ ] Split a tab into two Claude panes at different fill levels → each header shows its own
-        figure.
+  - [x] Start a Claude session → a greyed 0% until the first turn, then a tinted figure that grows
+        with the conversation. (cards; evidence/cards-USAGE-001.txt)
+  - [x] Take a session beyond 90% of its window → the ring and the number go red. (cards; evidence/cards-USAGE-001.txt)
+  - [x] Split a tab into two Claude panes at different fill levels → each header shows its own
+        figure. (cards; evidence/cards-USAGE-001.txt)
 Compat: —
 Source: D-06-001
 
@@ -310,9 +310,9 @@ Rules: a background refresh runs every five minutes, and focusing the window als
   state; one provider failing or lagging never stalls or blanks the others; usage updates that
   arrive while Kolux is still starting up are kept.
 Acceptance:
-  - [ ] Cut the network → figures keep their last values; restore it and focus the window → they
-        refresh.
-  - [ ] Make Grok slow to answer → Claude and Codex still update promptly.
+  - [x] Cut the network → figures keep their last values; restore it and focus the window → they
+        refresh. (cards; evidence/cards-USAGE-023.txt)
+  - [x] Make Grok slow to answer → Claude and Codex still update promptly. (cards; evidence/cards-USAGE-023.txt)
 Compat: —
 Source: D-06-023
 
@@ -644,8 +644,8 @@ Rules: taken out when usage moved to the top pill and the pane headers; the part
   are still gathered.
 Acceptance:
   - [ ] Default build → the status bar carries no per-provider usage segments or account menus.
-  - [ ] Turn a provider's usage item off → it only drops out of the top pill (USAGE-008); nothing
-        else changes.
+  - [x] Turn a provider's usage item off → it only drops out of the top pill (USAGE-008); nothing
+        else changes. (cards; evidence/cards-USAGE-029.txt)
 Compat: —
 Decision: H: default skip
 Source: D-06-029

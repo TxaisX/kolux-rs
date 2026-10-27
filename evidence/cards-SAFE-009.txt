@@ -1,0 +1,5 @@
+box 1: REAL-AGENT (not ticked) — hook answer proven by src-tauri/tests/cards_10.rs::safe009_box1_force_push_main_asks_with_the_kolux_reason_that_says_it_waits_and_stays_blocked_if_refused; the prompt and the refusal are Claude's
+box 2: src-tauri/tests/cards_10.rs::safe009_box2_the_working_tree_status_gets_the_neutral_answer (kolux_rs_lib::hooks::reply_body, "git status" -> "{}") — cargo test --manifest-path src-tauri/Cargo.toml --test cards_10 (scratch env G:\Temp\cards-v3) — ok; test result: ok. 18 passed; 0 failed
+box 3: src-tauri/tests/cards_10.rs::safe009_box3_switching_the_matching_rule_off_makes_the_very_next_force_push_neutral (protectedOff ["force-push"] -> "{}", asks without it) — same command — ok; test result: ok. 18 passed; 0 failed
+box 4: src-tauri/tests/cards_10.rs::safe009_box4_a_garbled_hook_body_gets_the_neutral_answer (4 garbled bodies -> "{}") — same command — ok; test result: ok. 18 passed; 0 failed
+box 5: REAL-AGENT (not ticked)

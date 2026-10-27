@@ -31,8 +31,8 @@ Rules: Enter keeps the typed folder and Escape puts the previous one back; text 
   disk, and extra root folders the user adds, where a newly added root starts hidden), and changing
   the global choice never overwrites a repository's own choice.
 Acceptance:
-  - [ ] Browse to D:/wt → the next worktree is created at D:/wt/<repo>/<name>.
-  - [ ] Launch with KOLUX_WORKSPACES_DIR pointing at a folder → new worktrees appear in that folder.
+  - [x] Browse to D:/wt → the next worktree is created at D:/wt/<repo>/<name>. (cards; evidence/cards-SET-032.txt)
+  - [x] Launch with KOLUX_WORKSPACES_DIR pointing at a folder → new worktrees appear in that folder. (cards; evidence/cards-SET-032.txt)
 Compat: KOLUX_WORKSPACES_DIR keeps its meaning; the saved workspaces folder and the nest-per-repository
   choice carry over as they are.
 Source: D-17-032
@@ -82,8 +82,8 @@ Rules: Claude and Codex each have warnings of their own; Codex also warns when i
   (Kolux RS, T-041-b: one active Claude account serves the whole window, so the limit figures on
   screen are always that account's; there is no per-view account to filter by.)
 Acceptance:
-  - [ ] Sign Claude out from its own CLI → the page shows Claude's sign-in warning.
-  - [ ] Turn auto-resume on and restart → it is still on.
+  - [x] Sign Claude out from its own CLI → the page shows Claude's sign-in warning. (cards; evidence/cards-SET-030.txt)
+  - [x] Turn auto-resume on and restart → it is still on. (cards; evidence/cards-SET-030.txt)
 Compat: —
 Source: D-17-030
 
@@ -99,9 +99,9 @@ Rules: Classic is the default and comes first, then 16 hued themes in colour-whe
   theme, and a violet sample when no hued theme is chosen; pop-out windows share the main window's
   theme.
 Acceptance:
-  - [ ] Fresh profile → Classic is selected; click Teal → sidebar, top bar and accent colours turn
-        teal within one frame.
-  - [ ] Save an unknown theme name in the settings and start → Classic is shown and selected.
+  - [x] Fresh profile → Classic is selected; click Teal → sidebar, top bar and accent colours turn
+        teal within one frame. (cards; evidence/cards-SET-001.txt)
+  - [x] Save an unknown theme name in the settings and start → Classic is shown and selected. (cards; evidence/cards-SET-001.txt)
   - [ ] With Rose chosen, open a pop-out window → it is Rose as well.
 Compat: a saved theme imports by its name; anything other than Classic or one of the 16 hues imports
   as Classic.
@@ -116,9 +116,9 @@ Rules: tint spans −180 to +180 degrees (default 0); saturation spans 0 to 160 
   spans −3 to +6 steps (default 0); all three are greyed out while Classic is chosen; a value outside
   its span is pulled to the nearest end, and a non-numeric value falls back to its default.
 Acceptance:
-  - [ ] Choose Classic → all three sliders are disabled.
-  - [ ] Choose Moss and drag saturation to 0 → the interface goes grey; back to 100 → Moss returns.
-  - [ ] Save saturation 500 in the settings → the app uses 160; save a word instead → the app uses 100.
+  - [x] Choose Classic → all three sliders are disabled. (cards; evidence/cards-SET-002.txt)
+  - [x] Choose Moss and drag saturation to 0 → the interface goes grey; back to 100 → Moss returns. (cards; evidence/cards-SET-002.txt)
+  - [x] Save saturation 500 in the settings → the app uses 160; save a word instead → the app uses 100. (cards; evidence/cards-SET-002.txt)
 Compat: saved tint, saturation and depth numbers import, clamped to these spans.
 Source: D-17-002
 
@@ -131,9 +131,9 @@ Rules: Match is one more entry in the same picker; the scheme catalogue, the sep
   and imported schemes all stay available; the opposite direction (app colours taken from a terminal
   scheme) was suggested once, never shipped, and is not part of this card.
 Acceptance:
-  - [ ] Choose Match, then switch the app theme from Sky to Ember → open terminals recolour without
-        being reopened.
-  - [ ] Choose a catalogue scheme again → terminals stop following the app hue.
+  - [x] Choose Match, then switch the app theme from Sky to Ember → open terminals recolour without
+        being reopened. (cards; evidence/cards-SET-003.txt)
+  - [x] Choose a catalogue scheme again → terminals stop following the app hue. (cards; evidence/cards-SET-003.txt)
 Compat: —
 Source: D-17-003
 
@@ -149,7 +149,7 @@ Rules: mode, theme and app font are in place before any window draws for the fir
 Acceptance:
   - [ ] Save Dark, Cobalt and a non-default app font, restart, record the screen at 60 fps → the first
         frame is dark Cobalt in that font, with no light frame.
-  - [ ] Switch Light to Dark and back → no visible colour fade on the panels.
+  - [x] Switch Light to Dark and back → no visible colour fade on the panels. (cards; evidence/cards-SET-004.txt)
 Compat: —
 Source: D-17-004
 
@@ -161,9 +161,9 @@ User sees: the app changes at once; on System it tracks the operating system and
 Rules: System is the default; in light mode terminals use a separate light scheme by default, and the
   user can turn that off to keep a single scheme for both modes.
 Acceptance:
-  - [ ] Mode System, switch the operating system to dark while the app runs → the app turns dark with
-        no restart.
-  - [ ] Mode Light with the separate light scheme on → terminals use the light scheme.
+  - [x] Mode System, switch the operating system to dark while the app runs → the app turns dark with
+        no restart. (cards; evidence/cards-SET-005.txt)
+  - [x] Mode Light with the separate light scheme on → terminals use the light scheme. (cards; evidence/cards-SET-005.txt)
 Compat: a saved System, Light or Dark choice imports unchanged.
 Source: D-17-005
 
@@ -186,9 +186,9 @@ Rules: the pages are General, Appearance, Accounts & keys, Agents, Terminal & se
   holds the protected-action rules (area 10) and Usage holds the stats page (area 06), and this area
   only places them in the page list.
 Acceptance:
-  - [ ] Press Mod+Comma → Settings opens on the last page used, or the first.
-  - [ ] Count the pages in the side list → exactly the ten named, plus one per repository.
-  - [ ] Follow an in-app link to the shortcut policy → Shortcuts opens, scrolled to that setting.
+  - [x] Press Mod+Comma → Settings opens on the last page used, or the first. (cards; evidence/cards-SET-006.txt)
+  - [x] Count the pages in the side list → exactly the ten named, plus one per repository. (cards; evidence/cards-SET-006.txt)
+  - [x] Follow an in-app link to the shortcut policy → Shortcuts opens, scrolled to that setting. (cards; evidence/cards-SET-006.txt)
 Compat: the keybinding command id app.settings stays, with Mod+Comma as its default.
 Source: D-17-006
 
@@ -202,8 +202,8 @@ Rules: profiles that existed before the redesign stay on Classic until the user 
   Terminals, and Mod+Alt+V steps through them; in the rebuild these choices live in General instead of
   the old Views & sessions page.
 Acceptance:
-  - [ ] Existing profile → Classic; choose New → the top bar with Agents, Board and Terminals appears.
-  - [ ] Set Board as the first screen, restart with New → Board shows first.
+  - [x] Existing profile → Classic; choose New → the top bar with Agents, Board and Terminals appears. (cards; evidence/cards-SET-037.txt)
+  - [x] Set Board as the first screen, restart with New → Board shows first. (cards; evidence/cards-SET-037.txt)
 Compat: the command that steps through workspace screens keeps its old keybinding command id (written
   with a capital letter, so it is held back pending the allowlist) and Mod+Alt+V.
 Source: D-17-037
@@ -217,9 +217,9 @@ Rules: a tier left empty means the provider's default; effort choices depend on 
   model keeps the effort if it is still offered and resets it otherwise; only providers that can route
   by tier are listed.
 Acceptance:
-  - [ ] Give the fast tier a small model and run an orchestrated task on that tier → the worker's header
-        names the small model.
-  - [ ] Pick a model that has no effort levels → the effort picker disappears.
+  - [x] Give the fast tier a small model and run an orchestrated task on that tier → the worker's header
+        names the small model. (cards; evidence/cards-SET-028.txt)
+  - [x] Pick a model that has no effort levels → the effort picker disappears. (cards; evidence/cards-SET-028.txt)
 Compat: —
 Source: D-17-028
 
@@ -233,8 +233,8 @@ Rules: search looks at command titles, group names, extra keywords, command ids,
   row says whether the command still works while a terminal has focus or is held back by the terminal
   policy (SET-014); commands behind a feature flag that is off are left out.
 Acceptance:
-  - [ ] Pick the Unassigned filter → only commands without a chord are listed.
-  - [ ] Search Mod+K (or the way it is drawn on screen) → the clear-terminal command shows.
+  - [x] Pick the Unassigned filter → only commands without a chord are listed. (cards; evidence/cards-SET-008.txt)
+  - [x] Search Mod+K (or the way it is drawn on screen) → the clear-terminal command shows. (cards; evidence/cards-SET-008.txt)
 Compat: —
 Source: D-17-008
 
@@ -254,10 +254,10 @@ Rules: Esc ends recording and changes nothing; one command may hold several chor
   the terminal command that changes the system input source; every change is saved to the keybindings
   file at once, sent to every window, and used to rebuild the app menu.
 Acceptance:
-  - [ ] Record Mod+Shift+K on a command → the row shows it with a Modified badge, and the file holds
-        the entry.
-  - [ ] Press Esc while recording → the previous chord stays.
-  - [ ] Press reset → the default chord returns and the Modified badge goes away.
+  - [x] Record Mod+Shift+K on a command → the row shows it with a Modified badge, and the file holds
+        the entry. (cards; evidence/cards-SET-009.txt)
+  - [x] Press Esc while recording → the previous chord stays. (cards; evidence/cards-SET-009.txt)
+  - [x] Press reset → the default chord returns and the Modified badge goes away. (cards; evidence/cards-SET-009.txt)
 Compat: —
 Source: D-17-009
 
@@ -276,8 +276,8 @@ Rules: collisions are judged inside a scope (global, tabs, terminal, browser, ed
   short; the macOS desktop-switching warning appears only when the current keyboard layout really
   produces a digit on that key, and stays quiet otherwise.
 Acceptance:
-  - [ ] Bind Mod+P to a second global command → both rows show Conflicts.
-  - [ ] On macOS with Ctrl+digit desktop switching on, bind Ctrl+2 → the system-capture warning shows.
+  - [x] Bind Mod+P to a second global command → both rows show Conflicts. (cards; evidence/cards-SET-010.txt)
+  - [x] On macOS with Ctrl+digit desktop switching on, bind Ctrl+2 → the system-capture warning shows. (cards; evidence/cards-SET-010.txt)
 Compat: —
 Source: D-17-010
 
@@ -299,11 +299,11 @@ Rules: the file's shape is given under Compat; entries in the section for the ru
   saved for another platform does not block it), leaves other overrides alone, and changes nothing the
   second time it runs.
 Acceptance:
-  - [ ] Put terminal.clear with the value null in the keybindings map and reload → the clear-terminal
-        command shows Unassigned.
-  - [ ] Break the file's syntax and reload → an error diagnostic, the default chords work, and the
-        broken file itself stays untouched.
-  - [ ] Add a win32 section overriding a shared entry → on Windows the section's value applies.
+  - [x] Put terminal.clear with the value null in the keybindings map and reload → the clear-terminal
+        command shows Unassigned. (cards; evidence/cards-SET-011.txt)
+  - [x] Break the file's syntax and reload → an error diagnostic, the default chords work, and the
+        broken file itself stays untouched. (cards; evidence/cards-SET-011.txt)
+  - [x] Add a win32 section overriding a shared entry → on Windows the section's value applies. (cards; evidence/cards-SET-011.txt)
 Compat: `~/.kolux/keybindings.json` keeps its shape: an optional schema reference, a version number
   of 1, a keybindings map from command id to a chord string, a list of chord strings, or null or false,
   and an optional platforms object holding darwin, linux and win32 maps of the same kind. Import keeps
@@ -322,9 +322,9 @@ Rules: there are 129 commands, 78 with a chord and 51 without, among them one ne
   Session have no chord, and Ctrl+Shift+N stays with Create worktree; command ids face the user because they key the keybindings
   file, so the rebuild keeps them.
 Acceptance:
-  - [ ] Fresh profile on Windows → Alt+1 selects tab 1, Ctrl+Shift+J opens the palette, Mod+Shift+D
-        splits right.
-  - [ ] Fresh profile → the Unassigned filter lists the board, dashboard, tasks, inbox and floor views.
+  - [x] Fresh profile on Windows → Alt+1 selects tab 1, Ctrl+Shift+J opens the palette, Mod+Shift+D
+        splits right. (cards; evidence/cards-SET-013.txt)
+  - [x] Fresh profile → the Unassigned filter lists the board, dashboard, tasks, inbox and floor views. (cards; evidence/cards-SET-013.txt)
 Compat: default chords, macOS first and then Windows and Linux where they differ: quick open Mod+P;
   app.settings Mod+Comma; force reload Mod+Shift+R; worktree.palette Mod+J | Mod+Shift+J;
   workspace.create Mod+N | Mod+Shift+N; workspace.delete Mod+Shift+Backspace; select workspace by
