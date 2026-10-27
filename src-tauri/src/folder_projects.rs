@@ -87,7 +87,7 @@ pub(crate) fn folder_only(store: &Store, project: &Project) -> Option<Worktree> 
 /// One already added is handed back; a Git repository is refused (it is added the usual way).
 pub fn add_folder(store: &Store, folder: &Path) -> Result<Project, String> {
     projects::plain_folder(folder)?;
-    let mut list = projects::load_projects(store);
+    let mut list = projects::load_projects_for_write(store)?;
     if let Some(existing) = list.iter().find(|p| projects::same_folder(Path::new(&p.path), folder)) {
         return Ok(existing.clone());
     }
@@ -254,6 +254,21 @@ mod tests {
         let p = Project { id: "p".into(), name: "p".into(), path: "C:/work/p".into(), workspaces_dir: None, base: None, display_name: None };
         let dirs = session_dirs(&p, &["C:/work/p".to_string(), "C:/ws/p/a".to_string(), "C:/ws/p/a".to_string()]);
         assert_eq!(dirs, vec![PathBuf::from("C:/work/p"), PathBuf::from("C:/ws/p/a")]);
+    }
+
+    #[test]
+    fn row895_adding_a_folder_refuses_rather_than_wiping_an_unreadable_project_list() {
+        let base = temp("row895");
+        let store = store(&base);
+        let list = r#"[{"id":"keep-1","name":"keep","path":"C:/keep"},{"id":"ke"#;
+        store.set("projects", list).unwrap();
+        crate::orchestration::kept::refuse_copies(&base.join("db"));
+        let folder = base.join("notes");
+        fs::create_dir_all(&folder).unwrap();
+        assert!(add_folder(&store, &folder).is_err());
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(list), "no one-project list replaced it");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
