@@ -288,13 +288,28 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     })();
     if let Err(e) = listed {
         // Row 923: the vault goes back first, so undo's fallback copy to the live file reads the earlier credentials.
-        match prior_vault.flatten() {
-            _ if !existing => remove_sealed_copy(&vault),
+        let restored = match prior_vault.flatten() {
+            _ if !existing => {
+                remove_sealed_copy(&vault);
+                false
+            }
             Some(Some(bytes)) => restore_sealed_copy(&vault, &bytes),
-            Some(None) => remove_sealed_copy(&vault),
-            None => {}
+            Some(None) => {
+                remove_sealed_copy(&vault);
+                false
+            }
+            None => false,
+        };
+        // Row 929: with no live file and no earlier bytes put back, the live file can only hold the refused login, so it goes.
+        if existing && before.is_none() && !restored {
+            if let Err(e) = fs::remove_file(&creds) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("kolux-rs: could not delete the refused sign-in {} ({:?})", creds.display(), e.kind());
+                }
+            }
+        } else {
+            undo(&before);
         }
-        undo(&before);
         return Err(e.into());
     }
     Ok(account)
@@ -327,12 +342,16 @@ pub(crate) fn claim_new_folder(profile: &Path, folder: &str, agent: &str, listed
 
 const CLAIM_TRIES: u32 = 8;
 
-/// Row 923: puts earlier sealed bytes back through a temp file and a rename, so a crash never leaves a truncated copy; a failure is logged by path and kind only.
-fn restore_sealed_copy(path: &Path, bytes: &[u8]) {
+/// Row 923: puts earlier sealed bytes back through a temp file and a rename, so a crash never leaves a truncated copy; a failure is logged by path and kind only. True when the bytes are back.
+fn restore_sealed_copy(path: &Path, bytes: &[u8]) -> bool {
     let tmp = path.with_extension("tmp");
-    if let Err(e) = fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, path)) {
-        eprintln!("kolux-rs: could not put the sealed copy back {} ({:?})", path.display(), e.kind());
-        let _ = fs::remove_file(&tmp);
+    match fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, path)) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("kolux-rs: could not put the sealed copy back {} ({:?})", path.display(), e.kind());
+            let _ = fs::remove_file(&tmp);
+            false
+        }
     }
 }
 
@@ -874,6 +893,24 @@ mod tests {
         let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
         assert!(!vault.exists(), "no sealed copy appears");
+    }
+
+    // Row 929: no live file and no earlier sealed copy means no earlier credentials, so a refused re-sign-in leaves none live.
+    #[test]
+    fn row929_a_refused_re_sign_in_with_no_live_file_and_no_sealed_copy_leaves_no_live_file() {
+        let (dir, store) = profile("row929-none");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::remove_file(&live).unwrap();
+        fs::remove_file(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert!(!live.exists(), "the refused login is not left live");
+        assert!(!vault.exists(), "and no sealed copy appears");
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
