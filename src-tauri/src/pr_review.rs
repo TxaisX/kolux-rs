@@ -206,11 +206,13 @@ pub struct Review {
     pub threads: Vec<Thread>,
     pub talk: Vec<Comment>,
     pub talk_more: u64,
+    /// The signed-in user's login, so the panel can tell which comments are theirs to edit or delete.
+    pub viewer: String,
 }
 
 pub const COMMENT_CAP: usize = 100;
 
-const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}}}}}}}";
+const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){viewer{login} repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}}}}}}}";
 
 pub fn review_args(host: &str, owner: &str, repo: &str, number: u64) -> Vec<String> {
     ["api", "graphql", "--hostname", host, "-f", &format!("query={REVIEW_QUERY}"), "-f", &format!("o={owner}"), "-f", &format!("r={repo}"), "-F", &format!("n={number}")].iter().map(|s| s.to_string()).collect()
@@ -282,7 +284,8 @@ pub fn parse_review(text: &str, bots: &[String]) -> Result<Review, String> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Review { threads, talk: list(&pr["comments"]), talk_more: more(&pr["comments"]) })
+    let viewer = v["data"]["viewer"]["login"].as_str().unwrap_or("").to_string();
+    Ok(Review { threads, talk: list(&pr["comments"]), talk_more: more(&pr["comments"]), viewer })
 }
 
 /// A comment is sent trimmed; a blank one is never sent.
@@ -304,6 +307,9 @@ pub enum Act<'a> {
     Reply(u64, &'a str),
     Edit(u64, &'a str),
     Delete(u64),
+    /// Edit or delete a comment of the plain conversation (an issue comment, not a review comment).
+    EditTalk(u64, &'a str),
+    DeleteTalk(u64),
     Resolve(&'a str, bool),
     React(u64, &'a str),
     /// A reaction on a comment of the plain conversation (an issue comment, not a review comment).
@@ -326,6 +332,8 @@ pub fn act_args(host: &str, owner: &str, repo: &str, number: u64, act: &Act) -> 
         Act::Reply(id, t) => s(&["api", &format!("repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies"), "-f", &format!("body={}", clean_comment(t)?)]),
         Act::Edit(id, t) => s(&["api", "-X", "PATCH", &format!("repos/{owner}/{repo}/pulls/comments/{id}"), "-f", &format!("body={}", clean_comment(t)?)]),
         Act::Delete(id) => s(&["api", "-X", "DELETE", &format!("repos/{owner}/{repo}/pulls/comments/{id}")]),
+        Act::EditTalk(id, t) => s(&["api", "-X", "PATCH", &format!("repos/{owner}/{repo}/issues/comments/{id}"), "-f", &format!("body={}", clean_comment(t)?)]),
+        Act::DeleteTalk(id) => s(&["api", "-X", "DELETE", &format!("repos/{owner}/{repo}/issues/comments/{id}")]),
         Act::Resolve(thread, on) => {
             let name = if *on { "resolveReviewThread" } else { "unresolveReviewThread" };
             s(&["api", "graphql", "-f", &format!("query=mutation($t:ID!){{{name}(input:{{threadId:$t}}){{thread{{isResolved}}}}}}"), "-f", &format!("t={thread}")])
@@ -441,7 +449,7 @@ pub async fn scm_review_read(worktree: String, url: String, bots: Vec<String>) -
 }
 
 /// GIT-030: add, reply, edit, delete, resolve or react; every change lands on GitHub.
-/// `kind` is comment, reply, edit, delete, resolve, unresolve, react, react_talk or unreact (id is the node id, text the reaction).
+/// `kind` is comment, reply, edit, delete, edit_talk, delete_talk, resolve, unresolve, react, react_talk or unreact (id is the node id, text the reaction).
 #[tauri::command]
 pub async fn scm_review_act(worktree: String, url: String, kind: String, id: String, text: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -453,6 +461,8 @@ pub async fn scm_review_act(worktree: String, url: String, kind: String, id: Str
             "reply" => Act::Reply(num()?, &t),
             "edit" => Act::Edit(num()?, &t),
             "delete" => Act::Delete(num()?),
+            "edit_talk" => Act::EditTalk(num()?, &t),
+            "delete_talk" => Act::DeleteTalk(num()?),
             "resolve" => Act::Resolve(&id, true),
             "unresolve" => Act::Resolve(&id, false),
             "react" => Act::React(num()?, &t),
@@ -775,6 +785,15 @@ mod tests {
     }
 
     #[test]
+    fn git_030_the_review_names_the_signed_in_viewer() {
+        let one = "{\"data\":{\"viewer\":{\"login\":\"Ann\"},\"repository\":{\"pullRequest\":{\"comments\":{\"totalCount\":0,\"nodes\":[]},\"reviewThreads\":{\"nodes\":[]}}}}}";
+        assert_eq!(parse_review(one, &[]).unwrap().viewer, "Ann");
+        assert!(REVIEW_QUERY.contains("viewer{login}"));
+        let none = one.replace("\"viewer\":{\"login\":\"Ann\"},", "");
+        assert_eq!(parse_review(&none, &[]).unwrap().viewer, "");
+    }
+
+    #[test]
     fn a_blank_comment_is_never_sent_and_the_text_is_trimmed_first() {
         assert!(act_args("h.com", "o", "r", 7, &Act::Comment("   \n ")).is_err());
         assert!(act_args("h.com", "o", "r", 7, &Act::Reply(5, "")).is_err());
@@ -788,6 +807,9 @@ mod tests {
         assert_eq!(a(Act::Comment("hi"))[3], "repos/o/r/issues/7/comments");
         assert_eq!(a(Act::Edit(5, "x")), ["api", "--hostname", "h.com", "-X", "PATCH", "repos/o/r/pulls/comments/5", "-f", "body=x"]);
         assert_eq!(a(Act::Delete(5)), ["api", "--hostname", "h.com", "-X", "DELETE", "repos/o/r/pulls/comments/5"]);
+        assert_eq!(a(Act::EditTalk(6, " y ")), ["api", "--hostname", "h.com", "-X", "PATCH", "repos/o/r/issues/comments/6", "-f", "body=y"]);
+        assert_eq!(a(Act::DeleteTalk(6)), ["api", "--hostname", "h.com", "-X", "DELETE", "repos/o/r/issues/comments/6"]);
+        assert!(act_args("h.com", "o", "r", 7, &Act::EditTalk(6, "  ")).is_err());
         let resolve = a(Act::Resolve("T1", true));
         assert!(resolve[5].contains("resolveReviewThread") && resolve[7] == "t=T1");
         assert!(a(Act::Resolve("T1", false))[5].contains("unresolveReviewThread"));

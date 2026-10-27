@@ -18,7 +18,13 @@
 .cm-link { border: 0; background: none; color: var(--fg-label, inherit); font: inherit; font-size: 11px; padding: 0; cursor: pointer; text-decoration: underline; opacity: 0; }
 .cm-comment:hover .cm-link, .cm-link:focus-visible { opacity: 1; }
 .cm-time { color: var(--fg-label, inherit); margin-left: auto; }
-.cm-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cm-body { overflow-wrap: anywhere; }
+.cm-body .md p { margin: 0 0 6px; white-space: pre-wrap; }
+.cm-body .md-h { font-size: 14px; margin-bottom: 4px; }
+.cm-body .md code, .cm-body .md-code { font-size: 12px; }
+.cm-body .md-code { overflow-x: auto; padding: 6px; border-radius: 6px; background: rgba(128, 128, 128, 0.15); margin: 0 0 6px; }
+.cm-body .md blockquote { margin: 0 0 6px; padding-left: 10px; border-left: 3px solid var(--line-subtle); opacity: 0.85; }
+.cm-body .md ul, .cm-body .md ol { margin: 0 0 6px; padding-left: 20px; }
 .cm-reactions { position: relative; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .cm-react { border: 1px solid var(--line-subtle); border-radius: 10px; background: none; color: inherit; font: inherit; font-size: 12px; padding: 0 6px; cursor: pointer; }
 .cm-react.mine { border-color: var(--line-focus); }

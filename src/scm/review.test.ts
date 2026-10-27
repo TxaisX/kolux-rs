@@ -156,3 +156,17 @@ it("GIT-030: pressing a reaction you gave takes it back by the comment's node id
   expect(reactionCall(c, { content: "+1", count: 1, mine: false }, false)).toEqual({ kind: "react_talk", id: "42", text: "+1" });
   expect(reactionCall({ ...c, db_id: null }, { content: "+1", count: 1, mine: false }, true)).toBeNull();
 });
+
+import { ownCall } from "./review";
+
+it("GIT-030: only your own comments can be edited or deleted, each by the call that fits where it sits", () => {
+  const c = { author: "Ann", db_id: 7 };
+  expect(ownCall(c, "ann", true, "edit")).toEqual({ kind: "edit", id: "7" });
+  expect(ownCall(c, "ann", false, "edit")).toEqual({ kind: "edit_talk", id: "7" });
+  expect(ownCall(c, "ANN", true, "delete")).toEqual({ kind: "delete", id: "7" });
+  expect(ownCall(c, "ann", false, "delete")).toEqual({ kind: "delete_talk", id: "7" });
+  expect(ownCall(c, "bob", true, "edit")).toBeNull();
+  expect(ownCall(c, "", true, "edit")).toBeNull();
+  expect(ownCall(c, undefined, true, "delete")).toBeNull();
+  expect(ownCall({ ...c, db_id: null }, "ann", true, "edit")).toBeNull();
+});
