@@ -84,15 +84,21 @@ fn chosen_root(store: &Store, project: &Project) -> Option<String> {
     Some(Path::new(&project.path).join(dir).display().to_string())
 }
 
+/// The choices for a listing, which only reads: when they cannot be read or first made (an unreadable
+/// record the keep-aside could not copy, or a refused first-use save), external worktrees stay hidden.
+/// Only this log line says so; no settings notice covers it (by design, coordinator default).
+fn read_choices(store: &Store) -> Value {
+    ensure(store, &crate::projects::load_projects(store)).unwrap_or_else(|e| {
+        eprintln!("kolux-rs: the worktree visibility choices could not be read or created ({e}); worktrees made outside Kolux stay hidden until that works");
+        Value::Null
+    })
+}
+
 /// Lays kind, source and visibility over Git's list and drops tools' scratch worktrees: those under
 /// a dot-folder of the main checkout other than Claude Code's, unless the user's own workspaces
 /// folder holds them.
 pub fn apply(store: &Store, project: &Project, hidden_by_hand: &Map<String, Value>, list: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
-    // A listing only reads: an unreadable record hides external worktrees and is never saved over.
-    let v = ensure(store, &crate::projects::load_projects(store)).unwrap_or_else(|e| {
-        eprintln!("kolux-rs: {e}; external worktrees stay hidden");
-        Value::Null
-    });
+    let v = read_choices(store);
     let extra = roots(&v);
     let chosen = chosen_root(store, project);
     // The scratch folders sit in the main checkout even when the project is a linked worktree (PROJ-006).
@@ -135,7 +141,7 @@ pub fn apply(store: &Store, project: &Project, hidden_by_hand: &Map<String, Valu
 
 /// The sources with their global choice and, for `project`, its own.
 pub fn sources(store: &Store, project: Option<&Project>) -> Vec<Source> {
-    let v = ensure(store, &crate::projects::load_projects(store)).unwrap_or(Value::Null);
+    let v = read_choices(store);
     let mut out = vec![(CLAUDE.to_string(), "Made by Claude Code".to_string(), None), (GSD.to_string(), "Made by GSD".to_string(), None), (OTHER.to_string(), "Elsewhere on disk".to_string(), None)];
     out.extend(roots(&v).into_iter().map(|r| (root_key(&r), r.clone(), Some(r))));
     out.into_iter()
