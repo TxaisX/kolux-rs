@@ -185,7 +185,8 @@ function keptEnds(loose: string, prev: string, out: string, whole: boolean): [st
 // (in document order, each keyed by its depth and first line) and the code blocks that the edit's own span leaves alone must read the same.
 type Entry = { key: string; shape: string; blankBefore: boolean | null; s: number; e: number };
 // Round 8: a list as marked reads it (loose = a blank line between its items or between blocks of one item), keyed by depth and first item.
-type ListEntry = { key: string; loose: boolean; items: string };
+// `indents`: each item line's own indent (an edit that moves an item line takes the gap above it along).
+type ListEntry = { key: string; loose: boolean; items: string; indents: string };
 
 /** Emphasis spelt with _ or * is one spelling: an item respelt by the save is still the same item. */
 const spell = (t: string) => t.replace(/_/g, "*");
@@ -201,10 +202,11 @@ function listEntries(src: string): { items: Entry[]; codes: string[]; lists: Lis
       const where = md.indexOf(t.raw, at);
       const s = where < 0 ? at : where;
       if (where >= 0) at = where + t.raw.length;
-      if (t.type === "code") codes.push((t as { text: string }).text.trimEnd());
+      // Round 9: marked reads `*     text` as an item holding code where the view reads an item with emphasis, so `__a__` and `**a**` are one spelling here too.
+      if (t.type === "code") codes.push(spell((t as { text: string }).text.trimEnd()).replace(/\*\*/g, "*"));
       if (t.type === "list") {
         const its = (t as { items: (Token & { text: string; tokens: Token[]; task?: boolean; checked?: boolean })[] }).items;
-        lists.push({ key: depth + "|" + spell(its[0]?.text.split("\n")[0].trim() ?? ""), loose: !!(t as { loose?: boolean }).loose, items: its.map((x) => spell(x.text.split("\n")[0].trim())).join("\n") });
+        lists.push({ key: depth + "|" + spell(its[0]?.text.split("\n")[0].trim() ?? ""), loose: !!(t as { loose?: boolean }).loose, items: its.map((x) => spell(x.text.split("\n")[0].trim())).join("\n"), indents: its.map((x) => /^[ \t]*/.exec(x.raw)![0].length).join(",") });
         let cur = s;
         its.forEach((it, i) => {
           const w = md.indexOf(it.raw, cur);
@@ -306,7 +308,7 @@ function structureProblem(body: string, saved: string, prev: string, out: string
     // The view spells a list loose where the file has it tight (a `1)` list): its own spelling binds nothing.
     if (v.loose && !was.lists[a].loose) continue;
     // A list that lost, gained or changed items can lose or gain its looseness with them (the gap was theirs): only an unchanged item run binds.
-    if (was.lists[a].items === now.lists[b].items && was.lists[a].loose !== now.lists[b].loose) return `list ${a} ${JSON.stringify(was.lists[a].key)} was ${was.lists[a].loose ? "loose" : "tight"}, the save made it ${now.lists[b].loose ? "loose" : "tight"}`;
+    if (was.lists[a].items === now.lists[b].items && was.lists[a].indents === now.lists[b].indents && was.lists[a].loose !== now.lists[b].loose) return `list ${a} ${JSON.stringify(was.lists[a].key)} was ${was.lists[a].loose ? "loose" : "tight"}, the save made it ${now.lists[b].loose ? "loose" : "tight"}`;
   }
   return null;
 }

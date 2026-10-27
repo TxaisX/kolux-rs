@@ -34,7 +34,8 @@ export function richChange(now: string, out: string, prev?: string, refused?: ()
   if (!c0) return null;
   // Round 9 (LOW-2): a span that ends between a CR and its LF (the LF is kept) in a note of CRLF line ends gives the CR back.
   const split = c0.to > c0.from && body[c0.to] === "\n" && body[c0.to - 1] === "\r" && !c0.insert.endsWith("\r") && !/(^|[^\r])\n/.test(now);
-  const c = split ? { ...c0, insert: c0.insert + "\r" } : c0;
+  // Code lines keep their CR in the view: the CR goes back only where the view reads the result as it read `next`.
+  const c = split && same(body.slice(0, c0.from) + c0.insert + "\r" + body.slice(c0.to), next) ? { ...c0, insert: c0.insert + "\r" } : c0;
   const crlf = inFileEnds(now, body[c.from - 1], c.insert);
   // Code lines keep their CR in the view, so the CRLF spelling is used only where the view reads it as it read the added lines.
   const insert = crlf !== c.insert && same(body.slice(0, c.from) + crlf + body.slice(c.to), next) ? crlf : c.insert;
@@ -334,8 +335,7 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
     const cut = blankAbove(next, ns[j]);
     if (cut < 0) return null;
     if (g.parent === undefined) {
-      // Round 9 (HIGH-1): only when the edit made it so; a lazy line already reads as the parent's text in the file's own gap.
-      if (noSiblingAbove(next, ns[j]) && !noSiblingAbove(tight.text, ts[g.item])) continue;
+      if (noSiblingAbove(next, ns[j])) continue;
     } else if (lineAbove(next, ns[j]) !== ns[fp === "before" ? g.parent : g.parent + dn]) return null; // the parent is no longer right above
     kept.push({ at: ns[j] - cut, raw: g.raw, item: j, cut });
   }
@@ -358,21 +358,37 @@ function lineAbove(text: string, at: number): number {
 /** Round 8 (NEW-HIGH-1): whether the nested item line at `at` has no sibling above it any more (the edit deleted them), so it now sits
  *  right under its parent's text; a gap kept there would loosen the parent's list. */
 function noSiblingAbove(text: string, at: number): boolean {
-  const m = ITEM.exec(text.slice(at, at + 40));
-  const w = m ? width(m[1]) : 0;
-  if (!w) return false;
+  const own = ITEM.exec(text.slice(at, at + 40));
+  const me = own && { w: width(own[1]), k: kind(own) };
+  if (!me?.w) return false;
   for (let end = at; end > 0; ) {
     const start = text.lastIndexOf("\n", end - 2) + 1;
     const line = text.slice(start, end);
     end = start;
-    if (/^[ \t]*\r?\n?$/.test(line)) continue;
-    const above = width(/^[ \t]*/.exec(line)![0]);
-    if (above < w) return true;
-    const sibling = above === w ? ITEM.exec(line) : null;
+    // Round 9 (HIGH-1): a text line (a lazy continuation) is no item; the siblings are read past it.
+    const levels = itemLevels(line);
+    if (!levels.length) continue;
     // Round 9 (HIGH-2): an item of another marker (`*` then `-`, `1.` then `-`) starts a list of its own, so it is no sibling.
-    if (sibling) return !m || kind(sibling) !== kind(m);
+    const level = levels.find((l) => l.w === me.w);
+    if (level) return level.k !== me.k;
+    if (levels[0].w < me.w) return true;
   }
   return false;
+}
+
+/** Round 9: the items a line opens, outermost first (`- - n1` opens one at column 0 and one at column 2): column and kind; none for a text line. */
+function itemLevels(line: string): { w: number; k: string }[] {
+  const levels: { w: number; k: string }[] = [];
+  let at = 0;
+  let col = 0;
+  for (;;) {
+    const m = /^([ \t]*)([-*+]|\d+[.)])[ \t]/.exec(line.slice(at));
+    if (!m) return levels;
+    const w = col + width(m[1]);
+    levels.push({ w, k: kind(m) });
+    col = w + m[2].length + 1;
+    at += m[0].length;
+  }
 }
 
 /** Whether the items around the edit read the same loose as tight: a table or HTML line after an item can start a block

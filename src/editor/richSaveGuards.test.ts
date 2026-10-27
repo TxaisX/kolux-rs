@@ -535,6 +535,12 @@ describe("round 9", () => {
       }
       expect(edit(b + P, "Tail", "TailX").refused).toBe(0);
     });
+    it("deleting the siblings above a lazy line still drops the gap below it (the parent's list stays tight)", () => {
+      const b = "- a 0\n  - n1\n  - n2\nlazy\n\n  - n3\n- b\n" + P;
+      const { next, refused } = edit(b, "    - n1\n    - n2 lazy\n", "");
+      expect(refused).toBe(0);
+      expect((marked.lexer(next)[0] as unknown as { loose: boolean }).loose).toBe(false);
+    });
   });
 
   describe("HIGH-2: a sub-list of another marker is not a sibling above", () => {
