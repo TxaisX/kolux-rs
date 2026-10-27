@@ -88,7 +88,7 @@ export const overlayOf = (h: Health): Overlay => (h.phase === "failed" || h.phas
 /** The back end's look at why an address failed (`browser_diagnose`). `https` is the same
  *  address over https when the switch makes sense (BROW-008: a failed http address, nothing but
  *  the scheme changed), `local` says the address is this computer's. */
-export type Kind = "unknown-host" | "refused" | "timeout" | "unreachable" | "certificate" | "unknown";
+export type Kind = "unknown-host" | "refused" | "timeout" | "unreachable" | "certificate" | "unknown" | "skipped";
 export type Diagnosis = { kind: Kind; local: boolean; https: string | null };
 
 /** T-158 (BROW-024): `browser_cert`'s answer for an address in this tab. `offer` is true only while
@@ -130,7 +130,7 @@ export function overlayModel(overlay: NonNullable<Overlay>, diag: Diagnosis | nu
     return { title: "This page stopped responding", text: "Kolux reloaded it once and it did not come back.", advice: null, switchHttps: null, openExternally: /^https?:/i.test(overlay.url) && handler !== false };
   }
   if (!diag) return { title: "This page could not load", text: `${host} did not give Kolux a page.`, advice: null, switchHttps: null, openExternally: false };
-  const reachable = diag.kind === "certificate" || diag.kind === "unknown";
+  const reachable = diag.kind === "certificate" || diag.kind === "unknown" || diag.kind === "skipped";
   const switchHttps = diag.kind === "unknown-host" ? null : diag.https;
   const local = diag.local ? "If this is your own server, start it, then press Retry." : null;
   const text = {
@@ -140,6 +140,8 @@ export function overlayModel(overlay: NonNullable<Overlay>, diag: Diagnosis | nu
     unreachable: `${host} cannot be reached from this computer.`,
     certificate: `${host} showed a certificate Kolux does not trust, so the page stays blocked. Certificate checking stays strict.`,
     unknown: `${host} did not give Kolux a page.`,
+    // T-323-d: a saved proxy means Kolux makes no check of its own, so it cannot say why.
+    skipped: `${host} did not give Kolux a page. Kolux did not look into why, because a proxy is saved.`,
   }[diag.kind];
-  return { title: "This page could not load", text, advice: diag.kind === "certificate" ? null : local, switchHttps, openExternally: reachable && handler !== false };
+  return { title: "This page could not load", text, advice: diag.kind === "certificate" || diag.kind === "skipped" ? null : local, switchHttps, openExternally: reachable && handler !== false };
 }

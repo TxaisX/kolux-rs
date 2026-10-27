@@ -49,7 +49,7 @@ const LIMITS: [RegExp, string][] = [
   [/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "front matter"],
   [/<!--/, "HTML comments"],
   [/!\[[^\]]*\]\(/, "images"],
-  [/^ {0,3}\[[^\]^]+\]:\s/m, "reference links"],
+  [/^ {0,3}\[[^\]^\n]+\]:\s/m, "reference links"],
   [/\[\^[^\]]+\]/, "footnotes"],
   [/^ {0,3}([-*_])( *\1){2,} *$/m, "horizontal rules"],
   [/^ {0,3}\S.*\r?\n {0,3}(=+|-+) *$/m, "underlined headings"],
@@ -67,7 +67,9 @@ export function limitsOf(md: string): string[] {
 }
 
 /** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
-export function unsupported(md: string): string | null {
+export function unsupported(source: string): string | null {
+  // Round 9 (MEDIUM-1): the round trip gives LF, so a CRLF note is read as its LF self (a tag split over lines must match what comes back).
+  const md = source.replace(/\r\n/g, "\n");
   const hit = limitsOf(md);
   if (hit.length) return hit[0];
   const prose = withoutCode(md);
@@ -86,6 +88,9 @@ const withoutCode = (md: string): string => withoutSections(md.replace(/^ {0,3}(
 
 const HTML_TAG = /<\/?[a-z][\w-]*(\s[^<>]*)?\/?>/gi;
 
+/** The HTML tags `md` shows as typed (code left out): the tag rule of `unsupported`, as the strings a placement must not add. */
+export const htmlTagsOf = (md: string): string[] => [...new Set(withoutCode(md).match(HTML_TAG) ?? [])];
+
 const words = (s: string) => (s.match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
 
 /** The markdown the rich view would write back for this text (null when Lexical fails on it). */
@@ -98,6 +103,11 @@ export function roundTrip(md: string): string | null {
     return null;
   }
 }
+
+export const WORD = /[\p{L}\p{N}]+/gu;
+
+export type Span = { s: number; e: number };
+export const wordSpans = (text: string): Span[] => Array.from(text.matchAll(WORD), (m) => ({ s: m.index, e: m.index + m[0].length }));
 
 /** The one replacement that turns `a` into `b`: the span between their common start and end. */
 export function changeBetween(a: string, b: string): { from: number; to: number; insert: string } | null {

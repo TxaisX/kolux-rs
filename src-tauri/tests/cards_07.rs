@@ -258,7 +258,7 @@ fn acct007_box1_connect_with_a_code_shows_the_code_then_reads_connected() {
     assert_eq!(&argv[1..], ["login", "--device-auth"]);
     let shown = Arc::default();
     let started = Instant::now();
-    let account = cx::sign_in(&store, &dir, "c1", NOW, codex_login(&program, true, Arc::clone(&shown))).unwrap();
+    let account = cx::sign_in(&store, &dir, "c1", false, NOW, codex_login(&program, true, Arc::clone(&shown))).unwrap();
     let shown = shown.lock().unwrap();
     assert_eq!(shown.len(), 1, "the view got one link-and-code pair, only once both were printed: {shown:?}");
     assert_eq!((shown[0].0.as_str(), shown[0].1.as_str()), ("https://auth.example.com/codex/device", "WXYZ-6789"));
@@ -309,7 +309,7 @@ fn acct007_box2_adding_a_second_account_leaves_the_users_codex_folder_byte_for_b
     // Two accounts are added; each then gets what a pane launch gives its home (the user's skills and settings are copied in).
     for (n, id) in ["c1", "c2"].into_iter().enumerate() {
         assert!(!cx::user_custom_provider(Some(user.to_str().unwrap()), None), "the add checks the user's settings by reading only");
-        let account = cx::sign_in(&store, &dir, id, NOW + n as i64, codex_login(&program, false, Arc::default())).unwrap();
+        let account = cx::sign_in(&store, &dir, id, false, NOW + n as i64, codex_login(&program, false, Arc::default())).unwrap();
         let home = Path::new(&account.home);
         cx::share_user_files(&user, home, Instant::now() + Duration::from_secs(5)).unwrap();
         cx::sync_settings(&user, home).unwrap();
@@ -524,7 +524,7 @@ fn acct002_box1_codex_connect_goes_to_browser_step_then_connected_with_the_accou
             false
         })
     };
-    let account = cx::sign_in(&store, &dir, "c1", NOW, codex_browser_login(&program, never(), in_browser)).unwrap();
+    let account = cx::sign_in(&store, &dir, "c1", false, NOW, codex_browser_login(&program, never(), in_browser)).unwrap();
     done.store(true, Ordering::SeqCst);
     assert!(watcher.join().unwrap(), "the browser step was on show before the sign-in file existed");
     assert_eq!(account.email.as_deref(), Some("kim@example.com"), "the account label is the email");
@@ -554,7 +554,7 @@ fn acct002_box2_cancel_while_connecting_ends_the_process_and_keeps_no_partial_ac
         press.store(true, Ordering::SeqCst);
     });
     let started = Instant::now();
-    let err = cx::sign_in(&store, &dir, "c1", NOW, codex_browser_login(&program, cancel, in_browser)).unwrap_err();
+    let err = cx::sign_in(&store, &dir, "c1", false, NOW, codex_browser_login(&program, cancel, in_browser)).unwrap_err();
     pressed.join().unwrap();
     assert_eq!(err.reason, "cancelled");
     assert!(started.elapsed() < Duration::from_secs(8), "the sign-in stopped at Cancel, it did not run to its own end");
