@@ -276,10 +276,11 @@ fn stat_015_kimi_file_kolux_created_goes_and_its_script_prints_nothing() {
 fn t_121_rows_name_each_agent() {
     let home = scratch("rows");
     let rows = rows(&home);
-    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi", "copilot", "grok", "devin", "pi", "hermes"]);
+    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "command-code", "kimi", "copilot", "grok", "devin", "pi", "hermes"]);
     assert!(rows.iter().all(|r| r["state"] == "not installed"));
     install_cursor(&home, &cursor_file(&home)).unwrap();
     install_droid(&home, &droid_file(&home)).unwrap();
+    install_command_code(&home, &command_code_file(&home)).unwrap();
     install_kimi(&home, &kimi_file(&home)).unwrap();
     install_copilot(&home, &copilot_file(&home)).unwrap();
     super::grok::install(&home, &super::grok::file(&home)).unwrap();
@@ -495,4 +496,83 @@ fn stat_012_cursor_permission_events_stay_mapped_for_older_files() {
         let e = normalize_with(&mut m, "/cursor", &json!({"hook_event_name":event,"conversation_id":"c1","tool_name":"search","command":"ls"})).unwrap();
         assert_eq!(e["hook_event_name"], "PreToolUse", "{event}");
     }
+}
+
+#[test]
+fn stat_014_command_code_tool_events_are_working_and_stop_is_done() {
+    let (mut s, mut m) = (Session::default(), Memory::default());
+    let p = "/command-code";
+    assert_eq!(agent_of(p), Some("command-code"));
+    assert_eq!(normalize_with(&mut m, p, &json!({"hook_event_name":"SessionStart","session_id":"x1"})), None, "session start fires while idle and is not hooked");
+    assert_eq!(state(&mut s, &mut m, p, json!({"hook_event_name":"PreToolUse","session_id":"x1","tool_name":"shell_command","tool_input":{"command":"ls"}})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, p, json!({"hook_event_name":"PostToolUse","session_id":"x1","tool_name":"shell_command"})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, p, json!({"hook_event_name":"Stop","session_id":"x1"})), Some("done"));
+    assert_eq!(s.resolved(), "done");
+}
+
+#[test]
+fn stat_014_command_code_install_writes_three_groups_and_keeps_the_users_and_removal_takes_only_kolux() {
+    let home = scratch("command-code");
+    let file = command_code_file(&home);
+    assert_eq!(file, home.join(".commandcode").join("settings.json"));
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{\n  \"theme\": \"dark\",\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"./done.sh\"\n          }\n        ]\n      }\n    ]\n  }\n}\n";
+    fs::write(&file, original).unwrap();
+    assert!(install_command_code(&home, &file).unwrap());
+    let v: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(v["theme"], "dark");
+    let mut keys: Vec<&str> = v["hooks"].as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["PostToolUse", "PreToolUse", "Stop"], "exactly the three events, not SessionStart");
+    assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "./done.sh", "the user's group stays first");
+    for e in COMMAND_CODE_EVENTS {
+        let mine: Vec<&Value> = v["hooks"][e].as_array().unwrap().iter().filter(|g| g["hooks"].as_array().is_some_and(|h| h.iter().any(names_mine))).collect();
+        assert_eq!(mine.len(), 1, "{e}");
+        assert_eq!(mine[0]["hooks"][0]["type"], "command", "{e}");
+        assert_eq!(mine[0]["hooks"][0]["timeout"], 10, "{e}");
+    }
+    assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], "*");
+    assert!(home.join(SCRIPT_DIR_FOR_TESTS).join(COMMAND_CODE_SCRIPT).is_file());
+    assert!(!install_command_code(&home, &file).unwrap(), "a second install changes nothing");
+    assert_eq!(inspect_command_code(&file), ("installed", None));
+    // The user adds a group of their own after the install; removal takes only Kolux's.
+    let mut edited = v.clone();
+    edited["hooks"]["PostToolUse"].as_array_mut().unwrap().push(json!({ "hooks": [{ "type": "command", "command": "./after.sh" }] }));
+    fs::write(&file, serde_json::to_string_pretty(&edited).unwrap()).unwrap();
+    assert!(remove_command_code(&home, &file).unwrap());
+    let w: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(w["hooks"]["Stop"][0]["hooks"][0]["command"], "./done.sh");
+    assert_eq!(w["hooks"]["PostToolUse"][0]["hooks"][0]["command"], "./after.sh");
+    assert!(w["hooks"].get("PreToolUse").is_none(), "an event Kolux alone held goes");
+    assert!(![&w["hooks"]["Stop"], &w["hooks"]["PostToolUse"]].iter().any(|l| l.as_array().unwrap().iter().any(|g| g["hooks"].as_array().unwrap().iter().any(names_mine))));
+    assert_eq!(inspect_command_code(&file).0, "not installed");
+    assert!(!remove_command_code(&home, &file).unwrap());
+}
+
+#[test]
+fn stat_014_command_code_untouched_file_comes_back_byte_for_byte_and_a_bad_shape_is_left_alone() {
+    let home = scratch("command-code-bytes");
+    let file = command_code_file(&home);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let original = "{\n  \"theme\": \"dark\"\n}\n";
+    fs::write(&file, original).unwrap();
+    assert!(install_command_code(&home, &file).unwrap());
+    assert!(remove_command_code(&home, &file).unwrap());
+    assert_eq!(read(&file), original);
+    for bad in ["[1]", "{\"hooks\": 3}", "{\"hooks\": {\"Stop\": {}}}", "not json"] {
+        fs::write(&file, bad).unwrap();
+        assert!(install_command_code(&home, &file).unwrap_err().contains("left alone"), "{bad}");
+        assert_eq!(read(&file), bad);
+    }
+}
+
+/// A Command Code hook with no output means no opinion and the tool proceeds; the script prints
+/// nothing, so Kolux can never answer a PreToolUse with a block.
+#[test]
+fn stat_014_command_code_script_prints_nothing_so_a_pre_tool_use_is_never_blocked() {
+    let home = scratch("command-code-script");
+    install_command_code(&home, &command_code_file(&home)).unwrap();
+    let written = read(&home.join(SCRIPT_DIR_FOR_TESTS).join(COMMAND_CODE_SCRIPT));
+    assert_eq!(written, script("command-code", "command-code", false));
+    assert_ne!(written, script("command-code", "command-code", true), "the printing variant differs, and Command Code gets the silent one");
 }

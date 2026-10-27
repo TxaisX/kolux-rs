@@ -43,7 +43,8 @@ fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
     assert_eq!(plan(&none, &ids(&["copilot"]), true)[8], ("copilot", Plan::Install), "T-122: and Copilot CLI");
     assert_eq!(plan(&none, &ids(&["grok", "devin"]), true)[9..11], [("grok", Plan::Install), ("devin", Plan::Install)], "T-122: and Grok and Devin");
     assert_eq!(plan(&none, &ids(&["pi"]), true)[11..12], [("pi", Plan::Install)], "T-122: and Pi (STAT-021)");
-    assert_eq!(plan(&none, &ids(&["hermes"]), true)[12..], [("hermes", Plan::Install)], "T-121: and Hermes (STAT-016)");
+    assert_eq!(plan(&none, &ids(&["hermes"]), true)[12..13], [("hermes", Plan::Install)], "T-121: and Hermes (STAT-016)");
+    assert_eq!(plan(&none, &ids(&["command-code"]), true)[13..], [("command-code", Plan::Install)], "STAT-014: and Command Code");
     let off = json!({ "agentStatusHooks": true, "disabledAgents": ["codex"] });
     assert_eq!(plan(&off, &ids(&["claude", "codex"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
     assert_eq!(plan(&off, &[], false)[..2], [("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");
