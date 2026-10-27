@@ -50,6 +50,20 @@ fn strip(args: &str, switches: &[&str]) -> String {
     args.split_whitespace().filter(|a| !switches.contains(&a.split('=').next().unwrap_or_default())).collect::<Vec<_>>().join(" ")
 }
 
+/// What a tab is built with: its browser arguments and the address for the builder's `proxy_url`.
+/// Windows: the proxy rides in the arguments (wry ignores `proxy_url` beside them) and the folder's
+/// engine must agree. Elsewhere wry reads only `proxy_url`, so the arguments stay the window's and
+/// the saved address goes to the builder exactly as `proxy_of` gave it. On every OS an address the
+/// engine cannot take (credentials, a path) is refused here, before anything loads.
+pub fn tab_setup(launch: &str, folder: &str, saved: Option<&Url>) -> Result<(String, Option<Url>), String> {
+    let args = tab_browser_args(&without_proxy(launch), saved)?;
+    if !cfg!(windows) {
+        return Ok((launch.to_string(), saved.cloned()));
+    }
+    admit(folder, (folder == DEFAULT_FOLDER).then_some(launch), &args)?;
+    Ok((args, None))
+}
+
 /// `args` without any `--proxy-server` switch.
 pub fn without_proxy(args: &str) -> String {
     strip(args, &["--proxy-server"])
@@ -182,6 +196,24 @@ mod tests {
         assert_eq!(e.admit("p1", "--a --proxy-server=http://y:2"), Verdict::Refuse, "the setting changed");
         assert_eq!(e.admit("p1", "--a"), Verdict::Refuse, "the proxy was cleared");
         assert_eq!(e.admit("p1", "--a --proxy-server=http://x:1"), Verdict::Open, "tabs already open keep the old proxy: the record did not move");
+    }
+
+    #[test]
+    fn row939_tab_setup_refuses_credentials_on_every_os_and_hands_the_builder_the_proxy_of_address() {
+        for saved in ["http://me:pw@127.0.0.1:8080", "http://127.0.0.1:8080/pac"] {
+            assert!(tab_setup(BASE, "t939-setup-refuse", Some(&url(saved))).is_err(), "{saved}");
+        }
+        let given = crate::browser::proxy_of(Some("socks5://proxy.test:1080")).unwrap();
+        let (args, for_builder) = tab_setup(BASE, "t939-setup-a", given.as_ref()).unwrap();
+        if cfg!(windows) {
+            assert_eq!(for_builder, None, "wry drops it beside browser arguments, so it rides in them");
+            assert_eq!(args, format!("{BASE} --proxy-server=socks5://proxy.test:1080"));
+        } else {
+            assert_eq!(for_builder, given, "the builder gets the address proxy_of returned");
+            assert_eq!(args, BASE, "the arguments are the window's, as before row 939");
+        }
+        let (args, for_builder) = tab_setup(BASE, "t939-setup-b", None).unwrap();
+        assert_eq!((args.as_str(), for_builder), (BASE, None), "no proxy: nothing added anywhere");
     }
 
     #[test]

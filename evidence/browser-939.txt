@@ -6,7 +6,7 @@ ROOT CAUSE
 
 FIX
 - src-tauri/src/browser_proxy.rs (browser::proxy): `tab_browser_args(base, proxy)` puts exactly one `--proxy-server=` into the tab's argument string (an existing one, or `--no-proxy-server`, is replaced); `proxy_flag` refuses credentials (CREDENTIALS_REFUSED), a path/query/fragment (SHAPE_REFUSED), and states the default port (http 80, socks5 1080). `Envs`/`admit`: each data folder's first argument string is kept (first open wins); a tab whose string differs is refused (CHANGED_REFUSED), never opened direct. The default folder is seeded with the main window's launch string.
-- browser.rs browser_open: the tab passes `tab_browser_args(without_proxy(browser_args_now()), saved proxy)` after `admit`; `.proxy_url()` is gone (it did nothing on Windows). With a refusal the tab's profile page count is released.
+- browser.rs browser_open: `proxy::tab_setup(launch, folder, saved)` returns the tab's args and the address for `.proxy_url()`. Windows: proxy rides in args after `admit`, `.proxy_url()` not called (wry drops it). macOS/Linux: args stay `browser_args_now()` and `.proxy_url(u)` gets the exact Url `proxy_of` returned, as before row 939. Credential/path refusals happen on every OS before anything loads. With a refusal the tab's profile page count is released.
 - resources/recovery.rs: `launch_browser_args_for(current, safe, identifier)` reads the profile's settings.json (or .bak) httpProxy, unseals it and puts the same switch into the window's string. NEEDS lib.rs:226 to call it: evidence/browser-939-lib.rs.patch (FLAG; lib.rs is a hard-stop file). WITHOUT the patch the lane still fails closed: the window has no proxy switch, a default-profile tab with a saved proxy is refused ("restart Kolux" message), profile tabs get their own environment with the switch.
 
 REFUSAL TEXTS (shown as the error of browser_open, i.e. the tab stays unopened)
@@ -21,7 +21,7 @@ OTHER WEBVIEW BUILDERS (src-tauri/src)
 - tools.rs:381 `WebviewWindowBuilder::from_config`: the app's own window (local assets / dev server on loopback); its arguments come from lib.rs:226 (carries the proxy once the patch is applied).
 - No other WebviewBuilder/add_child in src-tauri.
 
-NOT CHANGED: empty setting = system proxy (no switch), head_unless_proxied / icon gating, non-Windows paths (wry's proxy_url on macOS/Linux is the platform's own and is no longer called from browser_open: row 939 is the Windows path; the mac/Linux webviews were never built or proven here, note for the cross-platform pass).
+NOT CHANGED: empty setting = system proxy (no switch), head_unless_proxied / icon gating, non-Windows paths (macOS/Linux still use `.proxy_url()`, the only road wry reads there; test row939_tab_setup_refuses_credentials_on_every_os_and_hands_the_builder_the_proxy_of_address pins that the builder gets proxy_of's Url; never built or run on mac/Linux here).
 KNOWN LIMITS: a non-default profile's record stays until restart even after its tabs close (over-refuses, fails closed). `httpProxyBypass` is not applied to the browser pane (as before).
 
 TESTS (cargo test --lib -- browser recovery: 270 passed)

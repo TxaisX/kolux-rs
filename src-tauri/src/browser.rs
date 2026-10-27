@@ -1129,11 +1129,16 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
     let key = url.to_string();
     let (builder, spoof, folder) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
-    // Row 939: wry drops `.proxy_url()` whenever browser arguments are passed, so the proxy rides in
-    // them. Tabs already open keep the proxy they opened with until Kolux restarts.
+    // Row 939: on Windows wry drops `.proxy_url()` whenever browser arguments are passed, so the proxy
+    // rides in them; elsewhere `.proxy_url()` is the only road and stays. Tabs already open keep the
+    // proxy they opened with until Kolux restarts.
     let launch = crate::resources::recovery::browser_args_now();
-    let args = proxy::tab_browser_args(&proxy::without_proxy(&launch), saved.as_ref()).and_then(|args| proxy::admit(&folder, (folder == proxy::DEFAULT_FOLDER).then_some(launch.as_str()), &args).map(|()| args));
-    let args = args.inspect_err(|_| profiles::page_closed(id))?; // no engine page was made: the profile's folder is not in use
+    let setup = proxy::tab_setup(&launch, &folder, saved.as_ref());
+    let (args, url_proxy) = setup.inspect_err(|_| profiles::page_closed(id))?; // no engine page was made: the profile's folder is not in use
+    let builder = match url_proxy {
+        Some(u) => builder.proxy_url(u),
+        None => builder,
+    };
     let builder = builder
         .focused(false)
         // T-286-b (APP-017): the window's browser arguments (throttling exemption, safe graphics),
