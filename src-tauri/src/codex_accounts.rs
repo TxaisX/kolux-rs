@@ -294,10 +294,18 @@ pub fn login_command(program: &Path, home: &Path, device: bool) -> CommandBuilde
 /// success a new account is listed and made active, a listed one updated in place, and the
 /// sign-in sealed into the vault; only a sign-in the login changed counts. On failure the home is
 /// removed, unless it already holds a working sign-in.
-pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
-    let home = profile.join(FOLDER).join(id);
+pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
+    // Row 923: a NEW account never reuses a taken id, so a clash cannot overwrite a listed account's home or sealed copy.
+    let (id, home) = if existing {
+        let home = profile.join(FOLDER).join(id);
+        fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+        (id.to_string(), home)
+    } else {
+        let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
+        crate::claude_accounts::claim_new_folder(profile, FOLDER, "codex", &listed, id)?
+    };
+    let id = id.as_str();
     let auth = home.join("auth.json");
-    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     fs::write(home.join("config.toml"), HOME_CONFIG).map_err(|e| e.to_string())?;
     // ACCT-019: only a home with no sign-in file at all is removed; one that cannot be read (a
     // locked file) may still hold a working sign-in.
@@ -467,8 +475,9 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
     let _ = app.emit(EVENT, ());
     std::thread::spawn(move || {
         let store = app.state::<Mutex<Store>>();
+        let existing = again.is_some();
         let id = again.unwrap_or_else(|| format!("{:x}", crate::claude_key::now_ms()));
-        let result = sign_in(&store, &profile, &id, crate::claude_key::now_ms(), |home| {
+        let result = sign_in(&store, &profile, &id, existing, crate::claude_key::now_ms(), |home| {
             let seen: Arc<Mutex<Option<(String, String)>>> = Arc::default();
             let peek = seen.clone();
             let peek_app = app.clone();
@@ -940,7 +949,7 @@ mod tests {
         let broken = "[{\"id\":\"c1\",\"email\":\"sam@exa\u{0}\u{fffd} half";
         store.lock().unwrap().set(LIST_KEY, broken).unwrap();
         crate::orchestration::kept::refuse_copies(&profile);
-        let got = sign_in(&store, &profile, "c9", 1, |home: &Path| {
+        let got = sign_in(&store, &profile, "c9", false, 1, |home: &Path| {
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         });
@@ -963,9 +972,9 @@ mod tests {
             (String::new(), Ended::Exited(Some(0)), None)
         };
         let side = crate::orchestration::kept::Unreadable::new(&profile);
-        assert!(sign_in(&store, &profile, "c9", 1, login).is_err());
+        assert!(sign_in(&store, &profile, "c9", false, 1, login).is_err());
         side.restore();
-        let got = sign_in(&store, &profile, "c10", 1, login);
+        let got = sign_in(&store, &profile, "c10", false, 1, login);
         assert!(got.is_ok(), "{:?}", got.err());
         let store = store.lock().unwrap();
         assert_eq!(load(&store).len(), 1);
@@ -979,7 +988,7 @@ mod tests {
         let store = Mutex::new(Store::open(&profile).unwrap());
         store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
         store.lock().unwrap().poison(ACTIVE_KEY);
-        let got = sign_in(&store, &profile, "c9", 1, |home: &Path| {
+        let got = sign_in(&store, &profile, "c9", false, 1, |home: &Path| {
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         });
@@ -1090,8 +1099,8 @@ mod tests {
             fs::write(home.join("auth.json"), token(email)).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
-        sign_in(&store, &profile, "c2", 2, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", false, 2, ok("kim@example.com")).unwrap();
         let s = store.lock().unwrap();
         assert_eq!(load(&s).len(), 2, "one email can be two accounts (a personal and a business workspace)");
         assert_eq!(active_account(&s).unwrap().id, "c2");
@@ -1113,8 +1122,8 @@ mod tests {
             fs::write(home.join("auth.json"), token(email)).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
-        sign_in(&store, &profile, "c2", 2, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", false, 2, ok("kim@example.com")).unwrap();
         {
             let s = store.lock().unwrap();
             set_label(&s, "c1", "  Personal  ").unwrap();
@@ -1124,7 +1133,7 @@ mod tests {
             assert_eq!(list[1].label.as_ref().map(|l| l.chars().count()), Some(LABEL_MAX), "capped");
             assert!(set_label(&s, "gone", "x").is_err());
         }
-        sign_in(&store, &profile, "c1", 3, ok("kim.new@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", true, 3, ok("kim.new@example.com")).unwrap();
         let s = store.lock().unwrap();
         assert_eq!(load(&s)[0].label.as_deref(), Some("Personal"), "signing in again keeps the name");
         set_label(&s, "c1", "   ").unwrap();
@@ -1164,7 +1173,7 @@ mod tests {
         let before = fs::read(own.join("auth.json")).unwrap();
         let store = Mutex::new(Store::open(&profile).unwrap());
         for (id, who) in [("c1", "kim@example.com"), ("c2", "lee@example.com")] {
-            sign_in(&store, &profile, id, 7, |home| {
+            sign_in(&store, &profile, id, false, 7, |home| {
                 fs::write(home.join("auth.json"), token(who)).unwrap();
                 ("Successfully logged in".into(), Ended::Exited(Some(0)), None)
             })
@@ -1191,7 +1200,7 @@ mod tests {
     fn a_new_sign_in_lands_in_its_own_home_and_becomes_active() {
         let profile = temp("ok");
         let store = Mutex::new(Store::open(&profile).unwrap());
-        let a = sign_in(&store, &profile, "c1", 7, |home| {
+        let a = sign_in(&store, &profile, "c1", false, 7, |home| {
             assert!(home.ends_with("codex-accounts/c1") || home.ends_with("codex-accounts\\c1"));
             assert!(fs::read_to_string(home.join("config.toml")).unwrap().contains("\"file\""));
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
@@ -1225,7 +1234,7 @@ mod tests {
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok).unwrap();
         let s = store.lock().unwrap();
         assert!(!flag_printed(&s, "nobody").unwrap(), "an unlisted id (the system default) is never flagged");
         assert!(flag_printed(&s, "c1").unwrap());
@@ -1244,8 +1253,8 @@ mod tests {
             fs::write(home.join("auth.json"), token(email)).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         };
-        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
-        sign_in(&store, &profile, "c2", 2, ok("lee@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", false, 2, ok("lee@example.com")).unwrap();
         {
             let s = store.lock().unwrap();
             assert!(mark_sign_in_error(&s, "c1", true).unwrap());
@@ -1253,10 +1262,10 @@ mod tests {
             assert_eq!(active_account(&s).unwrap().id, "c2");
         }
         // a login that leaves the old sign-in untouched does not count, and keeps the home
-        let e = sign_in(&store, &profile, "c1", 3, |_| (String::new(), Ended::Exited(Some(0)), None)).unwrap_err();
+        let e = sign_in(&store, &profile, "c1", true, 3, |_| (String::new(), Ended::Exited(Some(0)), None)).unwrap_err();
         assert_eq!(e.reason, "sign-in-refused");
         assert!(profile.join(FOLDER).join("c1").join("auth.json").exists());
-        sign_in(&store, &profile, "c1", 4, ok("kim2@example.com")).unwrap();
+        sign_in(&store, &profile, "c1", true, 4, ok("kim2@example.com")).unwrap();
         let s = store.lock().unwrap();
         let list = load(&s);
         assert_eq!(list.len(), 2, "updated in place, not added");
@@ -1268,10 +1277,10 @@ mod tests {
     fn a_failed_sign_in_keeps_nothing_but_never_deletes_a_working_home() {
         let profile = temp("fail");
         let store = Mutex::new(Store::open(&profile).unwrap());
-        let e = sign_in(&store, &profile, "c2", 1, |_| ("Enter this one-time code: WXYZ-9876\nError: device code expired".into(), Ended::Exited(Some(1)), Some("WXYZ-9876".into()))).unwrap_err();
+        let e = sign_in(&store, &profile, "c2", false, 1, |_| ("Enter this one-time code: WXYZ-9876\nError: device code expired".into(), Ended::Exited(Some(1)), Some("WXYZ-9876".into()))).unwrap_err();
         assert!(!e.message.contains("WXYZ-9876") && !e.message.contains("https://"), "{e}");
         assert!(!profile.join(FOLDER).join("c2").exists());
-        let e = sign_in(&store, &profile, "c3", 1, |home| {
+        let e = sign_in(&store, &profile, "c3", false, 1, |home| {
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Cancelled, None)
         })
@@ -1279,6 +1288,28 @@ mod tests {
         assert_eq!(e, "Sign-in cancelled.");
         assert!(profile.join(FOLDER).join("c3").join("auth.json").exists(), "a home with a working sign-in stays");
         assert!(load(&store.lock().unwrap()).is_empty());
+    }
+
+    // Row 923 (4): a new sign-in whose id is already listed takes the next free id and leaves the listed account's home and sealed copy as they were.
+    #[test]
+    fn row923_a_new_codex_sign_in_on_a_taken_id_never_touches_the_listed_account() {
+        let profile = temp("row923-id");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        let first = sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        let (home, vault) = (profile.join(FOLDER).join("c1"), profile.join(secrets::VAULT).join("codex-c1.json"));
+        let (auth_before, sealed_before) = (fs::read(home.join("auth.json")).unwrap(), fs::read(&vault).unwrap());
+        let second = sign_in(&store, &profile, "c1", false, 2, ok("lee@example.com")).unwrap();
+        assert_eq!(first.id, "c1");
+        assert_eq!(second.id, "c2", "c1 is listed, so the new account takes the next id");
+        assert_eq!(second.home, profile.join(FOLDER).join("c2").to_string_lossy(), "its home follows the claimed id");
+        assert!(profile.join(secrets::VAULT).join("codex-c2.json").is_file());
+        assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth_before, "the listed home is byte-identical");
+        assert_eq!(fs::read(&vault).unwrap(), sealed_before, "and so is its sealed copy");
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
     }
 
     #[test]

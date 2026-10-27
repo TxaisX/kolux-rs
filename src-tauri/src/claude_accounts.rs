@@ -227,7 +227,8 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         (id.to_string(), dir)
     } else {
-        claim_new_folder(store, profile, id)?
+        let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
+        claim_new_folder(profile, FOLDER, "claude", &listed, id)?
     };
     let id = id.as_str();
     let creds = dir.join(CREDENTIALS);
@@ -299,12 +300,11 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     Ok(account)
 }
 
-/// Row 921: makes the folder of a NEW account and never reuses a taken id (listed, a folder or a sealed copy
+/// Row 921: makes the folder of a NEW account (`agent` is the sealed copy's name prefix) and never reuses a taken id (listed, a folder or a sealed copy
 /// already there); a taken id moves to the next free one, so a refused sign-in can only delete what it made.
-fn claim_new_folder(store: &Mutex<Store>, profile: &Path, id: &str) -> Result<(String, PathBuf), String> {
-    let parent = profile.join(FOLDER);
+pub(crate) fn claim_new_folder(profile: &Path, folder: &str, agent: &str, listed: &[String], id: &str) -> Result<(String, PathBuf), String> {
+    let parent = profile.join(folder);
     fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
     let start = u128::from_str_radix(id, 16).ok();
     for step in 0..CLAIM_TRIES {
         let candidate = match (step, start) {
@@ -312,7 +312,7 @@ fn claim_new_folder(store: &Mutex<Store>, profile: &Path, id: &str) -> Result<(S
             (_, Some(n)) => format!("{:x}", n + u128::from(step)),
             _ => break,
         };
-        if listed.contains(&candidate) || profile.join(secrets::VAULT).join(format!("claude-{candidate}.json")).exists() {
+        if listed.contains(&candidate) || profile.join(secrets::VAULT).join(format!("{agent}-{candidate}.json")).exists() {
             continue;
         }
         let dir = parent.join(&candidate);

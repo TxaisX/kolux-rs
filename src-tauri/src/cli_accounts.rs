@@ -108,7 +108,7 @@ pub fn finish(store: &Mutex<Store>, profile: &Path, agent: &str, id: &str, now: 
     };
     let ended = |r: Result<(), String>| r.map_or_else(Ended::NotStarted, |()| Ended::Exited(Some(0)));
     let added = if agent == "codex" {
-        codex_accounts::sign_in(store, profile, id, now, |home| (String::new(), ended(adopt(home)), None)).map(|a| json!({ "agent": "codex", "id": a.id, "email": a.email, "organization": Value::Null, "active": true }))
+        codex_accounts::sign_in(store, profile, id, false, now, |home| (String::new(), ended(adopt(home)), None)).map(|a| json!({ "agent": "codex", "id": a.id, "email": a.email, "organization": Value::Null, "active": true }))
     } else {
         claude_accounts::sign_in(store, profile, id, false, now, |dir| (String::new(), ended(adopt(dir))), status).map(|a| json!({ "agent": "claude", "id": a.id, "email": a.email, "organization": a.organization, "active": false }))
     };
