@@ -86,7 +86,7 @@ Rules: an AI cannot start until a model is picked explicitly, and the model row 
 Acceptance:
   - [x] Open a chooser pane and pick Claude Code with no model → Start is disabled; pick a model → Start becomes enabled. (cards; evidence/cards-SESS-007.txt)
   - [x] Pick Terminal → Start is enabled at once. (cards; evidence/cards-SESS-007.txt)
-  - [ ] Leave a chooser as the grid's only pane → it has no close button.
+  - [x] Leave a chooser as the grid's only pane → it has no close button. (cards; evidence/cards-SESS-007.txt)
 Compat: —
 Source: D-02-007
 

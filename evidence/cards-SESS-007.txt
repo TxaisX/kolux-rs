@@ -21,3 +21,6 @@ FAIL the lone chooser has no close button: button present=true
 screenshot: G:/Temp/live-v5-logs/SESS-007.png
 close: [true,"window close over CDP, exited in 7.8 s; pre-close tree 6 (msedgewebview2.exe x6); survivors 0 (none)"]
 RESULT: FAIL
+2026-10-27 box 3 (fix: closable now follows the shown-pane count):
+box 3: src/sessions/__cards__/SESS-007-b3.test.ts::"SESS-007 b3: a lone grid chooser has no Close this chooser button" + "a chooser beside another pane has the Close this chooser button" + "the New session sheet keeps its close button even with no other pane" — VITEST_MAX_WORKERS=2 pnpm exec vitest run src/sessions/__cards__/SESS-007-b3.test.ts — Test Files  1 passed (1), Tests  3 passed (3) (red first: 1 failed | 2 passed with chooserClosable returning true)
+  (real ChooserPane rendered with closable = chooserClosable(shown, inSheet); App.tsx renderChooser passes panesIn(panes, activeDir).length, the same count removeTarget uses; MIRROR App.tsx renderChooser: the call-site count is glue, live spawn re-confirms)
