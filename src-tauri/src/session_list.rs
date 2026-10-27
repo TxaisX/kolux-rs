@@ -142,7 +142,7 @@ pub fn claude_line(v: &Value, s: &mut Summary, turns: bool) {
         }
         Some("user") if turns && v.get("isSidechain").and_then(Value::as_bool) != Some(true) && v.get("isMeta").and_then(Value::as_bool) != Some(true) => {
             if let Some(t) = claude_user_text(v) {
-                s.turns += 1;
+                s.turns = s.turns.saturating_add(1);
                 if s.first.is_empty() {
                     s.first = tidy(&t);
                 }
@@ -179,7 +179,7 @@ pub fn codex_line(v: &Value, s: &mut Summary) {
         Some("event_msg") => {
             if let Some(p) = payload.filter(|p| p.get("type").and_then(Value::as_str) == Some("user_message")) {
                 if let Some(t) = text_of(p, "message").filter(|t| !injected(t)) {
-                    s.turns += 1;
+                    s.turns = s.turns.saturating_add(1);
                     if s.first.is_empty() {
                         s.first = tidy(&t);
                     }
@@ -247,7 +247,7 @@ type Probe = Worker<Job, Found>;
 /// unreadable, or the budget ran out.
 fn look(cache: &mut Cache, agent: &str, path: &Path, report: &mut Report, probe: &Probe) -> Option<(u64, u64, Summary)> {
     let Some(found) = probe.call((agent.to_string(), path.to_path_buf(), cache.get(path).cloned())) else {
-        // A helper that died on this file only skips it; only a spent budget cuts the scan short.
+        // A helper that died on this file only skips it; a spent budget, or a second helper death (which also sets stalled), cuts the scan short.
         report.cut_short |= probe.stalled();
         return None;
     };
@@ -384,7 +384,7 @@ fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &B
                 continue;
             }
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            let Some(id) = s.id.clone().or_else(|| (stem.len() >= 36).then(|| stem[stem.len() - 36..].to_string())) else { continue };
+            let Some(id) = s.id.clone().or_else(|| stem.len().checked_sub(36).and_then(|at| stem.get(at..)).map(str::to_string)) else { continue };
             let title = title_of(&s, index.get(&id));
             out.push(Entry { agent: "codex".into(), id, title, modified_ms: modified, bytes: len, turns: s.turns, dir: s.cwd });
         }
@@ -946,5 +946,89 @@ mod tests {
         let err = plan(&json!({}), &roots, "codex", "dup1", None, Shell::Pwsh).unwrap_err();
         assert!(err.contains("More than one"), "resume refuses too: {err}");
         let _ = fs::remove_dir_all(&home);
+    }
+
+    /// Row 897: release builds abort on panic, so a hostile transcript must never panic. Budget::none
+    /// runs everything on this thread: a panic here fails the test instead of dying in a helper.
+    #[test]
+    fn row897_hostile_transcripts_never_panic_on_the_scan_thread() {
+        let root = tmp("hostile");
+        let claude_dir = root.join("projects").join("C--work-app");
+        let archived = root.join("archived_sessions");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::create_dir_all(&archived).unwrap();
+        let good = claude_user("hello", r"C:\work\app").to_string() + "\n";
+        let mut claude: Vec<(&str, Vec<u8>)> = vec![
+            ("empty", vec![]),
+            ("mid-line", good.as_bytes()[..good.len() - 9].to_vec()),
+            ("bad-utf8", [b"{\"type\":\"user\",\"cwd\":\"C:\\\xff\xfe\xe2\x82\"}\n".as_slice(), &[0xC0, 0x80, 0xF8, b'\n']].concat()),
+            ("nul-and-lone-quotes", b"\0\0\0\n\"\n{\n[[[[\n}}}}\n".to_vec()),
+            ("deep", [vec![b'['; 100_000], vec![b'\n']].concat()),
+            (
+                "wrong-types",
+                b"{\"type\":7,\"cwd\":[1],\"isSidechain\":\"yes\",\"message\":{\"content\":5}}\n{\"type\":\"user\",\"cwd\":{},\"message\":{\"content\":[1,null,{\"type\":\"text\",\"text\":9}]}}\n{\"type\":\"summary\",\"summary\":1e999}\n{\"type\":\"ai-title\",\"aiTitle\":null}\n[]\n\"str\"\n42\nnull\n".to_vec(),
+            ),
+        ];
+        // A multibyte character straddling the head cap, the tail cap and the title cut.
+        let straddle = |at: usize| {
+            let mut v = good.clone().into_bytes();
+            v.extend(" ".repeat(at - v.len() - 1).bytes());
+            v.extend("\u{e9}\u{1f600}\n".bytes());
+            v
+        };
+        claude.push(("head-cap-split", straddle(HEAD_CAP as usize)));
+        claude.push(("tail-cap-split", straddle(HEAD_CAP as usize + 5000)));
+        claude.push(("title-cut", (claude_user(&"\u{e9}\u{1f600}".repeat(TITLE_MAX * 3), r"C:\work\app").to_string() + "\n").into_bytes()));
+        claude.push(("many-turns", good.repeat(20_000).into_bytes()));
+        for (name, bytes) in &claude {
+            fs::write(claude_dir.join(format!("{name}.jsonl")), bytes).unwrap();
+        }
+        // Codex: the same shapes, plus file names whose last 36 bytes cut a multibyte character.
+        let meta = json!({ "type": "session_meta", "payload": { "cwd": 5, "source": "cli", "id": [] } }).to_string();
+        let codex: Vec<(String, Vec<u8>)> = vec![
+            ("empty".into(), vec![]),
+            (
+                "wrong-types".into(),
+                format!("{meta}\n{{\"type\":\"event_msg\",\"payload\":\"x\"}}\n{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"user_message\",\"message\":7}}}}\n{{\"payload\":{{\"source\":{{\"subagent\":1}}}}}}\n").into_bytes(),
+            ),
+            ("bad-utf8".into(), b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"\xff\"}\n".to_vec()),
+            (format!("{}a", "\u{e9}".repeat(20)), good.clone().into_bytes()),
+            (format!("{}\u{1f600}", "b".repeat(37)), good.clone().into_bytes()),
+            (format!("rollout-{}a", "\u{e9}".repeat(30)), good.clone().into_bytes()),
+        ];
+        for (name, bytes) in &codex {
+            fs::write(archived.join(format!("{name}.jsonl")), bytes).unwrap();
+        }
+        fs::write(root.join("session_index.jsonl"), b"\xff{\"id\":1,\"thread_name\":[]}\n{\"id\":\"a\",\"thread_name\":\"t\"}\n\xe2\x82").unwrap();
+
+        super::super::scan::SPAWNS.with(|n| n.set(0));
+        let roots = Roots { claude: vec![root.clone()], codex: vec![root.clone()] };
+        let mut cache = Cache::new();
+        let got = list_scan(&roots, &Scope::All, &mut cache, None, &Budget::none());
+        // Cached sizes and times at their extremes force a re-read.
+        for entry in cache.values_mut() {
+            entry.0 = u64::MAX;
+            entry.1 = u64::MAX;
+        }
+        let again = list_scan(&roots, &Scope::All, &mut cache, None, &Budget::none());
+        assert_eq!(super::super::scan::SPAWNS.with(|n| n.get()), 0, "everything ran on this thread");
+        assert_eq!(got.sessions.len(), again.sessions.len());
+        assert!(got.sessions.iter().any(|e| e.agent == "claude" && e.title == "hello"), "readable ones are still listed");
+        // Direct calls with a size no file has, for every shape.
+        for (name, _) in &claude {
+            let f = claude_dir.join(format!("{name}.jsonl"));
+            for len in [0, 1, HEAD_CAP + 1, u64::MAX] {
+                let _ = summarize("claude", &f, len);
+                let _ = summarize("codex", &f, len);
+            }
+            let _ = probe_file(("claude".into(), f, None));
+        }
+        let _ = summarize("claude", &root.join("no-such.jsonl"), u64::MAX);
+        let hostile_stem = format!("rollout-{}", "\u{e9}".repeat(40));
+        for cut in (0..hostile_stem.len()).filter(|c| hostile_stem.is_char_boundary(*c)) {
+            let _ = rollout_id(&hostile_stem[..cut]);
+        }
+        let _ = rollout_id(&format!("rollout-a{}", "\u{e9}".repeat(20)));
+        let _ = fs::remove_dir_all(&root);
     }
 }

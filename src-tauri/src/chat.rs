@@ -880,7 +880,7 @@ pub(crate) fn jsonl_in(dir: &Path) -> impl Iterator<Item = PathBuf> {
 /// only day folders touched since the session began are opened.
 pub(crate) fn codex_rollouts(home: &Path, since: SystemTime) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    let fresh = |p: &Path| modified(p).is_some_and(|m| m + Duration::from_secs(86_400) >= since);
+    let fresh = |p: &Path| modified(p).is_some_and(|m| m.checked_add(Duration::from_secs(86_400)).is_none_or(|m| m >= since));
     for y in fs::read_dir(home.join("sessions")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
         for m in fs::read_dir(&y).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
             for d in fs::read_dir(&m).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| fresh(p)) {
