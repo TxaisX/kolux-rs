@@ -207,6 +207,20 @@ mod tests {
     }
 
     #[test]
+    fn card16b_a_failed_read_only_load_does_not_block_the_groups_writer() {
+        let (s, dir) = store("readonly");
+        s.set(KEY, "{\"groups\": [], \"rev\": 4}").unwrap();
+        let side = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        side.execute_batch("ALTER TABLE kv RENAME TO kv_gone").unwrap();
+        assert!(load(&s).groups.is_empty(), "the sidebar read falls back to the default");
+        side.execute_batch("ALTER TABLE kv_gone RENAME TO kv").unwrap();
+        let (g, _) = change(&s, |g| g.create("Work", None)).unwrap();
+        assert_eq!((g.rev, g.groups.len()), (5, 1), "the next change loads, saves and counts on");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn proj014_groups_last_across_restarts_and_an_empty_name_gets_a_default() {
         let (s, dir) = store("keep");
         let (g, made) = change(&s, |g| g.create("  ", None)).unwrap();

@@ -175,7 +175,7 @@ pub fn default_statuses() -> Vec<Status> {
 
 /// The user's statuses in their order, or the default set when none were saved.
 pub fn statuses(store: &Store) -> Vec<Status> {
-    Some(crate::orchestration::kept::or_default::<Vec<Status>>(store, STATUS_LIST_KEY)).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
+    Some(crate::orchestration::kept::or_default_held::<Vec<Status>>(store, STATUS_LIST_KEY)).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
 }
 
 fn slug(label: &str) -> String {
@@ -539,6 +539,22 @@ mod tests {
         assert!(err.contains(STATUS_OF_KEY) && !err.contains("s-1"), "{err}");
         assert!(clear_status(&store, "C:/a").is_err());
         assert_eq!(store.get(STATUS_OF_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row881_a_status_list_that_could_not_be_kept_aside_is_never_saved_over() {
+        let dir = temp("r881");
+        let db = dir.join("db");
+        let store = Store::open(&db).unwrap();
+        let broken = "[{\"id\": \"mine\", \"label\": \"Mine\"";
+        store.set(STATUS_LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&db);
+        assert_eq!(statuses(&store), default_statuses(), "the page shows the defaults");
+        let err = set_statuses(&store, &[(None, "Backlog".into())]).unwrap_err();
+        assert!(err.contains(STATUS_LIST_KEY) && err.contains("not saving over it"), "{err}");
+        assert_eq!(store.get(STATUS_LIST_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }
