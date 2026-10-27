@@ -12,6 +12,9 @@ pub mod watch;
 // GIT-018 / GIT-020 / GIT-022 (T-228-d): the writer agents, branch naming and review text.
 #[path = "scm_writers.rs"]
 pub mod writers;
+// Row 917: the provider-neutral repository id that keys the per-repository AI switch.
+#[path = "scm_repo_id.rs"]
+pub mod repo_id;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
