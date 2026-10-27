@@ -83,7 +83,8 @@ type Line<I, O> = (mpsc::Sender<I>, mpsc::Receiver<O>);
 
 /// See [`Budget::worker`]. Calls are one at a time; after the budget runs out on a call the helper is
 /// left to finish on its own and every later call answers `None` at once. A helper that died (its work
-/// panicked on one item) answers `None` for that item only and is replaced once per scan.
+/// panicked on one item) answers `None` for that item only and is replaced once per scan; a second
+/// death also sets `stalled`, so the scan reports itself cut short.
 pub struct Worker<I, O> {
     end: Option<Instant>,
     work: std::sync::Arc<dyn Fn(I) -> O + Send + Sync>,
