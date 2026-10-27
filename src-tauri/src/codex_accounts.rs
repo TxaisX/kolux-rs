@@ -297,13 +297,14 @@ pub fn login_command(program: &Path, home: &Path, device: bool) -> CommandBuilde
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
     // Row 923: a NEW account never reuses a taken id, so a clash cannot overwrite a listed account's home or sealed copy.
     // Row 929: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id.
-    let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
-    let (id, home) = if existing && listed.iter().any(|l| l == id) {
+    // Row 932: a list that cannot be read fails here, before the login; it never routes a listed account to a new id.
+    let listed_ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
+    let (id, home) = if existing && listed_ids.iter().any(|l| l == id) {
         let home = profile.join(FOLDER).join(id);
         fs::create_dir_all(&home).map_err(|e| e.to_string())?;
         (id.to_string(), home)
     } else {
-        crate::claude_accounts::claim_new_folder(profile, FOLDER, "codex", &listed, id)?
+        crate::claude_accounts::claim_new_folder(profile, FOLDER, "codex", &listed_ids, id)?
     };
     let id = id.as_str();
     let auth = home.join("auth.json");
@@ -948,9 +949,10 @@ mod tests {
         let profile = temp("row912");
         let store = Mutex::new(Store::open(&profile).unwrap());
         let broken = "[{\"id\":\"c1\",\"email\":\"sam@exa\u{0}\u{fffd} half";
-        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
-        crate::orchestration::kept::refuse_copies(&profile);
+        // The list breaks while the login runs: one that is broken at the start fails before the login (row 932).
         let got = sign_in(&store, &profile, "c9", false, 1, |home: &Path| {
+            store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+            crate::orchestration::kept::refuse_copies(&profile);
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         });
@@ -1311,6 +1313,30 @@ mod tests {
         assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth_before, "the listed home is byte-identical");
         assert_eq!(fs::read(&vault).unwrap(), sealed_before, "and so is its sealed copy");
         assert_eq!(load(&store.lock().unwrap()).len(), 2);
+    }
+
+    // Row 932: a store that cannot be read at the start fails a re-sign-in before the login, rather than routing a listed account to a new id.
+    #[test]
+    fn row932_an_existing_codex_sign_in_fails_up_front_when_the_list_cannot_be_read() {
+        let profile = temp("row932-unreadable");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", false, 1, ok).unwrap();
+        let ran = std::cell::Cell::new(false);
+        let side = crate::orchestration::kept::Unreadable::new(&profile);
+        let got = sign_in(&store, &profile, "c1", true, 2, |h: &Path| {
+            ran.set(true);
+            ok(h)
+        });
+        side.restore();
+        assert!(got.is_err(), "an unreadable list is an error, not a new account");
+        assert!(!ran.get(), "and the login never started");
+        let homes: Vec<_> = fs::read_dir(profile.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(homes, ["c1"], "no duplicate account folder");
+        assert_eq!(load(&store.lock().unwrap()).len(), 1);
     }
 
     // Row 929: existing:true at an id that is not listed (a stale screen) is a new account, so an orphan sealed copy at that id is never overwritten.
