@@ -26,7 +26,7 @@ export const draftVersion = () => version;
 export type DraftGate = { repo: RepoRef | null; agents: ReadonlyArray<{ id: string; installed: boolean }> };
 
 /** What the gate sees when the settings cannot be read: the writer is off, so neither the draft button nor the one-click flow sends a diff anywhere. */
-const CLOSED_SETTINGS: Record<string, unknown> = { commitWriter: "off" };
+export const CLOSED_SETTINGS: Record<string, unknown> = { commitWriter: "off" };
 
 /** The gate, read fresh each time: settings, the repository and the installed agents can all change while the composer is open. A settings read that fails shuts it (never "no settings = AI on"). */
 export async function readDraftGate(dir: string): Promise<{ settings: Record<string, unknown>; gate: DraftGate }> {
