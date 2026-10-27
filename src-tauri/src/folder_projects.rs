@@ -265,7 +265,8 @@ mod tests {
         crate::orchestration::kept::refuse_copies(&base.join("db"));
         let folder = base.join("notes");
         fs::create_dir_all(&folder).unwrap();
-        assert!(add_folder(&store, &folder).is_err());
+        let err = add_folder(&store, &folder).unwrap_err();
+        assert!(err.contains("projects could not be kept aside"), "{err}");
         assert_eq!(store.get("projects").unwrap().as_deref(), Some(list), "no one-project list replaced it");
         drop(store);
         let _ = fs::remove_dir_all(&base);

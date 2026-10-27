@@ -67,7 +67,7 @@ pub struct Place {
     pub refresh: bool,
 }
 
-const PROJECTS_KEY: &str = "projects";
+pub(crate) const PROJECTS_KEY: &str = "projects";
 /// Typed workspace names by folder (PROJ-021): the branch and folder carry the cleaned form,
 /// the row shows exactly what was typed.
 const NAMES_KEY: &str = "workspaceNames";
@@ -2229,15 +2229,18 @@ pub fn set_base(store: &Store, id: &str, base: Option<&str>) -> Result<Project, 
 /// PROJ-025 / PROJ-028: a project's own workspaces folder and base ref; empty clears either.
 #[tauri::command]
 pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: String, base: String) -> Result<Project, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let mut projects = load_projects_for_write(&store)?;
+    set_project_options(&*store.lock().map_err(|e| e.to_string())?, &project_id, &workspaces_dir, &base)
+}
+
+fn set_project_options(store: &Store, project_id: &str, workspaces_dir: &str, base: &str) -> Result<Project, String> {
+    let mut projects = load_projects_for_write(store)?;
     let project = projects.iter_mut().find(|p| p.id == project_id).ok_or("that project is no longer registered")?;
     let clean = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
-    project.workspaces_dir = clean(&workspaces_dir);
-    project.base = clean(&base);
+    project.workspaces_dir = clean(workspaces_dir);
+    project.base = clean(base);
     let project = project.clone();
-    save_projects(&store, &projects)?;
-    remember_dir(&store, &workspaces_dir)?;
+    save_projects(store, &projects)?;
+    remember_dir(store, workspaces_dir)?;
     Ok(project)
 }
 
@@ -5436,10 +5439,14 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         (store, profile)
     }
 
+    /// The wording kept::load returns when the copy cannot be made.
+    const NOT_KEPT_ASIDE: &str = "projects could not be kept aside";
+
     #[test]
     fn row895_forget_refuses_when_the_project_list_does_not_read_and_cannot_be_kept_aside() {
         let (store, profile) = broken_list_store("row895-forget", true);
-        assert!(forget_projects(&store, &["keep-1".to_string()]).is_err(), "no list to filter, so nothing is forgotten");
+        let err = forget_projects(&store, &["keep-1".to_string()]).unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE) && err.contains("nothing was changed"), "{err}");
         assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST), "the list blob is byte for byte what it was");
         drop(store);
         let _ = fs::remove_dir_all(profile);
@@ -5448,8 +5455,9 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
     #[test]
     fn row895_forget_keeps_an_unreadable_list_aside_before_it_saves() {
         let (store, profile) = broken_list_store("row895-aside", false);
-        let _ = forget_projects(&store, &["keep-1".to_string()]);
+        forget_projects(&store, &["keep-1".to_string()]).unwrap();
         assert_eq!(crate::orchestration::kept::asides(&store, "projects"), vec![BROKEN_LIST.to_string()], "the unreadable list survives under a corrupt- name");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some("[]"), "the key starts fresh once the copy is safe");
         drop(store);
         let _ = fs::remove_dir_all(profile);
     }
@@ -5458,7 +5466,8 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
     fn row895_adding_a_project_refuses_rather_than_wiping_an_unreadable_list() {
         let (store, profile) = broken_list_store("row895-add", true);
         let repo = temp("row895-add-repo");
-        assert!(register_project(&store, (repo.clone(), repo.clone())).is_err());
+        let err = register_project(&store, (repo.clone(), repo.clone())).unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "{err}");
         assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST), "no one-project list replaced it");
         drop(store);
         let _ = fs::remove_dir_all(profile);
@@ -5468,8 +5477,20 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
     #[test]
     fn row895_editing_a_project_refuses_rather_than_wiping_an_unreadable_list() {
         let (store, profile) = broken_list_store("row895-edit", true);
-        assert!(set_base(&store, "keep-1", Some("main")).is_err());
-        assert!(set_display_name(&store, "keep-1", "Shop").is_err());
+        let err = set_base(&store, "keep-1", Some("main")).unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "an unreadable list is not 'no longer registered': {err}");
+        let err = set_display_name(&store, "keep-1", "Shop").unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "{err}");
+        assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST));
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn row895_setting_a_project_folder_and_base_refuses_rather_than_wiping_an_unreadable_list() {
+        let (store, profile) = broken_list_store("row895-set", true);
+        let err = set_project_options(&store, "keep-1", "D:/ws", "main").unwrap_err();
+        assert!(err.contains(NOT_KEPT_ASIDE), "{err}");
         assert_eq!(store.get("projects").unwrap().as_deref(), Some(BROKEN_LIST));
         drop(store);
         let _ = fs::remove_dir_all(profile);
