@@ -3053,7 +3053,7 @@ mod tests {
         assert_eq!(skipped_diagnosis(&Ok(None), &u("https://example.com/")), None);
         assert_eq!(serde_json::to_string(&skipped_diagnosis(&proxied, &u("https://example.com/")).unwrap()).unwrap(), r#"{"kind":"skipped","local":false,"https":null}"#);
         // Every caller goes through the one gate in `head`.
-        let src = include_str!("browser.rs");
+        let src = include_str!("browser.rs").replace("\r\n", "\n"); // a Windows checkout is CRLF
         let body = &src[src.find("pub async fn head(app").unwrap()..];
         assert!(body[..body.find("\n}\n").unwrap()].contains("head_unless_proxied(&saved_proxy(app)"));
     }

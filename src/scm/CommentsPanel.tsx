@@ -4,7 +4,9 @@
 // (pr_review.rs) reads and writes GitHub; review.ts decides what is shown.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { botToggle, relabelAsBot, toggleBotIn } from "../settings/reviewBots";
 import { useSettings } from "../settings/useSettings";
+import Markdown from "../tasks/MarkdownView";
 import "./comments.css";
 import {
   REACTION_CHOICES,
@@ -15,8 +17,10 @@ import {
   cleanComment,
   emojiOf,
   moreNote,
+  ownCall,
   placeOf,
   reactKind,
+  reactionCall,
   relativeTime,
   repliable,
   reviewPrompt,
@@ -32,8 +36,8 @@ type Props = { dir: string; url: string; visible: boolean; extra?: (t: Thread) =
 type Mode = "groups" | "time";
 
 /** A box that sends on Enter (not while an input method composes), Shift+Enter for a new line. */
-function Composer({ label, send, cancel }: { label: string; send: (text: string) => Promise<void>; cancel: () => void }) {
-  const [text, setText] = useState("");
+function Composer({ label, send, cancel, initial }: { label: string; send: (text: string) => Promise<void>; cancel: () => void; initial?: string }) {
+  const [text, setText] = useState(initial ?? "");
   const [busy, setBusy] = useState(false);
   const clean = cleanComment(text);
   const go = () => {
@@ -73,8 +77,10 @@ function Composer({ label, send, cancel }: { label: string; send: (text: string)
 }
 
 export default function CommentsPanel({ dir, url, visible, extra }: Props) {
-  const { settings } = useSettings();
+  const { settings, save } = useSettings();
   const bots = botNames(settings?.[REVIEW_BOTS_KEY]);
+  const botCell = useRef<{ current: readonly string[] }>({ current: bots });
+  botCell.current.current = bots;
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -84,6 +90,8 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
   const [replying, setReplying] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [picking, setPicking] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   // GIT-031: threads queued for the agent, and the ones just delivered (waiting for the one combined reply)
   const [queue, setQueue] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
@@ -91,10 +99,10 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
   const asking = useRef("");
   asking.current = `${dir}|${url}`;
 
-  const load = () => {
+  const load = (botList: string[] = bots) => {
     const key = asking.current;
     setLoading(true);
-    invoke<Review>("scm_review_read", { worktree: dir, url, bots })
+    invoke<Review>("scm_review_read", { worktree: dir, url, bots: botList })
       .then((r) => {
         if (asking.current !== key) return;
         setReview(r);
@@ -122,6 +130,15 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
         throw e;
       },
     );
+  };
+
+  /** GIT-030: puts an author on (or takes one off) the bot list setting, then reads again so their cards sit apart. */
+  const toggleBot = (author: string) => {
+    const r = toggleBotIn(botCell.current, author);
+    if (r.note) return setNote(r.note);
+    setNote(null);
+    // A mark relabels the cards here; taking one off needs the read, since GitHub's own bot flag is not on the card.
+    void save({ [REVIEW_BOTS_KEY]: r.list }).then(() => (r.marked ? setReview((cur) => cur && relabelAsBot(cur, author)) : load(r.list)));
   };
 
   const queued = review ? review.threads.filter((t) => queue.includes(t.id) && !t.resolved) : [];
@@ -167,9 +184,12 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
         <button
           key={r.content}
           className={`cm-react${r.mine ? " mine" : ""}`}
-          title={r.mine ? "You reacted" : "React the same"}
-          disabled={c.db_id === null}
-          onClick={() => c.db_id !== null && void act(reactKind(inThread), String(c.db_id), r.content).catch(() => {})}
+          title={r.mine ? "You reacted: press to take it back" : "React the same"}
+          disabled={reactionCall(c, r, inThread) === null}
+          onClick={() => {
+            const call = reactionCall(c, r, inThread);
+            if (call) void act(call.kind, call.id, call.text).catch(() => {});
+          }}
         >
           {emojiOf(r.content)} {r.count}
         </button>
@@ -198,19 +218,58 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
     </div>
   );
 
-  const body = (c: Comment, inThread: boolean, reply?: boolean) => (
+  const body = (c: Comment, inThread: boolean, reply?: boolean) => {
+    const edit = ownCall(c, review?.viewer, inThread, "edit");
+    const del = ownCall(c, review?.viewer, inThread, "delete");
+    return (
     <div className={`cm-comment${reply ? " reply" : ""}${c.bot ? " bot" : ""}`} key={c.id}>
       <div className="cm-meta">
         <span className="cm-author">{c.author}</span>
         {c.bot && <span className="cm-tag">bot</span>}
+        {botToggle(c.bot, c.author, bots) && (
+          <button className="cm-link" title={botToggle(c.bot, c.author, bots) === "unmark" ? `Show ${c.author} as a person again` : `Treat ${c.author} as a bot (Settings > Git lists them)`} onClick={() => toggleBot(c.author)}>
+            {botToggle(c.bot, c.author, bots) === "unmark" ? "Not a bot" : "Mark as bot"}
+          </button>
+        )}
         <span className="cm-time" title={c.at}>
           {relativeTime(c.at, Date.now())}
         </span>
       </div>
-      <div className="cm-body">{c.body}</div>
+      {edit && editing === c.id ? (
+        <Composer label="Edit this comment" initial={c.body} cancel={() => setEditing(null)} send={(text) => act(edit.kind, edit.id, text).then(() => setEditing(null))} />
+      ) : (
+        <div className="cm-body">
+          <Markdown text={c.body} />
+        </div>
+      )}
       {reactions(c, inThread)}
+      {edit && del && editing !== c.id && (
+        <div className="cm-row">
+          {deleting === c.id ? (
+            <>
+              <span className="sb-hint">Delete this comment from GitHub?</span>
+              <button className="btn" onClick={() => void act(del.kind, del.id).then(() => setDeleting(null), () => {})}>
+                Delete
+              </button>
+              <button className="btn" onClick={() => setDeleting(null)}>
+                Keep
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn" onClick={() => setEditing(c.id)}>
+                Edit
+              </button>
+              <button className="btn" onClick={() => setDeleting(c.id)}>
+                Delete
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
-  );
+    );
+  };
 
   const thread = (t: Thread) => (
     <article className={`cm-card thread${t.resolved ? " resolved" : ""}`} key={t.id} data-thread={t.id}>
@@ -276,7 +335,7 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
           <button className="btn" aria-pressed={hideBots} onClick={() => setHideBots(!hideBots)} title="Hide comments from bots">
             {hideBots ? "Show bots" : "Hide bots"}
           </button>
-          <button className="btn" onClick={load} disabled={loading} title="Read the comments again">
+          <button className="btn" onClick={() => load()} disabled={loading} title="Read the comments again">
             {loading ? "Reading…" : "Refresh"}
           </button>
           <button className="btn" onClick={() => setAdding(!adding)}>

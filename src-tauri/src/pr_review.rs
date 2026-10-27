@@ -206,14 +206,31 @@ pub struct Review {
     pub threads: Vec<Thread>,
     pub talk: Vec<Comment>,
     pub talk_more: u64,
+    /// The signed-in user's login, so the panel can tell which comments are theirs to edit or delete.
+    pub viewer: String,
 }
 
 pub const COMMENT_CAP: usize = 100;
 
-const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}}}}}}}";
+const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){viewer{login} repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}}}}}}}";
 
 pub fn review_args(host: &str, owner: &str, repo: &str, number: u64) -> Vec<String> {
     ["api", "graphql", "--hostname", host, "-f", &format!("query={REVIEW_QUERY}"), "-f", &format!("o={owner}"), "-f", &format!("r={repo}"), "-F", &format!("n={number}")].iter().map(|s| s.to_string()).collect()
+}
+
+/// The GraphQL name of a REST reaction name (the inverse of `rest_reaction`).
+fn graphql_reaction(rest: &str) -> Option<&'static str> {
+    Some(match rest {
+        "+1" => "THUMBS_UP",
+        "-1" => "THUMBS_DOWN",
+        "laugh" => "LAUGH",
+        "confused" => "CONFUSED",
+        "heart" => "HEART",
+        "hooray" => "HOORAY",
+        "rocket" => "ROCKET",
+        "eyes" => "EYES",
+        _ => return None,
+    })
 }
 
 /// GraphQL names a reaction THUMBS_UP; the REST calls (and the buttons) say +1.
@@ -267,7 +284,8 @@ pub fn parse_review(text: &str, bots: &[String]) -> Result<Review, String> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Review { threads, talk: list(&pr["comments"]), talk_more: more(&pr["comments"]) })
+    let viewer = v["data"]["viewer"]["login"].as_str().unwrap_or("").to_string();
+    Ok(Review { threads, talk: list(&pr["comments"]), talk_more: more(&pr["comments"]), viewer })
 }
 
 /// A comment is sent trimmed; a blank one is never sent.
@@ -289,10 +307,15 @@ pub enum Act<'a> {
     Reply(u64, &'a str),
     Edit(u64, &'a str),
     Delete(u64),
+    /// Edit or delete a comment of the plain conversation (an issue comment, not a review comment).
+    EditTalk(u64, &'a str),
+    DeleteTalk(u64),
     Resolve(&'a str, bool),
     React(u64, &'a str),
     /// A reaction on a comment of the plain conversation (an issue comment, not a review comment).
     ReactTalk(u64, &'a str),
+    /// Takes back the viewer's reaction: the comment's GraphQL node id and the REST name. GraphQL needs no reaction id.
+    Unreact(&'a str, &'a str),
 }
 
 const REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
@@ -309,6 +332,8 @@ pub fn act_args(host: &str, owner: &str, repo: &str, number: u64, act: &Act) -> 
         Act::Reply(id, t) => s(&["api", &format!("repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies"), "-f", &format!("body={}", clean_comment(t)?)]),
         Act::Edit(id, t) => s(&["api", "-X", "PATCH", &format!("repos/{owner}/{repo}/pulls/comments/{id}"), "-f", &format!("body={}", clean_comment(t)?)]),
         Act::Delete(id) => s(&["api", "-X", "DELETE", &format!("repos/{owner}/{repo}/pulls/comments/{id}")]),
+        Act::EditTalk(id, t) => s(&["api", "-X", "PATCH", &format!("repos/{owner}/{repo}/issues/comments/{id}"), "-f", &format!("body={}", clean_comment(t)?)]),
+        Act::DeleteTalk(id) => s(&["api", "-X", "DELETE", &format!("repos/{owner}/{repo}/issues/comments/{id}")]),
         Act::Resolve(thread, on) => {
             let name = if *on { "resolveReviewThread" } else { "unresolveReviewThread" };
             s(&["api", "graphql", "-f", &format!("query=mutation($t:ID!){{{name}(input:{{threadId:$t}}){{thread{{isResolved}}}}}}"), "-f", &format!("t={thread}")])
@@ -319,6 +344,14 @@ pub fn act_args(host: &str, owner: &str, repo: &str, number: u64, act: &Act) -> 
             }
             let kind = if matches!(act, Act::ReactTalk(..)) { "issues" } else { "pulls" };
             s(&["api", &format!("repos/{owner}/{repo}/{kind}/comments/{id}/reactions"), "-f", &format!("content={what}")])
+        }
+        Act::Unreact(node, what) => {
+            let content = graphql_reaction(what).ok_or_else(|| format!("{what} is not a reaction GitHub offers"))?;
+            if node.trim().is_empty() {
+                return Err("That comment has no id".into());
+            }
+            let q = "mutation($s:ID!,$c:ReactionContent!){removeReaction(input:{subjectId:$s,content:$c}){reaction{content}}}";
+            s(&["api", "graphql", "-f", &format!("query={q}"), "-f", &format!("s={node}"), "-f", &format!("c={content}")])
         }
     })
 }
@@ -416,7 +449,7 @@ pub async fn scm_review_read(worktree: String, url: String, bots: Vec<String>) -
 }
 
 /// GIT-030: add, reply, edit, delete, resolve or react; every change lands on GitHub.
-/// `kind` is comment, reply, edit, delete, resolve, unresolve, react or react_talk.
+/// `kind` is comment, reply, edit, delete, edit_talk, delete_talk, resolve, unresolve, react, react_talk or unreact (id is the node id, text the reaction).
 #[tauri::command]
 pub async fn scm_review_act(worktree: String, url: String, kind: String, id: String, text: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -428,10 +461,13 @@ pub async fn scm_review_act(worktree: String, url: String, kind: String, id: Str
             "reply" => Act::Reply(num()?, &t),
             "edit" => Act::Edit(num()?, &t),
             "delete" => Act::Delete(num()?),
+            "edit_talk" => Act::EditTalk(num()?, &t),
+            "delete_talk" => Act::DeleteTalk(num()?),
             "resolve" => Act::Resolve(&id, true),
             "unresolve" => Act::Resolve(&id, false),
             "react" => Act::React(num()?, &t),
             "react_talk" => Act::ReactTalk(num()?, &t),
+            "unreact" => Act::Unreact(&id, &t),
             other => return Err(format!("Unknown action {other}")),
         };
         let a = act_args(&h, &o, &r, n, &act)?;
@@ -749,6 +785,15 @@ mod tests {
     }
 
     #[test]
+    fn git_030_the_review_names_the_signed_in_viewer() {
+        let one = "{\"data\":{\"viewer\":{\"login\":\"Ann\"},\"repository\":{\"pullRequest\":{\"comments\":{\"totalCount\":0,\"nodes\":[]},\"reviewThreads\":{\"nodes\":[]}}}}}";
+        assert_eq!(parse_review(one, &[]).unwrap().viewer, "Ann");
+        assert!(REVIEW_QUERY.contains("viewer{login}"));
+        let none = one.replace("\"viewer\":{\"login\":\"Ann\"},", "");
+        assert_eq!(parse_review(&none, &[]).unwrap().viewer, "");
+    }
+
+    #[test]
     fn a_blank_comment_is_never_sent_and_the_text_is_trimmed_first() {
         assert!(act_args("h.com", "o", "r", 7, &Act::Comment("   \n ")).is_err());
         assert!(act_args("h.com", "o", "r", 7, &Act::Reply(5, "")).is_err());
@@ -762,6 +807,9 @@ mod tests {
         assert_eq!(a(Act::Comment("hi"))[3], "repos/o/r/issues/7/comments");
         assert_eq!(a(Act::Edit(5, "x")), ["api", "--hostname", "h.com", "-X", "PATCH", "repos/o/r/pulls/comments/5", "-f", "body=x"]);
         assert_eq!(a(Act::Delete(5)), ["api", "--hostname", "h.com", "-X", "DELETE", "repos/o/r/pulls/comments/5"]);
+        assert_eq!(a(Act::EditTalk(6, " y ")), ["api", "--hostname", "h.com", "-X", "PATCH", "repos/o/r/issues/comments/6", "-f", "body=y"]);
+        assert_eq!(a(Act::DeleteTalk(6)), ["api", "--hostname", "h.com", "-X", "DELETE", "repos/o/r/issues/comments/6"]);
+        assert!(act_args("h.com", "o", "r", 7, &Act::EditTalk(6, "  ")).is_err());
         let resolve = a(Act::Resolve("T1", true));
         assert!(resolve[5].contains("resolveReviewThread") && resolve[7] == "t=T1");
         assert!(a(Act::Resolve("T1", false))[5].contains("unresolveReviewThread"));
@@ -769,6 +817,20 @@ mod tests {
         assert_eq!(a(Act::React(5, "heart"))[3], "repos/o/r/pulls/comments/5/reactions");
         assert_eq!(a(Act::ReactTalk(5, "+1"))[3], "repos/o/r/issues/comments/5/reactions");
         assert!(act_args("h.com", "o", "r", 7, &Act::React(5, "banana")).is_err());
+    }
+
+    #[test]
+    fn git_030_a_reaction_can_be_taken_back_by_its_comment_node_id() {
+        let a = |id: &str, what: &str| act_args("h.com", "o", "r", 7, &Act::Unreact(id, what));
+        let ok = a("IC_9", "+1").unwrap();
+        assert_eq!(ok[..4], ["api", "--hostname", "h.com", "graphql"]);
+        assert!(ok[5].starts_with("query=mutation") && ok[5].contains("removeReaction"));
+        assert_eq!((ok[7].as_str(), ok[9].as_str()), ("s=IC_9", "c=THUMBS_UP"));
+        assert!(a("IC_9", "banana").is_err());
+        assert!(a("  ", "heart").is_err());
+        for r in REACTIONS {
+            assert_eq!(rest_reaction(graphql_reaction(r).unwrap()), Some(r), "{r} round-trips");
+        }
     }
 
     #[test]
