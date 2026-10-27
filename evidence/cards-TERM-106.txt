@@ -3,3 +3,9 @@ box 2: src/terminal/__cards__/TERM-106.test.ts — pnpm exec vitest run src/term
   asserts: layoutWriter writes the three-tab layout, then (after the user closes tab 3) the two-tab layout; restoreLayout of the written copy has keys [1,2], activeTab {1:1,2:2}, focused 2, and no key 3 anywhere.
   MIRROR: App.tsx:2041 (setPanes filter on close) and App.tsx:1568 (layoutOf of live panes -> layoutWriter.set) are rebuilt in the test around the real layoutOf / layoutWriter / restoreLayout. The write is debounced 400 ms (layoutSave.ts), so a crash within 400 ms of a close would still bring the tab back (not asserted either way).
 gates: pnpm exec tsc --noEmit rc=0
+
+LIVE 2026-10-26 (box 1): hidden Tauri dev app (vite 1470, CDP 9290, scratch homes under G:/Temp/live-v1/run-TERM-106, stand-in scripts only), driven by scripts/prove/live-TERM-106.mjs via bash G:/Temp/live-v1/run-batch.sh TERM-106; exit 0, RESULT: PASS. Log: G:/Temp/live-v1-logs/TERM-106.out.txt (run-TERM-106.log).
+  SUBSTITUTION (judge): this build has no separate background host (spec T-068 note; no terminals.json is written), so the session holder is the app process. The script hard-kills it (taskkill /T /F, no graceful close, no save on exit; the next start shows its 'Report a crash' dialog), then relaunches the same profile.
+  Reading: pane printed marker H..-OUTPUT-END and its folder; after the relaunch the xterm buffer has marker row 1 < restored note row 5 ('restored after a restart') < new prompt row 6; the new shell's (Get-Location).Path equals the old folder.
+  Note: right after the relaunch the viewport is scrolled to the bottom (baseY 6, viewportY 6) and visibly shows only the new prompt; the earlier output sits in the scrollback just above it (scroll up to see it).
+  Screenshot: G:/Temp/live-v1-logs/TERM-106-restored-view.png

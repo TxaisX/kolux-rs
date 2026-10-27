@@ -203,3 +203,129 @@ export function hookEventsInstalled(settingsFile) {
 
 /** Rows of the screen with the blank ones dropped, trimmed for the evidence file (a short excerpt only). */
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
+
+// ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
+export const LIVE_BASE = "G:/Temp/live-v1";
+export const LIVE_LOGS = "G:/Temp/live-v1-logs";
+export const TERM = "section.pane[data-agent]";
+export const SHELL = 'section.pane[data-agent="shell"]';
+
+/** A stand-in claude.cmd: prints a banner and stays up (no network, no sign-in). body = extra batch lines run after the banner. */
+export function writeStandinClaude(dir, body = []) {
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "claude.cmd");
+  writeFileSync(file, ["@echo off", "echo Kolux RS stand-in for Claude Code (live-v1): banner only", ...body, "ping -n 3600 127.0.0.1 >nul", ""].join("\r\n"));
+  return file;
+}
+
+/** Closes the first-run guide (Close, then Skip in its "Skip setup?" question) and any other modal, so clicks and chords reach the grid. */
+export async function dismissFirstRun(app, log) {
+  const any = '[role="dialog"], [role="alertdialog"]';
+  for (let t = 0; t < 10; t++) {
+    if (!(await app.exists(any))) return true;
+    const label = await app.evalJs(`document.querySelector('[role="dialog"], [role="alertdialog"]')?.getAttribute("aria-label") ?? "(no label)"`);
+    const asked = await app.evalJs(`[...document.querySelectorAll("button")].some(b => b.textContent.trim() === "Skip") && /Skip setup\\?/.test(document.body.innerText)`);
+    if (asked) await app.clickWhere("button", "/^\\s*Skip\\s*$/");
+    else if (await app.exists('[role="dialog"] button[aria-label="Close setup"]')) await app.click('[role="dialog"] button[aria-label="Close setup"]');
+    else await app.cdp("key", "Escape");
+    await sleep(800);
+    log(`closed a first-run dialog: ${label} (${asked ? "Skip" : "Close"}); still open: ${await app.exists(any)}`);
+  }
+  return !(await app.exists(any));
+}
+
+/**
+ * id: card id. opts.report: from reporter(). opts.settings: extra settings seeded before launch. opts.standin: lines for a
+ * stand-in claude.cmd that agentOptions.claude.command points at. Scratch root G:/Temp/live-v1/run-<id>; the repo is a
+ * throwaway git repo added as a project (first shell opens). Returns helpers over CDP.
+ */
+export async function startPlain(id, opts) {
+  const { log } = opts.report;
+  const TEMP = `${LIVE_BASE}/run-${id}`;
+  const repo = `${LIVE_BASE}/work/${id}`;
+  const app = createApp({ root: ROOT, port: "1470", cdp: "9290", identifier: "com.txaisxiong.kolux-rs.prove", temp: TEMP, suffix: ".prove", offscreen: true, buildMinutes: 30, log });
+  const { profile } = app.paths;
+  if (existsSync(TEMP)) {
+    if (!existsSync(join(TEMP, ".prove-run"))) throw new Error(`${TEMP} exists without the prove marker`);
+    rmSync(TEMP, { recursive: true, force: true });
+  }
+  mkdirSync(TEMP, { recursive: true });
+  writeFileSync(join(TEMP, ".prove-run"), "made by scripts/prove/live-common.mjs startPlain\n");
+  writeFileSync(join(TEMP, ".kolux-rs-scratch"), "");
+  if (existsSync(repo)) rmSync(repo, { recursive: true, force: true });
+  mkdirSync(repo, { recursive: true });
+  for (const [name, text] of Object.entries(opts.files ?? { "notes.txt": "live-v1\n" })) writeFileSync(join(repo, name), text);
+  await git(repo, ["init", "-q", "-b", "main"]);
+  await git(repo, ["add", "."]);
+  await git(repo, ["commit", "-q", "-m", "start"]);
+  // uiLook is written down: a profile with any setting reads as Classic, and the clean (New) look is what a new install shows.
+  const seeded = { confirmCloseRunning: false, agentStatusHooks: true, uiLook: "new", ...(opts.settings ?? {}) };
+  if (opts.standin) seeded.agentOptions = { claude: { command: writeStandinClaude(join(TEMP, "standin"), opts.standin) } };
+  await app.launch({
+    prepare: () => {
+      rmSync(profile, { recursive: true, force: true });
+      mkdirSync(profile, { recursive: true });
+      writeFileSync(join(profile, "settings.json"), JSON.stringify(seeded, null, 2));
+    },
+  });
+  const { evalJs, cdp, click, clickWhere, exists, shown, focusPane, focusField, waitFor: wf } = app;
+  await wf("the sidebar add button", () => exists('.sb-foot button[title^="Add a project by path"]'), 30000);
+  if (!opts.noProject) {
+    await click('.sb-foot button[title^="Add a project by path"]');
+    await wf("the project folder field", () => exists('input[aria-label="project folder"]'), 5000);
+    await focusField('input[aria-label="project folder"]');
+    await cdp("insert", repo, "enter");
+    await wf("the first shell pane", async () => (await shown(TERM)) >= 1, 30000);
+    await wf("its input field", () => exists(`${TERM} .xterm-helper-textarea`), 30000);
+  }
+  // The first-run guide is a modal dialog; close it so key chords reach the grid.
+  await dismissFirstRun(app, log);
+  const shotDir = LIVE_LOGS;
+  mkdirSync(shotDir, { recursive: true });
+  const ctx = {
+    app, TEMP, repo, log,
+    /** Lines of the n-th shown terminal pane's whole buffer (scrollback included), from its xterm instance. */
+    lines: (index = 0, sel = TERM) =>
+      evalJs(`(() => { const p = [...document.querySelectorAll(${JSON.stringify(sel)})].filter(e => e.offsetParent !== null)[${index}]; if (!p) return null; for (const d of p.querySelectorAll("div")) { const t = d.__koluxTerm; if (t) { const b = t.buffer.active; const out = []; for (let y = 0; y < b.length; y++) out.push(b.getLine(y)?.translateToString(true) ?? ""); return { lines: out, baseY: b.baseY, viewportY: b.viewportY, rows: t.rows, cols: t.cols }; } } return null; })()`),
+    async text(index = 0, sel = TERM) {
+      const r = await ctx.lines(index, sel);
+      return r ? r.lines.join("\n") : null;
+    },
+    /** Types a line into the n-th shown pane through the input pipeline (real key events), then Enter. */
+    async typeInto(index, line, sel = TERM) {
+      await focusPane(sel, index, ".xterm-helper-textarea");
+      await cdp("insert", line, "enter");
+    },
+    /** Rects of every shown pane section, in DOM order. */
+    rects: (sel = TERM) =>
+      evalJs(`[...document.querySelectorAll(${JSON.stringify(sel)})].filter(e => e.offsetParent !== null).map(e => { const b = e.getBoundingClientRect(); return { key: e.getAttribute("aria-label"), x: b.x, y: b.y, w: b.width, h: b.height }; })`),
+    /** A CDP page screenshot (PNG) written to LIVE_LOGS/<name>.png. */
+    async shot(name) {
+      const targets = await (await fetch("http://127.0.0.1:9290/json")).json();
+      const t = targets.find((x) => x.type === "page" && /localhost:1470|tauri\.localhost/.test(x.url));
+      const ws = new WebSocket(t.webSocketDebuggerUrl);
+      await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+      const data = await new Promise((resolve) => {
+        ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id === 1) resolve(m.result?.data ?? null); };
+        ws.send(JSON.stringify({ id: 1, method: "Page.captureScreenshot", params: { format: "png" } }));
+      });
+      ws.close();
+      const file = `${shotDir}/${name}.png`;
+      if (data) writeFileSync(file, Buffer.from(data, "base64"));
+      return data ? file : null;
+    },
+    /** Pids of the shells (powershell/pwsh) under the app: a session restarted or started shows as a changed pid set. */
+    shellPids: async () => (await app.treeOf(app.pid)).filter((p) => /^(powershell|pwsh).exe$/i.test(p.name)).map((p) => p.pid).sort((x, y) => x - y),
+    stop: () => app.closeApp(),
+  };
+  return ctx;
+}
+
+/** Runs body(ctx); always stops the app; prints and returns the exit code (0 = every assertion held). */
+export async function finish(ctx, name, lines, ok) {
+  const closed = await ctx.stop().catch((e) => [false, String(e.message)]);
+  const text = lines.join("\n");
+  writeFileSync(`${LIVE_LOGS}/${name}.out.txt`, `${text}\nclose: ${JSON.stringify(closed)}\nRESULT: ${ok ? "PASS" : "FAIL"}\n`);
+  console.log(`close: ${JSON.stringify(closed)}\nRESULT: ${ok ? "PASS" : "FAIL"}`);
+  return ok ? 0 : 1;
+}
