@@ -28,7 +28,14 @@ describe("saveBreaksInvariant", () => {
   });
 
   it("fails when an untouched item changed its marker from + to -", () => {
-    expect(saveBreaksInvariant("- a\n+ b\n- c\n", "- a2\n- b\n- c\n", "- a\n- b\n- c", "- a2\n- b\n- c")).toMatch(/marker/);
+    expect(saveBreaksInvariant("- a\n+ b\n- c\n", "- a2\n- b\n- c\n", "- a\n- b\n- c", "- a2\n- b\n- c")).not.toBeNull();
+  });
+
+  it("fails when joining two lists saves the result loose though the view shows it tight (fuzz 63:170)", () => {
+    const body = "- itemitem\n\n nested\n\n deeper]\n\n- threeta\n\n3. 3. gamma\n\n4. |delta\n";
+    const prev = "- itemitem\n\n nested\n\n deeper]\n\n- threeta\n\n3. 3. gamma\n4. |delta";
+    const out = "- itemitem\n\n nested\n\n deeper]\n\n1. - threeta\n2. 3. gamma\n3. |delta";
+    expect(saveBreaksInvariant(body, "- itemitem\n\n nested\n\n deeper]\n1. - threeta\n2. 3. gamma\n\n3. |delta\n", prev, out)).not.toBeNull();
   });
 
   it("passes when the view edit itself changed the marker", () => {

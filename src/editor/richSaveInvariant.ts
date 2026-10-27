@@ -176,6 +176,18 @@ function untouchedListsChanged(B: Read, next: string, prev: string, out: string)
       if (a.markers[k] !== b.markers[k] && !(item && viewMade(item.key, "marker", b.markers[k]))) return `an untouched list changed its markers ${a.markers} to ${b.markers}: ${JSON.stringify(a.key.slice(0, 40))}`;
     }
   }
+  // The lists the edit reached: when the view's own loose/tight flags did not change, a tight one must not be saved loose, nor may their number change.
+  const bm = B.lists.slice(lp, B.lists.length - ls);
+  const nm = N.lists.slice(lp, N.lists.length - ls);
+  const suspect = bm.length !== nm.length || bm.some((x, i) => x.depth === nm[i].depth && !x.loose && nm[i].loose);
+  if (suspect) {
+    const [v0, v1] = view();
+    const [vp, vs] = sameEnds(v0.lists, v1.lists, (a, b) => a.key === b.key);
+    const w0 = v0.lists.slice(vp, v0.lists.length - vs);
+    const w1 = v1.lists.slice(vp, v1.lists.length - vs);
+    const viewChanged = w0.length !== w1.length || w0.some((x, i) => x.loose !== w1[i].loose);
+    if (!viewChanged) return bm.length !== nm.length ? "the edited lists were split or joined though the view's were not" : "an edited list went loose though the view's did not";
+  }
   const [ip, is] = sameEnds(B.items, N.items, (a, b) => a.key === b.key);
   const mi = new Map<number, number>();
   for (let i = 0; i < ip; i++) mi.set(i, i);
