@@ -294,6 +294,8 @@ function structureProblem(body: string, saved: string, prev: string, out: string
   // Round 8: a list the edit left as loose or tight as the view read it keeps the file's own state, even when one of its items was touched
   // (a gap kept right under a parent's text loosens the parent's list, and no single item's gap shows it).
   const [lp, ls] = sameEnds(was.lists, now.lists, (x, y) => x.key === y.key);
+  // Round 9: an edit that joins or splits lists in the view (it deletes the block between two) leaves no defined looseness for the joined list.
+  if (view.lists.length !== viewOut.lists.length) return null;
   const lpairs: [number, number][] = [];
   for (let i = 0; i < lp; i++) lpairs.push([i, i]);
   for (let i = 1; i <= ls; i++) lpairs.push([was.lists.length - i, now.lists.length - i]);
