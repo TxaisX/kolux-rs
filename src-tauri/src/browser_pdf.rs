@@ -216,7 +216,9 @@ pub async fn browser_pick_pdf_path(app: AppHandle, title: String, folder: Option
     if let Some(dir) = folder.filter(|d| Path::new(d).is_dir()) {
         pick = pick.set_directory(dir);
     }
-    let Some(chosen) = pick.blocking_save_file() else { return Ok(None) };
+    // Off the async worker: the dialog blocks until closed (the plugin still builds it on the main thread).
+    let picked = tauri::async_runtime::spawn_blocking(move || pick.blocking_save_file()).await.map_err(|e| e.to_string())?;
+    let Some(chosen) = picked else { return Ok(None) };
     chosen.into_path().map(|p| Some(p.display().to_string())).map_err(|e| e.to_string())
 }
 

@@ -34,12 +34,20 @@ pub fn is_folder(store: &Store, id: &str) -> bool {
 
 /// Drops projects from the folder list (removed, or now Git projects).
 pub(crate) fn unflag(store: &Store, ids: &[String]) -> Result<(), String> {
+    match unflag_write(store, ids)? {
+        Some((key, json)) => store.set(&key, &json).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// The folder list `unflag` would save, or None when nothing changes. Only reads.
+pub(crate) fn unflag_write(store: &Store, ids: &[String]) -> Result<Option<(String, String)>, String> {
     let before = ids_to_change(store)?;
     let kept: Vec<String> = before.iter().filter(|i| !ids.contains(i)).cloned().collect();
     if kept.len() == before.len() {
-        return Ok(());
+        return Ok(None);
     }
-    put_ids(store, &kept)
+    Ok(Some((FOLDERS_KEY.to_string(), serde_json::to_string(&kept).map_err(|e| e.to_string())?)))
 }
 
 /// What Kolux remembered about this project's path: the suggested names retired in its workspaces
@@ -265,7 +273,8 @@ mod tests {
         crate::orchestration::kept::refuse_copies(&base.join("db"));
         let folder = base.join("notes");
         fs::create_dir_all(&folder).unwrap();
-        assert!(add_folder(&store, &folder).is_err());
+        let err = add_folder(&store, &folder).unwrap_err();
+        assert!(err.contains("projects could not be kept aside"), "{err}");
         assert_eq!(store.get("projects").unwrap().as_deref(), Some(list), "no one-project list replaced it");
         drop(store);
         let _ = fs::remove_dir_all(&base);

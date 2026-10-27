@@ -145,3 +145,28 @@ it("GIT-032: a conflict lists files; a clean local merge says GitHub may be stal
   expect(stale.commands[0]).toBe("git fetch origin main");
   expect(conflictView(null).kind).toBe("unknown");
 });
+
+import { reactionCall } from "./review";
+
+it("GIT-030: pressing a reaction you gave takes it back by the comment's node id, otherwise adds it", () => {
+  const c = { id: "IC_1", db_id: 42, author: "ann", bot: false, body: "x", at: "" };
+  expect(reactionCall(c, { content: "heart", count: 2, mine: true }, true)).toEqual({ kind: "unreact", id: "IC_1", text: "heart" });
+  expect(reactionCall(c, { content: "heart", count: 2, mine: true }, false)).toEqual({ kind: "unreact", id: "IC_1", text: "heart" });
+  expect(reactionCall(c, { content: "+1", count: 1, mine: false }, true)).toEqual({ kind: "react", id: "42", text: "+1" });
+  expect(reactionCall(c, { content: "+1", count: 1, mine: false }, false)).toEqual({ kind: "react_talk", id: "42", text: "+1" });
+  expect(reactionCall({ ...c, db_id: null }, { content: "+1", count: 1, mine: false }, true)).toBeNull();
+});
+
+import { ownCall } from "./review";
+
+it("GIT-030: only your own comments can be edited or deleted, each by the call that fits where it sits", () => {
+  const c = { author: "Ann", db_id: 7 };
+  expect(ownCall(c, "ann", true, "edit")).toEqual({ kind: "edit", id: "7" });
+  expect(ownCall(c, "ann", false, "edit")).toEqual({ kind: "edit_talk", id: "7" });
+  expect(ownCall(c, "ANN", true, "delete")).toEqual({ kind: "delete", id: "7" });
+  expect(ownCall(c, "ann", false, "delete")).toEqual({ kind: "delete_talk", id: "7" });
+  expect(ownCall(c, "bob", true, "edit")).toBeNull();
+  expect(ownCall(c, "", true, "edit")).toBeNull();
+  expect(ownCall(c, undefined, true, "delete")).toBeNull();
+  expect(ownCall({ ...c, db_id: null }, "ann", true, "edit")).toBeNull();
+});

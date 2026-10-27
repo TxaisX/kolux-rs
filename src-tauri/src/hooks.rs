@@ -1521,7 +1521,8 @@ Content-Length: {}
         let s = json!({});
         let ev = |name: &str| format!(r#"{{"hook_event_name":"{name}","conversation_id":"c1","command":"git push -f"}}"#);
         assert_eq!(reply_body("/cursor", ev("beforeSubmitPrompt").as_bytes(), &s), r#"{"continue":true}"#);
-        for name in ["stop", "postToolUse", "postToolUseFailure", "afterAgentResponse", "preToolUse"] {
+        // Every event Kolux installs, so a new one is covered without editing this list.
+        for name in super::agent_hooks::more::CURSOR_EVENTS.into_iter().filter(|e| *e != "beforeSubmitPrompt").chain(["preToolUse"]) {
             assert_eq!(reply_body("/cursor", ev(name).as_bytes(), &s), "{}", "{name}");
         }
         for name in ["beforeShellExecution", "beforeMCPExecution"] {

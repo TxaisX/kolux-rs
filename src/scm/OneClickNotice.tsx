@@ -11,6 +11,7 @@ const mark = (run: Run, id: StepId): "done" | "now" | "skipped" | "todo" | "fail
   const at = STEPS.indexOf(run.step);
   if (run.skipped.includes(id)) return "skipped";
   if (i < at || (i === at && run.state === "done")) return "done";
+  if (run.neutral && i >= at) return "skipped";
   if (i === at) return run.state === "failed" ? "failed" : "now";
   return "todo";
 };
@@ -20,7 +21,7 @@ export function OneClickView({ run, onDismiss }: { run: Run; onDismiss?: () => v
   return (
     <div className="scm-ask" data-oneclick data-state={run.state} role="status" aria-live="polite" aria-label="Pull request progress" style={{ overflow: "hidden", maxWidth: "100%" }}>
       <div className="scm-ask-title" style={cut}>
-        {run.state === "done" ? `Pull request #${run.pr?.number ?? ""} opened` : run.state === "failed" ? "Stopped" : "Creating the pull request"}
+        {run.state === "done" ? `Pull request #${run.pr?.number ?? ""} opened` : run.neutral ? "Branch ready for your review text" : run.state === "failed" ? "Stopped" : "Creating the pull request"}
       </div>
       {STEPS.map((id) => {
         const m = mark(run, id);
@@ -37,7 +38,7 @@ export function OneClickView({ run, onDismiss }: { run: Run; onDismiss?: () => v
         );
       })}
       {run.message && (
-        <div className="note error" role="alert" style={{ overflowWrap: "anywhere" }}>
+        <div className={run.neutral ? "note warn" : "note error"} role={run.neutral ? "status" : "alert"} style={{ overflowWrap: "anywhere" }}>
           {run.message}
         </div>
       )}
