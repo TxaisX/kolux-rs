@@ -315,11 +315,17 @@ pub fn file_stamps(paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fen
 #[tauri::command]
 pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let mut pick = app.dialog().file().set_title("Open a file");
-    if let Some(dir) = default_path {
-        pick = pick.set_directory(dir);
-    }
-    let Some(chosen) = pick.blocking_pick_file() else { return Ok(None) };
+    // The dialog blocks until closed; keep it off the async runtime's threads.
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        let mut pick = app.dialog().file().set_title("Open a file");
+        if let Some(dir) = default_path {
+            pick = pick.set_directory(dir);
+        }
+        pick.blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(chosen) = chosen else { return Ok(None) };
     let path = chosen.into_path().map_err(|e| e.to_string())?;
     finish_pick(&fence, &store, &path).map(Some)
 }
