@@ -1,5 +1,5 @@
 diff --git a/src/settings/KeyLostNotice.test.ts b/src/settings/KeyLostNotice.test.ts
-index 0c3aca4d..44b94d13 100644
+index 0c3aca4d..78227592 100644
 --- a/src/settings/KeyLostNotice.test.ts
 +++ b/src/settings/KeyLostNotice.test.ts
 @@ -1,8 +1,11 @@
@@ -16,7 +16,7 @@ index 0c3aca4d..44b94d13 100644
  
  test("the note names each cleared key and says where to reconnect it", () => {
    expect(lostText(["claudeOauthToken"])).toBe("Your Claude 1-year key could not be opened on this computer, so it was cleared. Reconnect it in Settings › Accounts & keys.");
-@@ -26,3 +29,37 @@ test("every secret field the app stores has a label in the note", async () => {
+@@ -26,3 +29,39 @@ test("every secret field the app stores has a label in the note", async () => {
    for (const k of SECRET_KEYS) expect(lostText([k]), k).toContain("Your ");
    expect(lostText(["moonshotApiKey", "minimaxApiKey"])).toContain("Moonshot key and MiniMax key");
  });
@@ -49,13 +49,15 @@ index 0c3aca4d..44b94d13 100644
 +  expect(html).toContain("Claude 1-year key");
 +  expect(html).toContain("will show again");
 +  const status = /<span role="status">[\s\S]*?<\/span>/.exec(html)?.[0] ?? "";
++  expect(status).not.toBe("");
++  expect(html).not.toMatch(/<div[^>]*role="status"/);
 +  expect(status).not.toContain('role="alert"');
 +  expect(status).not.toContain("will show again");
 +  vi.mocked(invoke).mockResolvedValueOnce(null);
 +  expect(await dismissNote(names, () => invoke("secrets_dropped_dismiss"))).toEqual({ names: [], error: null });
 +});
 diff --git a/src/settings/KeyLostNotice.tsx b/src/settings/KeyLostNotice.tsx
-index b52128c0..dba3141f 100644
+index b52128c0..e59cdb35 100644
 --- a/src/settings/KeyLostNotice.tsx
 +++ b/src/settings/KeyLostNotice.tsx
 @@ -26,12 +26,33 @@ export function lostText(names: string[]): string | null {
@@ -118,7 +120,7 @@ index b52128c0..dba3141f 100644
 -    setNames([]);
 -    invoke("secrets_dropped_dismiss").catch(() => {});
 +    void dismissNote(names, () => invoke("secrets_dropped_dismiss")).then((r) => {
-+      setNames(r.names);
++      setNames((prev) => (r.error ? prev : []));
 +      setError(r.error);
 +    });
    };
