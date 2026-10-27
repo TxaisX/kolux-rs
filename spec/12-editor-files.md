@@ -33,8 +33,8 @@ Rules: Enter on a selected Inbox item does the same as the button; questions and
   are answered on the spot when the agent's terminal is alive and its prompt can be read; otherwise
   the item offers Answer in Code; opening an item marks it as visited.
 Acceptance:
-  - [ ] Inbox item for a waiting agent → click Open in Code → Code view, correct worktree, correct
-        pane focused.
+  - [x] Inbox item for a waiting agent → click Open in Code → Code view, correct worktree, correct
+        pane focused. (cards live; evidence/cards-EDIT-041.txt)
   - [x] Permission item whose terminal has exited → Answer in Code shows instead of inline buttons. (cards; evidence/cards-EDIT-041.txt)
 Compat: keybinding id view.code.
 Source: D-12-041
@@ -132,7 +132,7 @@ Acceptance:
   - [x] Edit without saving, then change the file from a terminal → the banner shows within a couple
         of seconds. (cards; evidence/cards-EDIT-003.txt)
   - [x] Click Reload → the buffer matches disk and a toast offers undo; undo → the edits come back. (cards; evidence/cards-EDIT-003.txt)
-  - [ ] Click Compare → disk copy on the left, buffer on the right.
+  - [x] Click Compare → disk copy on the left, buffer on the right. (cards live; evidence/cards-EDIT-003.txt)
   - [x] Save from Kolux → no banner. (cards; evidence/cards-EDIT-003.txt)
 Compat: —
 Source: D-12-003
@@ -159,7 +159,7 @@ Rules: Mod+S saves whichever editor is active; when a floating editor panel has 
 Acceptance:
   - [x] Open a code file from the explorer and type one character → unsaved marker shows; press
         Mod+S → marker gone and the character is on disk. (cards; evidence/cards-EDIT-001.txt)
-  - [ ] Go to the terminal view and come back → same tab in front, caret and scroll where they were.
+  - [x] Go to the terminal view and come back → same tab in front, caret and scroll where they were. (cards live; evidence/cards-EDIT-001.txt)
   - [x] With a floating editor active and another file in the main editor, press Mod+S → only the
         floating editor's file changes on disk. (cards; evidence/cards-EDIT-001.txt)
   - [x] Take away read permission on a file and open it → failure message with Retry; give
@@ -184,9 +184,9 @@ Rules: edit tabs open in rich view, while markdown diffs open as source; files l
   listing the notes fails, opening the picker again makes a fresh attempt instead of repeating the
   old failure.
 Acceptance:
-  - [ ] Open the repository's readme → rich view; switch to source → plain markdown; press
-        Mod+Shift+V → a separate preview tab.
-  - [ ] Open a 1 MB markdown file → source view with a banner; click Open anyway → rich view.
+  - [x] Open the repository's readme → rich view; switch to source → plain markdown; press
+        Mod+Shift+V → a separate preview tab. (cards live; evidence/cards-EDIT-012.txt)
+  - [x] Open a 1 MB markdown file → source view with a banner; click Open anyway → rich view. (cards live; evidence/cards-EDIT-012.txt)
 Compat: the existing keybinding ids for markdown preview, new markdown note and open markdown keep
   working.
 Source: D-12-012
@@ -206,9 +206,9 @@ Rules: inline view leaves out the original side's line numbers; showing whitespa
   header's previous and next change buttons are greyed out while there are no changes and come alive
   as soon as there are.
 Acceptance:
-  - [ ] Open a diff → inline; switch to two columns → side by side; press F7 → the caret lands on
-        the next change.
-  - [ ] Change the file in a terminal → the diff updates without reopening.
+  - [x] Open a diff → inline; switch to two columns → side by side; press F7 → the caret lands on
+        the next change. (cards live; evidence/cards-EDIT-027.txt)
+  - [x] Change the file in a terminal → the diff updates without reopening. (cards live; evidence/cards-EDIT-027.txt)
 Compat: the existing keybinding ids for next change (F7) and previous change (Shift+F7) keep
   working.
 Source: D-12-027
@@ -230,9 +230,9 @@ Rules: the side tree starts hidden, can be resized, and stays quick with thousan
   viewed; a file with both staged and unstaged changes gets two tree entries, each leading to its
   own section.
 Acceptance:
-  - [ ] Change 30 files and open All Changes → sections appear while scrolling; show the tree,
-        filter by name and jump to a file.
-  - [ ] Mark a file viewed, switch tabs and come back → the mark and the scroll position are kept.
+  - [x] Change 30 files and open All Changes → sections appear while scrolling; show the tree,
+        filter by name and jump to a file. (cards live; evidence/cards-EDIT-029.txt)
+  - [x] Mark a file viewed, switch tabs and come back → the mark and the scroll position are kept. (cards live; evidence/cards-EDIT-029.txt)
 Compat: —
 Source: D-12-029
 
@@ -248,8 +248,8 @@ Rules: a symlink expands only after it is confirmed to point at a folder; otherw
   the worktree changes; very large folders scroll smoothly because only the rows on screen are
   drawn.
 Acceptance:
-  - [ ] Press Mod+Shift+E → the explorer opens; Down, Right, Down, Enter → the first file of the
-        second folder opens.
+  - [x] Press Mod+Shift+E → the explorer opens; Down, Right, Down, Enter → the first file of the
+        second folder opens. (cards live; evidence/cards-EDIT-033.txt)
   - [x] Shift-click two rows apart → three rows are selected. (cards; evidence/cards-EDIT-033.txt)
 Compat: keybinding id sidebar.explorer.toggle; view id explorer.
 Source: D-12-033
