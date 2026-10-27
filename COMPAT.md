@@ -527,7 +527,7 @@ Kolux learns what an agent is doing (working, blocked, waiting for Txais, done) 
 - The hook reads all of stdin and sends it to Kolux over HTTP on the loopback address, at a per-agent path, on the port given by `KOLUX_AGENT_HOOK_PORT`, with `KOLUX_AGENT_HOOK_TOKEN` as a header. A second header carries pane identity: pane key, tab id, launch token, worktree id, hook environment and hook version, base64-encoded.
 - Timeouts are short: half a second to connect, one and a half seconds in all. Proxies are bypassed for the loopback address.
 - Guard first: if the port, the token or `KOLUX_PANE_KEY` is missing, the hook is running outside a Kolux pane. It exits 0 at once without reading stdin, because outside Kolux the caller may hold stdin open and a read would hang.
-- The hook always exits 0 and never blocks the agent. Its stdout is empty unless the agent needs an answer: Gemini gets an empty JSON object; Cursor gets "continue" on `beforeSubmitPrompt`, "allow" on `preToolUse`, `beforeShellExecution` and `beforeMCPExecution`, and an empty object otherwise; the Antigravity ask tools get a decision of "ask" so the agent shows its own prompt; Amp's plugin returns "allow" on tool calls. Codex's `PermissionRequest` hook returns no decision, so Codex still shows its own approval screen.
+- The hook always exits 0 and never blocks the agent. Its stdout is empty unless the agent needs an answer: Gemini gets an empty JSON object; Cursor gets "continue" on `beforeSubmitPrompt` and an empty object otherwise (its permission events `preToolUse`, `beforeShellExecution` and `beforeMCPExecution` are never installed, DT-C49); the Antigravity ask tools get a decision of "ask" so the agent shows its own prompt; Amp's plugin returns "allow" on tool calls. Codex's `PermissionRequest` hook returns no decision, so Codex still shows its own approval screen.
 - A small endpoint file in Kolux's data folder holds the current port and token. Hooks read it on each run, so a terminal that outlives a Kolux restart still reaches the current server.
 - On macOS and Linux, a hook that cannot reach Kolux spools the payload to a per-pane file under the endpoint folder (folder mode 700, file mode 600, 5 MB cap, cleared after 7 days; tool events are not spooled). On Windows the hook holds every event, tool events included, with names only: event, tool and session names and the few flags the status rules read, never the tool input, output, prompt or reply (the holding line in hooks.rs). Kolux replays the spool when it comes back.
 - On Windows, an event that Windows PowerShell cannot parse (keys that differ only in case, for one) is held with its event and session names only, read from the top-level keys that come before the first nested object; when a nested object such as the tool's input comes first, the event is dropped rather than risk a word of it. The held append waits out another hook that holds the file (up to two seconds); any other failure, a missing holding folder for one, gives up at once. A held event costs the agent about half a second to a second of PowerShell start-up on top of the hook's own short timeouts; an event that reaches Kolux pays none of it.
@@ -574,7 +574,7 @@ Kolux also installs a Claude status-line command, only when the user's own statu
 | Gemini | `~/.gemini/settings.json` | 4: `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool` | `PreToolUse`, `PostToolUse` (old entries are swept out) |
 | Antigravity | `~/.gemini/config/hooks.json`, inside one named bundle (kolux-status) | 5: `PreInvocation`, `PostInvocation`, `Stop`, `PreToolUse`, `PostToolUse` | none |
 | Amp | A plugin file in `~/.config/amp/plugins` | 5: `session.start`, `agent.start`, `tool.call`, `tool.result`, `agent.end` | none |
-| Cursor | `~/.cursor/hooks.json` | 8: `beforeSubmitPrompt`, stop, `preToolUse`, `postToolUse`, `postToolUseFailure`, `beforeShellExecution`, `beforeMCPExecution`, `afterAgentResponse` | `sessionStart`, `sessionEnd` |
+| Cursor | `~/.cursor/hooks.json` | 5: `beforeSubmitPrompt`, stop, `postToolUse`, `postToolUseFailure`, `afterAgentResponse` | `preToolUse`, `beforeShellExecution`, `beforeMCPExecution` (DT-C49), `sessionStart`, `sessionEnd` |
 | Droid | `~/.factory/settings.json` | 8: `SessionStart`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Notification` | none |
 | Command Code | `~/.commandcode/settings.json` | 3: `PreToolUse`, `PostToolUse`, `Stop` | none |
 | Grok | `~/.grok/hooks/kolux-status.json`, or the same under `GROK_HOME` | 9: `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionEnd`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification` | none |
@@ -658,11 +658,11 @@ Cursor (10):
 |---|---|
 | `beforeSubmitPrompt` | working; answers "continue". |
 | stop | done; interrupted when the status is not "completed". |
-| `preToolUse` | working with the tool in flight; answers "allow". |
+| `preToolUse` | working with the tool in flight; mapped, not installed (DT-C49). |
 | `postToolUse` | working. |
 | `postToolUseFailure` | working. |
-| `beforeShellExecution` | working; answers "allow". |
-| `beforeMCPExecution` | working; answers "allow". |
+| `beforeShellExecution` | working; mapped, not installed (DT-C49). |
+| `beforeMCPExecution` | working; mapped, not installed (DT-C49). |
 | `afterAgentResponse` | done only if Cursor's previous status was already done. |
 | `sessionStart` | Mapped to working but not installed. |
 | `sessionEnd` | Mapped to done but not installed. |
@@ -783,7 +783,7 @@ Verified against the old source for five agents (50 rows): Claude 13, OpenClaude
 | STAT-009 | Gemini CLI: the 4 events of 3.4; the older pre-tool and post-tool entries are recognised and swept out. |
 | STAT-010 | Antigravity: the 5 events of 3.4 in its hooks file, inside one named Kolux bundle. |
 | STAT-011 | Amp: a Kolux plugin in Amp's plugins folder handling the 5 events of 3.4. |
-| STAT-012 | Cursor Agent: the 8 installed events of 3.4, in Cursor's own naming style; the card and 3.4 agree that session start and session end are mapped but not installed. |
+| STAT-012 | Cursor Agent: the 5 installed events of 3.4, in Cursor's own naming style; the card and 3.4 agree that session start, session end and the three permission events (DT-C49) are mapped but not installed. |
 | STAT-013 | Droid: the 8 events of 3.4 in its settings. |
 | STAT-014 | Command Code: the 3 tool and stop events of 3.4; the rest of its status is read from its transcript. |
 | STAT-015 | Kimi: the 7 events of 3.4, in one block between Kolux marker lines in Kimi's TOML settings. |

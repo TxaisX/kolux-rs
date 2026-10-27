@@ -43,7 +43,8 @@ fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
     assert_eq!(plan(&none, &ids(&["copilot"]), true)[8], ("copilot", Plan::Install), "T-122: and Copilot CLI");
     assert_eq!(plan(&none, &ids(&["grok", "devin"]), true)[9..11], [("grok", Plan::Install), ("devin", Plan::Install)], "T-122: and Grok and Devin");
     assert_eq!(plan(&none, &ids(&["pi"]), true)[11..12], [("pi", Plan::Install)], "T-122: and Pi (STAT-021)");
-    assert_eq!(plan(&none, &ids(&["hermes"]), true)[12..], [("hermes", Plan::Install)], "T-121: and Hermes (STAT-016)");
+    assert_eq!(plan(&none, &ids(&["hermes"]), true)[12..13], [("hermes", Plan::Install)], "T-121: and Hermes (STAT-016)");
+    assert_eq!(plan(&none, &ids(&["command-code"]), true)[13..], [("command-code", Plan::Install)], "STAT-014: and Command Code");
     let off = json!({ "agentStatusHooks": true, "disabledAgents": ["codex"] });
     assert_eq!(plan(&off, &ids(&["claude", "codex"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
     assert_eq!(plan(&off, &[], false)[..2], [("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");
@@ -2026,6 +2027,16 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     show("amp", "before off", &amp);
     assert!(vendors::rows(&home).iter().all(|r| r["state"] == "installed"), "{:?}", vendors::rows(&home));
 
+    // Command Code: the user's own Stop hook and setting in its settings.json; Kolux's groups go in beside them.
+    let command_code = more::command_code_file(&home);
+    fs::create_dir_all(command_code.parent().unwrap()).unwrap();
+    let command_code_user = "{\n  \"theme\": \"dark\",\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"./done.sh\" }] }]\n  }\n}\n";
+    fs::write(&command_code, command_code_user).unwrap();
+    assert_eq!(apply(&home, &profile, "command-code", Plan::Install), Ok("installed"));
+    assert_eq!(more::inspect_command_code(&command_code).0, "installed");
+    assert_ne!(read(&command_code), command_code_user, "Kolux's groups went in");
+    show("command-code", "before off", &command_code);
+
     // A Claude settings file that never held Kolux's entries: off must not write it at all.
     let plain = dir.join("plain").join("settings.json");
     fs::create_dir_all(plain.parent().unwrap()).unwrap();
@@ -2038,7 +2049,7 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     for id in MANAGED {
         let out = match id {
             "claude" => with_claude_config(claude.parent().unwrap(), || apply(&home, &profile, id, Plan::Remove)),
-            "codex" | "gemini" | "antigravity" | "amp" => apply(&home, &profile, id, Plan::Remove),
+            "codex" | "gemini" | "antigravity" | "amp" | "command-code" => apply(&home, &profile, id, Plan::Remove),
             other => {
                 println!("{other} is managed but has no off-path proof in this test yet (hooks FIX-2 follow-up: add its file above)");
                 continue;
@@ -2061,6 +2072,7 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     assert_eq!(read(&antigravity), antigravity_user, "Antigravity: the user's bundle back exactly");
     assert!(!amp.exists(), "Amp: Kolux's plugin file is gone");
     assert_eq!(read(&amp_sibling), "export default () => {}\n", "the user's own plugin untouched");
+    assert_eq!(read(&command_code), command_code_user, "Command Code: the user's settings back exactly");
     assert_eq!(read(&plain), plain_user, "a file without Kolux's entries is left as it was");
     assert!(!backup_of(&plain).exists(), "and no copy of it was made");
     assert!(!claude_prev.exists() && !claude_prev.with_extension("json").exists(), "the status line slot is cleared");
@@ -2078,6 +2090,7 @@ fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
     assert_eq!(vendors::remove_hooks(&home, &gemini), Ok(false));
     assert_eq!(vendors::remove_antigravity(&home, &antigravity), Ok(false));
     assert_eq!(vendors::remove_amp(&amp), Ok(false));
+    assert_eq!(more::remove_command_code(&home, &command_code), Ok(false));
     assert_eq!((read(&claude), read(&codex), read(&gemini), read(&antigravity)), (shaped(), codex_user.into(), gemini_user.into(), antigravity_user.into()));
     let _ = fs::remove_dir_all(&dir);
 }
