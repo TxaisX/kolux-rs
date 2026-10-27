@@ -402,10 +402,10 @@ pub fn token_tracking_set(store: tauri::State<'_, Mutex<Store>>, provider: Strin
     set_tracking(&*store.lock().map_err(|e| e.to_string())?, &provider, on)
 }
 
-/// Rows 193, 912: the choices are read through `claude_accounts::load_for_save`, so a blob that no
-/// longer reads is kept aside before this save, and one that cannot be kept refuses the save.
+/// Rows 193, 916: a blob that no longer reads is kept aside before this save; one that cannot be read
+/// or kept answers an Err and nothing is poisoned, so a retry after a transient failure works.
 fn set_tracking(store: &Store, provider: &str, on: bool) -> Result<(), String> {
-    let mut all: serde_json::Map<String, Value> = crate::claude_accounts::load_for_save(store, KEY_TRACKING);
+    let mut all: serde_json::Map<String, Value> = crate::orchestration::kept::load(store, KEY_TRACKING)?;
     all.insert(provider.to_string(), Value::Bool(on));
     store.set(KEY_TRACKING, &Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
@@ -710,6 +710,20 @@ mod tests {
         assert!(set_tracking(&store, "claude", true).is_err(), "the save is refused");
         assert_eq!(store.get(KEY_TRACKING).unwrap().as_deref(), Some(broken), "the stored choices are byte-identical");
         assert!(choices(&store).is_empty(), "a read-only caller still gets the default");
+    }
+
+    // Row 916: a read that failed for a moment poisons nothing; the same switch works once the store reads again.
+    #[test]
+    fn row916_a_switch_works_again_once_the_store_can_be_read() {
+        let t = temp("row916");
+        let store = Store::open(&t.0).unwrap();
+        store.set(KEY_TRACKING, r#"{"codex":true}"#).unwrap();
+        let side = crate::orchestration::kept::Unreadable::new(&t.0);
+        assert!(set_tracking(&store, "claude", true).is_err());
+        side.restore();
+        set_tracking(&store, "claude", true).unwrap();
+        assert_eq!(choices(&store).get("claude").and_then(Value::as_bool), Some(true));
+        assert_eq!(choices(&store).get("codex").and_then(Value::as_bool), Some(true));
     }
 
     #[test]
