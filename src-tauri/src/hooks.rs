@@ -592,7 +592,6 @@ pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Resu
 
 /// T-548-b: the windows one config folder's reports carried, for a pane on another account.
 // Unregistered until lib.rs lists it (evidence/fix-hooks-fix-T-548-b-lib.rs.patch).
-#[allow(dead_code)]
 #[tauri::command]
 pub fn claude_usage_of(store: tauri::State<'_, Mutex<crate::state::Store>>, config_dir: Option<String>) -> Result<Vec<Limit>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;

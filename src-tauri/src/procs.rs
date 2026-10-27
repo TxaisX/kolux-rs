@@ -384,6 +384,12 @@ mod tests {
         drop(child);
         assert!(wait_gone(&[pid], Duration::from_secs(5)).is_empty(), "the shell is gone");
         // An orphan would still name the dead shell as its parent: the program went with it.
+        // Load flake fix: a killed program can take a moment to leave the table, so poll up to 5 s; an
+        // orphan lives the full 60 s and still fails.
+        let t = std::time::Instant::now();
+        while has_children(pid) != Some(false) && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert_eq!(has_children(pid), Some(false), "the program the shell started is gone too");
         assert_eq!(alive(pid), Some(false));
     }
