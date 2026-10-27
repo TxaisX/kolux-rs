@@ -1,0 +1,23 @@
+VIEW-026 live evidence (cards lane; BUG found by the live pass, boxes left unticked)
+
+LIVE 2026-10-26 (spec/05 live-v2; hidden dev app, vite 1470, CDP 9290, scratch roots under G:/Temp/live-v2)
+boxes: 1,2: FAIL (BUG, see kolux-rs-after.md NOW row)
+command: node scripts/prove/live-VIEW-026.mjs   (log G:/Temp/live-v2-logs/VIEW-026.out.txt)
+screenshot: G:/Temp/live-v2-logs/VIEW-026-board-collapsed.png
+screenshot: G:/Temp/live-v2-logs/VIEW-026-probe-expanded.png
+readings:
+  launching: pnpm tauri dev (identifier com.txaisxiong.kolux-rs.prove, vite 1470, CDP 9290; log G:\Temp\live-v2\run-VIEW-026\tauri-dev.log)
+  app pid 50088 (G:\Dev\kolux-rs-lanes\prove\src-tauri\target\debug\kolux-rs.exe); window: moved off-screen
+  closed a first-run dialog: Get started with Kolux (Close); still open: true
+  closed a first-run dialog: Get started with Kolux (Skip); still open: true
+  closed a first-run dialog: Floating workspace tour (Close); still open: false
+  Board card, collapsed: {"tag":"v26","expanded":false,"card":{"w":2,"h":29},"termVisible":false,"term":{"w":0,"h":0},"btnTitle":"Expand: show this session's live terminal in the card","btnRect":{"w":0,"h":0},"boardDisplay":"flex","parentClass":"cell"}
+  PASS setup: the Board shows the pane as a collapsed card (terminal not visible): {"tag":"v26","expanded":false,"card":{"w":2,"h":29},"termVisible":false,"term":{"w":0,"h":0},"btnTitle":"Expand: show this session's live terminal in the card","btnRect":{"w":0,"h":0},"boardDisplay":"flex","parentClass":"cell"}
+  FAIL a user can reach the card: it has a real width and its Expand button a clickable size: {"card":{"w":2,"h":29},"btnRect":{"w":0,"h":0},"boardDisplay":"flex"}
+  ERROR Error: Board card is not usable (see the check above); stopping before the expand step
+      at file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-026.mjs:31:25
+  close: [true,"window close over CDP, exited in 4.5 s; pre-close tree 8 (msedgewebview2.exe x6, conhost.exe x1, powershell.exe x1); survivors 0 (none)"]
+  RESULT: FAIL
+  diagnostic probe (force-clicked expand, not something a user can do):
+  collapsed: {"card":{"w":2,"h":29,"x":9,"y":71},"boardDisplay":"flex","term":{"w":0,"h":0},"expandBtn":{"x":0,"y":0,"w":0,"h":0,"clipped":false},"headText":"PSVIEW-026qmainWindows PowerShellReady0%"}
+  expanded: {"card":{"w":2,"h":420,"x":9,"y":71},"boardDisplay":"flex","term":{"w":8,"h":391},"expandBtn":{"x":0,"y":0,"w":0,"h":0,"clipped":false},"headText":"PSVIEW-026qmainWindows PowerShellReady0%"}

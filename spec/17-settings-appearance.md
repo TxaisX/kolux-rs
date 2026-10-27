@@ -188,7 +188,7 @@ Rules: the pages are General, Appearance, Accounts & keys, Agents, Terminal & se
 Acceptance:
   - [x] Press Mod+Comma → Settings opens on the last page used, or the first. (cards; evidence/cards-SET-006.txt)
   - [x] Count the pages in the side list → exactly the ten named, plus one per repository. (cards; evidence/cards-SET-006.txt)
-  - [ ] Follow an in-app link to the shortcut policy → Shortcuts opens, scrolled to that setting.
+  - [x] Follow an in-app link to the shortcut policy → Shortcuts opens, scrolled to that setting. (cards; evidence/cards-SET-006.txt)
 Compat: the keybinding command id app.settings stays, with Mod+Comma as its default.
 Source: D-17-006
 
