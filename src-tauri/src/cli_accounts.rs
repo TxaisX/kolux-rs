@@ -38,10 +38,14 @@ fn name(agent: &str) -> &'static str {
 
 // ---------------------------------------------------------------- the app's side
 
+/// Row 944: an account id from the renderer is joined into paths, so only letters and digits pass (no "..", separators or empty).
+pub(crate) fn safe_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 /// The throwaway folder of one sign-in; always worked out here, never taken from the caller.
 pub fn temp_of(profile: &Path, agent: &str, id: &str) -> Option<PathBuf> {
-    let safe = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric());
-    (AGENTS.contains(&agent) && safe).then(|| profile.join(TEMP_FOLDER).join(format!("{agent}-{id}")))
+    (AGENTS.contains(&agent) && safe_id(id)).then(|| profile.join(TEMP_FOLDER).join(format!("{agent}-{id}")))
 }
 
 pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
@@ -268,6 +272,17 @@ pub fn text(command: &str, r: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Row 944: only letters and digits are a safe account id.
+    #[test]
+    fn row944_safe_id_takes_letters_and_digits_only() {
+        for ok in ["a1", "c7", "19f3a"] {
+            assert!(safe_id(ok), "{ok}");
+        }
+        for bad in ["", "..", ".", "a/b", "a\\b", "a-1", "a b", "é"] {
+            assert!(!safe_id(bad), "{bad:?}");
+        }
+    }
 
     struct Sink(std::sync::Arc<Mutex<Vec<u8>>>);
     impl std::io::Write for Sink {

@@ -295,6 +295,10 @@ pub fn login_command(program: &Path, home: &Path, device: bool) -> CommandBuilde
 /// sign-in sealed into the vault; only a sign-in the login changed counts. On failure the home is
 /// removed, unless it already holds a working sign-in.
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
+    // Row 944: the id comes from the renderer and is joined into paths, so an unsafe one is refused before anything touches the disk.
+    if !crate::cli_accounts::safe_id(id) {
+        return Err(Attention::new("unknown", "That account id is not valid."));
+    }
     // Row 923: a NEW account never reuses a taken id, so a clash cannot overwrite a listed account's home or sealed copy.
     // Row 929: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id.
     // Row 932: a list that cannot be read fails here, before the login; it never routes a listed account to a new id.
@@ -848,6 +852,9 @@ pub fn codex_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Stor
 /// Takes the account off the list, deletes its home (only one inside Kolux's own folder) and
 /// sealed copy, and hands new panes back to the system default when it was the active one.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    if !crate::cli_accounts::safe_id(id) {
+        return Err("That Codex account id is not valid.".into());
+    }
     let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(at) = list.iter().position(|a| a.id == id) else {
         return Err("That Codex account is no longer listed.".into());
@@ -858,7 +865,8 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
         store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
     }
     let home = PathBuf::from(&gone.home);
-    if home.starts_with(profile.join(FOLDER)) {
+    // Row 944: only the account's own home directly under the accounts folder is deleted (a ".." or a nested path is not).
+    if home.parent() == Some(profile.join(FOLDER).as_path()) && home.file_name().is_some_and(|n| n == id) {
         remove_dir_patiently(&home).map_err(|e| format!("The account was removed, but its Codex home could not be deleted: {e}"))?;
     }
     let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
@@ -1356,6 +1364,23 @@ mod tests {
         assert_eq!(got.home, first.home, "and its home");
         let homes: Vec<_> = fs::read_dir(profile.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(homes, ["c1"], "no second account home");
+    }
+
+    // Row 944: an id like ".." is never an account home; a cancelled login must not roll back (delete) the profile folder.
+    #[test]
+    fn row944_a_codex_sign_in_with_a_path_id_is_refused_before_the_login() {
+        let profile = temp("row944-signin");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let marker = profile.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let called = std::cell::Cell::new(false);
+        let got = sign_in(&store, &profile, "..", true, 1, |_: &Path| {
+            called.set(true);
+            (String::new(), Ended::Cancelled, None)
+        });
+        assert!(got.is_err(), "an unsafe id is refused");
+        assert!(!called.get(), "the login never ran");
+        assert!(marker.exists(), "nothing outside the accounts folder was touched");
     }
 
     // Row 940: a non-empty list that lacks the id but a home that is there is a still-existing sign-in (the list lost it), so it keeps its id.

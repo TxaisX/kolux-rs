@@ -222,6 +222,10 @@ pub fn login_command(program: &Path, dir: &Path) -> CommandBuilder {
 /// account's earlier credentials are put back.
 #[allow(clippy::too_many_arguments)]
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended), status: impl FnOnce(&Path) -> Option<String>) -> Result<Account, Attention> {
+    // Row 944: the id comes from the renderer and is joined into paths, so an unsafe one is refused before anything touches the disk.
+    if !crate::cli_accounts::safe_id(id) {
+        return Err(Attention::new("unknown", "That account id is not valid."));
+    }
     // Row 932: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id; an unreadable list fails here, before the login.
     let (listed_ids, existing) = if existing {
         let ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
@@ -585,6 +589,9 @@ pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Sto
 /// hands new panes back to the system default when it was the active one. Only a folder inside
 /// Kolux's own accounts folder is ever deleted.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    if !crate::cli_accounts::safe_id(id) {
+        return Err("That Claude account id is not valid.".into());
+    }
     let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(at) = list.iter().position(|a| a.id == id) else {
         return Err("That Claude account is no longer listed.".into());
@@ -595,7 +602,8 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
         store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
     }
     let dir = PathBuf::from(&gone.config_dir);
-    if dir.starts_with(profile.join(FOLDER)) {
+    // Row 944: only the account's own folder directly under the accounts folder is deleted (a ".." or a nested path is not).
+    if dir.parent() == Some(profile.join(FOLDER).as_path()) && dir.file_name().is_some_and(|n| n == id) {
         crate::codex_accounts::remove_dir_patiently(&dir).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
     }
     let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("claude-{id}.json")));
@@ -1074,6 +1082,35 @@ mod tests {
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| None).is_err());
         assert_eq!(fs::read(&vault).unwrap(), orphan, "the orphan is byte-identical");
         assert!(!dir.join(FOLDER).join("a1").join(CREDENTIALS).exists(), "no credentials go live in the removed account's folder");
+    }
+
+    // Row 944: an id like ".." is never an account folder; the sign-in refuses it before the login runs or anything on disk changes.
+    #[test]
+    fn row944_a_sign_in_with_a_path_id_is_refused_before_the_login() {
+        let (dir, store) = profile("row944-signin");
+        let marker = dir.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let called = std::cell::Cell::new(false);
+        let got = sign_in(&store, &dir, "..", true, 9, |_| {
+            called.set(true);
+            (String::new(), Ended::Cancelled)
+        }, |_| None);
+        assert!(got.is_err(), "an unsafe id is refused");
+        assert!(!called.get(), "the login never ran");
+        assert!(marker.exists(), "nothing outside the accounts folder was touched");
+    }
+
+    // Row 944: removing an account whose listed id is ".." must not delete the profile folder.
+    #[test]
+    fn row944_removing_a_path_id_deletes_nothing() {
+        let (dir, store) = profile("row944-remove");
+        let marker = dir.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let s = store.lock().unwrap();
+        let odd = Account { id: "..".into(), email: None, organization: None, config_dir: dir.join(FOLDER).join("..").to_string_lossy().into_owned(), last_sign_in: 1, stale: false };
+        save(&s, &[odd]).unwrap();
+        assert!(remove(&s, &dir, "..").is_err(), "an unsafe id is refused");
+        assert!(marker.exists(), "the profile folder is still there");
     }
 
     // Row 940 (2): a non-empty list that lacks the id but a folder that is there is a still-existing sign-in (the list lost it), so it keeps its id.
