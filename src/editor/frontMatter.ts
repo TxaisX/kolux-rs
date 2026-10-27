@@ -136,6 +136,8 @@ function placeTight(body: string, out: string, prev: string, tight: ReturnType<t
   let kept = next === null ? null : tight ? regap(tight, next, prev, out) : next;
   // A blank line the edit did not touch must survive the placement (the blocks retyped in the view's spelling can drop one).
   if (kept !== null && next !== null && blankLines(next) < blankLines(base) + blankLines(out) - blankLines(prev)) kept = null;
+  // Round 9: a deleted line between a parent and its sub-list can leave the file's blank line there, which loosens the parent's list.
+  if (kept !== null && kept !== body && parentGaps(kept) > 0 && parentGaps(kept) > parentGaps(body) + parentGaps(out) - parentGaps(prev)) kept = null;
   if (kept !== null && next !== null && blankMoved(base, next, prev, out, new Set(tight?.gaps.map((g) => g.item)))) kept = null;
   if (next !== null && kept === null) placeStats.refused++;
   return kept;
@@ -162,6 +164,9 @@ function blankMoved(base: string, next: string, prev: string, out: string, gappe
     return (blankAbove(next, at) !== 0) !== had && !(had === false && gapped.has(i));
   });
 }
+
+/** Blank lines between an item's text and its first sub-item. */
+const parentGaps = (t: string) => (/^[ \t]+([-*+]|\d+[.)])[ \t]/m.test(t) ? (collapseGaps(t, true)?.gaps.filter((g) => g.parent !== undefined).length ?? 0) : 0);
 
 /** Blank lines straight above an indented line: inside an item, not a gap between blocks. */
 const blankLines = (t: string) => (t.match(/\n[ \t]*\r?\n(?=[ \t]+\S)/g) ?? []).length;
@@ -288,8 +293,12 @@ const numberless = (line: string) => line.replace(/^([ \t]*)\d+([.)])/, "$1#$2")
  *  "before" it (the edit is wholly above the line, or only after its marker), "after" it (the line is below the edit, a pure
  *  insertion at its start counts), or "cut" (the edit changes its line break or marker). */
 function itemFates(prev: string, out: string, starts: number[]): ("before" | "after" | "cut")[] {
-  const pl = prev.split("\n").map(numberless);
-  const ol = out.split("\n").map(numberless);
+  // Round 9: blank lines are the view's spacing, not the edit's, so they are left out (an edit that only re-spaces a list cuts no item).
+  const kept: number[] = []; // the non-blank line number of each line of `prev`
+  let nb = 0;
+  for (const l of prev.split("\n")) kept.push(/\S/.test(l) ? nb++ : nb);
+  const pl = prev.split("\n").filter((l) => /\S/.test(l)).map(numberless);
+  const ol = out.split("\n").filter((l) => /\S/.test(l)).map(numberless);
   let p = 0;
   while (p < pl.length && p < ol.length && pl[p] === ol[p]) p++;
   let s = 0;
@@ -298,12 +307,19 @@ function itemFates(prev: string, out: string, starts: number[]): ("before" | "af
   let col = 0; // how far line p reads the same in both: past the marker, the edit is inside the item's text
   if (p < pl.length && p < ol.length) while (col < pl[p].length && pl[p][col] === ol[p][col]) col++;
   const marker = p < pl.length ? (ITEM.exec(pl[p])?.[0].length ?? 0) : 0;
+  // Round 9: when the edit adds or removes no item line, the item lines it spans are the same items in order; one whose marker is intact stays "before".
+  const markerOf = (l: string) => ITEM.exec(l)?.[0];
+  const inPrev = pl.map((_, i) => i).filter((i) => i >= p && i < hi && markerOf(pl[i]));
+  const inOut = ol.map((_, i) => i).filter((i) => i >= p && i < ol.length - s && markerOf(ol[i]));
   const fates: ("before" | "after" | "cut")[] = [];
-  let line = 0;
+  let row = 0;
   let at = 0;
   for (const st of starts) {
-    while (at < st) if (prev.charCodeAt(at++) === 10) line++;
-    fates.push(line < p ? "before" : line >= hi ? "after" : line === p && ol.length - s > p && col >= marker ? "before" : "cut");
+    while (at < st) if (prev.charCodeAt(at++) === 10) row++;
+    const line = kept[row];
+    const k = inPrev.indexOf(line);
+    const intact = k >= 0 && inPrev.length === inOut.length && markerOf(pl[line]) === markerOf(ol[inOut[k]]);
+    fates.push(line < p ? "before" : line >= hi ? "after" : (line === p && ol.length - s > p && col >= marker) || intact ? "before" : "cut");
   }
   return fates;
 }
@@ -335,7 +351,9 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
     const cut = blankAbove(next, ns[j]);
     if (cut < 0) return null;
     if (g.parent === undefined) {
-      if (noSiblingAbove(next, ns[j])) continue;
+      const lone = noSiblingAbove(next, ns[j]);
+      if (lone === null) return null;
+      if (lone) continue;
     } else if (lineAbove(next, ns[j]) !== ns[fp === "before" ? g.parent : g.parent + dn]) return null; // the parent is no longer right above
     kept.push({ at: ns[j] - cut, raw: g.raw, item: j, cut });
   }
@@ -357,10 +375,11 @@ function lineAbove(text: string, at: number): number {
 
 /** Round 8 (NEW-HIGH-1): whether the nested item line at `at` has no sibling above it any more (the edit deleted them), so it now sits
  *  right under its parent's text; a gap kept there would loosen the parent's list. */
-function noSiblingAbove(text: string, at: number): boolean {
+function noSiblingAbove(text: string, at: number): boolean | null {
   const own = ITEM.exec(text.slice(at, at + 40));
   const me = own && { w: width(own[1]), k: kind(own) };
   if (!me?.w) return false;
+  let deeper = false;
   for (let end = at; end > 0; ) {
     const start = text.lastIndexOf("\n", end - 2) + 1;
     const line = text.slice(start, end);
@@ -371,7 +390,9 @@ function noSiblingAbove(text: string, at: number): boolean {
     // Round 9 (HIGH-2): an item of another marker (`*` then `-`, `1.` then `-`) starts a list of its own, so it is no sibling.
     const level = levels.find((l) => l.w === me.w);
     if (level) return level.k !== me.k;
-    if (levels[0].w < me.w) return true;
+    // Round 9: a deeper item passed on the way up may be a sibling at another indent (both in the parent's list), which cannot be told here: null.
+    if (levels[0].w < me.w) return deeper ? null : true;
+    deeper = true;
   }
   return false;
 }

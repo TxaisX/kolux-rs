@@ -569,3 +569,34 @@ describe("round 9", () => {
     });
   });
 });
+
+// Round 9 fuzz follow-ups (seeds 64, 96, 117, 124 of the chained-edit fuzz).
+describe("round 9: gaps the view's spacing or an odd indent must not move", () => {
+  it("a selection that merges items keeps the file's gap above a sub-item the user never touched (seed 64)", () => {
+    const body = "- [x] eggs *e*\n\n- [ ] bread.\n\n- a 2\n    - n1\n    - lazy\n\n    - n3\n- b\n\n- c\n";
+    const prev = "- [x] eggs *e*\n- [ ] bread.\n\n- a 2\n    - n1\n    - lazy\n    - n3\n- b\n- c";
+    const out = "- [x] eggs *e* -- a 2\n    - n1\n    - lazy\n    - n3\n\n- b\n- c";
+    const got = mapEdit(body, out, prev);
+    expect(got === null || got.includes("    - lazy\n\n    - n3\n")).toBe(true);
+  });
+  it("an item whose marker survives an edit that spans it keeps the gap above it (seed 117)", () => {
+    const body = "- a 2\n  1. x- b\n\n\n\n- `npm i` installs 3\n";
+    const prev = "- a 2\n    1. x- b\n- `npm i` installs 3";
+    const out = "- a 2\n    1. x- b -\n-  `npm i` installs 3";
+    expect(mapEdit(body, out, prev)).toBe("- a 2\n  1. x- b -\n\n\n\n-  `npm i` installs 3\n");
+  });
+  it("a sub-item at another indent than the siblings the edit deleted is refused, not tightened (seed 96)", () => {
+    const body = "- two\n    - nested deeper- three\n\n- a 3\n  - n1\n\n  - n2|\n- b\n";
+    const prev = "- two\n    - nested deeper- three\n- a 3\n    - n1\n    - n2|\n- b";
+    const out = "- two\n    - nested deeper- threen1\n    - n2|\n- b";
+    const got = mapEdit(body, out, prev);
+    expect(got === null || got.includes("\n\n  - n2|")).toBe(true);
+  });
+  it("a deleted line never leaves the file's blank line between a parent and its sub-list (seed 124)", () => {
+    const body = "- see _this_\n\n\n1. a 1\n   - x\n   * y\n\n   * z\n2. b\n";
+    const prev = "- see *this*\n\n1. a 1\n    * x\n    * y\n    * z\n2. b";
+    const out = "- see *this*\n    * y\n    * z\n\n2. b";
+    const got = mapEdit(body, out, prev);
+    expect(got === null || !/this_\n\n\s+\* y/.test(got)).toBe(true);
+  });
+});
