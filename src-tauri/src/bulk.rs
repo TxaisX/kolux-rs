@@ -193,11 +193,15 @@ pub fn set_statuses(store: &Store, list: &[(Option<String>, String)]) -> Result<
     let mut out: Vec<Status> = Vec::new();
     // A list that cannot be read or kept aside is an error, never an empty one to save over.
     let old: Vec<Status> = crate::orchestration::kept::load(store, STATUS_LIST_KEY)?;
-    for (id, label) in list.iter().filter(|(_, l)| !l.trim().is_empty()) {
+    let rows: Vec<&(Option<String>, String)> = list.iter().filter(|(_, l)| !l.trim().is_empty()).collect();
+    // Every caller id is reserved first, so a new row's slug never takes the id a later row keeps.
+    let reserved: std::collections::HashSet<&str> = rows.iter().filter_map(|(id, _)| id.as_deref()).filter(|i| !i.is_empty()).collect();
+    for (id, label) in rows {
         let base = id.clone().filter(|i| !i.is_empty()).unwrap_or_else(|| slug(label));
+        let owner = id.as_deref().is_some_and(|i| !i.is_empty()) && !out.iter().any(|s| s.id == base);
         let mut unique = base.clone();
         let mut n = 2;
-        while out.iter().any(|s| s.id == unique) {
+        while out.iter().any(|s| s.id == unique) || (!owner && reserved.contains(unique.as_str())) {
             unique = format!("{base}-{n}");
             n += 1;
         }
@@ -559,7 +563,7 @@ mod tests {
         crate::orchestration::kept::refuse_copies(&db);
         assert_eq!(statuses(&store), default_statuses(), "the page shows the defaults");
         let err = set_statuses(&store, &[(None, "Backlog".into())]).unwrap_err();
-        assert!(err.contains(STATUS_LIST_KEY) && (err.contains("not saving over it") || err.contains("could not be kept aside")), "{err}");
+        assert!(err.contains(STATUS_LIST_KEY) && err.contains("could not be kept aside"), "{err}");
         assert_eq!(store.get(STATUS_LIST_KEY).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
@@ -591,6 +595,35 @@ mod tests {
         assert_eq!((back[0]["id"].as_str(), back[0]["color"].as_str()), (Some("ideas"), Some("#f00")));
         assert_eq!(back[1]["id"], "ideas-2");
         assert!(back[1].get("color").is_none(), "{back}");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row927_a_new_row_never_takes_the_id_a_later_row_keeps() {
+        let dir = temp("r927a");
+        let store = Store::open(&dir).unwrap();
+        store.set(STATUS_LIST_KEY, r##"[{"id":"todo","label":"To do"},{"id":"done","label":"Done","color":"#0f0"}]"##).unwrap();
+        let out = set_statuses(&store, &[(Some("todo".into()), "To do".into()), (None, "Done".into()), (Some("done".into()), "Done".into())]).unwrap();
+        assert_eq!(out.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["todo", "done-2", "done"]);
+        let back: serde_json::Value = serde_json::from_str(&store.get(STATUS_LIST_KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(back[2]["color"], "#0f0", "the real Done keeps its id and its unknown fields");
+        assert!(back[1].get("color").is_none(), "{back}");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row927_b_a_duplicate_id_gets_base_and_base_2_and_only_the_first_keeps_its_fields() {
+        let dir = temp("r927b");
+        let store = Store::open(&dir).unwrap();
+        store.set(STATUS_LIST_KEY, r##"[{"id":"a","label":"A","color":"#f00"}]"##).unwrap();
+        let out = set_statuses(&store, &[(Some("a".into()), "A".into()), (Some("a".into()), "A again".into())]).unwrap();
+        assert_eq!(out.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["a", "a-2"]);
+        assert!(out[0].rest.contains_key("color") && out[1].rest.is_empty());
+        // A duplicate's suffix also steps over an id a later row keeps.
+        let out = set_statuses(&store, &[(Some("a".into()), "A".into()), (Some("a".into()), "A again".into()), (Some("a-2".into()), "Two".into())]).unwrap();
+        assert_eq!(out.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["a", "a-3", "a-2"]);
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }
