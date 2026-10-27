@@ -21,7 +21,7 @@ import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
 import { aiShownFor, fixRequest, recipeFor, type FixLaunch, type FixPlan } from "./recipes";
-import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, writerName, DEFAULT_WRITER, type Writer } from "./generate";
+import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, writerName, writerUsable, DEFAULT_WRITER, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import FileOpenWith from "./FileOpenWith";
@@ -146,7 +146,7 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
   // GIT-019: a recipe for the action wins over the single writer; the Rust side expands its variables.
   const commitRecipe = recipeFor(appSettings, "commit");
   const fixRecipe = recipeFor(appSettings, "fix");
-  const canGenerate = aiOn && (commitRecipe !== null || writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed)));
+  const canGenerate = aiOn && writerUsable(writer, agents, commitRecipe);
   // GIT-019: Fix with AI through the fix recipe: an agent recipe starts that agent with its extra arguments
   // (the app's own launch); a command template runs and what it printed is shown.
   const fix = async (output: string) => {

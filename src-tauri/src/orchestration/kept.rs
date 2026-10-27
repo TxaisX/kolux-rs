@@ -112,6 +112,13 @@ pub(crate) fn asides(store: &Store, key: &str) -> Vec<String> {
     q.query_map([format!("{key}.corrupt-%")], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
 }
 
+/// Whether any copy of `key` was ever kept aside (row 911). An exact, case-sensitive prefix match:
+/// LIKE would read `_` in a key as a wildcard and ignore case.
+pub(crate) fn has_aside(store: &Store, key: &str) -> Result<bool, String> {
+    let conn = rusqlite::Connection::open(store.dir().join("state.db")).map_err(|e| e.to_string())?;
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM kv WHERE substr(key, 1, length(?1)) = ?1)", [format!("{key}.corrupt-")], |r| r.get(0)).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +453,19 @@ mod tests {
         assert_eq!(again, vec![Value::from(1)], "the blob now decodes fine");
         assert!(load::<Vec<Value>>(&store, "demo.list").is_ok());
         assert!(store.set("demo.list", "[]").is_err(), "only a keep-aside clears the poison, not a good read");
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn row911_has_aside_matches_the_exact_key_only() {
+        let (store, dir) = fresh("has-aside");
+        store.set("aXb.corrupt-1", "x").unwrap();
+        store.set("A_B.corrupt-1", "x").unwrap();
+        store.set("a_bc.corrupt-1", "x").unwrap();
+        assert!(!has_aside(&store, "a_b").unwrap(), "`_` is not a wildcard, case counts, and a longer key is another key");
+        store.set("a_b.corrupt-2", "x").unwrap();
+        assert!(has_aside(&store, "a_b").unwrap());
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
     }
