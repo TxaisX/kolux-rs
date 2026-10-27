@@ -223,9 +223,15 @@ pub fn login_command(program: &Path, dir: &Path) -> CommandBuilder {
 #[allow(clippy::too_many_arguments)]
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended), status: impl FnOnce(&Path) -> Option<String>) -> Result<Account, Attention> {
     let dir = profile.join(FOLDER).join(id);
+    let (id, dir) = if existing {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        (id.to_string(), dir)
+    } else {
+        claim_new_folder(store, profile, id)?
+    };
+    let id = id.as_str();
     let creds = dir.join(CREDENTIALS);
     let vault = profile.join(secrets::VAULT).join(format!("claude-{id}.json"));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let before = read(&creds);
     let undo = |before: &Option<String>| {
         if existing {
@@ -282,6 +288,34 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     }
     Ok(account)
 }
+
+/// Row 921: makes the folder of a NEW account and never reuses a taken id (listed, a folder or a sealed copy
+/// already there); a taken id moves to the next free one, so a refused sign-in can only delete what it made.
+fn claim_new_folder(store: &Mutex<Store>, profile: &Path, id: &str) -> Result<(String, PathBuf), String> {
+    let parent = profile.join(FOLDER);
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+    let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
+    let start = u128::from_str_radix(id, 16).ok();
+    for step in 0..CLAIM_TRIES {
+        let candidate = match (step, start) {
+            (0, _) => id.to_string(),
+            (_, Some(n)) => format!("{:x}", n + u128::from(step)),
+            _ => break,
+        };
+        if listed.contains(&candidate) || profile.join(secrets::VAULT).join(format!("claude-{candidate}.json")).exists() {
+            continue;
+        }
+        let dir = parent.join(&candidate);
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok((candidate, dir)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("Kolux could not find a free folder for the new account; try again.".into())
+}
+
+const CLAIM_TRIES: u32 = 8;
 
 /// Deletes a sealed vault copy; a copy that is already gone is fine, any other failure is logged by path only.
 pub(crate) fn remove_sealed_copy(path: &Path) {
@@ -739,6 +773,38 @@ mod tests {
         assert_eq!(mark_stale(&store, "a1", true), Ok(true));
         assert!(remove(&store, &dir, "a1").is_ok());
         assert!(load(&store).is_empty());
+    }
+
+    // Row 921 (1): a new sign-in whose id is already taken never touches that account's folder or sealed copy.
+    #[test]
+    fn row921_a_refused_new_sign_in_on_a_taken_id_leaves_the_listed_account_whole() {
+        let (dir, store) = profile("row921-id");
+        let listed = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let sealed = fs::read(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"kim@example.com","orgName":"Other Org"}"#;
+        let got = sign_in(&store, &dir, "a1", false, 8, writes(r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#, Ended::Exited(Some(0))), |_| Some(other.into()));
+        assert!(got.is_err(), "the list save is refused");
+        assert!(Path::new(&listed.config_dir).join(CREDENTIALS).is_file(), "the listed account's folder survives");
+        assert_eq!(fs::read_to_string(Path::new(&listed.config_dir).join(CREDENTIALS)).unwrap(), CREDS, "with its own sign-in");
+        assert_eq!(fs::read(&vault).unwrap(), sealed, "and its sealed copy");
+    }
+
+    // Row 921 (1): a taken id (listed, or a folder or sealed copy already there) moves the new account to the next free id.
+    #[test]
+    fn row921_a_new_sign_in_on_a_taken_id_takes_the_next_free_one() {
+        let (dir, store) = profile("row921-bump");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        fs::create_dir_all(dir.join(FOLDER).join("a2")).unwrap();
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"kim@example.com","orgName":"Other Org"}"#;
+        let got = sign_in(&store, &dir, "a1", false, 8, writes(CREDS, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
+        assert_eq!(got.id, "a3", "a1 is listed and a2 has a folder");
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
+        assert!(dir.join(secrets::VAULT).join("claude-a3.json").is_file());
+        assert!(dir.join(secrets::VAULT).join("claude-a1.json").is_file());
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
