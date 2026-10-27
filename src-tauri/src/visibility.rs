@@ -66,12 +66,13 @@ fn read_projects(store: &Store) -> Result<Vec<Project>, String> {
 }
 
 fn seed(store: &Store, projects: &[Project]) -> Result<Value, String> {
+    // Row 911: a kept-aside list means the one read may be its "[]" reset or projects added since; their
+    // ids cannot be told from grandfathered ones, so none is grandfathered and the seed is never saved.
+    if crate::orchestration::kept::has_aside(store, crate::projects::PROJECTS_KEY)? {
+        return Ok(json!({ "global": {}, "roots": [], "projects": {} }));
+    }
     let own: Map<String, Value> = projects.iter().map(|p| (p.id.clone(), json!({ OTHER: true }))).collect();
     let v = json!({ "global": {}, "roots": [], "projects": own });
-    // Row 911: a kept-aside list means the one read may be its "[]" reset; use the seed, never save it.
-    if crate::orchestration::kept::has_aside(store, crate::projects::PROJECTS_KEY)? {
-        return Ok(v);
-    }
     save(store, &v)?;
     Ok(v)
 }
@@ -326,6 +327,24 @@ mod tests {
         assert_eq!(sources(&store, Some(&project)).len(), 3, "display still works");
         assert!(ensure(&store, &[]).is_ok(), "adding a project is not refused");
         assert_eq!(store.get(KEY).unwrap(), None, "no seed built from the reset list was saved");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row911_a_project_added_after_the_reset_starts_with_external_worktrees_hidden() {
+        let (store, dir) = broken_list_store("r911-add");
+        assert!(crate::projects::load_projects(&store).is_empty(), "a listing keeps the broken list aside and resets it");
+        let added = Project { id: "added-1".into(), name: "added".into(), path: dir.display().to_string(), workspaces_dir: None, base: None, display_name: None };
+        crate::projects::save_projects(&store, std::slice::from_ref(&added)).unwrap();
+        let wt = |path: &str, is_main: bool| Worktree { path: path.into(), branch: None, head: String::new(), is_main, name: None, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None };
+        let elsewhere = dir.parent().unwrap().join("r911-elsewhere").display().to_string();
+        let got = apply(&store, &added, &Map::new(), vec![wt(&added.path, true), wt(&elsewhere, false)]).unwrap();
+        let ext = got.iter().find(|w| w.kind == "external").expect("the outside worktree is listed");
+        assert!(ext.hidden, "a project added after the reset is not grandfathered (PROJ-042)");
+        set_choice(&store, None, CLAUDE, Some(true)).unwrap();
+        let v: Value = serde_json::from_str(&store.get(KEY).unwrap().unwrap()).unwrap();
+        assert!(v["projects"].get("added-1").is_none(), "the saved record grandfathers nothing for it: {v}");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
