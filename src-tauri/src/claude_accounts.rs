@@ -264,6 +264,12 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
             return Err(Attention::new("unknown", format!("{who} is already in the list, so nothing was added.")));
         }
     }
+    // Row 921: the sealed copy as it was (None = unreadable, Some(None) = absent), put back if the list save is refused.
+    let prior_vault = existing.then(|| match fs::read(&vault) {
+        Ok(b) => Some(Some(b)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+        Err(_) => None,
+    });
     if let Err(e) = secrets::write_file(&vault, &fresh) {
         undo(&before);
         return Err(format!("The sign-in could not be stored: {e}").into());
@@ -281,8 +287,13 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     })();
     if let Err(e) = listed {
         undo(&before);
-        if !existing {
-            remove_sealed_copy(&vault);
+        match prior_vault.flatten() {
+            _ if !existing => remove_sealed_copy(&vault),
+            Some(Some(bytes)) => {
+                let _ = fs::write(&vault, bytes);
+            }
+            Some(None) => remove_sealed_copy(&vault),
+            None => {}
         }
         return Err(e.into());
     }
@@ -805,6 +816,23 @@ mod tests {
         assert_eq!(load(&store.lock().unwrap()).len(), 2);
         assert!(dir.join(secrets::VAULT).join("claude-a3.json").is_file());
         assert!(dir.join(secrets::VAULT).join("claude-a1.json").is_file());
+    }
+
+    // Row 921 (2): a refused re-sign-in puts the sealed copy back as well as the live file.
+    #[test]
+    fn row921_a_refused_re_sign_in_puts_the_earlier_sealed_copy_back() {
+        let (dir, store) = profile("row921-vault");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        let sealed = fs::read(&vault).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+        crate::orchestration::kept::refuse_copies(&dir);
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
+        assert_eq!(fs::read(&vault).unwrap(), sealed, "the sealed copy is the earlier one again");
+        assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS));
+        assert_eq!(fs::read_to_string(Path::new(&a.config_dir).join(CREDENTIALS)).unwrap(), CREDS, "and so is the live file");
     }
 
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
