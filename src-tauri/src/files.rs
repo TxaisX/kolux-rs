@@ -327,12 +327,14 @@ pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fenc
 /// A pick the fence refuses outright (share, no drive, unresolvable, not a file) is an Err. A grant
 /// that only failed to save (a poisoned grants key) still holds in memory this run, so the pick stands.
 fn finish_pick(fence: &crate::fence::Fence, store: &std::sync::Mutex<crate::state::Store>, path: &Path) -> Result<String, String> {
+    // Row 907: a name that is not valid Unicode cannot be saved or handed on as it is, so it is refused before grant pushes it.
+    let Some(spelled) = path.to_str() else { return Err("Kolux cannot open that file because its name is not valid Unicode. Rename it and pick it again".to_string()) };
     match fence.grant(path, &*store.lock().map_err(|e| e.to_string())?) {
         Err(crate::fence::GrantError::Refused(e)) => return Err(e),
         Err(crate::fence::GrantError::SaveFailed(e)) => eprintln!("kolux-rs: the picked file's grant was not saved: {e}"),
         Ok(()) => {}
     }
-    Ok(path.to_string_lossy().into_owned())
+    Ok(spelled.to_owned())
 }
 
 /// The worktree's markdown files for the Mod+Shift+O picker (EDIT-012), at most 2000 of them.
@@ -833,6 +835,41 @@ mod tests {
         assert!(finish_pick(&fence, &store, share).is_err(), "a share");
         assert!(finish_pick(&fence, &store, &d.join("gone.txt")).is_err(), "a path that does not resolve");
         assert!(finish_pick(&fence, &store, &d).is_err(), "a folder is not grantable");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A file name that is not valid Unicode: an unpaired surrogate on Windows, a stray byte elsewhere.
+    fn non_unicode_name() -> std::ffi::OsString {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[0x61, 0xD800, 0x2E, 0x74, 0x78, 0x74])
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(vec![b'a', 0xFF, b'.', b't', b'x', b't'])
+        }
+    }
+
+    #[test]
+    fn row907_a_pick_that_is_not_valid_unicode_is_refused_before_the_fence_grants_it() {
+        let d = temp_dir("pick-non-unicode");
+        let store = std::sync::Mutex::new(crate::state::Store::open(&d.join("data")).unwrap());
+        let fence = crate::fence::Fence::load(&store);
+        let git = crate::git::Git { version: String::new() };
+        let picked = d.join(non_unicode_name());
+        fs::write(&picked, "p").expect("the file system takes the name");
+        assert!(picked.to_str().is_none());
+        let err = finish_pick(&fence, &store, &picked).unwrap_err();
+        assert!(!err.is_empty());
+        assert!(store.lock().unwrap().get("file_grants").unwrap().is_none(), "nothing was granted or saved");
+        assert!(fence.allow(&picked.to_string_lossy(), &store, &git, true).is_err(), "the lossy spelling is not allowed either");
+        // A later ordinary pick still saves: the refused one left nothing behind to break the grants list.
+        let ok = d.join("ok.txt");
+        fs::write(&ok, "p").unwrap();
+        let got = finish_pick(&fence, &store, &ok).unwrap();
+        assert!(store.lock().unwrap().get("file_grants").unwrap().is_some_and(|g| g.contains("ok.txt")), "{got}");
         let _ = fs::remove_dir_all(&d);
     }
 

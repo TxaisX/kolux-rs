@@ -406,7 +406,8 @@ mod tests {
             assert!(matches!(e, GrantError::Refused(_)), "{}: {e:?}", p.display());
             e.to_string()
         };
-        for p in [r"\server\share\a.txt", "//server/share/a.txt", r"\??\UNC\kolux-none.invalid\share\p.txt", r"\??\C:\Windows\win.ini", r"C:Windows\win.ini", r"relative\a.txt", ""] {
+        // The first is root-relative (one backslash, no server); the next four are the real UNC and device spellings.
+        for p in [r"\server\share\a.txt", r"\\server\share\a.txt", r"\\?\UNC\server\share\a.txt", r"\\.\C:\a.txt", r"\\?\GLOBALROOT\Device\x", "//server/share/a.txt", r"\??\UNC\kolux-none.invalid\share\p.txt", r"\??\C:\Windows\win.ini", r"C:Windows\win.ini", r"relative\a.txt", ""] {
             assert_eq!(said(Path::new(p)), not_on_a_drive(Path::new(p)), "{p}");
         }
         let gone = t.0.join("outside/gone.txt");
