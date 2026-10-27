@@ -4,12 +4,13 @@
 // when only a push is missing offers one combined push-and-create action. Rules live in startPr.ts.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import type { AgentInfo } from "../launch/PlusMenu";
 import type { ActionOutcome, Pr, Status } from "./model";
 import { writerOf } from "./generate";
 import SearchPick from "../editor/SearchPick";
 import { needsOneClick, realPorts, startOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
-import { applyDraft, draftOffered, draftPrText } from "./prDraft";
+import { applyIfUnchanged, draftOffered, draftPrText, type DraftGate } from "./prDraft";
 import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
 type Props = { dir: string; onCreated: (pr: Pr) => void };
@@ -25,11 +26,13 @@ export default function PrStart({ dir, onCreated }: Props) {
   const [busy, setBusy] = useState(false);
   const [branches, setBranches] = useState<string[]>([]); // EDIT-048: the Base box suggests from these
   const [aiOffered, setAiOffered] = useState(false); // GIT-024: the AI draft button follows the Source Control writer switches
-  const [writing, setWriting] = useState(false);
+  const [writing, setWriting] = useState<string | null>(null); // the worktree a draft is running for, so another worktree never shows "Writing…"
   const [writeNote, setWriteNote] = useState<string | null>(null);
   const going = useOneClick(dir);
   const asking = useRef(dir);
   asking.current = dir;
+  const latest = useRef<Draft | null>(null);
+  latest.current = draft;
 
   const check = async (): Promise<{ status: Status; ready: Readiness } | null> => {
     try {
@@ -74,22 +77,39 @@ export default function PrStart({ dir, onCreated }: Props) {
     setWriteNote(null);
     void offerDraft();
   };
-  const offerDraft = async () => {
+  // The gate is read fresh each time: settings, the repository and the installed agents can all change while the composer is open.
+  const readGate = async () => {
     const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => ({}));
     const repo = await invoke<{ owner: string; name: string } | null>("scm_github_repo", { worktree: dir }).catch(() => null);
-    if (asking.current === dir) setAiOffered(draftOffered(settings, repo ? `${repo.owner}/${repo.name}` : null));
+    const agents = await invoke<AgentInfo[]>("agent_list").catch(() => [] as AgentInfo[]);
+    const gate: DraftGate = { repo: repo ? `${repo.owner}/${repo.name}` : null, agents };
+    return { settings, gate };
+  };
+  const offerDraft = async () => {
+    const { settings, gate } = await readGate();
+    if (asking.current === dir) setAiOffered(draftOffered(settings, gate.repo, gate.agents));
   };
   // GIT-024: the writer fills title and description; a failure is shown and the typed text stays.
-  const write = async (base: string) => {
-    setWriting(true);
+  const write = async (d: Draft) => {
+    const snap = { title: d.title, body: d.body };
+    setWriting(dir);
     setWriteNote(null);
-    const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => ({}));
-    const result = await draftPrText(dir, base.trim(), settings);
+    const { settings, gate } = await readGate();
+    const result = await draftPrText(dir, d.base.trim(), settings, gate);
     if (asking.current === dir) {
+      if (result.state === "off") {
+        setAiOffered(false);
+        setWriteNote("Writing with AI is switched off or has no usable writer, so nothing was written.");
+      }
       if (result.state === "failed") setWriteNote(result.message);
-      setDraft((cur) => cur && applyDraft(cur, result));
+      const cur = latest.current;
+      if (cur) {
+        const out = applyIfUnchanged(cur, snap, result);
+        setDraft(out.draft);
+        if (out.note) setWriteNote(out.note);
+      }
     }
-    setWriting(false);
+    setWriting((w) => (w === dir ? null : w));
   };
   const create = async (d: Draft, push: "none" | "publish" | "push") => {
     setBusy(true);
@@ -145,8 +165,8 @@ export default function PrStart({ dir, onCreated }: Props) {
           <textarea className="field multi" aria-label="pull request description" placeholder="Description" value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           {aiOffered && (
             <div className="btn-row">
-              <button className="btn" data-pr-draft disabled={writing || busy || !draft.base.trim()} title="Write the title and description from this branch's changes" onClick={() => void write(draft.base)}>
-                {writing ? "Writing…" : "Write with AI"}
+              <button className="btn" data-pr-draft disabled={writing === dir || busy || !draft.base.trim()} title="Write the title and description from this branch's changes" onClick={() => void write(draft)}>
+                {writing === dir ? "Writing…" : "Write with AI"}
               </button>
             </div>
           )}
