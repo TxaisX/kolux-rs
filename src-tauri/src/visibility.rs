@@ -68,6 +68,10 @@ fn read_projects(store: &Store) -> Result<Vec<Project>, String> {
 fn seed(store: &Store, projects: &[Project]) -> Result<Value, String> {
     let own: Map<String, Value> = projects.iter().map(|p| (p.id.clone(), json!({ OTHER: true }))).collect();
     let v = json!({ "global": {}, "roots": [], "projects": own });
+    // Row 911: a kept-aside list means the one read may be its "[]" reset; use the seed, never save it.
+    if crate::orchestration::kept::has_aside(store, crate::projects::PROJECTS_KEY)? {
+        return Ok(v);
+    }
     save(store, &v)?;
     Ok(v)
 }
@@ -307,6 +311,21 @@ mod tests {
         set_choice(&store, None, CLAUDE, Some(true)).unwrap();
         let v: Value = serde_json::from_str(&store.get(KEY).unwrap().unwrap()).unwrap();
         assert_eq!(v["projects"]["keep-1"][OTHER], true);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row911_a_kept_aside_project_list_never_seeds_the_visibility_choices() {
+        let (store, dir) = broken_list_store("r911");
+        assert!(crate::projects::load_projects(&store).is_empty(), "a listing keeps the broken list aside");
+        assert_eq!(store.get(crate::projects::PROJECTS_KEY).unwrap().as_deref(), Some("[]"), "and starts it fresh");
+        assert_eq!(crate::orchestration::kept::asides(&store, crate::projects::PROJECTS_KEY), vec![BROKEN_LIST.to_string()]);
+        let project = Project { id: "keep-1".into(), name: "keep".into(), path: dir.display().to_string(), workspaces_dir: None, base: None, display_name: None };
+        assert!(apply(&store, &project, &Map::new(), Vec::new()).is_ok());
+        assert_eq!(sources(&store, Some(&project)).len(), 3, "display still works");
+        assert!(ensure(&store, &[]).is_ok(), "adding a project is not refused");
+        assert_eq!(store.get(KEY).unwrap(), None, "no seed built from the reset list was saved");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

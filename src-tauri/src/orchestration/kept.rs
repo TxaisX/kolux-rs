@@ -112,6 +112,12 @@ pub(crate) fn asides(store: &Store, key: &str) -> Vec<String> {
     q.query_map([format!("{key}.corrupt-%")], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
 }
 
+/// Whether any copy of `key` was ever kept aside (same lookup as `asides`; row 911).
+pub(crate) fn has_aside(store: &Store, key: &str) -> Result<bool, String> {
+    let conn = rusqlite::Connection::open(store.dir().join("state.db")).map_err(|e| e.to_string())?;
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM kv WHERE key LIKE ?1)", [format!("{key}.corrupt-%")], |r| r.get(0)).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

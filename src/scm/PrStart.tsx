@@ -92,7 +92,7 @@ export default function PrStart({ dir, onCreated }: Props) {
     setWriteNote(null);
     const { settings, gate } = await readGate();
     const pending = draftPrText(dir, d.base.trim(), settings, gate); // registers the run before its first await
-    setStarting(null);
+    setStarting((s) => (s === dir ? null : s)); // another worktree's click may have taken the slot meanwhile
     const result = await pending;
     if (asking.current === dir) {
       if (result.state === "off") setAiOffered(false);
