@@ -554,7 +554,7 @@ pub async fn scm_name_branch(worktree: String, task: String, writer: Option<Writ
 
 /// Whether the front end named a writer at all. Unlike `ask`, branch naming never falls back to Claude
 /// Code: no writer means the user turned AI off, so no agent runs and the task's own words name it.
-fn writer_chosen(w: &WriterArg) -> bool {
+pub(crate) fn writer_chosen(w: &WriterArg) -> bool {
     w.agent.is_some() || w.command.as_deref().is_some_and(|c| !c.trim().is_empty())
 }
 
