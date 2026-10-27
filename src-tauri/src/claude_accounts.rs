@@ -1032,6 +1032,21 @@ mod tests {
         assert_eq!(load(&store.lock().unwrap()).len(), 1);
     }
 
+    // Row 938 (3): a store that cannot be read at the start fails an existing sign-in before the login runs.
+    #[test]
+    fn row938_an_existing_claude_sign_in_fails_up_front_when_the_list_cannot_be_read() {
+        let (dir, store) = profile("row938-unreadable");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let ran = std::cell::Cell::new(false);
+        let side = crate::orchestration::kept::Unreadable::new(&dir);
+        let got = sign_in(&store, &dir, "a1", true, 9, |d: &Path| { ran.set(true); writes(CREDS, Ended::Exited(Some(0)))(d) }, |_| Some(SIGNED_IN.into()));
+        side.restore();
+        assert!(got.is_err(), "an unreadable list is an error, not a new account");
+        assert!(!ran.get(), "and the login never started");
+        let folders: Vec<_> = fs::read_dir(dir.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(folders, ["a1"], "no duplicate account folder");
+    }
+
     // Row 912: a read-only caller keeps the plain load: the default, and no key poisoned.
     #[test]
     fn row912_a_read_only_load_gives_the_default_and_poisons_nothing() {
