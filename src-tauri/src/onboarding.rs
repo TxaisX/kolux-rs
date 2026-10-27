@@ -92,6 +92,17 @@ fn save(store: &Store, rec: &Onboarding) -> Result<(), String> {
     store.set(KEY, &serde_json::to_string(rec).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
+/// This start's number: the stored count plus one. A count that cannot be read stops startup (it would
+/// pass an old profile off as new); one that cannot be written is logged and the start still counts.
+#[allow(dead_code)] // lib.rs calls it once evidence/fix-other-fix-884-lib.rs.patch is applied (hard-stop file)
+pub fn count_start(store: &Store) -> Result<u64, String> {
+    let starts: u64 = store.get("start_count").map_err(|e| e.to_string())?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
+    if let Err(e) = store.set("start_count", &starts.to_string()) {
+        eprintln!("kolux-rs: start count not saved ({e}); startup goes on");
+    }
+    Ok(starts)
+}
+
 /// ONB-001: the profile's first start opens a record; a profile with none counts as done (ONB-008).
 pub fn first_start(store: &Store, starts: u64) -> Result<(), String> {
     // Startup must never fail on an unreadable record; it is left as it is, unsaved.
@@ -102,11 +113,16 @@ pub fn first_start(store: &Store, starts: u64) -> Result<(), String> {
             return Ok(());
         }
     };
-    match rec {
+    let saved = match rec {
         None if starts == 1 => save(store, &Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }),
         Some(old) if upgraded(old.clone(), 0) != old => save(store, &upgraded(old, now_ms())),
         _ => Ok(()),
+    };
+    // Row 884: a record that cannot be written is logged; the wizard just does not open this run.
+    if let Err(e) = saved {
+        eprintln!("kolux-rs: onboarding record not saved ({e}); startup goes on");
     }
+    Ok(())
 }
 
 /// Moving on from `step` stores it as the last screen finished; a closed record stays as it is.
@@ -871,6 +887,45 @@ mod tests {
         let g = tours_read(&s).unwrap();
         assert_eq!(g.tours_auto, Some(false), "no record: no wizard showing, so no automatic tours");
         assert_eq!(s.get(GUIDE).unwrap().as_deref(), Some(broken), "the blob is byte-identical");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A trigger that refuses every write of `key`, as a full disk or a locked row would.
+    fn refuse_writes(dir: &std::path::Path, key: &str) {
+        let conn = rusqlite::Connection::open(dir.join("state.db")).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER no_ins BEFORE INSERT ON kv WHEN NEW.key = '{key}' BEGIN SELECT RAISE(ABORT, 'disk full'); END;              CREATE TRIGGER no_upd BEFORE UPDATE ON kv WHEN NEW.key = '{key}' BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn row884_a_failed_onboarding_save_never_stops_startup() {
+        let (s, dir) = store("r884-new");
+        refuse_writes(&dir, KEY);
+        assert_eq!(first_start(&s, 1), Ok(()), "the first-start record could not be saved; startup goes on");
+        assert_eq!(load(&s), None, "nothing was saved");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (s, dir) = store("r884-upgrade");
+        s.set(KEY, "{\"version\": 1, \"step\": 9}").unwrap();
+        refuse_writes(&dir, KEY);
+        assert_eq!(first_start(&s, 5), Ok(()), "the upgrade write could not be saved; startup goes on");
+        assert_eq!(s.get(KEY).unwrap().as_deref(), Some("{\"version\": 1, \"step\": 9}"), "the old record is untouched");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row884_a_failed_start_count_save_still_counts_the_start() {
+        let (s, dir) = store("r884-count");
+        assert_eq!(count_start(&s), Ok(1));
+        assert_eq!(count_start(&s), Ok(2));
+        refuse_writes(&dir, "start_count");
+        assert_eq!(count_start(&s), Ok(3), "the count is answered although it could not be written");
+        assert_eq!(s.get("start_count").unwrap().as_deref(), Some("2"));
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }
