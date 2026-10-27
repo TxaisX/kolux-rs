@@ -225,8 +225,8 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     // Row 932: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id; an unreadable list fails here, before the login.
     let (listed_ids, existing) = if existing {
         let ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
-        // Row 938: an empty list is a set-aside corrupt list or a first account, not a stale screen, so the id keeps its own folder.
-        let listed = ids.is_empty() || ids.iter().any(|l| l == id);
+        // Row 940: an unlisted id whose account folder is there (a list set aside as corrupt leaves the folders) is still that sign-in; a removed account's folder is gone, so a stale screen claims a new id.
+        let listed = ids.iter().any(|l| l == id) || profile.join(FOLDER).join(id).is_dir();
         (ids, listed)
     } else {
         (load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect(), false)
@@ -380,7 +380,7 @@ pub(crate) fn claim_new_folder(profile: &Path, folder: &str, agent: &str, listed
             (_, Some(n)) => format!("{:x}", n + u128::from(step)),
             _ => break,
         };
-        if listed.contains(&candidate) || profile.join(secrets::VAULT).join(format!("{agent}-{candidate}.json")).exists() {
+        if listed.contains(&candidate) || !matches!(profile.join(secrets::VAULT).join(format!("{agent}-{candidate}.json")).try_exists(), Ok(false)) {
             continue;
         }
         let dir = parent.join(&candidate);
@@ -1061,6 +1061,34 @@ mod tests {
         assert_eq!(load(&store.lock().unwrap()).len(), 1);
     }
 
+
+    // Row 940 (2): an empty list and an orphan sealed copy but no folder is a removed account, so a refused stale sign-in never unseals the orphan live.
+    #[test]
+    fn row940_a_refused_sign_in_at_a_removed_id_leaves_its_orphan_sealed_copy_alone() {
+        let (dir, store) = profile("row940-orphan");
+        store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
+        let vault = dir.join(secrets::VAULT).join("claude-a1.json");
+        secrets::write_file(&vault, CREDS).unwrap();
+        let orphan = fs::read(&vault).unwrap();
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, writes(new, Ended::Exited(Some(0))), |_| None).is_err());
+        assert_eq!(fs::read(&vault).unwrap(), orphan, "the orphan is byte-identical");
+        assert!(!dir.join(FOLDER).join("a1").join(CREDENTIALS).exists(), "no credentials go live in the removed account's folder");
+    }
+
+    // Row 940 (2): a non-empty list that lacks the id but a folder that is there is a still-existing sign-in (the list lost it), so it keeps its id.
+    #[test]
+    fn row940_an_existing_sign_in_at_an_unlisted_id_with_a_folder_keeps_its_id() {
+        let (dir, store) = profile("row940-folder");
+        sign_in(&store, &dir, "b1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let folder = dir.join(FOLDER).join("a1");
+        fs::create_dir_all(&folder).unwrap();
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"lee@example.com","orgName":"Other Org"}"#;
+        let got = sign_in(&store, &dir, "a1", true, 9, writes(r#"{"claudeAiOauth":{"accessToken":"fake-lee"}}"#, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
+        assert_eq!(got.id, "a1", "the account keeps its id, not a new one");
+        assert_eq!(Path::new(&got.config_dir), folder, "and its folder");
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
+    }
 
     // Row 938 (3): a store that cannot be read at the start fails an existing sign-in before the login runs.
     #[test]

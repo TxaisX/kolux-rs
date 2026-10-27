@@ -299,8 +299,8 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     // Row 929: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id.
     // Row 932: a list that cannot be read fails here, before the login; it never routes a listed account to a new id.
     let listed_ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
-    // Row 938: an empty list (a set-aside corrupt list, or a first account) is not a stale screen, so the id keeps its own home.
-    let (id, home) = if existing && (listed_ids.is_empty() || listed_ids.iter().any(|l| l == id)) {
+    // Row 940: an unlisted id whose home is there (a list set aside as corrupt leaves the homes) is still that sign-in; a removed account's home is gone, so a stale screen claims a new id.
+    let (id, home) = if existing && (listed_ids.iter().any(|l| l == id) || profile.join(FOLDER).join(id).is_dir()) {
         let home = profile.join(FOLDER).join(id);
         fs::create_dir_all(&home).map_err(|e| e.to_string())?;
         (id.to_string(), home)
@@ -313,7 +313,7 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     // ACCT-019: only a home with no sign-in file at all is removed; one that cannot be read (a
     // locked file) may still hold a working sign-in.
     let roll_back = || {
-        if !auth.exists() {
+        if matches!(auth.try_exists(), Ok(false)) {
             let _ = fs::remove_dir_all(&home);
         }
     };
@@ -326,7 +326,7 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     }
     let text = fs::read_to_string(&auth).map_err(|e| e.to_string())?;
     let vault = profile.join(secrets::VAULT).join(format!("codex-{id}.json"));
-    let vault_was_there = vault.exists();
+    let vault_was_there = !matches!(vault.try_exists(), Ok(false));
     if let Err(e) = secrets::write_file(&vault, &text) {
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
@@ -1356,6 +1356,24 @@ mod tests {
         assert_eq!(got.home, first.home, "and its home");
         let homes: Vec<_> = fs::read_dir(profile.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(homes, ["c1"], "no second account home");
+    }
+
+    // Row 940: a non-empty list that lacks the id but a home that is there is a still-existing sign-in (the list lost it), so it keeps its id.
+    #[test]
+    fn row940_an_existing_codex_sign_in_at_an_unlisted_id_with_a_home_keeps_its_id() {
+        let profile = temp("row940-home");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        let home = profile.join(FOLDER).join("c2");
+        fs::create_dir_all(&home).unwrap();
+        let got = sign_in(&store, &profile, "c2", true, 2, ok("lee@example.com")).unwrap();
+        assert_eq!(got.id, "c2", "the account keeps its id, not a new one");
+        assert_eq!(got.home, home.to_string_lossy());
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
     }
 
     // Row 929: existing:true at an id that is not listed (a stale screen) is a new account, so an orphan sealed copy at that id is never overwritten.
