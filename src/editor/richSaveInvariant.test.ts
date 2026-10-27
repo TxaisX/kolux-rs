@@ -94,7 +94,7 @@ describe("round 12", () => {
       if (got === null) return;
       expect(got.startsWith(pre) && got.endsWith(post), "bytes outside the case moved").toBe(true);
       const mid = got.slice(pre.length, got.length - post.length);
-      const want = [r4, SEED_ALT[name]].filter((x): x is string => typeof x === "string").map((x) => x.replace(/\n$/, ""));
+      const want = [r4, SEED_ALT[name]].filter((x): x is string => typeof x === "string").map((x) => noFront(x).replace(/\n$/, ""));
       expect(want).toContain(mid);
     });
 

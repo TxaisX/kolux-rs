@@ -37,6 +37,9 @@ export const SEED_CASES: SeedCase[] = [
 
 // 63:175 is edit-owned (audit): the view split `- [ ] bread` and moved the blank, so the save follows `out`'s spacing, not r4's.
 export const SEED_ALT: Record<string, string> = {
+  // Round 13: saved with the file's own lines kept (r4 refused both).
+  "seed 8 edit 238": "---\ntitle: fuzz\n---\n- a 0\n  * x\n  - n1 .    - n2\n- ba 1\n    * x\n    * y\n\n    * z\n\n2. b\n\n\n- 🙂✅\n\n- 🙃\n- tail 2\n",
+  "seed 8 edit 244": "---\ntitle: fuzz\n---\n- a 0\n    - x\n    - n1 .    - n2ba 1 \\_    \\* x\n    * y\n\n    * z\n\n2. b\n\n\n- 🙂✅\n\n- \ud83d# -\n- tail 2.\n",
   "seed 63 edit 175": "- 🙂\n\n- ✅\n\n- 🙃\n- tail 0\n\n\n- [ ] buy milk 1\n\n- [x] eggs _e_\n\n- [ ]\n- bread\n- a 2\n  - n1\n  - n2\nlazy\n\n  - n3\n- b\n\n\n- item 3\n- item _two_\n  - nested __n__\n    deeper\n- three\n",
 };
 

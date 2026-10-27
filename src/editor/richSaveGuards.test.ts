@@ -388,7 +388,8 @@ describe("round 7", () => {
       const b = "- a\n  - n1\n\n- b\n" + P;
       const { next, refused } = edit(b, "n1", "n1\n    - n2");
       expect(refused).toBe(0);
-      expect(next).toBe("- a\n    - n1\n    - n2\n\n- b\n" + P);
+      // Round 13: the file's two-space sub-items keep their bytes.
+      expect(next).toBe("- a\n  - n1\n  - n2\n\n- b\n" + P);
     });
     it("a third nested item keeps the n2/b gap and the a/n1 blank line, or is refused", () => {
       const b = "- a\n\n  - n1\n\n  - n2\n\n- b\n\n- c\n" + P;
@@ -454,16 +455,13 @@ describe("round 8", () => {
 
   describe("MEDIUM-1: adding a sub-item keeps the gap between a parent and its sub-list", () => {
     const shapes: [string, string, string, string, string][] = [
-      ["after n2", "- a\n\n  - n1\n  - n2\n- b\n", "    - n2\n", "    - n2\n    - x\n", "- a\n\n    - n1\n    - n2\n    - x\n- b\n"],
-      ["n1 only", "- a\n\n  - n1\n- b\n", "    - n1\n", "    - n1\n    - x\n", "- a\n\n    - n1\n    - x\n- b\n"],
+      ["after n2", "- a\n\n  - n1\n  - n2\n- b\n", "    - n2\n", "    - n2\n    - x\n", "- a\n\n  - n1\n  - n2\n  - x\n- b\n"],
+      ["n1 only", "- a\n\n  - n1\n- b\n", "    - n1\n", "    - n1\n    - x\n", "- a\n\n  - n1\n  - x\n- b\n"],
       ["ordered", "1. a\n\n   1. n1\n   2. n2\n2. b\n", "    2. n2\n", "    2. n2\n    3. x\n", "1. a\n\n   1. n1\n   2. n2\n    3. x\n2. b\n"],
       ["indent-4 children", "- a\n\n    - n1\n    - n2\n- b\n", "    - n2\n", "    - n2\n    - x\n", "- a\n\n    - n1\n    - n2\n    - x\n- b\n"],
     ];
-    // Round 12: "after n2" wants its 2-space siblings respelt at four spaces, which moves a line the edit never touched: the note stays as it was.
-    const mayRefuse = new Set(["after n2"]);
-    it.each(shapes)("%s", (name, b, from, to, want) => {
+    it.each(shapes)("%s", (_name, b, from, to, want) => {
       const { next, refused } = edit(b + P, from, to);
-      if (refused && mayRefuse.has(name)) return expect(next).toBe(b + P);
       expect(refused).toBe(0);
       expect(next).toBe(want + P);
     });
@@ -649,5 +647,69 @@ describe("round 10: `1)` lists stay as tight as the file has them, a deleted ite
   it.each(B)("%s", (_, b, edit, want) => {
     const body = b + P;
     ok(run(body, edit), body, want + P);
+  });
+});
+
+// Row 94 round 13: a structural edit (Enter, split, first or last sub-item) in a 2-space sub-list saves with every untouched line
+// byte for byte as the file had it (its indent, its `_x_` emphasis, its CRLF); the new line takes the file's indent and marker.
+describe("round 13: structural edits in a 2-space sub-list", () => {
+  const crlf = (s: string) => s.replace(/\n/g, "\r\n");
+  const BASE = "- Groceries\n  - buy _milk_ today\n  - two words\n  - eggs __large__\n- Errands _soon_\n";
+  const run = (now: string, from: string, to: string) => {
+    const body = now.replace(/^---\n[^]*?\n---\n/, "");
+    const prev = roundTrip(body)!;
+    expect(prev).toContain(from);
+    const out = roundTrip(prev.replace(from, to))!;
+    let refused = 0;
+    const next = apply(now, richChange(now, out, prev, () => refused++));
+    return { next, refused, out };
+  };
+  const edits: [string, string, string, string][] = [
+    ["Enter at the end of a sub-item and type bread", "two words\n", "two words\n    - bread\n", "- Groceries\n  - buy _milk_ today\n  - two words\n  - bread\n  - eggs __large__\n- Errands _soon_\n"],
+    ["Enter in the middle of a sub-item", "two words", "two\n    - words", "- Groceries\n  - buy _milk_ today\n  - two\n  - words\n  - eggs __large__\n- Errands _soon_\n"],
+    ["a new first sub-item", "    - buy", "    - new\n    - buy", "- Groceries\n  - new\n  - buy _milk_ today\n  - two words\n  - eggs __large__\n- Errands _soon_\n"],
+    ["a new last sub-item", "eggs **large**\n", "eggs **large**\n    - fish\n", "- Groceries\n  - buy _milk_ today\n  - two words\n  - eggs __large__\n  - fish\n- Errands _soon_\n"],
+  ];
+  const variants: [string, (s: string) => string][] = [
+    ["LF", (s) => s],
+    ["CRLF", crlf],
+    ["front matter, no final newline", (s) => "---\ntitle: x\n---\n" + s.slice(0, -1)],
+  ];
+  for (const [vname, v] of variants) {
+    it.each(edits)(`${vname}: %s`, (_, from, to, want) => {
+      const { next, refused, out } = run(v(BASE), from, to);
+      expect(refused).toBe(0);
+      expect(next).toBe(v(want));
+      expect(roundTrip(next.replace(/^---\n[^]*?\n---\n/, ""))).toBe(out);
+    });
+  }
+
+  it("a mixed note: each sub-list keeps its own indent", () => {
+    const M = "- A _a_\n  - a1\n  - a2 _x_\n- B\n    - b1 _y_\n    - b2\n";
+    const one = run(M, "a2 *x*\n", "a2 *x*\n    - n1\n");
+    expect(one.refused).toBe(0);
+    expect(one.next).toBe("- A _a_\n  - a1\n  - a2 _x_\n  - n1\n- B\n    - b1 _y_\n    - b2\n");
+    const two = run(M, "b1 *y*\n", "b1 *y*\n    - n2\n");
+    expect(two.refused).toBe(0);
+    expect(two.next).toBe("- A _a_\n  - a1\n  - a2 _x_\n- B\n    - b1 _y_\n    - n2\n    - b2\n");
+  });
+
+  it("a `*` list keeps its marker on the new line", () => {
+    const S = "* Groceries\n  * buy _milk_\n  * eggs\n* Errands\n";
+    const got = run(S, "buy *milk*\n", "buy *milk*\n    - bread\n");
+    expect(got.refused).toBe(0);
+    expect(got.next).toBe("* Groceries\n  * buy _milk_\n  * bread\n  * eggs\n* Errands\n");
+  });
+
+  // These saved before round 13 and must keep saving (a 3-space sub-list under `1.`, a tab-indented one): the exact new-line spelling is not pinned.
+  const keep: [string, string, string, string][] = [
+    ["3 spaces under 1.", "1. A\n   - a1\n   - a2\n   - a3\n2. B\n", "a2", "a2\n    - x"],
+    ["tab-indented", "- A\n\t- a1\n\t- a2\n\t- a3\n- B\n", "a2", "a2\n    - x"],
+    ["tab-indented, last", "- A\n\t- a1\n\t- a2\n\t- a3\n- B\n", "a3\n", "a3\n    - x\n"],
+  ];
+  it.each(keep)("%s still saves", (_, now, from, to) => {
+    const { next, refused, out } = run(now, from, to);
+    expect(refused).toBe(0);
+    expect(roundTrip(next)).toBe(out);
   });
 });
