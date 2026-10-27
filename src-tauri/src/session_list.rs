@@ -208,6 +208,8 @@ pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     if path.file_name().is_some_and(|n| n.to_string_lossy().contains("stall")) {
         std::thread::sleep(std::time::Duration::from_secs(5));
     }
+    #[cfg(test)]
+    assert!(!path.file_name().is_some_and(|n| n.to_string_lossy().contains("boom")), "test panic");
     let Some(head) = slice(path, 0, HEAD_CAP) else {
         s.unreadable = true;
         return s;
@@ -245,7 +247,8 @@ type Probe = Worker<Job, Found>;
 /// unreadable, or the budget ran out.
 fn look(cache: &mut Cache, agent: &str, path: &Path, report: &mut Report, probe: &Probe) -> Option<(u64, u64, Summary)> {
     let Some(found) = probe.call((agent.to_string(), path.to_path_buf(), cache.get(path).cloned())) else {
-        report.cut_short = true;
+        // A helper that died on this file only skips it; only a spent budget cuts the scan short.
+        report.cut_short |= probe.stalled();
         return None;
     };
     let (modified, len, s, fresh) = found?;
@@ -708,7 +711,7 @@ mod tests {
 
     /// Row 777 follow-up: one budgeted worker per scan, not a thread per transcript.
     #[test]
-    fn a_warm_budgeted_scan_of_thousands_of_transcripts_starts_at_most_two_threads() {
+    fn a_warm_budgeted_scan_of_thousands_of_transcripts_starts_one_thread() {
         let root = tmp("warmthreads");
         let dir = root.join("projects").join("C--work-app");
         for i in 0..2000 {
@@ -723,7 +726,20 @@ mod tests {
         let (took, spawns) = (began.elapsed(), super::super::scan::SPAWNS.with(|n| n.get()));
         eprintln!("p49 warm scan of 2000 transcripts: {took:?}, {spawns} budget threads");
         assert_eq!((got.sessions.len(), got.report.parsed, got.report.skipped, got.report.cut_short), (2000, 0, 0, false));
-        assert!(spawns <= 2, "the warm scan started {spawns} threads");
+        assert_eq!(spawns, 1, "the warm scan started {spawns} threads");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Row 893: a panic while reading one transcript costs that file only; the helper is replaced and the rest parse.
+    #[test]
+    fn row893_a_panic_reading_one_transcript_skips_it_and_the_others_are_still_parsed() {
+        let root = tmp("boom");
+        let dir = root.join("projects").join("C--work-app");
+        lines(&dir.join("a-boom.jsonl"), &[claude_user("first", r"C:\work\app")]);
+        lines(&dir.join("b.jsonl"), &[claude_user("second", r"C:\work\app")]);
+        lines(&dir.join("c.jsonl"), &[claude_user("third", r"C:\work\app")]);
+        let got = list_scan(&Roots { claude: vec![root.clone()], codex: vec![] }, &Scope::All, &mut Cache::new(), None, &Budget::within(std::time::Duration::from_secs(60)));
+        assert_eq!((got.sessions.len(), got.report.parsed, got.report.skipped, got.report.cut_short), (2, 2, 1, false));
         let _ = fs::remove_dir_all(&root);
     }
 
