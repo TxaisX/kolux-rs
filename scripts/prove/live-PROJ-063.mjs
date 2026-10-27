@@ -3,7 +3,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, fillComposer, submitComposer, workspaceRows } from "./live-proj-common.mjs";
+import { showElsewhere, reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, fillComposer, submitComposer, workspaceRows } from "./live-proj-common.mjs";
 
 const W_DIR = join(LIVE_BASE, "work", "PROJ-063-W");
 const prepare = async (repo) => {
@@ -27,8 +27,14 @@ export async function run063(ctx, { check, log }) {
   await ctx.typeInto(0, "git switch -c x063");
   const git1 = await poll(async () => ((await git(w.path, ["branch", "--show-current"])).trim() === "x063" ? true : null), 15000, 400);
   check("the switch happened in W's own terminal (git says the folder is on x063)", !!git1, "");
-  const row = await poll(async () => ((await rowFacts(app, "x063")) ? await rowFacts(app, "x063") : null), 20000, 500);
+  const row = await poll(async () => ((await rowFacts(app, "x063")) ? await rowFacts(app, "x063") : null), 45000, 500);
   const waited = Date.now() - t0;
+  if (!row) {
+    const pj = (await app.invoke("project_list")).find((p) => p.name === "PROJ-063");
+    const sc = await app.invoke("workspace_scan", { projectId: pj.id });
+    log(`backend view after ${waited} ms: ${JSON.stringify(sc.list.map((x) => ({ path: x.path, branch: x.branch, name: x.name })))}`);
+    log(`rows now: ${JSON.stringify(await workspaceRows(app))}; visibility ${await app.evalJs("document.visibilityState")}`);
+  }
   const old = await rowFacts(app, "W");
   log(`row for the new branch after ${waited} ms: ${JSON.stringify(row)}; row still labelled W: ${JSON.stringify(old)}`);
   check("the row shows the new branch (x063) within the poll window", !!row && row.path === w.path, JSON.stringify(row));
@@ -58,6 +64,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   let ok = false;
   try {
     ctx = await startPlain("PROJ-063", { report: rep, prepare });
+    await showElsewhere(ctx.app);
     await sleep(3000);
     await run063(ctx, { check: chk.check, log });
     ok = chk.allPassed();

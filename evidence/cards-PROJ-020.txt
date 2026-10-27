@@ -31,3 +31,14 @@ screenshot: G:/Temp/live-v5-logs/PROJ-020.png
 PASS going back to fix-login shows the same Claude terminal (banner still in its buffer): 
 close: [true,"window close over CDP, exited in 4.2 s; pre-close tree 11 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, cmd.exe x1, PING.EXE x1); survivors 0 (none)"]
 RESULT: PASS
+
+LIVE 2026-10-27 (box 2): node scripts/prove/live-PROJ-020b.mjs against a hidden dev app (identifier com.txaisxiong.kolux-rs.prove, scratch roots G:/Temp/live-v5/run-*, no sign-in, no network). A second workspace exists; a post-checkout hook (sleep 4) keeps the create running while the test switches to the other workspace.
+rows before: [{"label":"other","path":"G:\\Temp\\live-v5\\work\\PROJ-020b-other","sel":false}]
+PASS the pre-existing second workspace (other) is listed: 
+PASS moved to the other workspace while the create was still running: switched=true stillRunning=true
+after the hook finished (true): rows [{"label":"other","path":"G:\\Temp\\live-v5\\work\\PROJ-020b-other","sel":true},{"label":"bg-create","path":"G:\\Temp\\live-v5\\run-PROJ-020b\\home\\kolux-rs\\workspaces\\PROJ-020b\\bg-create","sel":false}]; note {"cls":"note ok","text":"created bg-create in G:\\Temp\\live-v5\\run-PROJ-020b\\home\\kolux-rs\\workspaces\\PROJ-020b\\bg-create from main"}; shown panes [{"agent":"shell","label":"PROJ-020b-other pane","shown":true}]
+PASS the create finished in the background: the bg-create row appears and git lists its worktree: {"label":"bg-create","path":"G:\\Temp\\live-v5\\run-PROJ-020b\\home\\kolux-rs\\workspaces\\PROJ-020b\\bg-create","sel":false}
+PASS focus stayed on the other workspace (only other is selected): ["other"]
+PASS the pane in front is not the new workspace's: [{"agent":"shell","label":"PROJ-020b-other pane","shown":true}]
+screenshot: G:/Temp/live-v5-logs/PROJ-020b.png
+RESULT: PASS

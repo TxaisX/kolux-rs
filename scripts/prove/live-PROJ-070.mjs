@@ -3,7 +3,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, workspaceRows } from "./live-proj-common.mjs";
+import { showElsewhere, reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, workspaceRows } from "./live-proj-common.mjs";
 
 const DIR = join(LIVE_BASE, "work", "PROJ-070-wt");
 const N = 40;
@@ -41,7 +41,7 @@ export async function run070(ctx, { check, log }) {
   log(`before the delete: ${JSON.stringify(before)}; ${name(36)} sits ${topBefore} px below the list top; ${target} selected`);
   check("the active row is on screen with the list scrolled partway", (await rowTop(app, target)) !== null && before.top > 0 && before.top < before.max, JSON.stringify(before));
   await app.focusPane("section.pane[data-agent]", 0, ".xterm-helper-textarea").catch(() => {});
-  await app.rawKey({ key: "Backspace", code: "Backspace", vk: 8, mods: 2 | 8 });
+  await ctx.rawKey({ key: "Backspace", code: "Backspace", vk: 8, mods: 2 | 8 });
   const ask = await poll(async () => ((await app.exists(".sidebar .btn.danger")) ? true : null), 10000, 300);
   check("Mod+Shift+Backspace asks to remove the active workspace", !!ask, "");
   if (!ask) return;
@@ -65,6 +65,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   let ok = false;
   try {
     ctx = await startPlain("PROJ-070", { report: rep, prepare });
+    await showElsewhere(ctx.app);
     await sleep(3000);
     await run070(ctx, { check: chk.check, log });
     ok = chk.allPassed();

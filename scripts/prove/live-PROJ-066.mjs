@@ -3,7 +3,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, panes, shownPanes, tabLabels, workspaceRows } from "./live-proj-common.mjs";
+import { showElsewhere, reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, panes, shownPanes, tabLabels, workspaceRows } from "./live-proj-common.mjs";
 import { PLUS } from "./live-SESS-004.mjs";
 
 const B_DIR = join(LIVE_BASE, "work", "PROJ-066-B");
@@ -75,6 +75,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   let ok = false;
   try {
     ctx = await startPlain("PROJ-066", { report: rep, prepare });
+    await showElsewhere(ctx.app);
     await sleep(3000);
     await run066(ctx, { check: chk.check, log });
     ok = chk.allPassed();

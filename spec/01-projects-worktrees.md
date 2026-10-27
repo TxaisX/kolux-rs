@@ -24,7 +24,7 @@ User sees: the selection moves on the same click; every workspace keeps its own 
   terminals.
 Rules: removing a workspace clears its tabs, open files and browser tabs.
 Acceptance:
-  - [ ] Switch from A to B and back → A's terminals and tabs are as they were.
+  - [x] Switch from A to B and back → A's terminals and tabs are as they were. (cards live; evidence/cards-PROJ-066.txt)
   - [x] Delete a workspace → none of its tabs remain anywhere. (cards; evidence/cards-PROJ-066.txt)
 Compat: —
 Source: D-01-066
@@ -75,8 +75,8 @@ Rules: the shortcut is Mod+N, and Mod+Shift+N is bound as well; terminals in the
 Acceptance:
   - [x] Create a workspace called fix-login → its branch and folder exist, its terminal starts in
         that folder, and going back to the main checkout keeps the two terminals apart. (cards live; evidence/cards-PROJ-020.txt)
-  - [ ] Start a create and move to another workspace → the create finishes in the background without
-        taking focus.
+  - [x] Start a create and move to another workspace → the create finishes in the background without
+        taking focus. (cards live; evidence/cards-PROJ-020.txt)
 Compat: Keybinding id workspace.create.
   (Kolux RS, T-013-fix-a: with no project, Mod+N and the New workspace button open the add-project
   form; T-013-c built the overtaken-create and stand-in tab rules: a create made with Create more

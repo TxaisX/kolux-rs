@@ -77,3 +77,6 @@ export const sidebarNote = (app) =>
   app.evalJs(`(() => { const n = [...document.querySelectorAll(".sidebar .note")].filter(e => !e.closest("[role=alertdialog]")).pop(); return n ? { cls: n.className, text: n.textContent.trim() } : null; })()`);
 
 export const norm = (p) => String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/** Worktrees made outside Kolux are hidden by default (source "other"); show them, as the Settings choice "Elsewhere on disk" does. */
+export const showElsewhere = (app) => app.invoke("visibility_set", { projectId: null, source: "other", show: true });

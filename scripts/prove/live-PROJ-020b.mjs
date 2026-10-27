@@ -3,7 +3,7 @@
 import { existsSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, fillComposer, submitComposer, workspaceRows, sidebarNote, shownPanes } from "./live-proj-common.mjs";
+import { showElsewhere, reporter, startPlain, finish, sleep, poll, checker, git, LIVE_BASE, fillComposer, submitComposer, workspaceRows, sidebarNote, shownPanes } from "./live-proj-common.mjs";
 
 const DONE = join(LIVE_BASE, "work", "PROJ-020b-hook-done.txt");
 const OTHER = join(LIVE_BASE, "work", "PROJ-020b-other");
@@ -56,6 +56,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   let ok = false;
   try {
     ctx = await startPlain("PROJ-020b", { report: rep, prepare });
+    await showElsewhere(ctx.app);
     await sleep(3000);
     await run020b(ctx, { check: chk.check, log });
     ok = chk.allPassed();
