@@ -14,3 +14,15 @@ box 1: PASS
   PASS and the page's readyState is no longer loading: complete
   after a normal page: {"reload":true,"title":"Reload (Ctrl+R)","stop":false}
   PASS after a normal load the button reads Reload (no Stop): {"reload":true,"title":"Reload (Ctrl+R)","stop":false}
+
+
+LIVE 2026-10-27 (scripts/prove/live-BROW.mjs, hidden dev app, scratch loopback pages)
+box 1: PASS
+  slow page: Stop button present=true; {"title":"Stop loading","label":"Stop","animation":"spin","content":"\"\""}; server hits 1
+  PASS while the slow page loads the toolbar button is Stop with the loading (spinner) class: {"title":"Stop loading","label":"Stop","animation":"spin","content":"\"\""}
+  screenshot: G:/Temp/live-v8-logs/BROW-005-b1-loading.png
+  after pressing Stop: Reload button back=true in 338 ms; page readyState=complete
+  PASS pressing Stop halts the load: the button returns to Reload within 1 s: 338 ms
+  PASS and the page's readyState is no longer loading: complete
+  after a normal page: {"reload":true,"title":"Reload (Ctrl+R)","stop":false}
+  PASS after a normal load the button reads Reload (no Stop): {"reload":true,"title":"Reload (Ctrl+R)","stop":false}
