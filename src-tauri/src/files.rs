@@ -57,19 +57,19 @@ pub fn read_text_up_to(path: &Path, max: u64) -> Result<String, String> {
 const STALE_COPY_SECS: u64 = 600;
 
 pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
-    replace_with(path, |f| f.write_all(text.as_bytes()))
+    replace_with(path, false, |f| f.write_all(text.as_bytes()))
 }
 
-/// The same all-or-nothing save for raw bytes (row 947).
+/// The same all-or-nothing save for raw bytes (row 947); a new file is owner-only on unix (row 952).
 pub(crate) fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    replace_with(path, |f| f.write_all(bytes))
+    replace_with(path, true, |f| f.write_all(bytes))
 }
 
 /// EDIT-046: the all-or-nothing save. `put` fills a temporary file beside `path`; the file is
 /// flushed to disk and only then moved over `path`. Any failure removes the temporary file and
 /// leaves `path` exactly as it was. A copy left by an app that died mid-save is cleared the next
 /// time that file is saved.
-fn replace_with(path: &Path, put: impl FnOnce(&mut fs::File) -> std::io::Result<()>) -> Result<(), String> {
+fn replace_with(path: &Path, private: bool, put: impl FnOnce(&mut fs::File) -> std::io::Result<()>) -> Result<(), String> {
     static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let name = path.file_name().ok_or_else(|| format!("{} is not a file path", path.display()))?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
@@ -81,7 +81,15 @@ fn replace_with(path: &Path, put: impl FnOnce(&mut fs::File) -> std::io::Result<
         let _ = fs::remove_file(&temp);
         format!("could not save {}: {e}", path.display())
     };
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&temp).map_err(fail)?;
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600); // never world-readable, even in a crash copy; an existing target's mode wins below
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    let mut f = opts.open(&temp).map_err(fail)?;
     put(&mut f).and_then(|_| f.flush()).and_then(|_| f.sync_all()).map_err(fail)?;
     drop(f);
     #[cfg(unix)]
@@ -1074,7 +1082,7 @@ mod tests {
         let f = d.join("notes.txt");
         fs::write(&f, "the original, whole\n").unwrap();
         // The writer gets half the new text out and then the disk "fails".
-        let err = replace_with(&f, |t| {
+        let err = replace_with(&f, false, |t| {
             t.write_all(b"half of the new te")?;
             Err(std::io::Error::other("disk full"))
         })
@@ -1105,6 +1113,41 @@ mod tests {
         write_text(&f, "two, longer").unwrap();
         assert_eq!(fs::read_to_string(&f).unwrap(), "two, longer");
         assert_eq!(entries(&d), vec!["new.txt".to_string()]);
+    }
+
+    #[test]
+    fn row952_write_bytes_to_a_new_path_writes_exactly_those_bytes() {
+        let d = temp_dir("r952-bytes");
+        let f = d.join("creds.json");
+        let bytes = [0u8, 159, 146, 150, b'{', 255];
+        write_bytes(&f, &bytes).unwrap();
+        assert_eq!(fs::read(&f).unwrap(), bytes);
+        assert_eq!(entries(&d), vec!["creds.json".to_string()]);
+    }
+
+    // The two mode tests run on unix only; this Windows host cannot run them (nor see them fail first).
+    #[cfg(unix)]
+    #[test]
+    fn row952_write_bytes_makes_a_new_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = temp_dir("r952-new");
+        let f = d.join("creds.json");
+        write_bytes(&f, b"secret").unwrap();
+        assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn row952_write_text_over_an_existing_file_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = temp_dir("r952-keep");
+        let f = d.join("notes.txt");
+        fs::write(&f, "old").unwrap();
+        fs::set_permissions(&f, fs::Permissions::from_mode(0o644)).unwrap();
+        write_text(&f, "new").unwrap();
+        assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o644);
+        write_bytes(&f, b"newer").unwrap();
+        assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o644, "an existing file keeps its mode even for write_bytes");
     }
 
     #[test]
