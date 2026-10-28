@@ -130,12 +130,14 @@ User sees: a system notification when the agent finishes, with the agent's name,
 Rules: nothing is sent for session boundaries, replayed events, Cursor Agent shell steps or Grok's
   routine permission prompts; blocked and interrupted turns get their own wording; every subagent
   turn and every background-shell turn is a notification of its own; it works when the agent's
-  workspace is not the one on screen; the 'Agent Task Complete' switch controls it and is on by
-  default.
+  workspace is not the one on screen; the 'An agent finishes its task or needs permission' switch
+  controls it and is on by default.
 Acceptance:
   - [x] Codex finishes in a workspace that is not active → exactly one notification with a preview
         of its reply. (cards; evidence/cards-STAT-041.txt)
-  - [ ] Turn 'Agent Task Complete' off → the next finish raises nothing.
+  - [x] Turn 'An agent finishes its task or needs permission' off → the next finish raises nothing.
+        (Reworded per Txais 2026-10-28 decisions file, A2: keep the page wording.)
+        (cards; evidence/cards-STAT-041.txt)
 Compat: carry over the user's saved on or off choice; default on.
 Source: D-04-041
 
@@ -291,7 +293,9 @@ Rules: the notice names the account whose sign-in lapsed; the button starts the 
 Acceptance:
   - [x] Let a saved Claude account's sign-in expire → the notice appears; finish signing in → it
         goes away. (cards; evidence/cards-STAT-046.txt)
-  - [ ] Two saved accounts, one expired → only the expired one is named.
+  - [x] Two saved accounts, the active one expired → only the active one is named; the notice covers
+        the active account only (spec/07 rule). (Reworded per Txais 2026-10-28 decisions file, A.)
+        (cards; evidence/cards-STAT-046.txt)
 Compat: —
 Source: D-04-046
 

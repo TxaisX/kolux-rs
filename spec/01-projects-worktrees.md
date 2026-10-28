@@ -90,13 +90,15 @@ User sees: the shown name is exactly what was typed; the branch and folder get a
 Rules: spaces turn into hyphens, repeated separators merge, characters Git does not allow are
   dropped, and runs of dots shrink; letters outside plain ASCII stay; emoji become their readable
   shortcode words in the branch and folder, while the shown name keeps the emoji itself; a name that
-  cleans down to nothing is rejected with a message; when the branch name is already taken on the
+  cleans down to nothing becomes the branch "workspace" (SESS-036); when the branch name is already taken on the
   remote, a number is added; with no display name typed, the branch name is shown without its refs
   prefix.
 Acceptance:
   - [x] Create "Fix login 🔥" → the branch reads like fix-login-fire and the shown name is
         unchanged. (cards; evidence/cards-PROJ-021.txt)
-  - [ ] Create a name made only of characters Git rejects → refused with a message.
+  - [x] Create a name made only of characters Git rejects (e.g. "???") → the branch becomes
+        "workspace". (Reworded per Txais 2026-10-28 decisions file, A2: keep the fallback.)
+        (cards; evidence/cards-PROJ-021.txt)
 Compat: —
   (Kolux RS, T-013-fix-b: emoji outside the short-word table become their Unicode name in words,
   DT-C9; the pane header shows the typed name, `evidence/T-013-fix-b-header.png`.)
@@ -237,7 +239,9 @@ Rules: a workspace with changes is not deleted unless forced, and a locked one i
 Acceptance:
   - [x] Delete a workspace holding an unsaved change → a warning shows; confirming without force is
         refused. (cards; evidence/cards-PROJ-070.txt)
-  - [ ] Delete the active row while the list is scrolled → the list does not jump.
+  - [x] Delete the active row while the list is scrolled → no row still on screen moves; the list's
+        scroll offset may shift by about one row (~70 px) because the active row is pinned. (Reworded
+        per Txais 2026-10-28 decisions file, A.) (live 2026-10-27; evidence/cards-PROJ-070.txt)
 Compat: Keybinding id workspace.delete.
 Source: D-01-070
 

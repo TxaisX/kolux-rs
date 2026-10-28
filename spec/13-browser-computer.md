@@ -145,8 +145,10 @@ Rules: the switch to HTTPS is offered only for a qualifying failed http address 
   own error page is detected (checked about four times a second, paused while hidden) and covered by
   the overlay; failures that come out of crash recovery leave out the network troubleshooting text.
 Acceptance:
-  - [ ] Open http://localhost:9 with nothing listening → overlay with local-server advice and
-        Retry; start a server and press Retry → the page loads.
+  - [x] Open http://localhost:<free port> with nothing listening → overlay with local-server advice
+        and Retry; start a server and press Retry → the page loads. (Reworded per Txais 2026-10-28
+        decisions file, A2: port 9 is on Chromium's blocked-port list.)
+        (live, free port 55726; evidence/cards-BROW-008.txt)
   - [ ] Open a public site with a broken certificate → certificate wording and no local-server
         advice.
 Compat: —

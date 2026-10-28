@@ -107,8 +107,10 @@ Rules: renewal happens early, inside the last 5 minutes before expiry, and also 
   when the switch is turned off, and shows the Needs sign-in chip and the main-window notice; on
   hides both and sends nothing.)
 Acceptance:
-  - [ ] Default setting, no Claude pane open, a managed account's token close to expiry → it is
-        renewed before it runs out. (Kolux RS: not built, DT-C16; Claude Code renews in its panes)
+  - [x] Default setting, no Claude pane open, a managed account's token close to expiry → Kolux does
+        not renew it and sends nothing to the token service; Claude Code renews it in its own panes
+        (DT-C16). (Reworded per Txais 2026-10-28 decisions file, A2.)
+        (cards; evidence/cards-ACCT-006.txt)
   - [x] Switch the opt-out on → no traffic reaches the token service, and the account never shows
         Needs re-auth afterwards. (T-043-d: Kolux sends nothing in either position; on hides the chip and notice)
 Compat: The opt-out choice (off unless the user turned it on) carries over.

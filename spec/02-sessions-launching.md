@@ -256,7 +256,9 @@ User sees: every agent's opening prompt holds the task followed by a short rules
 Rules: the rules block is left out wherever the prompt is shown back to the user; the handoff note
   exists before the first change; a single-seat launch gets no rules block.
 Acceptance:
-  - [ ] Launch Pair with a task → each agent writes its handoff note before editing anything, and the prompt shown to the user contains only the task.
+  - [ ] Launch Pair with a task → each agent writes its handoff note before editing anything, and the
+        prompt shown to the user holds the short role brief and the task, with no rules block.
+        (Reworded per Txais 2026-10-28 decisions file, A; still open: REAL-AGENT.)
   - [x] Launch Solo with a task → the agent's opening prompt carries no rules block. (cards; evidence/cards-SESS-025.txt)
 Compat: one handoff note per worktree, a markdown file kept in the project's hidden Kolux folder
   and named after the worktree.

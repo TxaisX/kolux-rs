@@ -119,7 +119,9 @@ Rules: the waiting evidence comes from a hook, the prompt text on screen, or the
 Acceptance:
   - [x] A worker reaches a permission prompt → worker-show reports the waiting field with that
       prompt and a source of hook or prompt text. (cards; evidence/cards-ORCH-020.txt)
-  - [ ] A worker in the middle of a tool call → the waiting field is empty.
+  - [x] A worker in the middle of a tool call → the waiting field reads "no" (checked, no open
+        prompt); it reads "yes" with a prompt, and "unknown" when Kolux could not look. (Reworded per
+        Txais 2026-10-28 decisions file, A.) (cards; evidence/cards-ORCH-020.txt)
 Compat: `kolux orchestration worker-show --dispatch <id> [--json]`.
 Source: D-08-020
 
@@ -347,7 +349,9 @@ Rules: without inject nothing is typed into the target; the dispatch carries con
 Acceptance:
   - [x] Dispatch a task with inject to an idle Claude pane → the pane receives the brief and starts
       work. (cards live; evidence/cards-ORCH-013.txt)
-  - [ ] Dispatch to the coordinator's own pane → turned away with a reason.
+  - [x] Dispatch to the coordinator's own pane with inject, or once the nesting budget is spent →
+        turned away with a reason; a context-only one inside the budget is allowed. (Reworded per
+        Txais 2026-10-28 decisions file, A2.) (cards; evidence/cards-ORCH-013.txt)
   - [x] Dispatch with dry-run → the plan is printed and the task is still ready. (cards; evidence/cards-ORCH-013.txt)
 Compat: `kolux orchestration dispatch --task <id> --to <handle> [--inject] [--dry-run] [--return-preamble] [--json]`.
 Source: D-08-013

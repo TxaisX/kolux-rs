@@ -200,8 +200,9 @@ Source: D-05-001
 ### VIEW-002 · Cycle the workspace screen from the keyboard
 Tier: P0 · Pushed: 7 · State at 0.15.0: live
 User does: presses Mod+Alt+V, or picks a screen from View > Workspace View.
-User sees: the workspace moves to the next screen in the order Agents, Board, Terminals; the menu
-  lists the three screens as radio items with the current one checked.
+User sees: the workspace moves to the next screen in the order Agents, Board, Terminals, Tower; the
+  menu lists Agents, Board and Terminals as radio items with the current one checked (none while on
+  Tower).
 Rules: the order follows the left-to-right order of the labels in the top-bar switch; in the classic
   look, which has no top bar, the chord does nothing; the chord can be rebound like any other
   shortcut; the View menu entry for the three screens exists only while the top bar is on; the menu
@@ -209,7 +210,8 @@ Rules: the order follows the left-to-right order of the labels in the top-bar sw
   current; the chord printed in the menu is only a label; the key press is handled inside the
   window, not by the menu.
 Acceptance:
-  - [ ] New look, on Agents, press the chord three times → Board, Terminals, Agents.
+  - [ ] New look, on Agents, press the chord four times → Board, Terminals, Tower, Agents.
+        (Reworded per Txais 2026-10-28 decisions file, A: Tower stays in the cycle.)
   - [x] Classic look, press the chord → nothing changes. (cards live; evidence/cards-VIEW-002.txt)
   - [x] Switch to Board with the mouse, open the menu → Board is checked. (cards; evidence/cards-VIEW-002.txt)
   - [x] Turn the new look off → the submenu is gone. (cards; evidence/cards-VIEW-002.txt)
@@ -359,8 +361,10 @@ Rules: quick successive switches are saved as one write; the final choice is wri
   page in front of them.
 Acceptance:
   - [x] Open Tasks, quit, relaunch → Tasks is shown. (cards live; evidence/cards-VIEW-005.txt)
-  - [ ] Corrupt the saved preference file, relaunch → app opens on the terminal workspace without an
-        error dialog.
+  - [x] Corrupt the saved preference file, relaunch → no error dialog: with no good copy the app
+        opens on the terminal workspace; with the usual backup present it opens from that copy and
+        says once, on the page, that it used the last good copy. (Reworded per Txais 2026-10-28
+        decisions file, A: works as now.) (cards; evidence/cards-VIEW-005.txt)
 Compat: —
 Source: D-05-005
 

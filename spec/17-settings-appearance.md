@@ -63,8 +63,9 @@ Rules: switching off the agent that is the default leaves no default; Refresh lo
 Acceptance:
   - [x] Switch off the agent that is the default → the page shows no default; a new session asks, or
         takes the first agent available. (cards live; evidence/cards-SET-027.txt)
-  - [ ] Remove every agent CLI and press Refresh → the saved default is still recorded, and it is used
-        again once one CLI is reinstalled.
+  - [x] With every agent CLI gone (test stand-in; the real PATH is never changed) press Refresh → the
+        saved default is still recorded, and it is used again once one CLI is back. (Reworded per Txais
+        2026-10-28 decisions file, A2: test proof accepted.) (cards; evidence/cards-SET-027.txt)
 Compat: the saved default agent, the list of switched-off agents, and each agent's command override,
   default arguments and default environment variables all import.
 Source: D-17-027
