@@ -523,13 +523,29 @@ pub fn quit_watchdog<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
     let dir = app.path().app_data_dir().ok();
     std::thread::spawn(move || {
-        std::thread::sleep(quit_deadline());
-        if let Some(dir) = dir {
-            crate::diag::write(&dir, &format!("quit: still running {} s after the window closed; exiting now (APP-006)", quit_deadline().as_secs()));
-        }
-        std::process::exit(0);
+        let log = move || {
+            if let Some(dir) = dir {
+                crate::diag::write(&dir, &format!("quit: still running {} s after the window closed; exiting now (APP-006)", quit_deadline().as_secs()));
+            }
+        };
+        watchdog_run(quit_deadline(), log, || std::process::exit(0));
     });
 }
+
+/// The watchdog body: wait out the deadline, log, exit. The log write may stall on the profile
+/// drive (an oplock held elsewhere), so it runs detached and is waited for only briefly.
+fn watchdog_run(deadline: Duration, log: impl FnOnce() + Send + 'static, exit: impl FnOnce()) {
+    std::thread::sleep(deadline);
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        log();
+        let _ = done.send(());
+    });
+    let _ = wait.recv_timeout(WATCHDOG_LOG_WAIT);
+    exit();
+}
+
+const WATCHDOG_LOG_WAIT: Duration = Duration::from_millis(500);
 
 // ---------------------------------------------------------------- APP-011: the save point
 
@@ -686,6 +702,16 @@ mod tests {
     }
 
     use super::*;
+
+    /// APP-050 b2: the kill-switch fires on time even when the profile log write stalls.
+    #[test]
+    fn app050b2_the_quit_watchdog_exits_on_time_while_the_log_write_is_stalled() {
+        let start = std::time::Instant::now();
+        let mut exited = None;
+        watchdog_run(Duration::from_millis(100), || std::thread::sleep(Duration::from_secs(5)), || exited = Some(start.elapsed()));
+        let at = exited.expect("the watchdog exits");
+        assert!(at < Duration::from_millis(100) + Duration::from_secs(1), "exit came {at:?} after the start; a stalled log write held it");
+    }
 
     /// T-324-b-rest: only a Windows exit nobody asked for, or one the system says is a shutdown, is a session end.
     #[test]
