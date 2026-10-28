@@ -565,29 +565,39 @@ impl Client {
 
 /// AFTER-696: ends the running service (and with it every shell it holds) before an update
 /// replaces the program it runs from. True once nothing answers and its process is gone; a
-/// service too old to know `stop` is ended by its pid.
+/// service too old to know `stop` is ended by its pid. `wait` is ONE deadline for the whole call
+/// (probes, the stop reply, the graceful wait and the check after the kill): the quit watchdog
+/// counts on it (row 1014).
 pub fn stop(dir: &Path, wait: Duration) -> bool {
-    let Probe::Ready(ep, mut c) = probe(dir, PROBE_WAIT) else { return true };
+    // A probe or read is never given less than this, so a nearly spent deadline still gets one look.
+    const FLOOR: Duration = Duration::from_millis(50);
+    let start = Instant::now();
+    let until = start + wait;
+    let left = |t: Instant| t.saturating_duration_since(Instant::now());
+    let Probe::Ready(ep, mut c) = probe(dir, PROBE_WAIT.min(wait).max(FLOOR)) else { return true };
+    let own = ep.pid == std::process::id();
+    // An in-process service has no pid to kill, so it gets the whole deadline; any other gets half, then the kill.
+    let graceful_end = if own { until } else { start + wait / 2 };
+    let _ = c.set_wait(Some(left(graceful_end).max(FLOOR)));
     let _ = c.request(json!({ "op": "stop" }), &mut Vec::new());
     drop(c);
-    let own = ep.pid == std::process::id();
-    let gone = |until: Instant| loop {
-        if matches!(probe(dir, PROBE_WAIT.min(wait)), Probe::None) && (own || crate::procs::wait_gone(&[ep.pid], POLL).is_empty()) {
+    let gone = |end: Instant| loop {
+        if matches!(probe(dir, PROBE_WAIT.min(left(until)).max(FLOOR)), Probe::None) && (own || crate::procs::wait_gone(&[ep.pid], POLL).is_empty()) {
             return true;
         }
-        if Instant::now() >= until {
+        if Instant::now() >= end {
             return false;
         }
-        std::thread::sleep(POLL);
+        std::thread::sleep(POLL.min(left(end)));
     };
-    if gone(Instant::now() + wait) {
+    if gone(graceful_end) {
         return true;
     }
     if own {
         return false;
     }
     crate::procs::kill_tree(ep.pid);
-    gone(Instant::now() + wait)
+    gone(until)
 }
 
 /// What a look at the data folder finds.
@@ -850,6 +860,82 @@ mod tests {
         // No service at all: nothing to stop.
         assert!(stop(&dir, Duration::from_secs(1)));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A listener that answers every hello and nothing else, until `done` is set (a service that ignores `stop`).
+    fn deaf_service(dir: &Path, pid: u32) -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let ep = Endpoint { port: listener.local_addr().unwrap().port(), token: "t".into(), pid, generation: 1, protocol: PROTOCOL };
+        write_endpoint(dir, &ep).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let flag = done.clone();
+        let thread = std::thread::spawn(move || {
+            let mut conns = Vec::new();
+            while !flag.load(Ordering::SeqCst) {
+                if let Ok((conn, _)) = listener.accept() {
+                    conn.set_nonblocking(false).unwrap();
+                    let mut out = conn.try_clone().unwrap();
+                    let mut line = String::new();
+                    if BufReader::new(conn.try_clone().unwrap()).read_line(&mut line).is_ok() {
+                        writeln!(out, "{}", json!({ "ok": true, "result": { "protocol": PROTOCOL } })).unwrap();
+                    }
+                    conns.push(conn);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        (done, thread)
+    }
+
+    #[test]
+    fn row1014_stop_ends_at_its_one_deadline_when_the_service_ignores_it() {
+        let limit = Duration::from_secs(2);
+        // Another process's service: half the deadline of grace, then the kill, inside one deadline.
+        let dir = scratch("row1014-other");
+        let mut child = if cfg!(windows) {
+            std::process::Command::new("cmd.exe").args(["/c", "ping -n 30 127.0.0.1 >nul"]).spawn().unwrap()
+        } else {
+            std::process::Command::new("sh").args(["-c", "sleep 30; true"]).spawn().unwrap()
+        };
+        let (done, thread) = deaf_service(&dir, child.id());
+        let t = Instant::now();
+        // The pid dies at the halfway kill, and a dead pid reads as a stopped service even though the listener still answers.
+        assert!(stop(&dir, limit), "the kill at the halfway point ends it");
+        let took = t.elapsed();
+        eprintln!("row1014: other-pid stop took {took:?}");
+        assert!(took >= Duration::from_millis(900) && took < Duration::from_millis(2500), "{took:?}");
+        let _ = child.kill();
+        let _ = child.wait();
+        done.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        // This process's own service: no kill, the graceful wait takes the whole deadline.
+        let dir = scratch("row1014-own");
+        let (done, thread) = deaf_service(&dir, std::process::id());
+        let t = Instant::now();
+        assert!(!stop(&dir, limit));
+        let took = t.elapsed();
+        eprintln!("row1014: own-pid stop took {took:?}");
+        assert!(took >= Duration::from_millis(1500) && took < Duration::from_millis(2500), "{took:?}");
+        done.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn row1014_killing_the_tree_takes_well_under_the_deadline() {
+        let mut child = if cfg!(windows) {
+            std::process::Command::new("cmd.exe").args(["/c", "ping -n 30 127.0.0.1 >nul"]).spawn().unwrap()
+        } else {
+            std::process::Command::new("sh").args(["-c", "sleep 30; true"]).spawn().unwrap()
+        };
+        let t = Instant::now();
+        crate::procs::kill_tree(child.id());
+        let took = t.elapsed();
+        eprintln!("row1014: kill_tree took {took:?}");
+        let _ = child.wait();
+        assert!(took < Duration::from_millis(1500), "{took:?}");
     }
 
     #[test]

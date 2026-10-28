@@ -240,6 +240,8 @@ pub(crate) struct Flow {
 pub(crate) const FLOW_HIGH: u64 = 512 * 1024;
 const FLOW_LOW: u64 = 128 * 1024;
 pub(crate) const FLOW_WAIT: Duration = Duration::from_secs(2);
+/// The whole service stop at an update quit: the share of the quit budget it must fit (row 1014).
+pub(crate) const UPDATE_STOP_LIMIT: Duration = Duration::from_secs(2);
 
 impl Flow {
     /// Counts `bytes` just sent to the pane and, past the high mark, waits for it to catch up.
@@ -1612,7 +1614,7 @@ impl Terminals {
         let dir = self.service.dir.lock().ok().and_then(|d| d.clone());
         self.kill_all();
         if let Some(dir) = dir {
-            crate::pty::service::stop(&dir, std::time::Duration::from_secs(5));
+            crate::pty::service::stop(&dir, UPDATE_STOP_LIMIT);
         }
     }
 
