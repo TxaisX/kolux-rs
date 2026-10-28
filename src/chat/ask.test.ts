@@ -289,3 +289,15 @@ describe("FIX-2: the window's own reading must still be permission", () => {
     expect(writes).toHaveLength(1);
   });
 });
+
+describe("row 1032: a prompt heard before the Agents screen first opens", () => {
+  it("the window's start-up hearing counts it, so the chat's first mount draws the card", async () => {
+    forgetAsks();
+    forgetHearing();
+    handlers.length = 0;
+    await hearStates(listen as never); // the window, at start (App.tsx); no chat mounted yet
+    ask();
+    await hearAsks(listen as never); // the chat's first mount, after the event
+    expect(cardOf("claude", askOf(1), 70)).toMatchObject({ tool: "Bash", detail: "rm -rf build" });
+  });
+});
