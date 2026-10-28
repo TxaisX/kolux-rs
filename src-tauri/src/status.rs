@@ -94,7 +94,36 @@ pub struct Child {
     pub state: &'static str,
     #[serde(skip)]
     pending: Option<String>,
+    /// Hash of the input of the tool `pending` waits on (VIEW-025 b5).
+    #[serde(skip)]
+    pending_input: u64,
     pub started: u64,
+}
+
+/// A tool an agent started this turn: `agent` is the sub-agent's id, `None` for the lead (VIEW-025 b5).
+#[derive(Debug)]
+struct Started {
+    agent: Option<String>,
+    id: String,
+    name: String,
+    input: u64,
+}
+
+/// A hash of the tool input as Claude sent it; the same process writes the PreToolUse and the
+/// PermissionRequest, so the serialized form is stable.
+fn input_hash(event: &Value) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(event.get("tool_input").unwrap_or(&Value::Null)).unwrap_or_default().hash(&mut h);
+    h.finish()
+}
+
+fn record_start(list: &mut Vec<Started>, agent: Option<&str>, event: &Value) {
+    let Some(id) = str_of(event, "tool_use_id") else { return };
+    if list.len() >= MAX_TOOLS {
+        list.remove(0);
+    }
+    list.push(Started { agent: agent.map(str::to_string), id: trim(id, 80), name: str_of(event, "tool_name").map(|t| trim(t, 60)).unwrap_or_default(), input: input_hash(event) });
 }
 
 /// One line of the pane's history: the state it entered, the prompt that began the turn, when.
@@ -167,8 +196,12 @@ pub struct Session {
     /// The tool ids already started when the cancel keystroke came: their own late reports say
     /// nothing about the turn, while a tool id outside this list proves the turn went on (T-123-c).
     killed: Vec<String>,
-    /// The tool a Claude Deny (card or typed Esc) refused: its late Post* never means the turn went on.
-    denied: Option<String>,
+    /// The tool ids a Claude Deny (card or typed Esc) refused: their late Post* never mean the turn went on.
+    denied: Vec<String>,
+    /// Every tool the lead and the sub-agents started this turn, newest last (VIEW-025 b5).
+    started: Vec<Started>,
+    /// Hash of the input of the tool the lead's `pending` waits on.
+    pending_input: u64,
     prompt: Option<String>,
     pub reply: Option<String>,
     /// The stop the session is blocked on, kept until a turn reaches done (STAT-022).
@@ -282,7 +315,7 @@ impl Session {
                             let i = self.children.iter().position(|c| c.state != "working")?;
                             self.children.remove(i);
                         }
-                        self.children.push(Child { id, kind, model, state: "working", pending: None, started: now_ms() });
+                        self.children.push(Child { id, kind, model, state: "working", pending: None, pending_input: 0, started: now_ms() });
                     }
                 }
             }
@@ -314,6 +347,7 @@ impl Session {
                 match name {
                     "PermissionRequest" => {
                         c.pending = tool;
+                        c.pending_input = input_hash(event);
                         c.state = "permission";
                     }
                     "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
@@ -323,6 +357,7 @@ impl Session {
                         c.pending = None;
                         c.state = change.state;
                         if name == "PreToolUse" {
+                            record_start(&mut self.started, Some(id), event);
                             started = tool;
                         }
                     }
@@ -396,7 +431,8 @@ impl Session {
                 self.cancelled = false;
                 self.tools.clear();
                 self.killed.clear();
-                self.denied = None;
+                self.denied.clear();
+                self.started.clear();
                 self.reply = None;
                 self.own = Some("working");
             }
@@ -432,6 +468,7 @@ impl Session {
             "PermissionRequest" => {
                 // A question asked as a permission waits instead, and clears on later tool work (STAT-027).
                 self.pending = change.tool.clone();
+                self.pending_input = input_hash(event);
                 self.own = Some(change.state);
             }
             "PostCompact" => {
@@ -446,6 +483,7 @@ impl Session {
                     return None;
                 }
                 if name == "PreToolUse" {
+                    record_start(&mut self.started, None, event);
                     if let Some(id) = str_of(event, "tool_use_id") {
                         if self.tools.len() >= MAX_TOOLS {
                             self.tools.remove(0);
@@ -486,7 +524,7 @@ impl Session {
             self.cancelled = true;
             self.cancelled_at = now_ms();
             self.killed.clone_from(&self.tools);
-            self.denied = None;
+            self.denied.clear();
         }
     }
 
@@ -512,7 +550,7 @@ impl Session {
             // inside it, that report is the cancelled tool's own hook finishing, not the turn going on.
             _ if event.get("is_interrupt").and_then(Value::as_bool) == Some(true) => false,
             // VIEW-025 b4: the tool a Deny refused never counts, whenever its Post lands (the 2 s tick may not have run).
-            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || (self.denied.as_deref() != Some(id) && (self.past_grace() || !self.killed.iter().any(|k| k == id))))),
+            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || (!self.denied.iter().any(|d| d == id) && (self.past_grace() || !self.killed.iter().any(|k| k == id))))),
             Agent::Codex | Agent::Vendor => self.fresh_tool(name, event),
         }
     }
@@ -523,7 +561,7 @@ impl Session {
         agent == Agent::Claude
             && match (name, str_of(event, "agent_id")) {
                 ("SubagentStart", _) => true,
-                ("PreToolUse", Some(a)) => self.children.iter().any(|c| c.id == a) && str_of(event, "tool_use_id").is_none_or(|id| self.denied.as_deref() != Some(id)),
+                ("PreToolUse", Some(a)) => self.children.iter().any(|c| c.id == a) && str_of(event, "tool_use_id").is_none_or(|id| !self.denied.iter().any(|d| d == id)),
                 _ => false,
             }
     }
@@ -572,7 +610,8 @@ impl Session {
             self.interrupted = false;
             self.tools.clear();
             self.killed.clear();
-            self.denied = None;
+            self.denied.clear();
+            self.started.clear();
         }
         self.pending = None;
         self.own = Some(state);
@@ -616,8 +655,7 @@ impl Session {
     /// VIEW-025 b2: the card's answer. A Claude Deny types Esc, which real Claude takes as an interrupt
     /// and answers with no hook, so the deny is marked as a cancel and settles like STAT-028's.
     pub fn answer(&mut self, agent: Agent, approve: bool) -> &'static str {
-        // The lead's prompt is for the tool it started last (its PreToolUse comes before the PermissionRequest).
-        let asked = if self.own == Some("permission") && self.pending.is_some() { self.tools.last().cloned() } else { None };
+        let asked = self.asked_ids();
         let state = self.answer_state();
         if agent == Agent::Claude && !approve {
             self.mark_cancel(true);
@@ -626,6 +664,20 @@ impl Session {
             }
         }
         state
+    }
+
+    /// The started ids of the asker `answer_state` answers (the first child asking, else the lead)
+    /// whose name and input match its prompt; the PermissionRequest carries no tool_use_id.
+    fn asked_ids(&self) -> Vec<String> {
+        let (who, name, input) = match self.children.iter().find(|c| c.state == "permission" && c.pending.is_some()) {
+            Some(c) => (Some(c.id.as_str()), c.pending.as_deref().unwrap_or_default(), c.pending_input),
+            None if self.own == Some("permission") && self.pending.is_some() => (None, self.pending.as_deref().unwrap_or_default(), self.pending_input),
+            None => return Vec::new(),
+        };
+        let mine = || self.started.iter().filter(|t| t.agent.as_deref() == who);
+        let hits: Vec<String> = mine().filter(|t| t.name == name && t.input == input).map(|t| t.id.clone()).collect();
+        // No match (the prompt names a tool never seen start): the asker's last started tool.
+        if hits.is_empty() { mine().next_back().map(|t| t.id.clone()).into_iter().collect() } else { hits }
     }
 
     pub fn answer_state(&mut self) -> &'static str {
@@ -1846,7 +1898,7 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"t0"}"#), Some("working"));
         // A new turn forgets the denial.
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
-        assert!(s.denied.is_none());
+        assert!(s.denied.is_empty());
     }
 
     #[test]
@@ -1855,7 +1907,7 @@ mod tests {
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
         state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
         s.cancel();
-        assert!(s.denied.is_none(), "no permission prompt, nothing denied");
+        assert!(s.denied.is_empty(), "no permission prompt, nothing denied");
         // Past the grace, before any tick: apply settles first, then the Post is the turn going on (as after a tick).
         s.cancelled_at -= CANCEL_GRACE_MS + 1;
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), Some("working"));
@@ -1927,6 +1979,57 @@ mod tests {
         s.typed_cancel();
         assert!(!s.cancelled, "no prompt stands, so a typed Esc is a plain cancel");
         assert_eq!(s.resolved(), "working");
+    }
+
+    #[test]
+    fn p80_the_denied_tool_is_found_by_name_and_input_not_by_the_last_one_started() {
+        // (f) two parallel WebFetch calls; the prompt is for t1's url, t2 started last.
+        let fetch = |id: &str, url: &str| format!(r#"{{"hook_event_name":"PreToolUse","tool_name":"WebFetch","tool_use_id":"{id}","tool_input":{{"url":"{url}"}}}}"#);
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, &fetch("t1", "https://a.example"));
+        state(&mut s, &fetch("t2", "https://b.example"));
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"WebFetch","tool_input":{"url":"https://a.example"}}"#);
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"WebFetch","tool_use_id":"t1","error":"denied"}"#), None);
+        assert_eq!(s.resolved(), "interrupted", "the denied t1's late report does not undo the interrupt");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"WebFetch","tool_use_id":"t2"}"#), Some("working"));
+        // (g) a child's denied tool reporting after the settle changes nothing.
+        let mut s = child_asking();
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","agent_id":"a","tool_name":"Bash","tool_use_id":"c1","error":"denied"}"#), None);
+        assert_eq!(s.resolved(), "interrupted");
+    }
+
+    #[test]
+    fn p80_the_denied_set_holds_every_started_id_of_the_asker_that_matches_and_is_bounded_and_cleared() {
+        let pre = |agent: &str, id: &str, cmd: &str| format!(r#"{{"hook_event_name":"PreToolUse",{agent}"tool_name":"Bash","tool_use_id":"{id}","tool_input":{{"command":"{cmd}"}}}}"#);
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a","agent_type":"w"}"#);
+        state(&mut s, &pre("", "l1", "ls"));
+        state(&mut s, &pre(r#""agent_id":"a","#, "c1", "ls"));
+        state(&mut s, &pre(r#""agent_id":"a","#, "c2", "make"));
+        state(&mut s, &pre(r#""agent_id":"a","#, "c3", "ls"));
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a","tool_name":"Bash","tool_input":{"command":"ls"}}"#);
+        s.answer(Agent::Claude, false);
+        assert_eq!(s.denied, vec!["c1", "c3"], "only the asker's started tools with that name and input, not the lead's l1 or c2");
+        // No match: the asker's last started tool.
+        let mut s = child_asking();
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a","tool_name":"Bash","tool_input":{"command":"never started"}}"#);
+        s.answer(Agent::Claude, false);
+        assert_eq!(s.denied, vec!["c1"]);
+        // Bounded by MAX_TOOLS, and a new turn forgets the record.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        for i in 0..MAX_TOOLS + 5 {
+            state(&mut s, &pre("", &format!("x{i}"), "ls"));
+        }
+        assert_eq!(s.started.len(), MAX_TOOLS);
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        assert!(s.started.is_empty());
     }
 
     /// A Claude lead working with sub-agent `a`, which asks permission for a Bash tool it started as `c1`.
