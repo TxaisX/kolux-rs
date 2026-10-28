@@ -956,9 +956,8 @@ fn proxy_in_settings(read: std::io::Result<serde_json::Value>) -> Result<Option<
     }
 }
 
-/// `proxy_in_settings` plus the one case the settings load hides: with no settings.json the load
-/// reads {} (state.rs read_file), but a last good copy beside it may name a proxy, or may be too
-/// damaged to say it does not. That is "can't read", never "no proxy".
+/// `proxy_in_settings` plus a second look at the last good copy for a missing settings.json (the
+/// load itself reads that copy since row 944; this is the belt for a copy too damaged to say). That is "can't read", never "no proxy".
 fn proxy_in_profile(read: std::io::Result<serde_json::Value>, dir: &std::path::Path) -> Result<Option<String>, String> {
     let saved = proxy_in_settings(read)?;
     if saved.is_some() || !matches!(std::fs::metadata(dir.join("settings.json")), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
@@ -2960,8 +2959,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // Row 939b: the settings load reads a missing settings.json as {} even when a .bak names a proxy, so
-    // the runtime read looks at the .bak itself: the tab, the icon and the HEAD gates all refuse.
+    // Row 939b, changed by row 944: a missing settings.json beside a .bak reads the .bak (state.rs read_file),
+    // so a proxy in it is honoured and a copy that cannot be read refuses the tab, the icon and the HEAD.
     #[test]
     fn row939b_a_missing_settings_file_with_a_proxy_in_the_last_good_copy_refuses_everything() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-row939b-settings-{}", std::process::id()));
@@ -2970,19 +2969,18 @@ mod tests {
         let read = |s: &crate::state::Store| proxy_in_profile(s.try_settings(), &s.dir());
         let bak = dir.join("settings.json.bak");
         assert_eq!(read(&store), Ok(None), "neither file: first run");
-        for (what, bytes, refused) in [
-            ("a proxy", r#"{"httpProxy":"http://127.0.0.1:3128"}"#, true),
-            ("an empty proxy", r#"{"httpProxy":""}"#, false),
-            ("no proxy", r#"{"theme":"dark"}"#, false),
-            ("a copy that cannot be read", "{ half written", true),
+        // Row 944: the load now reads the copy for a missing file, so a proxy in it is the saved proxy.
+        for (what, bytes, want) in [
+            ("a proxy", r#"{"httpProxy":"http://127.0.0.1:3128"}"#, Ok(Some("http://127.0.0.1:3128".to_string()))),
+            ("an empty proxy", r#"{"httpProxy":""}"#, Ok(None)),
+            ("no proxy", r#"{"theme":"dark"}"#, Ok(None)),
+            ("a copy that cannot be read", "{ half written", Err(SETTINGS_UNREADABLE.to_string())),
         ] {
             std::fs::write(&bak, bytes).unwrap();
             let got = read(&store);
-            if refused {
-                assert_eq!(got, Err(SETTINGS_UNREADABLE.to_string()), "{what}");
+            assert_eq!(got, want, "{what}");
+            if got.is_err() {
                 assert!(!icon_fetch_allowed(&got), "{what}: no icon or HEAD goes direct");
-            } else {
-                assert_eq!(got, Ok(None), "{what}");
             }
         }
         std::fs::write(dir.join("settings.json"), r#"{"theme":"dark"}"#).unwrap();
