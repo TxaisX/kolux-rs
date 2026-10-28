@@ -205,8 +205,8 @@ export function hookEventsInstalled(settingsFile) {
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
 
 // ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
-export const LIVE_BASE = "G:/Temp/live-v6";
-export const LIVE_LOGS = "G:/Temp/live-v6-logs";
+export const LIVE_BASE = "G:/Temp/live-v7";
+export const LIVE_LOGS = "G:/Temp/live-v7-logs";
 export const TERM = "section.pane[data-agent]";
 export const SHELL = 'section.pane[data-agent="shell"]';
 

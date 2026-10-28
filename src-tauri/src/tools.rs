@@ -11,12 +11,14 @@ use serde::Serialize;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
 /// A probe that runs past this is ended and its tool reported as unknown (no notice).
 const PROBE_LIMIT: Duration = Duration::from_secs(6);
+/// After a probe's child exits, how long a quiet stdout is waited on (a grandchild may hold it open).
+const DRAIN_IDLE: Duration = Duration::from_millis(500);
 const KEY_DISMISSED: &str = "tool_notices_dismissed";
 
 /// One tool's state: ok, missing (or, for gh's sign-in, signed out) or unknown (the probe hung).
@@ -64,7 +66,8 @@ pub enum Ran {
 }
 
 /// Runs `program args` found on the search path, ending it once it runs past `limit`.
-/// ponytail: output is read after exit, fine for the few lines a version or status check prints.
+/// Stdout is drained on a thread while the child runs; after exit a pipe a grandchild still holds is waited on only briefly.
+/// ponytail: stderr is null (nothing to fill), so only stdout can stall a child.
 pub fn probe(program: &str, args: &[&str], limit: Duration) -> Ran {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
@@ -74,15 +77,28 @@ pub fn probe(program: &str, args: &[&str], limit: Duration) -> Ran {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let Ok(mut child) = cmd.spawn() else { return Ran::NotFound };
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    if let Some(mut s) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while let Ok(n @ 1..) = s.read(&mut buf) {
+                if tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
     let start = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut out = String::new();
-                if let Some(mut s) = child.stdout.take() {
-                    let _ = s.read_to_string(&mut out);
+                let deadline = (start + limit).max(Instant::now() + DRAIN_IDLE);
+                let mut bytes = Vec::new();
+                // Ends at EOF, once the pipe has been quiet for DRAIN_IDLE, or at the deadline.
+                while let Ok(chunk) = rx.recv_timeout(DRAIN_IDLE.min(deadline.saturating_duration_since(Instant::now()))) {
+                    bytes.extend_from_slice(&chunk);
                 }
-                return Ran::Exited(status.success(), out);
+                return Ran::Exited(status.success(), String::from_utf8_lossy(&bytes).into_owned());
             }
             Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(50)),
             _ => {
@@ -637,6 +653,48 @@ mod tests {
         let r = probe("git", &["--no-such-option-kolux"], PROBE_LIMIT);
         assert!(matches!(r, Ran::Exited(false, _)));
         assert_eq!(installed("git", PROBE_LIMIT), Check::Ok);
+    }
+
+    /// Runs a throwaway script (a .cmd on Windows, `sh` elsewhere) through `probe`.
+    fn probe_script(tag: &str, win: &str, unix: &str, limit: Duration) -> Ran {
+        let dir = std::env::temp_dir().join(format!("kolux-row961-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let got = if cfg!(windows) {
+            let script = dir.join("out.cmd");
+            std::fs::write(&script, win.replace('\n', "\r\n")).unwrap();
+            probe(script.to_str().unwrap(), &[], limit)
+        } else {
+            let script = dir.join("out.sh");
+            std::fs::write(&script, unix).unwrap();
+            probe("sh", &[script.to_str().unwrap()], limit)
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        got
+    }
+
+    // Row 961: output bigger than the pipe buffer is read while the child runs, not after it exits.
+    #[test]
+    fn row961_a_probe_with_more_output_than_the_pipe_holds_is_not_reported_hung() {
+        let line = "0123456789012345678901234567890123456789";
+        let win = format!("@echo off\nfor /L %%i in (1,1,3000) do @echo {line}\n");
+        let unix = format!("i=0\nwhile [ $i -lt 3000 ]; do echo {line}; i=$((i+1)); done\n");
+        match probe_script("big", &win, &unix, Duration::from_secs(8)) {
+            Ran::Exited(true, out) => assert!(out.len() > 64_000, "kept {} bytes", out.len()),
+            other => panic!("expected Exited(true, ..), got {other:?}"),
+        }
+    }
+
+    // Row 961: a grandchild that keeps stdout open past the child's exit cannot stall the probe.
+    #[test]
+    fn row961_a_grandchild_holding_stdout_open_does_not_stall_the_probe() {
+        let start = Instant::now();
+        let limit = Duration::from_secs(3);
+        let got = probe_script("held", "@echo off\nstart /b ping -n 9 127.0.0.1\necho finished\n", "sleep 9 &\necho finished\n", limit);
+        assert!(start.elapsed() < limit + Duration::from_secs(1), "took {:?}", start.elapsed());
+        match got {
+            Ran::Exited(true, out) => assert!(out.contains("finished"), "got {out:?}"),
+            other => panic!("expected Exited(true, ..), got {other:?}"),
+        }
     }
 
     #[test]

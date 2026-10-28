@@ -34,7 +34,7 @@ Rules: an empty tab shows the blank page (with the browser settings page gone, t
   page can never close the tab it lives in, the request is ignored and switching tabs still works;
   a tab opened from a link keeps the session profile of the page that opened it.
 Acceptance:
-  - [ ] Press Mod+Shift+B → a New Tab is active and typed characters land in its address bar.
+  - [x] Press Mod+Shift+B → a New Tab is active and typed characters land in its address bar. (cards live; evidence/cards-BROW-001.txt)
   - [ ] Load a page whose script asks to close its own window → the tab stays and the other tabs
         still switch normally.
 Compat: keyboard command for a new browser tab, default Mod+Shift+B on every platform (its command
@@ -52,8 +52,8 @@ Rules: a page that is not on screen stays alive where it is, so coming back only
   touring dozens of worktrees does not leave hidden pages alive forever, because the hidden-worktree
   memory budget (BROW-021) decides which ones unload.
 Acceptance:
-  - [ ] Type into a form field, go to a terminal tab and return → the typed text is still there.
-  - [ ] Go to another worktree and come back → the page has not reloaded.
+  - [x] Type into a form field, go to a terminal tab and return → the typed text is still there. (cards live; evidence/cards-BROW-002.txt)
+  - [x] Go to another worktree and come back → the page has not reloaded. (cards live; evidence/cards-BROW-002.txt)
 Compat: —
 Source: D-13-002
 
@@ -102,8 +102,8 @@ Rules: only the toolbar button halts a load in progress, while the shortcut and 
   never drifts from the page's; a page's own back or forward to a neighbouring entry moves the
   toolbar's cursor too.)
 Acceptance:
-  - [ ] Open a slow page → Stop with a spinner; press it → loading halts; after a normal load the
-        button reads Reload.
+  - [x] Open a slow page → Stop with a spinner; press it → loading halts; after a normal load the
+        button reads Reload. (cards live; evidence/cards-BROW-005.txt)
   - [x] In a fresh tab → back and forward are both disabled. (cards; evidence/cards-BROW-005.txt)
 Compat: keyboard commands browser.back (Mac Mod+[, other platforms Alt+Left), browser.forward (Mac
   Mod+], other platforms Alt+Right), browser.reload (Mod+R), and hard reload (Mod+Shift+R; its
@@ -162,7 +162,7 @@ Rules: the number of recovery attempts is limited; a rebuild that hangs is retri
   last picture instead of going blank; only the page that belongs to a tab may attach to it, and a
   mismatched page is turned away.
 Acceptance:
-  - [ ] Kill the process behind a tab → the tab returns to its page with no action from the user.
+  - [x] Kill the process behind a tab → the tab returns to its page with no action from the user. (cards live; evidence/cards-BROW-009.txt)
   - [x] Force recovery to fail → an error shows; retry from the toolbar → the page is back. (cards; evidence/cards-BROW-009.txt)
 Compat: —
 Source: D-13-009

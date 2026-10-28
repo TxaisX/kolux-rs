@@ -7,10 +7,8 @@
 //! one Kolux knows and the whole listing is dropped, never used in part.
 
 use crate::agents;
-use crate::claude_key::{run_hidden, strip_ansi, Ended};
-use portable_pty::CommandBuilder;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use crate::claude_key::strip_ansi;
+use crate::tools::{probe, Ran};
 use std::time::Duration;
 
 /// How long a listing may take before Kolux gives up on it.
@@ -123,18 +121,16 @@ pub fn parse_listing(text: &str) -> Option<Vec<Found>> {
 pub async fn agent_models(id: String) -> Option<Vec<Found>> {
     let args = listing_args(&id)?;
     let path = agents::catalogue().into_iter().find(|a| a.id == id)?.path?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = CommandBuilder::new(&path);
-        cmd.args(args);
-        let (out, ended) = run_hidden(cmd, LIST_LIMIT, Arc::new(AtomicBool::new(false)), || {}, |_| false);
-        match ended {
-            Ended::Exited(Some(0)) | Ended::Exited(None) => parse_listing(&out),
-            _ => None,
-        }
-    })
-    .await
-    .ok()
-    .flatten()
+    tauri::async_runtime::spawn_blocking(move || list_from(&path, args, LIST_LIMIT)).await.ok().flatten()
+}
+
+/// Runs the listing command and reads its models; `None` when it fails, hangs or prints an unknown format.
+fn list_from(program: &str, args: &[&str], limit: Duration) -> Option<Vec<Found>> {
+    // stdin is null (never a sign-in prompt to wait on), no window, killed past `limit`.
+    match probe(program, args, limit) {
+        Ran::Exited(true, out) => parse_listing(&out),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +169,21 @@ mod tests {
     fn labels_are_built_from_ids_when_none_is_given() {
         assert_eq!(label_of("gpt-5-codex"), "GPT 5 Codex");
         assert_eq!(label_of("grok-code-fast-1"), "Grok Code Fast 1");
+    }
+
+    // Row 951: a listing never waits on input, so a program that asks for a line (a sign-in prompt) is not left hanging.
+    #[cfg(windows)]
+    #[test]
+    fn row951_a_listing_runs_with_no_input_to_wait_on() {
+        let dir = std::env::temp_dir().join(format!("kolux-row951-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("asks.cmd");
+        std::fs::write(&script, "@set /p ans=
+@echo grok-4
+").unwrap();
+        let got = list_from(script.to_str().unwrap(), &[], Duration::from_secs(4));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(ids(got), Some(vec!["grok-4".into()]));
     }
 
     #[test]
