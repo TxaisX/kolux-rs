@@ -880,9 +880,14 @@ pub(crate) mod tests {
         });
         let ep = Endpoint { port, token: "t".into(), pid: 1, generation: 1, protocol: PROTOCOL };
         let client = Client::connect(&ep, Duration::from_millis(500)).unwrap();
+        // On a thread, so the old order (no timeout on the attach read) fails here instead of hanging the run.
+        let (tx, rx) = std::sync::mpsc::channel();
         let t = Instant::now();
-        let failed = Link::connect(ep, client).err().expect("attach was never answered");
-        assert!(t.elapsed() < Duration::from_secs(5), "took {:?}: {failed}", t.elapsed());
+        std::thread::spawn(move || {
+            let _ = tx.send(Link::connect(ep, client).err());
+        });
+        let failed = rx.recv_timeout(Duration::from_secs(5)).expect("connect hung on an attach nobody answers");
+        assert!(failed.is_some(), "attach was never answered, so connect must fail (took {:?})", t.elapsed());
         drop(release);
         server.join().unwrap();
     }

@@ -1612,9 +1612,20 @@ impl Terminals {
     /// of holding the old program open. Coordinator default; Txais may overrule. False when the
     /// service was still answering at the deadline (true when no service dir is known).
     pub fn end_for_update(&self) -> bool {
-        let dir = self.service.dir.lock().ok().and_then(|d| d.clone());
         self.kill_all();
-        dir.is_none_or(|dir| crate::pty::service::stop(&dir, UPDATE_STOP_LIMIT))
+        self.stop_service(UPDATE_STOP_LIMIT)
+    }
+
+    /// Stops the linked service within `limit`. The dir is forgotten once it is stopped, so the
+    /// installer's before-exit hook (second call on the quit path) returns at once; a failed stop
+    /// keeps it, so a retry stops again. Only `use_service` (at startup) stores it.
+    fn stop_service(&self, limit: Duration) -> bool {
+        let Some(dir) = self.service.dir.lock().ok().and_then(|d| d.clone()) else { return true };
+        let stopped = crate::pty::service::stop(&dir, limit);
+        if stopped {
+            *self.service.dir.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+        stopped
     }
 
     /// `kill_all` without the app-wide quitting flag (a test runs it alone).
@@ -1953,6 +1964,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+
+    /// Row 1031/M2: the quit path ends the service twice (install_on_quit, then the installer's hook); the second finds it done.
+    #[test]
+    fn row1031_a_second_service_stop_finds_it_done_and_returns_at_once() {
+        let dir = std::env::temp_dir().join(format!("kolux-row1031-stop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = Terminals::default();
+        assert!(t.stop_service(Duration::from_secs(2)), "no service is known: nothing to stop");
+        *t.service.dir.lock().unwrap() = Some(dir.clone());
+        assert!(t.stop_service(Duration::from_secs(2)), "no endpoint in the dir: stopped");
+        assert!(t.service.dir.lock().unwrap().is_none(), "a stopped service's dir is forgotten");
+        let again = std::time::Instant::now();
+        assert!(t.stop_service(Duration::from_secs(2)));
+        assert!(again.elapsed() < Duration::from_millis(200), "{:?}", again.elapsed());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// after-list 697: a terminal started while the window is still taking the service's terminals
     /// back waits for that, so it never takes the id an adopted terminal (and its hooks) carry.
