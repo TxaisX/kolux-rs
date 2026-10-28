@@ -502,7 +502,7 @@ pub fn main(args: &[String]) -> i32 {
 
 /// One connection to the service after a good hello.
 pub struct Client {
-    lines: std::io::Lines<BufReader<TcpStream>>,
+    reader: BufReader<TcpStream>,
     out: TcpStream,
     next: u64,
     pub hello: Value,
@@ -514,18 +514,19 @@ impl Client {
         let stream = TcpStream::connect_timeout(&addr, wait).map_err(|e| e.to_string())?;
         stream.set_read_timeout(Some(wait)).map_err(|e| e.to_string())?;
         let mut out = stream.try_clone().map_err(|e| e.to_string())?;
-        let mut lines = BufReader::new(stream).lines();
+        let mut reader = BufReader::new(stream);
         writeln!(out, "{}", json!({ "op": "hello", "token": ep.token, "protocol": PROTOCOL })).map_err(|e| e.to_string())?;
-        let reply: Value = lines.next().ok_or("the terminal service closed the connection")?.map_err(|e| e.to_string()).and_then(|l| serde_json::from_str(&l).map_err(|e| e.to_string()))?;
+        let reply = Self::read_line(&mut reader)?;
         if reply["ok"] != true {
             return Err(reply["error"].as_str().unwrap_or("the terminal service refused the connection").to_string());
         }
-        Ok(Client { lines, out, next: 0, hello: reply["result"].clone() })
+        Ok(Client { reader, out, next: 0, hello: reply["result"].clone() })
     }
 
     /// How long a read waits (None: for as long as it takes, the window's event connection).
     pub fn set_wait(&mut self, wait: Option<Duration>) -> Result<(), String> {
-        self.out.set_read_timeout(wait).map_err(|e| e.to_string())
+        // Windows keeps a socket's timeout per handle: it must go on the one that reads, not `out`.
+        self.reader.get_ref().set_read_timeout(wait).map_err(|e| e.to_string())
     }
 
     /// The service's protocol, from its hello.
@@ -550,7 +551,14 @@ impl Client {
 
     /// The next line from the service (an event once attached).
     pub fn read(&mut self) -> Result<Value, String> {
-        let line = self.lines.next().ok_or("the terminal service closed the connection")?.map_err(|e| e.to_string())?;
+        Self::read_line(&mut self.reader)
+    }
+
+    fn read_line(reader: &mut BufReader<TcpStream>) -> Result<Value, String> {
+        let mut line = String::new();
+        if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+            return Err("the terminal service closed the connection".into());
+        }
         serde_json::from_str(&line).map_err(|e| e.to_string())
     }
 }
@@ -1010,5 +1018,26 @@ mod tests {
         assert!(matches!(probe(&dir, PROBE_WAIT), Probe::None));
         assert!(t.elapsed() < Duration::from_millis(500), "took {:?}", t.elapsed());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn term106_an_event_connection_waits_past_the_connect_timeout() {
+        // A quiet shell sends nothing for seconds; the attached read must outlast the connect wait.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut hello = String::new();
+            BufReader::new(conn.try_clone().unwrap()).read_line(&mut hello).unwrap();
+            writeln!(conn, "{}", json!({ "ok": true, "result": {} })).unwrap();
+            std::thread::sleep(Duration::from_millis(900));
+            writeln!(conn, "{}", json!({ "ev": "output", "id": 1 })).unwrap();
+        });
+        let ep = Endpoint { port, token: "t".into(), pid: 1, generation: 1, protocol: PROTOCOL };
+        let mut c = Client::connect(&ep, Duration::from_millis(300)).unwrap();
+        c.set_wait(None).unwrap();
+        let ev = c.read().expect("the event connection must not time out while idle");
+        assert_eq!(ev["ev"], "output");
+        server.join().unwrap();
     }
 }
