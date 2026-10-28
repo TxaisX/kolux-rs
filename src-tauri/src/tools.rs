@@ -76,7 +76,12 @@ pub fn probe(program: &str, args: &[&str], limit: Duration) -> Ran {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0); // own group, so a hang takes the whole tree
     let Ok(mut child) = cmd.spawn() else { return Ran::NotFound };
+    // ponytail: a grandchild started before the assignment escapes the job (std cannot spawn suspended).
+    #[cfg(windows)]
+    let job = crate::procs::Job::new().ok().filter(|j| j.assign_pid(child.id()).is_ok());
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     if let Some(mut s) = child.stdout.take() {
         std::thread::spawn(move || {
@@ -93,21 +98,37 @@ pub fn probe(program: &str, args: &[&str], limit: Duration) -> Ran {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let deadline = (start + limit).max(Instant::now() + DRAIN_IDLE);
-                let mut bytes = Vec::new();
-                // Ends at EOF, once the pipe has been quiet for DRAIN_IDLE, or at the deadline.
-                while let Ok(chunk) = rx.recv_timeout(DRAIN_IDLE.min(deadline.saturating_duration_since(Instant::now()))) {
-                    bytes.extend_from_slice(&chunk);
-                }
+                let bytes = drain_after_exit(&rx, deadline);
                 return Ran::Exited(status.success(), String::from_utf8_lossy(&bytes).into_owned());
             }
             Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                #[cfg(windows)]
+                drop(job); // kill-on-close ends every member
+                #[cfg(unix)]
+                crate::procs::kill_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 return Ran::Hung;
             }
         }
     }
+}
+
+/// What a probe's stdout holds once its child has exited. Ends at EOF, once the pipe has been quiet for
+/// DRAIN_IDLE, or at `deadline`. A cut (not EOF) drops the partial last line, so a listing never ends mid-id;
+/// a clean EOF keeps everything, since a listing may lack its final newline.
+fn drain_after_exit(rx: &mpsc::Receiver<Vec<u8>>, deadline: Instant) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    while Instant::now() < deadline {
+        match rx.recv_timeout(DRAIN_IDLE.min(deadline.saturating_duration_since(Instant::now()))) {
+            Ok(chunk) => bytes.extend_from_slice(&chunk),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return bytes,
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+        }
+    }
+    bytes.truncate(bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1));
+    bytes
 }
 
 /// A version check that fails or cannot start means missing; one that hung means unknown.
@@ -689,12 +710,78 @@ mod tests {
     fn row961_a_grandchild_holding_stdout_open_does_not_stall_the_probe() {
         let start = Instant::now();
         let limit = Duration::from_secs(3);
-        let got = probe_script("held", "@echo off\nstart /b ping -n 9 127.0.0.1\necho finished\n", "sleep 9 &\necho finished\n", limit);
+        // ping -n 6 / sleep 5 outlast limit + 1 s (so a stalled drain still fails) yet end soon after.
+        let got = probe_script("held", "@echo off\nstart /b ping -n 6 127.0.0.1\necho finished\n", "sleep 5 &\necho finished\n", limit);
         assert!(start.elapsed() < limit + Duration::from_secs(1), "took {:?}", start.elapsed());
         match got {
             Ran::Exited(true, out) => assert!(out.contains("finished"), "got {out:?}"),
             other => panic!("expected Exited(true, ..), got {other:?}"),
         }
+    }
+
+    // Card 39: a hung probe ends the whole tree, not just the direct child (a .cmd shim's grandchild).
+    #[test]
+    fn row965_a_hung_probe_ends_the_grandchild_it_started() {
+        let dir = std::env::temp_dir().join(format!("kolux-row965-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("grandchild.pid");
+        let (win, unix) = (
+            format!("@echo off\nstart /b powershell -NoProfile -Command \"$PID | Out-File -Encoding ascii -FilePath '{}'; Start-Sleep -Seconds 20\"\nping -n 30 127.0.0.1 >nul\n", pidfile.display()),
+            format!("sleep 30 &\necho $! > '{}'\nsleep 30\n", pidfile.display()),
+        );
+        // The limit leaves a slow machine time to start the grandchild before the hang.
+        let got = probe_script("tree", &win, &unix, Duration::from_secs(4));
+        let pid = std::fs::read_to_string(&pidfile).ok().and_then(|t| t.trim().parse::<u32>().ok());
+        let gone = pid.is_some_and(|p| {
+            let end = Instant::now() + Duration::from_secs(2);
+            while crate::procs::alive(p) != Some(false) && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            crate::procs::alive(p) == Some(false)
+        });
+        if let Some(p) = pid.filter(|_| !gone) {
+            crate::procs::kill_tree(p);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(got, Ran::Hung);
+        assert!(pid.is_some(), "the grandchild never reported its pid");
+        assert!(gone, "grandchild {pid:?} outlived the hung probe");
+    }
+
+    // Card 39: a listing cut by the idle window or the deadline never ends mid-line; a clean EOF is kept whole.
+    #[test]
+    fn row965_a_cut_drain_drops_the_partial_last_line_but_an_eof_keeps_it() {
+        let far = || Instant::now() + Duration::from_secs(5);
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        tx.send(b"a\nb\npar".to_vec()).unwrap();
+        tx.send(b"t".to_vec()).unwrap();
+        assert_eq!(drain_after_exit(&rx, far()), b"a\nb\n", "idle cut (tx still open)");
+        tx.send(b"no newline at all".to_vec()).unwrap();
+        assert!(drain_after_exit(&rx, far()).is_empty(), "idle cut with no newline");
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        tx.send(b"a\nb\nlast".to_vec()).unwrap();
+        drop(tx);
+        assert_eq!(drain_after_exit(&rx, far()), b"a\nb\nlast", "EOF keeps the last line");
+    }
+
+    // Card 39: a grandchild writing non-stop cannot keep the drain past its deadline.
+    #[test]
+    fn row965_the_drain_stops_at_its_deadline_while_output_keeps_coming() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let writer = std::thread::spawn(move || {
+            for _ in 0..150 {
+                if tx.send(b"x\n".to_vec()).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let start = Instant::now();
+        let got = drain_after_exit(&rx, start + Duration::from_millis(300));
+        assert!(start.elapsed() < Duration::from_secs(1), "took {:?}", start.elapsed());
+        assert!(!got.is_empty() && got.ends_with(b"\n"));
+        drop(rx);
+        writer.join().unwrap();
     }
 
     #[test]
