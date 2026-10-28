@@ -42,8 +42,8 @@ Rules: before launch, Kolux records the folder as trusted in each agent's own co
   neither documents where its trust decision is kept, and Cursor's `--trust` flag is for headless
   runs only; their own trust prompt stays with the user.)
 Acceptance:
-  - [ ] Create a worktree and launch Claude Code with a prompt → no trust menu, and the prompt
-        reaches the agent.
+  - [x] Create a worktree and launch Claude Code with a prompt → no trust menu, and the prompt
+        reaches the agent. (cards live; evidence/cards-SAFE-023.txt)
   - [x] Launch again in the same folder → the agent's trust configuration does not change at all. (cards; evidence/cards-SAFE-023.txt)
 Compat: the agents' own configuration is their public interface and the rebuild writes the same
   places: Cursor's per-project trust marker, Copilot's trusted-folder list, Codex's project trust
