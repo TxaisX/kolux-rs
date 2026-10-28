@@ -39,6 +39,17 @@ export function offerFor(r: Readiness | null, key: string | null, now: number): 
   return r.push === "none" ? { kind: "create" } : { kind: "push-create", push: r.push };
 }
 
+/** Row 76: why this repository cannot start a pull request from Kolux, or null for GitHub (or an answer not in yet). Creating one goes through gh, which only knows GitHub. */
+export const createBlock = (provider: string | null | undefined, host: string | null | undefined): string | null =>
+  !provider || provider === "github" ? null : `Creating a pull request from Kolux needs a GitHub remote; ${host ? `${host} is not one` : "this repository has no remote"}.`;
+
+/** Whether the empty state may offer to start a pull request: not on a non-GitHub remote, not with an open one already linked. */
+export const canStartReview = (blockedBy: string | null, linked: boolean): boolean => blockedBy === null && !linked;
+
+/** The empty state's offer: a linked pull request or a non-GitHub remote blocks it (the reason is shown for the remote only). */
+export const offerOf = (i: { linked: boolean; blockedBy: string | null; ready: Readiness | null; key: string | null; now: number }): Offer =>
+  i.blockedBy !== null ? { kind: "blocked", reason: i.blockedBy } : i.linked ? { kind: "blocked", reason: "" } : offerFor(i.ready, i.key, i.now);
+
 /** Hard errors by worktree, each with the git state it was raised for. */
 export type ErrorBook = Readonly<Record<string, { key: string; message: string }>>;
 export const raise = (book: ErrorBook, dir: string, key: string, message: string): ErrorBook => ({ ...book, [dir]: { key, message } });

@@ -415,6 +415,15 @@ pub fn checks_for(provider: &Provider, ask: impl FnOnce() -> Result<scm::PrCheck
     }
 }
 
+/// Row 76: the create gate. A pull request is made through gh, which only knows GitHub: any other provider is refused
+/// by name before `make` (and so before gh or the writer) runs.
+pub fn create_for<T>(provider: &Provider, make: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    match provider.other_label() {
+        None => make(),
+        Some((_, host)) => Err(format!("Creating a pull request from Kolux needs a GitHub remote; {}.", host.map_or("this repository has no remote".to_string(), |h| format!("{h} is not one")))),
+    }
+}
+
 /// Row 76: what the composer is told. `provider` is github, gitlab, other or none; `pr` only ever comes from a GitHub lookup.
 /// `repo` (GitHub only) is the repository gh searched, which is origin's: with a fork as origin, that is the fork.
 #[derive(Debug, Serialize)]
@@ -489,6 +498,7 @@ pub async fn scm_check_log(worktree: String, link: String) -> Result<String, Str
 pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>, instructions: Option<String>, issue: Option<Issue>, use_template: bool, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<(String, String), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
+        create_for(&provider_for(scm::repo_id::primary_host(dir, &scm::ssh_config())?.as_deref()), || Ok(()))?; // no writer run for a remote that cannot take the pull request
         // A base given with its remote (origin/main) is used as is; a bare name must match one remote.
         let base = base.trim().to_string();
         let against = if base.contains('/') && crate::git::run(&["rev-parse", "--verify", "--quiet", &base], Some(dir)).is_ok() {
@@ -1066,6 +1076,28 @@ mod tests {
         let got = checks_for(&Provider::GitHub, || Ok(scm::PrChecks { conflict: true, ..Default::default() })).unwrap();
         assert!(got.conflict && got.provider.is_none() && got.host.is_none(), "{got:?}");
         assert!(checks_for(&Provider::GitHub, || Err("gh is signed out".into())).is_err());
+    }
+
+    #[test]
+    fn row76_pr_create_for_a_non_github_remote_never_calls_gh() {
+        for (p, host) in [(Provider::GitLab("gitlab.com".into()), "gitlab.com"), (Provider::Other("code.example.org".into()), "code.example.org")] {
+            let mut asked = 0;
+            let err = create_for(&p, || {
+                asked += 1;
+                Ok(sample_pr())
+            })
+            .unwrap_err();
+            assert_eq!(asked, 0, "{p:?} must not reach gh");
+            assert!(err.contains(host) && err.contains("needs a GitHub remote"), "{err}");
+        }
+        let err = create_for(&Provider::NoHost, || -> Result<(), String> { unreachable!() }).unwrap_err();
+        assert!(err.contains("no remote"), "{err}");
+        assert_eq!(create_for(&Provider::GitHub, || Ok(sample_pr())).unwrap().number, 7);
+        assert!(create_for(&Provider::GitHub, || Err::<scm::Pr, String>("gh is signed out".into())).is_err());
+    }
+
+    fn sample_pr() -> scm::Pr {
+        serde_json::from_value(serde_json::json!({"number": 7, "url": "https://github.com/a/b/pull/7", "state": "OPEN", "title": "t", "head": "h", "draft": false})).unwrap()
     }
 
     #[test]

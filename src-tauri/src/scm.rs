@@ -2189,7 +2189,14 @@ pub async fn scm_pr_checks(worktree: String, linked: Option<String>) -> Result<P
 
 #[tauri::command]
 pub async fn scm_pr_create(worktree: String, title: String, body: String, base: String, draft: bool) -> Result<Pr, String> {
-    tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        // Row 76: gh creates pull requests on GitHub only; any other remote is refused by name before gh is looked for.
+        let provider = crate::pr_review::provider_for(repo_id::primary_host(dir, &ssh_config())?.as_deref());
+        crate::pr_review::create_for(&provider, || pr_create(&gh_program()?, dir, &title, &body, &base, draft))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// GIT-014: shows a changed file in the file manager (its folder when the file was deleted); the

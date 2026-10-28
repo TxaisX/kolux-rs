@@ -23,6 +23,9 @@ export function checksSummary(checks: Check[]): string {
 
 export const stillRunning = (checks: Check[]): boolean => checks.some((c) => c.outcome === "running");
 
+/** Only a GitHub "no pull request" is trusted for the grace period; a provider answer is cheap (gh is not run) and carries the host the composer must know. */
+export const reusableNoPr = (d: PrChecks): boolean => d.pr === null && !d.provider;
+
 export const reuseNoPr = (seen: Map<string, number>, dir: string, now: number): boolean => {
   const at = seen.get(dir);
   return at !== undefined && now - at < NO_PR_GRACE_MS;

@@ -48,9 +48,9 @@ describe("row 76 linked pull request lookup in the composer", () => {
     expect(text).not.toMatch(/acme|yet/);
   });
 
-  it("a none answer without a repository still says where gh looked", async () => {
+  it("a none answer without a repository names no location", async () => {
     reply = github(null, null);
-    expect(reviewLines(await readReview("C:/w", status))).toEqual(["No pull request for this branch in origin."]);
+    expect(reviewLines(await readReview("C:/w", status))).toEqual(["No pull request found for this branch."]);
   });
 
   it("a branch pushed to a fork asks with the fork's owner and renamed branch and names the fork", async () => {

@@ -10,15 +10,16 @@ import { needsOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
 import { draftOffered, draftPrText, draftRunning, draftSubscribe, draftVersion, readDraftGate, settleDraft, startGatedOneClick } from "./prDraft";
 import { readReview, reviewKey, reviewLines, reviewSettle, reviewShown, type ReviewSlot } from "./prFind";
-import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
+import { assess, canStartReview, confirmed, createBlock, dismiss, errorShown, offerOf, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
-type Props = { dir: string; onCreated: (pr: Pr) => void };
+// `provider`/`host` come with the Checks answer (known before the lookup below), so a non-GitHub remote never shows a create action.
+type Props = { dir: string; provider?: string; host?: string | null; onCreated: (pr: Pr) => void };
 type Draft = { title: string; body: string; base: string; draft: boolean };
 
 /** Hard errors by worktree live outside the component so another worktree's panel never clears them. */
 let errors: ErrorBook = {};
 
-export default function PrStart({ dir, onCreated }: Props) {
+export default function PrStart({ dir, provider, host, onCreated }: Props) {
   const [seen, setSeen] = useState<{ dir: string; status: Status; ready: Readiness } | null>(null);
   const [, tick] = useState(0);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -72,7 +73,9 @@ export default function PrStart({ dir, onCreated }: Props) {
   const facts = reviewShown(review, reviewAsk);
   const linkedPr = facts?.lookup.kind === "found" && facts.lookup.pr.state === "OPEN" ? facts.lookup.pr : null;
   const key = mine ? readinessKey(dir, mine.status) : null;
-  const offer: Offer = linkedPr ? { kind: "blocked", reason: "" } : offerFor(mine?.ready ?? null, key, Date.now());
+  const lookup = facts?.lookup;
+  const blockedBy = lookup?.kind === "unsupported" ? createBlock(lookup.provider, lookup.host) : createBlock(provider, host);
+  const offer: Offer = offerOf({ linked: !!linkedPr, blockedBy, ready: mine?.ready ?? null, key, now: Date.now() });
   const failed = errorShown(errors, dir, key ?? "status");
 
   const fail = (message: string) => {
@@ -82,6 +85,7 @@ export default function PrStart({ dir, onCreated }: Props) {
   // The composer opens only on a confirmed answer; a stale one is read again first.
   const open = async () => {
     errors = dismiss(errors, dir);
+    if (blockedBy !== null) return;
     let now: { status: Status; ready: Readiness } | null = mine;
     if (!now || !confirmed(now.ready, readinessKey(dir, now.status), Date.now())) now = await check();
     if (!now || now.ready.reason !== null) return tick((n) => n + 1);
@@ -142,6 +146,7 @@ export default function PrStart({ dir, onCreated }: Props) {
   // GIT-022: with work still to commit or push, one click does all of it and opens the review.
   const oneClick = async () => {
     errors = dismiss(errors, dir);
+    if (blockedBy !== null) return;
     const { settings, gate } = await readGate();
     const done = await startGatedOneClick(dir, settings, gate);
     if (done.state === "done" && done.pr) onCreated(done.pr);
@@ -172,7 +177,7 @@ export default function PrStart({ dir, onCreated }: Props) {
         </div>
       )}
       {offer.kind === "blocked" && !draft && !linkedPr && <div className="sb-hint">{offer.reason}</div>}
-      {mine && !draft && !linkedPr && offer.kind === "blocked" && going?.state !== "running" && needsOneClick(mine.status) && (
+      {mine && !draft && canStartReview(blockedBy, !!linkedPr) && offer.kind === "blocked" && going?.state !== "running" && needsOneClick(mine.status) && (
         <button className="btn primary" data-pr-one-click onClick={() => void oneClick()}>
           Commit, push and create pull request
         </button>

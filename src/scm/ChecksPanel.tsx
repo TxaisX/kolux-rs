@@ -14,7 +14,7 @@ import CommentsPanel from "./CommentsPanel";
 import ConflictPanel from "./ConflictPanel";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
-import { CHECKS_POLL_MS, CHECKS_UNLINKED_KEY, checksSummary, panelBody, reuseNoPr, showing, stillRunning, unlinkedPrs, withUnlinkedPr, type PrChecks } from "./checks";
+import { CHECKS_POLL_MS, CHECKS_UNLINKED_KEY, checksSummary, panelBody, reusableNoPr, reuseNoPr, showing, stillRunning, unlinkedPrs, withUnlinkedPr, type PrChecks } from "./checks";
 import { prStateWord } from "./model";
 import { recordChecks } from "./prSearch";
 import { CHECK_CAP, capped, checkGroups } from "./review";
@@ -59,8 +59,8 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
       .then((data) => {
         recordChecks(dir, data); // VIEW-043: the palette reads the same answer
         if (asking.current !== key) return;
-        if (data.pr) noPrSeen.delete(key);
-        else noPrSeen.set(key, Date.now());
+        if (reusableNoPr(data)) noPrSeen.set(key, Date.now());
+        else noPrSeen.delete(key);
         setGot({ key, data, error: null, loading: false });
       })
       .catch((err) => asking.current === key && setGot((g) => ({ key, data: g?.key === key ? g.data : null, error: String(err), loading: false })));
@@ -119,7 +119,7 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
             </button>
           </div>
         ) : body === "start" || !pr ? (
-          <PrStart dir={dir} onCreated={() => load(true)} />
+          <PrStart dir={dir} provider={data.provider} host={data.host} onCreated={() => load(true)} />
         ) : (
           <>
             <div className="scm-prrow checks-review">

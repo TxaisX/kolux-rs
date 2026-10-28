@@ -5,7 +5,7 @@ const replies: Record<string, unknown> = {};
 vi.mock("@tauri-apps/api/core", () => ({ invoke: async (cmd: string) => replies[cmd] ?? null }));
 
 import GhBanner, { classify } from "../tasks/GhBanner";
-import { panelBody, type PrChecks } from "./checks";
+import { panelBody, reusableNoPr, type PrChecks } from "./checks";
 import type { Status } from "./model";
 import { readReview, reviewLines } from "./prFind";
 
@@ -34,5 +34,14 @@ describe("row 76: the Checks panel on a non-GitHub remote", () => {
     expect(panelBody({ dir: "C:/w", error: null, data: noPr(), view: "unlinked" })).toBe("unlinked");
     expect(panelBody({ dir: null, error: null, data: null, view: null })).toBe("workspace");
     expect(typeof GhBanner).toBe("function");
+  });
+});
+
+describe("row 76: the provider answer reaches the composer", () => {
+  it("only a GitHub no-pull-request answer may stand in for the next ask; a provider answer is asked again", () => {
+    expect(reusableNoPr(noPr())).toBe(true);
+    expect(reusableNoPr(gitlab)).toBe(false);
+    expect(reusableNoPr(noPr({ provider: "none", host: null }))).toBe(false);
+    expect(reusableNoPr({ ...noPr(), pr: { number: 1, url: "u", state: "OPEN", title: "t", head: "h", draft: false } as PrChecks["pr"] })).toBe(false);
   });
 });
