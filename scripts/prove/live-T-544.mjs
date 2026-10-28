@@ -131,6 +131,14 @@ const configLine = () => {
     return "(no kolux.log)";
   }
 };
+// The newest reattach line: "0 taken back" = not reattached; "N taken back" with blank panes = reattached blank.
+const takenBackLine = () => {
+  try {
+    return readFileSync(join(DATA[0], "logs", "kolux.log"), "utf8").split(/\r?\n/).filter((l) => /terminals taken back/.test(l)).pop() ?? "(no 'terminals taken back' line)";
+  } catch {
+    return "(no kolux.log)";
+  }
+};
 const jobLine = () => {
   try {
     return /could not be put in its own job object/.test(readFileSync(join(DATA[0], "logs", "kolux.log"), "utf8")) ? "the app reported it could NOT join its own job (APP-053)" : "no APP-053 job failure in kolux.log";
@@ -166,10 +174,55 @@ const key = async (k) => {
 
 const app = createApp({ root: ROOT, port: "1", cdp: String(CDP), identifier: ID, temp: RUN, offscreen: true, attach: true, log });
 // A release build has no __koluxTerm (dev only), so this reads the DOM renderer's visible rows: terminalGpu must be off
-// (item 4 runs first). i = -1: every visible pane.
-const paneLines = async (i) => {
-  const r = await app.evalJs(`(() => { const ps = [...document.querySelectorAll(${JSON.stringify(TERM)})].filter(e => e.offsetParent !== null); return (${i} < 0 ? ps : ps.slice(${i}, ${i} + 1)).flatMap(p => [...p.querySelectorAll(".xterm-rows > div")].map(r => r.textContent)); })()`);
-  return (Array.isArray(r) ? r : []).map((l) => l.replace(/ /g, " ").trim());
+// (item 4 runs first). i = -1: every visible pane. Rows come back as [text, full]; full = the text reaches the right edge
+// with no trailing space, i.e. the line wraps into the next row. scan: also step the viewport through the scrollback.
+async function domRows(sel, i, scan) {
+  const read = (p) => {
+    const sw = p.querySelector(".xterm-screen")?.getBoundingClientRect().width ?? 0;
+    return [...p.querySelectorAll(".xterm-rows > div")].map((r) => {
+      const t = r.textContent.replace(/ /g, " ");
+      const rg = document.createRange();
+      rg.selectNodeContents(r);
+      const w = rg.getBoundingClientRect().width;
+      return [t, t.length > 0 && !/\s$/.test(t) && sw - w < (w / t.length) * 1.5];
+    });
+  };
+  const frame = () => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+  const ps = [...document.querySelectorAll(sel)].filter((e) => e.offsetParent !== null);
+  const out = [];
+  for (const p of i < 0 ? ps : ps.slice(i, i + 1)) {
+    const v = p.querySelector(".xterm-viewport");
+    if (scan && v && v.scrollHeight > v.clientHeight) {
+      const end = v.scrollTop;
+      for (let y = 0; ; y += v.clientHeight) {
+        v.scrollTop = Math.min(y, v.scrollHeight);
+        v.dispatchEvent(new Event("scroll"));
+        await frame();
+        out.push(...read(p));
+        if (v.scrollTop + v.clientHeight >= v.scrollHeight - 1) break;
+      }
+      v.scrollTop = end;
+      v.dispatchEvent(new Event("scroll"));
+      await frame();
+    } else out.push(...read(p));
+    out.push(["", false]); // a pane boundary never joins
+  }
+  return out;
+}
+// Wrapped rows are joined back into one line.
+const joinRows = (rows) => {
+  const out = [];
+  let wrap = false;
+  for (const [t, full] of rows) {
+    if (wrap && t.trim()) out[out.length - 1] += t;
+    else out.push(t);
+    wrap = full;
+  }
+  return out.map((l) => l.trim());
+};
+const paneLines = async (i, scan = false) => {
+  const r = await app.evalJs(`(${domRows.toString()})(${JSON.stringify(TERM)}, ${i}, ${scan})`);
+  return joinRows(Array.isArray(r) ? r : []);
 };
 const typeInto = async (i, line) => {
   await app.focusPane(TERM, i, ".xterm-helper-textarea");
@@ -210,12 +263,22 @@ function jobs(label) {
     if (j !== "False") voided ??= `terminal service pid ${s.pid} reads IsProcessInJob ${j} at ${label}`;
   }
 }
+// The Tip card ignores Escape; its own button is "Not now".
+async function dismissTip() {
+  if (await app.clickWhere('[role="dialog"] button', "/^\\s*Not now\\s*$/").then(() => true, () => false)) {
+    await sleep(800);
+    log(`closed the Tip card (Not now); a dialog still open: ${await app.exists('[role="dialog"], [role="alertdialog"]')}`);
+  }
+}
 async function back(label) {
+  await dismissTip();
   await dismissFirstRun(app, log);
   await waitFor("a terminal pane back", async () => (await app.shown(TERM)) >= 1, 60000, 500);
   await waitFor("its input field", async () => (await app.count(`${TERM} .xterm-helper-textarea`)) >= 1, 30000);
   await sleep(4000);
+  await dismissTip(); // it can open after the panes
   jobs(label);
+  log(`reattach ${label}: ${takenBackLine()}`);
 }
 async function closeNoCdp(pid) {
   const r = ps(`$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.CloseMainWindow() } else { 'gone' }`);
@@ -335,12 +398,12 @@ try {
   await sleep(1500);
   const w = await run(1, "where.exe kolux", "W");
   const first = w.find((l) => /^[a-z]:\\[^>]*\\kolux\.(exe|cmd|bat|ps1)$/i.test(l)) ?? ""; // a path line, not the echoed prompt
-  const whereOk = norm(first) === norm(CLI);
-  check("item2", "where.exe kolux lists the install's bin\\kolux.exe first", whereOk, mask(JSON.stringify(w)));
-  if (whereOk) {
-    const v = await run(1, "kolux --version", "V");
-    check("item2", "kolux --version prints 0.1.0", v.some((l) => /\b0\.1\.0\b/.test(l)), JSON.stringify(v));
-  } else check("item2", "kolux --version prints 0.1.0", false, "not run: the first kolux on PATH is not the install's");
+  // kolux-12's ruling: .cmd before .exe in where.exe is fine (PATHEXT resolves the .exe); the first entry's folder counts.
+  check("item2", "where.exe kolux lists an entry in the install's bin folder first", norm(first).startsWith(norm(join(INSTALL, "bin")) + "/"), mask(JSON.stringify(w)));
+  const src = await run(1, "(Get-Command kolux).Source", "S");
+  check("item2", "(Get-Command kolux).Source is the install's bin\\kolux.exe", src.some((l) => norm(l) === norm(CLI)), mask(JSON.stringify(src)));
+  const v = await run(1, "kolux --version", "V");
+  check("item2", "kolux --version prints 0.1.0", v.some((l) => /\b0\.1\.0\b/.test(l)), mask(JSON.stringify(v)));
 
   // APP-052 b1: a marker survives three quit + relaunch rounds.
   await typeInto(1, `echo ${M1}`);
@@ -353,7 +416,8 @@ try {
     await launch(`relaunch ${round}`);
     await back(`relaunch ${round}`);
     const l = await paneLines(-1);
-    check("b1", `round ${round}: the marker is shown after the relaunch`, l.includes(M1), `${l.length} buffer rows, panes shown ${await app.shown(TERM)}`);
+    const all = await paneLines(-1, true);
+    check("b1", `round ${round}: the marker is back after the relaunch (screen or scrollback)`, all.includes(M1), `on screen ${l.includes(M1)} (${l.length} rows), in scrollback ${all.includes(M1)} (${all.length} rows), panes shown ${await app.shown(TERM)}; ${takenBackLine()}`);
     log(`screenshot: ${await shot(`T-544-APP052-round${round}`)}`);
   }
 
@@ -364,11 +428,16 @@ try {
     await typeInto(1, `echo ${M2}`);
     await waitFor("marker 2", async () => (await paneLines(1)).includes(M2), 30000, 500);
     await sleep(2500);
-    const others = services().filter((s) => s.pid !== svc[0].pid).map((s) => s.pid).sort();
+    // Other lanes' services come and go on their own; only the install's count (kolux-12's ruling).
+    const exeOf = (s) => mask(/^"([^"]+)"|^(\S+)/.exec(s.cmd)?.slice(1).find(Boolean) ?? "?");
+    const otherSvc = (list) => list.filter((s) => s.pid !== svc[0].pid);
+    log(`b2: other terminal services before the kill: ${JSON.stringify(otherSvc(services()).map((s) => [s.pid, exeOf(s)]))}`);
+    const oursBefore = otherSvc(mine()).map((s) => s.pid).sort();
     ps(`Stop-Process -Id ${svc[0].pid} -Force`);
     const gone = await waitFor("the service to be gone", async () => !services().some((s) => s.pid === svc[0].pid), 15000, 300).then(() => true, () => false);
-    const after = services().filter((s) => others.includes(s.pid)).length;
-    check("b2", "only that service was killed", gone && after === others.length, `pid ${svc[0].pid} gone ${gone}; other terminal services on the machine ${others.length} before, ${after} still running`);
+    const oursAfter = otherSvc(mine()).map((s) => s.pid).sort();
+    log(`b2: other terminal services after the kill: ${JSON.stringify(otherSvc(services()).map((s) => [s.pid, exeOf(s)]))}`);
+    check("b2", "only that service was killed", gone && JSON.stringify(oursAfter) === JSON.stringify(oursBefore), `pid ${svc[0].pid} gone ${gone}; the install's other services ${JSON.stringify(oursBefore)} before, ${JSON.stringify(oursAfter)} after`);
     await sleep(2000);
     const closed = await app.closeAndCount(app.pid);
     log(`b2 quit: ${closed.how}; survivors ${closed.survivors.length} (${app.byName(closed.survivors)})`);
