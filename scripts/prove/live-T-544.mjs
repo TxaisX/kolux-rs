@@ -290,7 +290,8 @@ try {
   if (wasOn) await app.click(sw);
   await waitFor("terminalGpu false in settings.json", async () => readSettings().terminalGpu === false || (!wasOn && readSettings().terminalGpu !== true), 10000, 500);
   log(`item 4: terminalGpu set through the Settings UI (Appearance > Terminal drawing; it was ${wasOn ? "on" : "already off"}); settings.json terminalGpu ${JSON.stringify(readSettings().terminalGpu)}`);
-  await key({ key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  // The page's own Close button (run 2: a CDP Escape after the switch click left Settings open).
+  await app.click('.settings button[aria-label="Close Settings"]');
   await waitFor("Settings closed", async () => !(await app.exists('.settings[role=dialog][aria-label="Settings"]')), 5000);
   await app.evalJs(`(() => { window.__t544csp = []; document.addEventListener("securitypolicyviolation", e => window.__t544csp.push(e.violatedDirective + " " + e.blockedURI)); return 1; })()`);
   await app.focusPane(TERM, 0, ".xterm-helper-textarea");
