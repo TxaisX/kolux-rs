@@ -4990,7 +4990,7 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
                 let _ = w.unminimize();
                 w.show().and_then(|_| w.set_focus()).map_err(|e| e.to_string())
             };
-            dispatch(&Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front }, req)
+            dispatch(&Ctx { claude_config: crate::claude_accounts::trust_config_file(&store), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front }, req)
         });
     });
     Ok(())
