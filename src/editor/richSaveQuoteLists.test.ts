@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { richChange, splitFront } from "./frontMatter";
 import { roundTrip, unsupported } from "./markdown";
 
-// Row 937 (r12 review) blind spot: richSaveInvariant.ts reads a blockquote as one unit, so its list checks do not look inside a quote.
+// Row 937 (r12 review) blind spot: richSaveInvariant.ts reads a blockquote as one unit, so its list checks do not look inside a quote. These are quote lines that look like list items (the view writes them as a list; the quote is the container).
 // Each edit below changes a list inside a quote; the save must be exactly the same line edit made in the file, or be refused.
 const NOTES: [string, string][] = [
   ["bullets", "> - item alpha\n> - item bravo\n> - item charlie\n\nTail para here.\n"],
@@ -25,7 +25,7 @@ const OPS: Op[] = [
   { name: "join with line above", view: (l, i, m) => [...l.slice(0, i - 1), `${l[i - 1]} ${m[3]}`, ...l.slice(i + 1)], file: (l, i, m) => [...l.slice(0, i - 1), `${l[i - 1]} ${m[3]}`, ...l.slice(i + 1)] },
 ];
 
-describe("a list inside a blockquote: every edit saves the same line edit, or is refused", () => {
+describe("quote text that looks like list items: every edit saves the same line edit, or is refused", () => {
   const cases: [string, string, string, number][] = [];
   for (const [name, body] of NOTES) for (const nl of ["\n", "\r\n"]) for (const op of OPS) cases.push([`${name} / ${op.name} / ${nl === "\n" ? "LF" : "CRLF"}`, body, nl, OPS.indexOf(op)]);
 
@@ -59,5 +59,32 @@ describe("a list inside a blockquote: every edit saves the same line edit, or is
       else expect(saved, why).toBe(expected);
     }
     expect(tried).toBeGreaterThan(0);
+  });
+});
+
+// Row 981 item 5: the notes above are spelt exactly as the view spells them, so they only reach the plain-copy path. These are the same quote text in other spellings (the review's seven probes):
+// the view respells them (`-` markers, "> " with a space, "_em_" as "*em*"), so the save must still be the same text edit made in the file, or be refused.
+const OTHER_FORMS: [string, string, string, string, string?, string?][] = [
+  ["new item after", "> - item alpha\n> - item bravo\n> - item charlie\n\nTail para here.\n", "item bravo", "item bravo\n> - new item"],
+  ["* markers, rename", "> * item alpha\n> * item bravo\n> * item charlie\n\nTail para here.\n", "item bravo", "item brave"],
+  ["* markers, delete an item", "> * item alpha\n> * item bravo\n> * item charlie\n\nTail para here.\n", "\n> \\* item bravo", "", "\n> * item bravo", ""],
+  [">- with no space", ">- item alpha\n>- item bravo\n\nTail para here.\n", "bravo", "bravos"],
+  ["_em_ and a lazy continuation", "> - item _alpha_\n> - item bravo\nlazy line\n\nTail.\n", "bravo", "bravos"],
+  ["1) markers", "> 1) item alpha\n> 2) item bravo\n\nTail.\n", "bravo", "bravos"],
+  ["a wrapped item", "> - item alpha\n>   wrapped\n> - item bravo\n\nTail.\n", "bravo", "bravos"],
+];
+
+describe("quote text that looks like list items, in other spellings: byte-exact or refused", () => {
+  it.each(OTHER_FORMS)("%s", (_label, body, viewFrom, viewTo, fileFrom = viewFrom, fileTo = viewTo) => {
+    const prev = roundTrip(body)!;
+    expect(prev, "the probe note must open in the rich view").not.toBeNull();
+    expect(prev.includes(viewFrom), "the view's text carries the edited words").toBe(true);
+    const out = roundTrip(prev.replace(viewFrom, viewTo))!;
+    let refused = 0;
+    const c = richChange(body, out, prev, () => refused++);
+    const saved = c ? body.slice(0, c.from) + c.insert + body.slice(c.to) : body;
+    const why = `${JSON.stringify(body)}\nprev=${JSON.stringify(prev)}\nout=${JSON.stringify(out)}\nsaved=${JSON.stringify(saved)}`;
+    if (refused) expect(saved, why).toBe(body);
+    else expect(saved, why).toBe(body.replace(fileFrom, fileTo));
   });
 });
