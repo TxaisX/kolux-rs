@@ -120,8 +120,8 @@ Rules: Approve stays clickable for as long as the plan is still pending, with or
   saved draft for that pane and plan; in most Claude releases that first choice also accepts later
   file edits automatically, but the button keeps the plain label Approve.
 Acceptance:
-  - [ ] Open the sheet and click Approve → Claude leaves plan mode and starts the work, and the
-        review button is gone.
+  - [x] Open the sheet and click Approve → Claude leaves plan mode and starts the work, and the
+        review button is gone. (cards live; evidence/cards-SAFE-003.txt)
   - [ ] Write a comment, then click Approve → Approve was clickable, Claude proceeds, and the
         comment is not kept.
 Compat: —
@@ -144,8 +144,8 @@ Rules: the button stays disabled until there is at least one comment or a note t
   saved draft.
 Acceptance:
   - [x] No comments and an empty note → Request changes is disabled. (cards; evidence/cards-SAFE-004.txt)
-  - [ ] Two comments, then Request changes → Claude gets a single message naming both line ranges
-        and comes back with a revised plan.
+  - [x] Two comments, then Request changes → Claude gets a single message naming both line ranges
+        and comes back with a revised plan. (cards live; evidence/cards-SAFE-004.txt)
   - [ ] A pane whose status never updates → the feedback still arrives after about 3 seconds.
 Compat: —
 Source: D-10-004
