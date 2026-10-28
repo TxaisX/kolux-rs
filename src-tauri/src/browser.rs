@@ -1530,8 +1530,9 @@ pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
     let Some(v) = setting.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
     };
+    // The URL parser drops tabs and newlines inside the text, so a setting holding one would pass as another address.
     match Url::parse(v) {
-        Ok(u) if matches!(u.scheme(), "http" | "socks5") && u.host_str().is_some() => Ok(Some(u)),
+        Ok(u) if matches!(u.scheme(), "http" | "socks5") && u.host_str().is_some() && !v.chars().any(char::is_control) => Ok(Some(u)),
         _ => Err("the HTTP proxy setting is not an http:// or socks5:// address with a host; the tab stays closed until the setting is fixed or cleared".into()),
     }
 }
@@ -2959,7 +2960,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // T-323-c: a saved proxy means no icon fetch at all; the icon clients only ever connect directly.
     // Row 939b: the settings load reads a missing settings.json as {} even when a .bak names a proxy, so
     // the runtime read looks at the .bak itself: the tab, the icon and the HEAD gates all refuse.
     #[test]
@@ -2992,6 +2992,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // T-323-c: a saved proxy means no icon fetch at all; the icon clients only ever connect directly.
     #[test]
     fn t323c_with_a_saved_proxy_no_icon_fetch_goes_direct() {
         use std::io::{Read, Write};

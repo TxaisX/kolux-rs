@@ -208,6 +208,16 @@ mod tests {
         assert!(proxy_flag(&url("http://127.0.0.1:1")).is_ok());
     }
 
+    // Row 939b: shapes the engine would read as something else. Each must stop at the setting (proxy_of
+    // refuses) or at the switch (proxy_flag refuses); none may come out as a proxy.
+    #[test]
+    fn row939b_odd_host_shapes_refuse_instead_of_going_direct() {
+        for saved in ["http://[::1]=x:8080", "http://[::1]=x", "http://[fe80::1%25eth0]:8080", "http://[fe80::1%eth0]:8080", "http://a%0Ab:3128", "http://a%0Db:3128", "http://[::1\n]:8080", "socks5://[::1]=x:1080", "http://proxy.test\n=x:3128", "http://proxy.\ntest:3128", "http://proxy.test:3128\n--no-sandbox"] {
+            let got = crate::browser::proxy_of(Some(saved)).and_then(|p| p.map_or(Ok(String::new()), |u| proxy_flag(&u)));
+            assert!(got.is_err(), "{saved} must refuse, got {got:?}");
+        }
+    }
+
     #[test]
     fn row939_a_default_folder_tab_passes_the_window_string_itself() {
         let launch = "--a  --proxy-server=http://x.test:1";
