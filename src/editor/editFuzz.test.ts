@@ -1,7 +1,7 @@
 import { marked, type Token } from "marked";
 import { describe, expect, it } from "vitest";
 import { blockSpans, collapseGaps, placeStats, richChange, splitFront } from "./frontMatter";
-import { changeBetween, roundTrip, unsupported } from "./markdown";
+import { changeBetween, limitsOf, roundTrip, unsupported } from "./markdown";
 
 // Row 94 review rounds 3-4: random everyday edits in the rich view, chained (each saved note is the next edit's input).
 // After every edit the saved note reads back as the rich view's text, keeps every block away from the edit (on the file's own
@@ -269,7 +269,9 @@ function structureProblem(body: string, saved: string, prev: string, out: string
   const ones = (t: string) => t.replace(/^([ \t]*)\d+([.)])/gm, "$11$2");
   const spelt = (t: string) => ones(t).replace(/^([ \t]*)[*+](?=[ \t])/gm, "$1-").replace(/_/g, "*").trimEnd();
   const view = listEntries(ones(prev));
-  const e = changeBetween(ones(prev), ones(out))!;
+  // Row 936 (seed 95): an edit that only renumbers an ordered list changes nothing the numbers-as-1 text shows.
+  const e = changeBetween(ones(prev), ones(out));
+  if (!e) return null;
   // A lone carriage return (typed inside a CRLF note) is a line end to marked and plain text to the view.
   if (/\r(?!\n)/.test(body)) return null;
   // marked reads raw HTML blocks (an unclosed tag swallows what follows) where the view sends the note to source.
@@ -336,6 +338,52 @@ function structureProblem(body: string, saved: string, prev: string, out: string
   return null;
 }
 
+/** Whether `marked` reads an indented code block anywhere in `ts` (list items and quotes included). */
+function hasIndentedCode(ts: Token[]): boolean {
+  return ts.some((t) => (t.type === "code" && (t as { codeBlockStyle?: string }).codeBlockStyle === "indented") || hasIndentedCode((t as { tokens?: Token[] }).tokens ?? []) || hasIndentedCode((t as { items?: Token[] }).items ?? []));
+}
+
+/** Row 936: `unsupported` guesses from lines (a ref-link look, an indented row after a blank). True when every line-level reason it gives for
+ *  `md` is a guess that CommonMark, read by `marked`, says misfired: no link reference is defined (a `[r]: u` line that continues a paragraph
+ *  defines none), and no indented code block or `~~~` fence exists (an indented line after a blank inside a list item is item content).
+ *  A real definition, a real code block and every other reason (HTML, lost words) keep the check strict. */
+function limitsMisfired(md: string): boolean {
+  const lf = md.replace(/\r\n/g, "\n");
+  const reasons = limitsOf(lf);
+  if (!reasons.length) return false;
+  const lexed = marked.lexer(lf);
+  const guess: Record<string, boolean> = {
+    "it has reference links": Object.keys(lexed.links).length === 0,
+    "it has code blocks the rich view would reflow": !/^ {0,3}~{3,}/m.test(lf) && !hasIndentedCode(lexed),
+  };
+  return reasons.every((r) => guess[r] === true);
+}
+
+/** The saved body `nb`, read by the rich view as the app feeds it (LF text), is the view's text `out` (a table row's gap above it aside). */
+function readsAs(nb: string, out: string): boolean {
+  // Row 936 (seeds 119, 95, 108): the app gives the view LF text. The raw CRLF text drops the spaces before a line end in the round trip and keeps a CR on code lines, so both sides are read as LF.
+  const rowGap = (t: string | null) => t?.replace(/\n\n(?=\|)/g, "\n");
+  const lf = (t: string) => t.replace(/\r\n/g, "\n");
+  return rowGap(trimFenceEdges(roundTrip(lf(nb)))) === rowGap(trimFenceEdges(lf(out)));
+}
+
+/** Row 936 (seeds 114, 117, 51 and more): the fuzz feeds raw CRLF, so a code line ends in a CR; deleting its text leaves a CR-only line that the LF view drops. Blank lines at the very start or end of a ``` body are not compared. */
+function trimFenceEdges(t: string | null): string | null {
+  if (t === null) return t;
+  const rows = t.split(String.fromCharCode(10));
+  const kept: string[] = [];
+  let open = false;
+  for (const r of rows) {
+    if (/^ {0,3}```/.test(r)) {
+      if (open) while (kept.length && kept[kept.length - 1] === "") kept.pop();
+      open = !open;
+      kept.push(r);
+    } else if (open && r === "" && kept[kept.length - 1]?.startsWith("```")) continue;
+    else kept.push(r);
+  }
+  return kept.join(String.fromCharCode(10));
+}
+
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
   it.each(SEEDS)("400 chained edits (seed %i)", (seed) => {
     const r = rng(seed);
@@ -375,8 +423,7 @@ describe("fuzz: chained everyday rich-view edits save a note that reads back as 
         // (1) It reads back as the view's text.
         expect(next.startsWith(front), why).toBe(true);
         // The view reads a table row under a list item with a blank above it or not, by the loose lists earlier in the note (its own quirk, same on round 6).
-        const rowGap = (t: string | null) => t?.replace(/\n\n(?=\|)/g, "\n");
-        expect(rowGap(roundTrip(nb)), why).toBe(rowGap(out));
+        expect(readsAs(nb, out), why).toBe(true);
         // (2) Every block away from the edit keeps its bytes (the whole list or section when it was placed whole).
         const [head, tail] = keptEnds(body, prev, out, placeStats.whole !== whole);
         expect(nb.startsWith(head) && nb.endsWith(tail), why + `
@@ -386,7 +433,8 @@ tail=${JSON.stringify(tail)}`).toBe(true);
         expect(structureProblem(body, nb, prev, out), why).toBeNull();
         // (3) A note the view could show stays one it can show, unless the view's own text cannot be shown.
         // richChange puts the body's last line end back, so that is the text the view's `out` becomes.
-        if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null) expect(unsupported(nb), why).toBeNull();
+        // Row 936 (seeds 36, 108): a reason that is only a line-level guess gone wrong (see limitsMisfired) is not a note the view lost.
+        if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null && unsupported(nb) !== null) expect(limitsMisfired(nb), why + `\nunsupported=${unsupported(nb)}`).toBe(true);
         now = next;
         prev = out;
         if (s) chained++;
@@ -430,5 +478,71 @@ describe("oracle: list state and respelt items", () => {
     const { prev, out } = viewEdit(body, "    - n1\n", "");
     expect(structureProblem(body, `- a\n  ${x}\n\n  - n2\n- b\n\n\nTail para here.\n`, prev, out)).toMatch(/was tight, the save made it loose/);
     expect(structureProblem(body, saveOf(body, prev, out), prev, out)).toBeNull();
+  });
+});
+
+// Row 936: the oracle's own false positives (default seeds 36, 95, 108; FUZZ_SHAPES=r12 seed 119). Each pins the exact check that changed,
+// with a twin the check must still flag.
+describe("oracle: row 936 false positives", () => {
+  const typed = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    return { prev, out: roundTrip(prev.replace(from, to))! };
+  };
+  const saved = (body: string, prev: string, out: string) => {
+    const c = richChange(body, out, prev);
+    return c ? body.slice(0, c.from) + c.insert + body.slice(c.to) : body;
+  };
+  // Seed 36, check (3): `[r]: u,` on the second line of a paragraph defines nothing (a definition cannot interrupt a paragraph).
+  it("seed 36: a wrapped paragraph whose line reads like a reference definition is a misfire; a real definition is not", () => {
+    const body = "[see 0\n[r]: u,";
+    const { prev, out } = typed(body, "[see", "|[see");
+    const nb = saved(body, prev, out);
+    expect(nb).toBe("|[see 0\n[r]: u,");
+    expect(unsupported(nb)).toBe("it has reference links");
+    expect(limitsMisfired(nb)).toBe(true);
+    expect(limitsMisfired("para\n\n[r]: u,\n")).toBe(false);
+    expect(limitsMisfired("# H\n[r]: u\n")).toBe(false);
+  });
+  // Seed 108, check (3): `    - n3` after a blank line under an item is a sub-item, not code.
+  it("seed 108: an indented sub-item after a blank line is a misfire; indented code, a nested code block and a ~~~ fence are not", () => {
+    const nb = "1. b\n   wrapped\n    - n1\n    - n2 lazy\n\n    - n3\n";
+    expect(unsupported(nb)).toBe("it has code blocks the rich view would reflow");
+    expect(limitsMisfired(nb)).toBe(true);
+    expect(limitsMisfired("para\n\n    code\n")).toBe(false);
+    expect(limitsMisfired("- a\n\n      code\n")).toBe(false);
+    expect(limitsMisfired("~~~\nx\n~~~\n")).toBe(false);
+    // A misfire never excuses another reason.
+    expect(limitsMisfired(nb + "\n[r]: u\n")).toBe(false);
+  });
+  // Seed 95, structureProblem: a renumber-only edit has no change once the numbers are read as 1.
+  it("seed 95: an edit that only renumbers a list has no structure problem; a real change in the same shape still does", () => {
+    const body = "- a\n  - n1\n\n  - n2\n- b\n\n1. x\n2. y\n";
+    expect(structureProblem(body, body.replace("2. y", "3. y"), "1. x\n2. y", "1. x\n3. y")).toBeNull();
+    const tail = "- a\n  - n1\n\n  - n2\n- b\n\nTail para here.\n";
+    const { prev, out } = typed(tail, "  - n1\n", "");
+    expect(structureProblem(tail, "- a\n\n  - n2\n- b\n\n\nTail para here.\n", prev, out)).toMatch(/was tight, the save made it loose/);
+  });
+  // Seed 119 (r12 shapes): the check read CRLF text, where the round trip drops the spaces before a line end; the app feeds LF text.
+  it("seed 119: a CRLF note is read as the app gives it (LF); a changed word still fails", () => {
+    const body = "1.\r\n\r\n    - *x* and     -..\r\n";
+    const prev = roundTrip(body.replace(/\r\n/g, "\n"))!;
+    const out = roundTrip(prev.replace(/-\.\.$/, ""))!;
+    const nb = saved(body, prev, out);
+    expect(nb).toBe("1.\r\n\r\n    - *x* and     \r\n");
+    expect(readsAs(nb, out)).toBe(true);
+    expect(readsAs(nb.replace("and", "or"), out)).toBe(false);
+    // Seeds 95, 108: a view text made from raw CRLF keeps a CR on its code lines; it is the same text as the LF note's.
+    const crCode = "- a\r\n  ```\r\n  x\r\n  ```\r\n- b\r\n";
+    expect(readsAs(crCode, roundTrip(crCode)!)).toBe(true);
+    expect(readsAs(crCode.replace("x", "y"), roundTrip(crCode)!)).toBe(false);
+  });
+  // Seeds 114, 117, 122, 138, 145, 173, 51, 63: a code line typed away in a CRLF list item leaves a CR-only line in the view's text; the LF view drops it.
+  it("emptying a CRLF code line is read as the app reads it; a changed code line still fails", () => {
+    const body = "- 3\r\n  ```\r\n  x\r\n  ```\r\n- b\r\n";
+    const out = roundTrip(body)!.replace("x\r", "\r");
+    const nb = "- 3\r\n  ```\r\n\r\n  ```\r\n- b\r\n";
+    expect(readsAs(nb, out)).toBe(true);
+    expect(readsAs(nb.replace("\r\n\r\n  ```", "\r\n  y\r\n  ```"), out)).toBe(false);
+    expect(readsAs(nb.replace("- b", "- c"), out)).toBe(false);
   });
 });
