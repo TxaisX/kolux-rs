@@ -6,11 +6,11 @@ import net from "node:net";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { reporter, startPlain, finish, sleep, poll, checker, LIVE_LOGS } from "./live-proj-common.mjs";
 import { ROOT, dismissFirstRun } from "./live-common.mjs";
 import { savedProxy, openBrowserAt, sampler, pageTarget, local, HOST } from "./live-T-323-proxy.mjs";
-import { targetCall } from "./live-browser-common.mjs";
+import { targetCall, makeSites } from "./live-browser-common.mjs";
 
 const run = promisify(execFile);
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
@@ -24,6 +24,20 @@ const MSG = {
 };
 
 const entries = [];
+// Batch 8: what the stub saw is split into requests for the PAGE host (the ones the proof is about) and everything else;
+// WebView2 makes its own background CONNECTs (edge.microsoft.com and similar) through the saved proxy, and those are named, not counted.
+const PAGE_RE = /10\.254\.254\.254/;
+const MS_RE = /(^|[.\/@])((\w[\w-]*\.)*(microsoft|msedge|skype|bing|live|windows|office|azure|msn)\.(com|net)|edge\.[\w.]+)(:\d+|\/|$)/i;
+const pageEntries = (from = 0) => entries.slice(from).filter((e) => PAGE_RE.test(e.url));
+const otherEntries = (from = 0) => entries.slice(from).filter((e) => !PAGE_RE.test(e.url));
+const describe = (list) => list.map((e) => `${e.proxy} ${e.method} ${e.url}`);
+const otherNote = (log, what, from) => {
+  const o = otherEntries(from);
+  const ms = o.filter((e) => MS_RE.test(e.url));
+  const rest = o.filter((e) => !MS_RE.test(e.url));
+  log(`${what}: other stub requests (not the page host): Microsoft-service ${JSON.stringify(describe(ms))}; unclassified ${JSON.stringify(describe(rest))}`);
+  return { ms, rest };
+};
 function stub(log, name) {
   const s = http.createServer((req, res) => {
     entries.push({ proxy: name, method: req.method, url: req.url });
@@ -90,13 +104,29 @@ export async function run939(ctx, { check, log }, p) {
   app.rawKey = ctx.rawKey; // savedProxy (live-T-323-proxy.mjs) presses the Settings chord through the app object
   const S = (n, name, ok, detail) => check(`step ${n}: ${name}`, ok, detail);
 
+  // ---- (e) baseline: PDF export with NO proxy saved, of a loopback page, to a scratch path (no native dialog)
+  const out = `${p.dir}/pdf-out`;
+  mkdirSync(out, { recursive: true });
+  const loop = await makeSites();
+  const basePdf = `${out}/baseline.pdf`;
+  rmSync(basePdf, { force: true });
+  const baseHtml = `<h1>PDF baseline</h1><p>body</p><img src="${loop.base}/ok" alt="loopback"><link rel="stylesheet" href="${loop.base}/die">`;
+  const baseRes = await app.evalJs(`window.__TAURI_INTERNALS__.invoke("browser_export_pdf", ${JSON.stringify({ html: baseHtml, title: "PDF baseline", path: basePdf, overwrite: true })}).then((r) => "ok " + r, (e) => "error " + String(e))`);
+  await sleep(1500);
+  const baseSize = existsSync(basePdf) ? statSync(basePdf).size : 0;
+  const baseHead = baseSize ? readFileSync(basePdf).subarray(0, 5).toString() : "";
+  log(`(e) BASELINE (no proxy saved) export result: ${baseRes}; file exists ${existsSync(basePdf)} (${baseSize} bytes, header ${JSON.stringify(baseHead)}); loopback server hits ${JSON.stringify(loop.hits)}`);
+  check("(e) baseline: PDF export with no proxy writes a non-empty file with the %PDF header", /^ok /.test(baseRes) && baseSize > 0 && baseHead.startsWith("%PDF"), `${baseRes} ${baseSize} ${JSON.stringify(baseHead)}`);
+  loop.stop();
+
   // ---- Step 1: save the proxy (Settings > Network proxy), restart, open the page
   const set = await savedProxy(app, `http://127.0.0.1:${p.A.port}`, log);
   S(1, "the proxy http://127.0.0.1:<stub> is saved (secret_status true)", set === true, String(set));
   await restart(ctx, log);
   const s1 = sampler(app, log);
   await openBrowserAt(app, `http://${HOST}/`);
-  const t = await poll(() => pageTarget(HOST), 40000, 500);
+  // The target exists before the page has loaded: wait for the title the stub's page carries.
+  const t = await poll(async () => { const x = await pageTarget(HOST); return x && /Proxy proof/.test(x.title) ? x : null; }, 40000, 500) ?? (await pageTarget(HOST));
   log(`page target: ${t ? JSON.stringify({ url: t.url, title: t.title }) : null}`);
   S(1, `the page at the unroutable host ${HOST} opened in the browser pane (title Proxy proof page, served by the stub)`, !!t && /Proxy proof/.test(t.title), t?.title ?? "none");
   await sleep(8000);
@@ -114,7 +144,8 @@ export async function run939(ctx, { check, log }, p) {
 
   // ---- Step 3: the stub saw the page; no direct socket to the page host
   const seen1 = await s1.stop();
-  const pageHits = entries.filter((e) => e.proxy === "A" && /10\.254\.254\.254/.test(e.url));
+  const pageHits = entries.filter((e) => e.proxy === "A" && PAGE_RE.test(e.url));
+  otherNote(log, "steps 1-3", 0);
   log(`stub A saw for the page host: ${JSON.stringify(pageHits.map((e) => `${e.method} ${e.url}`))}`);
   S(3, "the stub logged the request for the page host", pageHits.length > 0, String(pageHits.length));
   const rows1 = rowsOf(seen1);
@@ -138,13 +169,11 @@ export async function run939(ctx, { check, log }, p) {
     log(`(d) could not drive the page: ${e.message}`);
   }
   await sleep(6000);
-  const popHits = entries.slice(hitsBefore).filter((e) => /\/popup/.test(e.url));
+  const popHits = entries.slice(hitsBefore).filter((e) => /\/popup/.test(e.url) && PAGE_RE.test(e.url));
   log(`(d) popup request at stub A: ${JSON.stringify(popHits.map((e) => `${e.method} ${e.url}`))}; popup target: ${JSON.stringify((await pageTarget("/popup"))?.title ?? null)}`);
   check("(d) a popup from the proxied tab goes through the stub (request logged there)", popHits.length > 0, String(popHits.length));
 
   // ---- (e) PDF export while the proxy is saved (the native save dialog is the separate command browser_pick_pdf_path; the export command takes the path)
-  const out = `${p.dir}/pdf-out`;
-  mkdirSync(out, { recursive: true });
   const pdf = `${out}/note.pdf`;
   rmSync(pdf, { force: true });
   const sPdf = sampler(app, log);
@@ -157,9 +186,11 @@ export async function run939(ctx, { check, log }, p) {
   const pdfHits = entries.slice(mark);
   log(`(e) export result: ${res}; file exists ${existsSync(pdf)}${existsSync(pdf) ? ` (${statSync(pdf).size} bytes, header ${JSON.stringify(readFileSync(pdf).subarray(0, 5).toString())})` : ""}`);
   log(`(e) stub requests during the render: ${JSON.stringify(pdfHits.map((e) => `${e.proxy} ${e.method} ${e.url}`))}`);
+  otherNote(log, "(e)", mark);
+  log(`(e) page-host stub requests during the render: ${JSON.stringify(describe(pageEntries(mark)))}`);
   const pdfOut = outsideRows(seenPdf);
   log(`(e) non-loopback sockets of the app tree during the render: ${JSON.stringify(pdfOut)}; to the page host: ${JSON.stringify(rowsOf(seenPdf).filter((r) => r.includes("10.254.254.254")))}`);
-  check("(e) PDF export still works with the proxy saved (a PDF file is written)", /^ok /.test(res) && existsSync(pdf) && readFileSync(pdf).subarray(0, 4).toString() === "%PDF", String(res));
+  check("(e) PDF export still works with the proxy saved (a PDF file is written)", /^ok /.test(res) && existsSync(pdf) && statSync(pdf).size > 0 && readFileSync(pdf).subarray(0, 4).toString() === "%PDF", String(res));
   check("(e) no socket from the app tree to the page host during the render", rowsOf(seenPdf).every((r) => !r.includes("10.254.254.254")), "");
   log("(e) the native save dialog (browser_pick_pdf_path) was not opened: LIVE (native dialog); the export command was called with a scratch path");
 
@@ -169,14 +200,16 @@ export async function run939(ctx, { check, log }, p) {
 
   // ---- Steps 5, 6, 8, 9: new tabs after the setting changed (no restart)
   const s5 = sampler(app, log);
-  const stubCount = () => entries.length;
+  const stubCount = () => pageEntries().length; // page-host requests only
   let c0 = stubCount();
+  const mark5 = entries.length;
   await app.invoke("secret_set", { key: "httpProxy", value: `http://127.0.0.1:${p.B.port}` });
   log(`step 5: proxy changed in settings to http://127.0.0.1:${p.B.port} (secret_set, the call the Apply button makes); no restart`);
   const r5 = await newTabRefusal(app, ctx, MSG.changed);
-  log(`step 5 notices: ${JSON.stringify(r5.all)}; panes ${r5.panes}; stub requests meanwhile: ${stubCount() - c0}`);
+  log(`step 5 notices: ${JSON.stringify(r5.all)}; panes ${r5.panes}; page-host stub requests meanwhile: ${stubCount() - c0}`);
+  otherNote(log, "step 5", mark5);
   S(5, `a new tab refuses with "${MSG.changed}"`, r5.got === MSG.changed, String(r5.got));
-  S(5, "the stub saw nothing new while the tab refused", stubCount() === c0, `${stubCount() - c0} new`);
+  S(5, "the stub saw no request for the page host while the tab refused", stubCount() === c0, `${stubCount() - c0} new`);
   log(`screenshot (step 5): ${await ctx.shot("939-step5")}`);
 
   c0 = stubCount();
@@ -198,7 +231,8 @@ export async function run939(ctx, { check, log }, p) {
     const now = await noticeTexts(app);
     S(8, `${odd} refuses with the shape message too (${before} notices before, ${now.length} after)`, now.length > before || r.got === MSG.shape, String(r.got));
   }
-  S(8, "the stub saw nothing during steps 5, 6 and 8", stubCount() === c0, `${stubCount() - c0} new`);
+  S(8, "the stub saw no request for the page host during steps 5, 6 and 8", stubCount() === c0, `${stubCount() - c0} new`);
+  otherNote(log, "steps 5-8", mark5);
 
   // Step 9: settings.json unreadable and no .bak
   const file = app.paths.settings;
@@ -231,9 +265,18 @@ export async function run939(ctx, { check, log }, p) {
   log(`(a) dead-port proxy http://127.0.0.1:${p.dead}: window ${JSON.stringify(ui)}; IPC status ${ipc2}; save+load round trip ${ipc3}`);
   check("(a) with the proxy on a dead port the app UI still loads from the dev server (vite on localhost)", ui.rootKids > 0 && ui.text > 20, JSON.stringify(ui));
   check("(a) IPC still works (secret_set and secret_status answer)", ipc2 === true && ipc3 === true, `${ipc2} ${ipc3}`);
-  await openBrowserAt(app, `http://${HOST}/`);
+  // Batch 8: a NEW browser tab is opened and its own (shown) address bar driven; the old panes' fields are not used.
+  const panesBefore = await browserPanes(app);
+  await ctx.rawKey({ key: "B", code: "KeyB", vk: 66, mods: 2 | 8 });
+  await poll(async () => ((await browserPanes(app)) > panesBefore ? true : null), 20000, 300);
+  await sleep(2500);
+  const SHOWN = 'section.pane.browser:not([hidden]) input[aria-label="Address"]';
+  await app.focusField(SHOWN);
+  await sleep(300);
+  await app.evalJs(`document.querySelector(${JSON.stringify(SHOWN)}).select()`);
+  await app.cdp("insert", `http://${HOST}/`, "enter");
   const failed = await poll(async () => {
-    const x = await app.evalJs(`JSON.stringify(document.querySelector("section.pane.browser")?.innerText ?? "")`);
+    const x = await app.evalJs(`JSON.stringify(document.querySelector("section.pane.browser:not([hidden])")?.innerText ?? "")`);
     return /could not load|did not give Kolux a page|stopped responding/i.test(JSON.parse(x)) ? JSON.parse(x) : null;
   }, 40000, 600);
   log(`(a) browser pane with the dead proxy: ${JSON.stringify((failed ?? "").replace(/\s+/g, " ").slice(0, 240))}`);
@@ -258,13 +301,13 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     ctx = await startPlain("BROW-939", { report: rep });
     await sleep(3000);
-    await run939(ctx, { check: chk.check, log }, { A, B, dead, dir: "G:/Temp/live-v7/run-BROW-939" });
+    await run939(ctx, { check: chk.check, log }, { A, B, dead, dir: "G:/Temp/live-v8/run-BROW-939" });
     ok = chk.allPassed();
   } catch (e) {
     log(`ERROR ${e.stack ?? e}`);
   }
   const code = ctx ? await finish(ctx, "BROW-939", ev, ok) : 1;
-  writeFileSync(`${ROOT}/evidence/live-browser-939.txt`, `LIVE 2026-10-27 browser proxy, after.md row 939 (scripts/prove/live-browser-939.mjs, hidden dev app, stub proxy on loopback, unroutable page host ${HOST})\nresult: ${ok ? "PASS" : "FAIL"}\n\n${ev.join("\n")}\n`);
+  appendFileSync(`${ROOT}/evidence/live-browser-939.txt`, `\n\nLIVE BATCH 8 2026-10-27 browser proxy, after.md row 939 (scripts/prove/live-browser-939.mjs, hidden dev app, stub proxy on loopback, unroutable page host ${HOST})\nresult: ${ok ? "PASS" : "FAIL"}\n\n${ev.join("\n")}\n`);
   A.server.close();
   B.server.close();
   process.exit(code);

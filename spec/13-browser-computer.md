@@ -35,8 +35,8 @@ Rules: an empty tab shows the blank page (with the browser settings page gone, t
   a tab opened from a link keeps the session profile of the page that opened it.
 Acceptance:
   - [x] Press Mod+Shift+B → a New Tab is active and typed characters land in its address bar. (cards live; evidence/cards-BROW-001.txt)
-  - [ ] Load a page whose script asks to close its own window → the tab stays and the other tabs
-        still switch normally.
+  - [x] Load a page whose script asks to close its own window → the tab stays and the other tabs
+        still switch normally. (cards live; evidence/cards-BROW-001.txt)
 Compat: keyboard command for a new browser tab, default Mod+Shift+B on every platform (its command
   id is an allowlist candidate).
 Source: D-13-001

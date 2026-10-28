@@ -22,3 +22,23 @@ box 2: FAIL
   after the switching: tabs [{"text":"Terminal 2×","sel":false},{"text":"Closer page×","sel":false},{"text":"New Tab×","sel":true}]; page targets []
   PASS all three tabs are still in the strip after the switching, the closer tab included: [{"text":"Terminal 2×","sel":false},{"text":"Closer page×","sel":false},{"text":"New Tab×","sel":true}]
   screenshot: G:/Temp/live-v7-logs/BROW-001-b2.png
+
+
+LIVE 2026-10-27 (scripts/prove/live-BROW.mjs, hidden dev app, scratch loopback pages)
+box 1: PASS
+  panes before: []; tabs before: []
+  tabs after: [{"text":"Terminal 2×","sel":false},{"text":"New Tab×","sel":true}]; new pane: {"hidden":false,"activeIsAddress":true,"before":"","selStart":0,"selEnd":0}
+  PASS a New Tab is the active (selected) tab: [{"text":"Terminal 2×","sel":false},{"text":"New Tab×","sel":true}]
+  PASS the address bar holds the cursor (activeElement) with its contents selected: {"hidden":false,"activeIsAddress":true,"before":"","selStart":0,"selEnd":0}
+  PASS typed characters ("ab") land in the address bar: {"value":"ab","focused":true}
+  screenshot: G:/Temp/live-v8-logs/BROW-001-b1.png
+box 2: PASS
+  closer page served 1 time(s); page targets over time [{"ms":500,"targets":["/closer"]},{"ms":1500,"targets":["/closer"]},{"ms":3000,"targets":["/closer"]},{"ms":6000,"targets":["/closer"]}]; tabs [{"text":"Terminal 2×","sel":false},{"text":"Closer page×","sel":true}]; pane {"hidden":false,"w":785,"h":732}; overlay null
+  PASS the page loaded and its script ran (server saw it): hits=1
+  PASS after window.close() the tab stays: still in the strip, selected, its pane on screen: {"tabs":2,"closerPane":{"hidden":false,"w":785,"h":732}}
+  PASS and the close request was ignored (card Rules): the page is still there, no 'stopped responding' overlay: {"closerAlert":null,"targets":["/closer"]}
+  switching sequence: [{"clicked":0,"selected":0,"onlyOne":true,"browserPanesShown":0},{"clicked":1,"selected":1,"onlyOne":true,"browserPanesShown":1},{"clicked":2,"selected":2,"onlyOne":true,"browserPanesShown":1},{"clicked":1,"selected":1,"onlyOne":true,"browserPanesShown":1},{"clicked":0,"selected":0,"onlyOne":true,"browserPanesShown":0},{"clicked":2,"selected":2,"onlyOne":true,"browserPanesShown":1}]
+  PASS with three tabs, clicking each tab (forward and back) selects exactly that tab: ["0->0","1->1","2->2","1->1","0->0","2->2"]
+  after the switching: tabs [{"text":"Terminal 2×","sel":false},{"text":"Closer page×","sel":false},{"text":"New Tab×","sel":true}]; page targets ["/closer"]
+  PASS all three tabs are still in the strip after the switching, the closer tab included: [{"text":"Terminal 2×","sel":false},{"text":"Closer page×","sel":false},{"text":"New Tab×","sel":true}]
+  screenshot: G:/Temp/live-v8-logs/BROW-001-b2.png

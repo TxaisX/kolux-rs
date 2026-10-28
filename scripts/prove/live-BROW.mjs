@@ -1,5 +1,5 @@
 // LIVE proof, spec/13 boxes BROW-001 b1+b2, BROW-002 b1+b2, BROW-005 b1, BROW-008 b1, BROW-009 b1, all in one hidden launch.
-// node live-BROW.mjs   (writes G:/Temp/live-v7-logs/BROW.out.txt and BROW-boxes.json; evidence sections go to evidence/cards-BROW-00x.txt)
+// node live-BROW.mjs   (writes G:/Temp/live-v8-logs/BROW.out.txt and BROW-boxes.json; evidence sections go to evidence/cards-BROW-00x.txt)
 import http from "node:http";
 import net from "node:net";
 import { execFile } from "node:child_process";
