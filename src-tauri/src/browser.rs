@@ -88,6 +88,9 @@ pub mod pdf;
 #[allow(dead_code)]
 #[path = "browser_tower.rs"]
 pub mod tower;
+// Row 954 (b): a tab whose own window a page destroyed is built again, never in a loop.
+#[path = "browser_selfclose.rs"]
+pub mod selfclose;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -120,10 +123,11 @@ const ICON_MAX: usize = 256 * 1024;
 /// network or the operating system, and a page that has no script of ours sees nothing.
 const CHORD_SCHEME: &str = "kolux-chord:";
 
-/// Runs in a tab's main frame before the page's own script (row 954, BROW-001): the page's
-/// `window.close()` does nothing. wry answers the engine's close request by destroying the tab's
-/// window, which left a dead page under the "stopped responding" overlay. Popups do not get it:
-/// a sign-in popup closes itself when it is done.
+/// Runs in a tab before the page's own script (row 954, BROW-001): the page's `window.close()`
+/// does nothing. On Windows the engine runs it in the tab's child frames too; popups do not get it
+/// (a sign-in popup closes itself when it is done), so a popup can still call `close` on the tab's
+/// window: `selfclose` rebuilds the tab then. wry answers the engine's close request by destroying
+/// the tab's window, which left a dead page under the "stopped responding" overlay.
 pub const NO_CLOSE_SCRIPT: &str = r#"(() => {
   const keep = function close() {};
   try { Object.defineProperty(window, "close", { value: keep, writable: false, configurable: false }); } catch (_) { try { window.close = keep; } catch (_) {} }
@@ -1139,8 +1143,10 @@ fn err(e: tauri::Error) -> String {
 /// so it is handed back for the address bar (BROW-001).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
-pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>) -> Result<(), String> {
+pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>, rebuild: Option<String>) -> Result<(), String> {
     let url = parse(&url)?;
+    // Row 954 (c): "auto" / "retry" mark a rebuild of a tab that had a page: it keeps its saved profile and never takes focus.
+    let rebuild = selfclose::Rebuild::from_arg(rebuild.as_deref());
     notices::opening(id); // after-list 719: its notices wait for the pane's browser_pane_ready
     families().join(id, url.as_str(), Instant::now()); // T-272-c
     let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
@@ -1163,6 +1169,10 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let chord_app = app.clone();
     let window_app = app.clone();
     let permission_app = app.clone();
+    #[cfg(windows)]
+    let self_close_app = app.clone();
+    // Row 954 (c): this build's own record of its destroy, shared by both detectors and the failure handler.
+    let engine_rec = selfclose::register(id, rebuild);
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
     let download_app = app.clone();
@@ -1173,7 +1183,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let crash_dir = app.path().app_data_dir().ok();
     // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
     let key = url.to_string();
-    let (builder, spoof, folder) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
+    let (builder, spoof, folder) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, rebuild.keeps_profile(), &key);
     // Row 939: on Windows wry drops `.proxy_url()` whenever browser arguments are passed, so the proxy
     // rides in them; elsewhere `.proxy_url()` is the only road and stays. Tabs already open keep the
     // proxy they opened with until Kolux restarts.
@@ -1367,6 +1377,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         // SAFETY: ParentWindow only writes the controller's parent window handle into `container`.
         if unsafe { pw.controller().ParentWindow(&mut container) }.is_ok() {
             holder::record(id, container.0 as isize);
+            engine_rec.set_container(container.0 as isize);
             drag::settle(container.0 as isize); // after-list 746: a page made mid-drag lets it through
         }
         // T-283 (BROW-043): the engine's browser process behind this page is recorded for clean-up.
@@ -1384,14 +1395,21 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         // T-272-b (BROW-032): the page's permission requests are answered by the permission rules.
         engine::permissions(id, &pw, permission_app);
         // T-286-b (APP-040): the engine's process failures become crash records when real.
-        engine::watch_page_failures(id, &pw, crash_dir);
+        engine::watch_page_failures(id, &pw, crash_dir, engine_rec.clone());
+        // Row 954 (b): a page that destroyed its own tab gets it built again.
+        engine::watch_self_close(id, &pw, self_close_app, engine_rec);
     });
     #[cfg(not(windows))]
     let _ = page;
     // A new page is laid over its pane; a tab opened behind starts hidden (council FIX-2, AFTER 3),
     // and the pane's bounds keep this true from here on.
     set_shown(id, shown.unwrap_or(true));
-    webview.set_focus().map_err(err)
+    // Row 954 (c): a rebuild never takes the keyboard, shown or hidden.
+    if selfclose::focuses_after_open(rebuild) {
+        webview.set_focus().map_err(err)
+    } else {
+        Ok(())
+    }
 }
 
 /// The loading surface for a pane colour (BROW-011): opaque, so the engine's white never shows
@@ -1553,6 +1571,7 @@ pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
 
 #[tauri::command]
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
+    selfclose::closed(id); // row 954 (c): what the engine raises from here on is not a self-close
     set_shown(id, false);
     families().leave(id); // T-272-c
     notices::closed(id); // after-list 719
@@ -1600,20 +1619,27 @@ pub fn probe_result(answer: &str) -> &'static str {
     }
 }
 
+/// The probe's verdict: a query the engine refused to send is silence too, and silence makes the caller check the container (row 954 d, H2).
+pub fn probe_verdict(sent: bool, answer: Option<&str>) -> &'static str {
+    if sent { answer.map_or("no-answer", probe_result) } else { "no-answer" }
+}
+
 /// Asks a tab's page where it is: `"page"`, `"error-page"` or `"no-answer"` (see `probe_result`).
 #[tauri::command]
 pub async fn browser_probe(app: AppHandle, id: u32) -> Result<&'static str, String> {
     let v = view(&app, id)?;
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    if v.eval_with_callback(PROBE_QUERY, move |answer| {
-        let _ = tx.send(answer);
-    })
-    .is_err()
-    {
-        return Ok("no-answer");
+    let sent = v
+        .eval_with_callback(PROBE_QUERY, move |answer| {
+            let _ = tx.send(answer);
+        })
+        .is_ok();
+    let answer = if sent { tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(PROBE_WAIT).ok()).await.map_err(|e| e.to_string())? } else { None };
+    let verdict = probe_verdict(sent, answer.as_deref());
+    if verdict == "no-answer" {
+        selfclose::probe_missed(&app, id, holder::window_exists); // row 954 (c): a destroyed container is a self-close, not a crash
     }
-    let answer = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(PROBE_WAIT).ok()).await.map_err(|e| e.to_string())?;
-    Ok(answer.as_deref().map_or("no-answer", probe_result))
+    Ok(verdict)
 }
 
 // ---------------------------------------------------------------- T-195: agents and notes drive the tab
@@ -1923,19 +1949,21 @@ pub fn take_profile(url: &str) -> Option<String> {
     Some(n.remove(at).1)
 }
 
+/// The profile the command line handed over for a NEW tab at `url`. A rebuild never takes one: it
+/// would steal the entry meant for a new tab at the same address (row 954 d, N2).
+fn given_profile(rebuild: bool, url: &str) -> Option<String> {
+    if rebuild { None } else { take_profile(url) }
+}
+
 /// A tab in a profile other than the default runs in that profile's own engine data folder; the
 /// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
-fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, url: &str) -> (WebviewBuilder<tauri::Wry>, bool, String) {
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, rebuild: bool, url: &str) -> (WebviewBuilder<tauri::Wry>, bool, String) {
     let shared = || proxy::DEFAULT_FOLDER.to_string();
-    let profile = profile.or_else(|| take_profile(url));
-    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true, shared()) };
+    let profile = profile.or_else(|| given_profile(rebuild, url));
     let Ok(root) = profiles::root() else { return (b, true, shared()) };
-    let mut store = profiles::load(&root);
-    if profiles::set_tab(&mut store, id, &p).is_err() {
-        return (b, true, shared());
-    }
-    let _ = profiles::save(&root, &store);
-    let spoof = profiles::spoofs(&store, &p);
+    // Row 954 (c): a rebuild (crash, self-close) passes no profile but keeps the tab's saved one; any other open rewrites the row.
+    let (profile, spoof) = profiles::open_tab(&root, id, profile, rebuild);
+    let Some(p) = profile else { return (b, true, shared()) };
     match profiles::data_dir(&root, &p) {
         Some(dir) => {
             profiles::page_opened(id, &p); // after-list 153: a deleted profile's folder waits for its last page
@@ -2264,6 +2292,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn row_954d_a_rebuild_leaves_the_pending_cli_profile_for_the_new_tab() {
+        hand_profile("https://n2.example/", "work".into());
+        assert_eq!(given_profile(true, "https://n2.example/"), None, "a rebuild takes nothing");
+        assert_eq!(given_profile(true, "https://n2.example/"), None);
+        assert_eq!(given_profile(false, "https://n2.example/"), Some("work".into()), "the new tab still gets it");
+        assert_eq!(given_profile(false, "https://n2.example/"), None);
+    }
+
+    #[test]
     fn two_tab_creates_close_together_each_open_in_their_own_profile() {
         hand_profile("https://a.example/", "work".into());
         hand_profile("https://b.example/", "home".into());
@@ -2360,6 +2397,15 @@ mod tests {
         assert!(include_str!("browser.rs").contains(&install), "the tab builder installs it");
         // Popups close themselves when a sign-in ends, so they never get it.
         assert!(!include_str!("browser_popup.rs").contains("NO_CLOSE_SCRIPT"));
+    }
+
+    // Row 954 (b): the close request is observed on tab views only; a popup closing itself is normal.
+    #[test]
+    fn row954b_only_tab_views_hear_their_close_request() {
+        let hook = format!("engine::{}(id, &pw, self_close_app, engine_rec)", "watch_self_close"); // not spelled out, so this test cannot match itself
+        assert!(include_str!("browser.rs").contains(&hook), "the tab builder hooks it");
+        assert!(!include_str!("browser_popup.rs").contains("watch_self_close"));
+        assert!(!include_str!("browser_popup.rs").contains("selfclose"));
     }
 
     #[test]
@@ -3267,6 +3313,14 @@ mod t074_tests {
         assert_eq!(probe_result("null"), "no-answer");
         assert_eq!(probe_result(""), "no-answer");
         assert_eq!(probe_result("{}"), "no-answer");
+    }
+
+    #[test]
+    fn row_954d_a_probe_the_engine_refused_to_send_is_no_answer_so_the_container_is_checked() {
+        assert_eq!(probe_verdict(false, None), "no-answer");
+        assert_eq!(probe_verdict(false, Some("\"https://example.com/\"")), "no-answer");
+        assert_eq!(probe_verdict(true, None), "no-answer");
+        assert_eq!(probe_verdict(true, Some("\"https://example.com/\"")), "page");
     }
 
     #[test]

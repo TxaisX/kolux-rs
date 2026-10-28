@@ -8,10 +8,10 @@
 
 /** What the back end's probe of the page came back with. */
 export type Probe = "page" | "error-page" | "no-answer";
-export type Phase = "blank" | "loading" | "ok" | "recovering" | "failed" | "crashed";
+export type Phase = "blank" | "loading" | "ok" | "recovering" | "failed" | "crashed" | "closed";
 /** `recovery`: the load in flight is the automatic reload of a dead page, so what it lands on is
  *  judged as crash recovery (BROW-009), not as a network failure. */
-export type Health = { phase: Phase; url: string; misses: number; recoveries: number; recovery: boolean };
+export type Health = { phase: Phase; url: string; misses: number; recoveries: number; recovery: boolean; /** Row 954 (c): the closed phase is a rebuild whose open failed. */ openFailed?: boolean };
 export type Event =
   | { t: "started"; url: string }
   | { t: "finished"; url: string }
@@ -21,7 +21,11 @@ export type Event =
   /** The user typed an address: a new page gets its own recovery allowance. */
   | { t: "navigate" }
   /** T-283 (BROW-010): the computer woke from sleep; every pane hears the one signal. */
-  | { t: "woke" };
+  | { t: "woke" }
+  /** Row 954 (b): a page destroyed its own tab; `reopen` is false when it keeps doing it. */
+  | { t: "selfclosed"; reopen: boolean }
+  /** Row 954 (c): the rebuild's open failed; the tab stays closed with Retry. */
+  | { t: "openfailed" };
 /** `reload`: the pane reloads the page. `rebuild`: a reload cannot work, so the pane closes the page
  *  and opens it again (BROW-009). `overlay`: a recovery overlay goes up (see `overlayOf`). */
 export type Action = "none" | "reload" | "rebuild" | "overlay";
@@ -48,7 +52,7 @@ export function step(h: Health, e: Event): [Health, Action] {
     case "retry":
       // A crashed page already got its one automatic reload and did not come back: the page
       // behind the overlay is dead, so Retry builds it again instead of reloading it.
-      return [{ ...h, misses: 0, recoveries: 0, recovery: false }, h.phase === "crashed" ? "rebuild" : "reload"];
+      return [{ ...h, misses: 0, recoveries: 0, recovery: false, openFailed: false }, h.phase === "crashed" || h.phase === "closed" ? "rebuild" : "reload"];
     case "navigate":
       return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "none"];
     case "woke":
@@ -57,6 +61,12 @@ export function step(h: Health, e: Event): [Health, Action] {
       if (h.phase === "blank") return [h, "none"];
       if (h.phase === "failed" || h.phase === "crashed") return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "reload"];
       return [{ ...h, misses: 0, recoveries: 0 }, "none"];
+    case "selfclosed":
+      // The destroyed page answers no probe, so the dead-page count must not run: the tab is
+      // "loading" until the rebuilt page's own load events arrive. Left closed, the overlay speaks.
+      return e.reopen ? [{ ...h, phase: "loading", misses: 0, recovery: false }, "rebuild"] : [{ ...h, phase: "closed", misses: 0 }, "overlay"];
+    case "openfailed":
+      return [{ ...h, phase: "closed", misses: 0, recovery: false, openFailed: true }, "overlay"];
     case "probe":
       return probed(h, e.answer);
   }
@@ -65,7 +75,7 @@ export function step(h: Health, e: Event): [Health, Action] {
 function probed(h: Health, answer: Probe): [Health, Action] {
   // While the overlay is up the page is hidden under it; while a load is in flight the page is
   // waited for (BROW-009), and a blank tab has nothing to probe.
-  if (h.phase === "failed" || h.phase === "crashed" || h.phase === "loading" || h.phase === "blank") return [h, "none"];
+  if (h.phase === "failed" || h.phase === "crashed" || h.phase === "closed" || h.phase === "loading" || h.phase === "blank") return [h, "none"];
   switch (answer) {
     case "page":
       return [{ ...h, phase: "ok", misses: 0 }, "none"];
@@ -82,8 +92,9 @@ function probed(h: Health, answer: Probe): [Health, Action] {
   }
 }
 
-export type Overlay = { kind: "failed" | "crashed"; url: string } | null;
-export const overlayOf = (h: Health): Overlay => (h.phase === "failed" || h.phase === "crashed" ? { kind: h.phase, url: h.url } : null);
+export type Overlay = { kind: "failed" | "crashed" | "closed"; url: string; openFailed?: boolean } | null;
+export const overlayOf = (h: Health): Overlay =>
+  h.phase === "failed" || h.phase === "crashed" || h.phase === "closed" ? { kind: h.phase, url: h.url, ...(h.openFailed ? { openFailed: true } : {}) } : null;
 
 /** The back end's look at why an address failed (`browser_diagnose`). `https` is the same
  *  address over https when the switch makes sense (BROW-008: a failed http address, nothing but
@@ -124,6 +135,14 @@ const where = (url: string) => {
  *  address, so Open Externally hides; null = not known, the button stays as it was). */
 export function overlayModel(overlay: NonNullable<Overlay>, diag: Diagnosis | null, handler: boolean | null = null): OverlayModel {
   const host = where(overlay.url);
+  if (overlay.kind === "closed" && overlay.openFailed) {
+    // Row 954 (c): the rebuild could not open the page; the error itself is in the toolbar note.
+    return { title: "This page could not be reopened", text: "Kolux could not open it again. Press Retry to try once more.", advice: null, switchHttps: null, openExternally: /^https?:/i.test(overlay.url) && handler !== false };
+  }
+  if (overlay.kind === "closed") {
+    // Row 954 (b): the page destroyed its own tab twice in ten seconds; Kolux stopped rebuilding it.
+    return { title: "This page closed itself", text: "It keeps closing itself, so Kolux left it closed. Press Retry to open it again.", advice: null, switchHttps: null, openExternally: /^https?:/i.test(overlay.url) && handler !== false };
+  }
   if (overlay.kind === "crashed") {
     // BROW-009: the page's process died (or stopped answering) and the one automatic reload did not
     // bring it back; no network troubleshooting here.
