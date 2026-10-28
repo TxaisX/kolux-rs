@@ -529,7 +529,7 @@ pub fn quit_watchdog<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                     crate::diag::write(&dir, &format!("quit: still running {} s after the window closed; exiting now (APP-006)", quit_deadline().as_secs()));
                 }
             };
-            watchdog_run(quit_deadline(), log, || std::process::exit(0));
+            watchdog_run(watchdog_sleep(), log, || std::process::exit(0));
         });
     });
 }
@@ -560,6 +560,14 @@ fn watchdog_run(deadline: Duration, log: impl FnOnce() + Send + 'static, exit: i
 }
 
 const WATCHDOG_LOG_WAIT: Duration = Duration::from_millis(500);
+
+/// Room for process teardown after the exit call (measured 15.7 s and 15.8 s against the 15 s box).
+const EXIT_MARGIN: Duration = Duration::from_secs(1);
+
+/// How long the watchdog sleeps before it logs, so the exit call lands inside the quit deadline.
+fn watchdog_sleep() -> Duration {
+    quit_deadline().saturating_sub(WATCHDOG_LOG_WAIT).saturating_sub(EXIT_MARGIN)
+}
 
 // ---------------------------------------------------------------- APP-011: the save point
 
@@ -726,6 +734,15 @@ mod tests {
         let at = exited.expect("the watchdog exits");
         assert!(at >= Duration::from_millis(100), "exit came {at:?} after the start, before the deadline");
         assert!(at < Duration::from_millis(100) + Duration::from_secs(1), "exit came {at:?} after the start; a stalled log write held it");
+    }
+
+    /// APP-050 box 2 (row 979): sleep + log wait + teardown margin fit the quit deadline, and a normal quit finishes first.
+    #[test]
+    fn app050b2_the_watchdog_sleep_leaves_room_for_the_log_wait_and_teardown_inside_the_quit_deadline() {
+        let sleep = watchdog_sleep();
+        assert!(sleep + WATCHDOG_LOG_WAIT + EXIT_MARGIN <= quit_deadline(), "sleep {sleep:?} + log wait + margin overshoots {:?}", quit_deadline());
+        let normal_quit = final_save::QUIT_DEADLINE + crate::tools::WEBVIEW_EXIT_WAIT;
+        assert!(sleep >= normal_quit, "watchdog sleep {sleep:?} fires before a normal quit ({normal_quit:?}) can finish");
     }
 
     /// APP-050 b2: arming twice (window close, then RunEvent::Exit) starts one watchdog, not two.
