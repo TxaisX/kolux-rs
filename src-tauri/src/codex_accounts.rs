@@ -861,8 +861,10 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     };
     let gone = list.remove(at);
     store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
-        store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
+    // Row 947: the list is already saved, so a marker that will not clear is logged and reported at the end, after the sealed copy and home are gone.
+    let cleared = if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) { store.set(ACTIVE_KEY, "").map_err(|e| e.to_string()) } else { Ok(()) };
+    if let Err(e) = &cleared {
+        eprintln!("kolux-rs: could not clear the active Codex account ({e})");
     }
     // Row 944: the sealed copy goes first, so a home that will not delete never leaves a copy a stale sign-in could unseal.
     crate::claude_accounts::remove_sealed_copy(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
@@ -871,7 +873,7 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     if home.parent() == Some(profile.join(FOLDER).as_path()) && home.file_name().is_some_and(|n| n == id) {
         remove_dir_patiently(&home).map_err(|e| format!("The account was removed, but its Codex home could not be deleted: {e}"))?;
     }
-    Ok(())
+    cleared
 }
 
 #[tauri::command]
@@ -1384,6 +1386,25 @@ mod tests {
         assert!(vault.is_file());
         assert!(remove(&store.lock().unwrap(), &profile, "c1").is_err(), "the home delete still reports its failure");
         assert!(!vault.exists(), "the sealed copy is gone");
+    }
+
+    // Row 947: an active marker that will not clear is reported at the end, after the list is saved and the sealed copy and home are gone.
+    #[test]
+    fn row947_a_marker_that_will_not_clear_still_removes_the_vault_and_home() {
+        let profile = temp("row947-marker");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        sign_in(&store, &profile, "c1", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
+        let s = store.lock().unwrap();
+        s.set(ACTIVE_KEY, "c1").unwrap();
+        s.poison(ACTIVE_KEY);
+        assert!(remove(&s, &profile, "c1").is_err(), "the failure to clear the marker is still reported");
+        assert!(crate::orchestration::kept::load::<Vec<Account>>(&s, LIST_KEY).unwrap().is_empty(), "the list was saved");
+        assert!(!profile.join(secrets::VAULT).join("codex-c1.json").exists(), "the sealed copy is gone");
+        assert!(!profile.join(FOLDER).join("c1").exists(), "and so is the home");
     }
 
     // Row 944: an id like ".." is never an account home; a cancelled login must not roll back (delete) the profile folder.

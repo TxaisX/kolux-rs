@@ -600,8 +600,10 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     };
     let gone = list.remove(at);
     save(store, &list)?;
-    if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
-        store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
+    // Row 947: the list is already saved, so a marker that will not clear is logged and reported at the end, after the sealed copy and folder are gone.
+    let cleared = if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) { store.set(ACTIVE_KEY, "").map_err(|e| e.to_string()) } else { Ok(()) };
+    if let Err(e) = &cleared {
+        eprintln!("kolux-rs: could not clear the active Claude account ({e})");
     }
     // Row 944: the sealed copy goes first, so a folder that will not delete never leaves a copy a stale sign-in could unseal.
     remove_sealed_copy(&profile.join(secrets::VAULT).join(format!("claude-{id}.json")));
@@ -610,7 +612,7 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     if dir.parent() == Some(profile.join(FOLDER).as_path()) && dir.file_name().is_some_and(|n| n == id) {
         crate::codex_accounts::remove_dir_patiently(&dir).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
     }
-    Ok(())
+    cleared
 }
 
 #[tauri::command]
@@ -1166,6 +1168,20 @@ mod tests {
         save(&s, &[odd]).unwrap();
         assert!(remove(&s, &dir, "..").is_err(), "an unsafe id is refused");
         assert!(marker.exists(), "the profile folder is still there");
+    }
+
+    // Row 947: an active marker that will not clear is reported at the end, after the list is saved and the sealed copy and folder are gone.
+    #[test]
+    fn row947_a_marker_that_will_not_clear_still_removes_the_vault_and_folder() {
+        let (dir, store) = profile("row947-marker");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let s = store.lock().unwrap();
+        activate(&s, Some("a1")).unwrap();
+        s.poison(ACTIVE_KEY);
+        assert!(remove(&s, &dir, "a1").is_err(), "the failure to clear the marker is still reported");
+        assert!(load(&s).is_empty(), "the list was saved");
+        assert!(!dir.join(secrets::VAULT).join("claude-a1.json").exists(), "the sealed copy is gone");
+        assert!(!dir.join(FOLDER).join("a1").exists(), "and so is the folder");
     }
 
     // Row 940 (2): a non-empty list that lacks the id but a folder that is there is a still-existing sign-in (the list lost it), so it keeps its id.
