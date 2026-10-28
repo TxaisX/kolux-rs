@@ -114,8 +114,8 @@ User sees: the answer goes to that agent and the card moves out of needs-you.
 Rules: the approve and deny buttons on Board cards stayed when the footer under terminal panes was
   removed.
 Acceptance:
-  - [ ] Agent asks to run a command → card shows both buttons; approve → agent proceeds.
-  - [ ] Deny on a card → the agent receives the refusal and the card leaves needs-you.
+  - [x] Agent asks to run a command → card shows both buttons; approve → agent proceeds. (cards live; evidence/cards-VIEW-025.txt)
+  - [x] Deny on a card → the agent receives the refusal and the card leaves needs-you. (cards live; evidence/cards-VIEW-025.txt)
 Compat: —
   (Kolux RS, T-028-a: built through `agent_answer`, which types the agent's own keys into its
   terminal: Enter / Esc for Claude Code, y / n for Codex.)

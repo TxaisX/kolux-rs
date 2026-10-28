@@ -94,6 +94,7 @@ export async function startProve(id, opts) {
     confirmCloseRunning: false,
     agentStatusHooks: true,
     agentOptions: { claude: { env: `CLAUDE_CONFIG_DIR=${ACCOUNT_A}`, args: opts.claudeArgs.replaceAll("${SETTINGS}", settingsFile) } },
+    ...(opts.settings ?? {}), // e.g. uiLook: "new" for the screen switcher
   };
   await app.launch({
     prepare: () => {
