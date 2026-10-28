@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import src from "./BrowserPane.tsx?raw";
-import { type Call, namesPane, type Opening, openFirstPage, openPage, reopenPage } from "./reopen";
+import { type Call, namesPane, type Opening, openFirstPage, openPage, reopenPage, takesBarFocus } from "./reopen";
 import { fresh, overlayModel, overlayOf, step } from "./loadState";
 
 const at: Opening = { url: "https://example.com/", spot: { x: 10, y: 40, w: 800, h: 600 }, background: [18, 18, 20], shown: true };
@@ -245,5 +245,39 @@ describe("row 977: a restored pane's first open reads its own saved profile", ()
     expect(src).toContain("restored?: boolean");
     expect(src).toContain("restored = false");
     expect(src).toContain("restored, restoreSpent)");
+  });
+});
+
+describe("row 979 (F2): the address bar takes the keyboard only for a focused, not-restored pane", () => {
+  const first = { url: "https://example.com/", shown: true };
+
+  it("a restored pane's first open does not focus the bar", async () => {
+    const restoring = await openFirstPage((async () => {}) as Call, 5, first, true, { current: false });
+    expect(restoring).toBe(true);
+    expect(takesBarFocus(true, restoring)).toBe(false);
+    expect(takesBarFocus(false, restoring)).toBe(false);
+  });
+
+  it("a pane that is not the focused one does not focus the bar", async () => {
+    const restoring = await openFirstPage((async () => {}) as Call, 5, first, false, { current: false });
+    expect(restoring).toBe(false);
+    expect(takesBarFocus(false, restoring)).toBe(false);
+  });
+
+  it("a focused fresh pane's first open does (BROW-001)", async () => {
+    const restoring = await openFirstPage((async () => {}) as Call, 5, first, false, { current: false });
+    expect(takesBarFocus(true, restoring)).toBe(true);
+  });
+
+  it("a restored pane's second open is not a restore, so a focused pane takes the bar", async () => {
+    const spent = { current: false };
+    await openFirstPage((async () => {}) as Call, 5, first, true, spent);
+    expect(await openFirstPage((async () => {}) as Call, 5, first, true, spent)).toBe(false);
+  });
+
+  it("BrowserPane reads focused through a ref at the moment the open finishes", () => {
+    expect(src).toContain("focusedNow.current = focused");
+    expect(src).toContain("takesBarFocus(focusedNow.current, restoring)");
+    expect(src).not.toMatch(/^\s*bar\.current\?\.focus\(\)/m); // never an unconditional focus
   });
 });

@@ -23,7 +23,7 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
-import { namesPane, openFirstPage, type ProfileEvent, reopenPage, type Why } from "./reopen";
+import { namesPane, openFirstPage, type ProfileEvent, reopenPage, takesBarFocus, type Why } from "./reopen";
 import { SELF_CLOSE_EVENT, type SelfClosed, selfCloseNotice } from "./selfClose";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
@@ -205,6 +205,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   // pane is NOW (shown or hidden, size) instead of where it was when the rebuild began.
   const mountedFor = useRef<number | null>(null);
   const restoreSpent = useRef(false); // row 977: only the first open of a restored pane is a restore
+  const focusedNow = useRef(focused); // row 979: the mount's async open reads the focus as it is when the open finishes
+  focusedNow.current = focused;
   const sendBounds = useRef<(() => void) | null>(null);
   const reopen = (to: string, profile?: string, why: Why = "auto") => {
     const body = host.current;
@@ -403,11 +405,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         // open tabs or send chords until it is shown (council FIX-2).
         const body = host.current!;
         const shown = body.clientWidth > 0 && body.clientHeight > 0;
-        await openFirstPage(invoke, id, { url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown }, restored, restoreSpent);
+        const restoring = await openFirstPage(invoke, id, { url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown }, restored, restoreSpent);
         opened.current = true;
         if (alive) {
           setOpen(true);
-          bar.current?.focus(); // BROW-001: the cursor is in the address bar once the page exists
+          if (takesBarFocus(focusedNow.current, restoring)) bar.current?.focus(); // BROW-001: a tab the user just opened has the cursor in its address bar; a restored or unfocused pane never takes the keyboard
         }
         else invoke("browser_close", { id }).catch(() => {});
       } catch (err) {

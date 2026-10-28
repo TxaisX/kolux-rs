@@ -43,9 +43,17 @@ export async function openPage(call: Call, id: number, args: Record<string, unkn
 /** Row 977: a pane that came back from the saved layout opens its FIRST page with `rebuild: "restore"`,
  *  so the back end reads the tab's own saved profile instead of opening in the default. Later opens
  *  (a reopen, Retry, a profile change) name their own reason. `spent` is set once that first open
- *  has succeeded; a failed one leaves it, so the pane's next try is still the restore. */
-export async function openFirstPage(call: Call, id: number, args: Record<string, unknown>, restored: boolean, spent: { current: boolean }): Promise<void> {
+ *  has succeeded; a failed one leaves it, so the pane's next try is still the restore. Answers whether
+ *  this open was the restore. */
+export async function openFirstPage(call: Call, id: number, args: Record<string, unknown>, restored: boolean, spent: { current: boolean }): Promise<boolean> {
   const restoring = restored && !spent.current;
   await openPage(call, id, restoring ? { ...args, rebuild: "restore" } : args);
   spent.current = true;
+  return restoring;
+}
+
+/** Row 979 (F2): after a pane's first open the address bar takes the keyboard (BROW-001) only when the
+ *  user opened the tab to type in it: the pane is the focused one and the open was not a restore. */
+export function takesBarFocus(focused: boolean, restoring: boolean): boolean {
+  return focused && !restoring;
 }
