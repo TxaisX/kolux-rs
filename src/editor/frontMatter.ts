@@ -56,7 +56,14 @@ function placeChange(now: string, out: string, prev?: string, refused?: () => vo
   // Code lines keep their CR in the view, so the CRLF spelling is used only where the view reads it as it read the added lines.
   const insert = crlf !== c.insert && same(body.slice(0, c.from) + crlf + body.slice(c.to), next) ? crlf : c.insert;
   // Round 11: whatever the placement did, a save must leave every byte and every untouched list outside the edit as it was.
-  if (prev !== undefined && saveBreaksInvariant(body, body.slice(0, c.from) + insert + body.slice(c.to), prev, out) !== null) return placeStats.refused++, placeStats.invariant++, refused?.(), null;
+  if (prev !== undefined && saveBreaksInvariant(body, body.slice(0, c.from) + insert + body.slice(c.to), prev, out) !== null) {
+    // Row 926: the placement drops the file's blank line at the edit's boundary; the same save with it kept stands when the invariant passes it (a parent it would loosen still refuses).
+    const was = { ...placeStats };
+    const again = keepGaps ? null : withBoundaryGaps(() => placeChange(now, out, prev, () => {}));
+    if (again) return again;
+    Object.assign(placeStats, was);
+    return placeStats.refused++, placeStats.invariant++, refused?.(), null;
+  }
   return { from: c.from + front.length, to: c.to + front.length, insert };
 }
 
@@ -84,6 +91,16 @@ export function keepRaw(body: string, out: string, prev?: string): string {
 }
 
 type Edit = { from: number; to: number; insert: string };
+
+let keepGaps = false;
+function withBoundaryGaps<T>(run: () => T): T {
+  keepGaps = true;
+  try {
+    return run();
+  } finally {
+    keepGaps = false;
+  }
+}
 
 /** How each rich edit was placed (the fuzz test reads it): by word number, by retyping the touched blocks, or refused;
  *  `whole` counts the placements that needed a whole list or section, not just its touched item or child. */
@@ -365,7 +382,20 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
     const fp = g.parent === undefined ? f : fate[g.parent];
     // A parent gap is kept only where neither line is touched: an edit near it cannot say where the gap belongs now.
     if (g.parent !== undefined && (j < 0 || fp === "cut")) return null;
-    if (j < 0) continue;
+    if (j < 0) {
+      // Row 926: an item the edit cut keeps the gap above its line when the placement left everything before that line as it was.
+      const was = ts[g.item];
+      const at = keepGaps && g.parent === undefined ? lineStartKept(tight.text, next, was) : -1;
+      if (at >= 0) {
+        const k = ns.indexOf(at);
+        if (k >= 0 && used.has(k)) return null;
+        if (k >= 0) used.add(k);
+        const cut = blankAbove(next, at);
+        if (cut < 0) return null;
+        kept.push({ at: at - cut, raw: g.raw, item: g.item, cut });
+      }
+      continue;
+    }
     if (j >= ns.length || used.has(j)) return null;
     used.add(j);
     const cut = blankAbove(next, ns[j]);
@@ -373,13 +403,19 @@ function regap(tight: { text: string; gaps: Gap[] }, next: string, prev: string,
     if (g.parent === undefined) {
       const lone = noSiblingAbove(next, ns[j]);
       if (lone === null) return null;
-      if (lone) continue;
+      if (lone && !keepGaps) continue;
     } else if (lineAbove(next, ns[j]) !== ns[fp === "before" ? g.parent : g.parent + dn]) return null; // the parent is no longer right above
     kept.push({ at: ns[j] - cut, raw: g.raw, item: j, cut });
   }
   kept.sort((a, b) => a.at - b.at);
   const restored = restore(next, kept);
   return looseReadsAlike(tight.text, next, kept) ? restored : null;
+}
+
+/** Row 926: where the line that starts at `was` in `before` starts in `after`, when the edit left it and everything above it (or everything from it down) as it was; else -1. */
+function lineStartKept(before: string, after: string, was: number): number {
+  const at = after.startsWith(before.slice(0, was)) ? was : after.endsWith(before.slice(was)) ? after.length - (before.length - was) : -1;
+  return at === 0 || after[at - 1] === "\n" ? at : -1;
 }
 
 /** Round 8 (MEDIUM-1): where the last non-blank line above `at` starts, or -1. */
