@@ -16,8 +16,8 @@ import { createApp, sleep, waitFor } from "../evidence/app-launch.mjs";
 export { sleep, waitFor };
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
 export const ACCOUNT_A = "G:/Dev/kolux-scratch/live-signin/account-a";
-export const BASE = "G:/Temp/live-v13";
-export const LOGS = "G:/Temp/live-v13-logs";
+export const BASE = "G:/Temp/live-v14";
+export const LOGS = "G:/Temp/live-v14-logs";
 export const CLAUDE = 'section.pane[data-agent*="claude"]';
 
 // Nothing of the old app, no token variable and no API key may reach the app, its panes or Claude.
@@ -235,8 +235,8 @@ export function hookEventsInstalled(settingsFile) {
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
 
 // ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
-export const LIVE_BASE = "G:/Temp/live-v13";
-export const LIVE_LOGS = "G:/Temp/live-v13-logs";
+export const LIVE_BASE = "G:/Temp/live-v14";
+export const LIVE_LOGS = "G:/Temp/live-v14-logs";
 export const TERM = "section.pane[data-agent]";
 export const SHELL = 'section.pane[data-agent="shell"]';
 
