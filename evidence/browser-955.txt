@@ -71,3 +71,17 @@ graphics on (the safe-graphics flag file), then relaunch. Expect no 0x8007139F i
     also one that calls it on load). Expect the tab stays, the page stays responsive, no "stopped responding" overlay, and
     switching to other tabs and back still works.
  4. A sign-in-style popup (window.open then close() inside the popup) still closes itself (popups are exempt).
+
+LEFTOVERS CLOSED (kolux-34 browser, with Row 954 b)
+- (a) The recovery.rs ratchet now pairs EACH WebviewWindowBuilder::new(, WebviewBuilder::new(, WebviewWindow::builder(,
+  Webview::builder( and WebviewWindowBuilder::from_config( with .additional_browser_args(, .data_directory( or .window_features(
+  before its .build(/add_child(. Only tools.rs (from_config; lib.rs sets the string) is exempt. Red: with the scanner reverted to
+  per-file contains, row955_the_scan_pairs_each_builder_not_each_file failed (left: []); green with the pairing.
+  A vitest (src/tower/pageWindows.test.ts) fails on `new WebviewWindow(` / `new Webview(` anywhere in src/ except
+  src/tower/ownWindow.ts. Red: with the pattern neutered, 2 of 3 tests failed (expected [] to deeply equal the files); green restored.
+- (b) browser.rs NO_CLOSE_SCRIPT comment: on Windows the engine runs the init script in child frames too (popups do not get it).
+- (d) Skipped: main does not register browser::tower::tower_window_open in lib.rs, so the dead-code allow and the in-page fallback stay.
+
+WHEN THE BREAKAGE STARTED (from git history)
+- PDF export has been broken since it shipped: T-316-b (merge 7c22769b).
+- The Tower pop-out worked until T-286-b (93b08c09). (Cause not re-derived here; the fix for both is that Rust builds the window with the shared browser arguments.)
