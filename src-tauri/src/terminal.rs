@@ -1609,13 +1609,12 @@ impl Terminals {
 
     /// AFTER-696: the restart to update. The installer replaces the program the background service
     /// runs from, so the service and its shells end too (update_restart: "the shells end") instead
-    /// of holding the old program open. Coordinator default; Txais may overrule.
-    pub fn end_for_update(&self) {
+    /// of holding the old program open. Coordinator default; Txais may overrule. False when the
+    /// service was still answering at the deadline (true when no service dir is known).
+    pub fn end_for_update(&self) -> bool {
         let dir = self.service.dir.lock().ok().and_then(|d| d.clone());
         self.kill_all();
-        if let Some(dir) = dir {
-            crate::pty::service::stop(&dir, UPDATE_STOP_LIMIT);
-        }
+        dir.is_none_or(|dir| crate::pty::service::stop(&dir, UPDATE_STOP_LIMIT))
     }
 
     /// `kill_all` without the app-wide quitting flag (a test runs it alone).
