@@ -15,13 +15,18 @@ const walk = (dir, out = []) => {
   return out;
 };
 
-const CLIENTS = [/\bfetch\(\s*["'`]https?:/, /XMLHttpRequest/, /sendBeacon/, /new WebSocket\(/, /\breqwest::/, /tauri_plugin_updater/, /\bureq::/, /\bhyper::/, /TcpStream::connect/];
+// \s* on both sides of :: so `TcpStream :: connect` and a line break inside it are caught too.
+const TCP_CONNECT = /TcpStream\s*::\s*connect/;
+const TCP_CONNECT_ALL = new RegExp(TCP_CONNECT.source, "g");
+const CLIENTS = [/\bfetch\(\s*["'`]https?:/, /XMLHttpRequest/, /sendBeacon/, /new WebSocket\(/, /\breqwest::/, /tauri_plugin_updater/, /\bureq::/, /\bhyper::/, TCP_CONNECT];
 const ALLOWED = {
   "src-tauri/src/artifacts.rs": [/\breqwest::/], // the script CDNs, when saving an artifact for offline use
   "src-tauri/src/browser.rs": [/\breqwest::/], // the open page's own site icon (APP-070: sites the user opens in the browser pane)
   "src-tauri/src/update.rs": [/tauri_plugin_updater/], // GitHub Releases
   "src-tauri/src/lib.rs": [/tauri_plugin_updater/],
-  "src-tauri/src/cli.rs": [/TcpStream::connect/], // kolux-dev talking to the app on 127.0.0.1
+  "src-tauri/src/cli.rs": [TCP_CONNECT], // kolux-dev talking to the app on 127.0.0.1
+  "src-tauri/src/pty_service.rs": [TCP_CONNECT], // pty_service.rs:514 Client::connect: the host is the literal [127,0,0,1], only the port comes from the service's endpoint file
+  "src-tauri/src/labels.rs": [TCP_CONNECT], // labels.rs:180 the label proxy to a workspace dev server: its only target comes from target_of (labels.rs:75), which refuses any host that is not a loopback IP or localhost
 };
 // The one loopback call each file may make, as exact text: it is cut out before the scan, so any
 // other fetch in the same file is still caught (an ALLOWED entry would pass the whole file).
@@ -40,8 +45,14 @@ const PINNED = {
     [/\breqwest::/g, 11],
     [/\bicon_client_for\b/g, 4],
   ],
+  // pty_service.rs holds exactly one loopback connect (its ALLOWED line); a second one fails the audit.
+  "src-tauri/src/pty_service.rs": [[TCP_CONNECT_ALL, 1]],
+  // labels.rs holds exactly one connect, behind the loopback guard in target_of; a second one fails the audit.
+  "src-tauri/src/labels.rs": [[TCP_CONNECT_ALL, 1]],
 };
 const EXACT = {
+  // browser.rs:285 the page script wraps the open PAGE's own XHR (offline/intercept/extra headers); it opens no connection of its own, so the page's requests stay "the sites you open in the browser pane"
+  "src-tauri/src/browser.rs": /\bXMLHttpRequest\.prototype\b/g,
   "src-tauri/src/agent_hooks/vendors.rs": /\bfetch\(`http:\/\/127\.0\.0\.1:\$\{port\}\/amp`/g, // the Amp status plugin posting to Kolux on 127.0.0.1
 };
 
@@ -53,12 +64,21 @@ const shipped = (text) => {
   const m = /#\[cfg\(test\)\]\s*mod tests\b/.exec(text);
   return m ? text.slice(0, m.index) : text;
 };
+const clientProblems = (rel, text) => CLIENTS.filter((re) => re.test(text) && !(ALLOWED[rel] ?? []).some((a) => a.source === re.source)).map((re) => `${rel}: ${re.source}`);
 const pinnedProblems = (rel, text) => (PINNED[rel] ?? []).filter(([what, n]) => count(text, what) !== n).map(([what, n]) => `${rel}: ${String(what)} x${count(text, what)}, want ${n}`);
 
 test("app070: no network client in the shipped source beyond the connections the statement names", () => {
-  // scripts/evidence drives a dev build over loopback for proofs and never ships.
-  const files = [...walk(path.join(root, "src")), ...walk(path.join(root, "src-tauri/src")), ...walk(path.join(root, "scripts")).filter((f) => !f.includes(`${path.sep}evidence${path.sep}`))];
+  // scripts/evidence, scripts/prove and scripts/stress drive a hidden dev build over loopback CDP for proofs and
+  // never ship: tauri.conf.json bundles only ../dist (no resources), package.json is private, nothing in src or src-tauri imports them.
+  const harness = ["evidence", "prove", "stress"].map((d) => `${path.sep}scripts${path.sep}${d}${path.sep}`);
+  const files = [...walk(path.join(root, "src")), ...walk(path.join(root, "src-tauri/src")), ...walk(path.join(root, "scripts")).filter((f) => !harness.some((h) => f.includes(h)))];
   expect(files.length).toBeGreaterThan(50);
+  // Keeps the folder exclusions honest: nothing shipped may name a harness folder, and the bundle carries no extra files or sidecars.
+  const imports = [...walk(path.join(root, "src")), ...walk(path.join(root, "src-tauri/src"))].filter((f) => /scripts[\\/]+(?:evidence|prove|stress)\b/.test(fs.readFileSync(f, "utf8"))).map((f) => path.relative(root, f));
+  expect(imports).toEqual([]);
+  const bundle = JSON.parse(fs.readFileSync(path.join(root, "src-tauri/tauri.conf.json"), "utf8")).bundle ?? {};
+  expect(bundle.resources, "bundle.resources").toBeUndefined();
+  expect(bundle.externalBin, "bundle.externalBin").toBeUndefined();
   const found = [];
   for (const f of files) {
     const rel = path.relative(root, f).replace(/\\/g, "/");
@@ -68,12 +88,20 @@ test("app070: no network client in the shipped source beyond the connections the
       text = text.replace(EXACT[rel], "");
     }
     if (ONE_CLIENT[rel]) expect(text.split(ONE_CLIENT[rel]).length - 1, rel).toBe(1);
-    found.push(...pinnedProblems(rel, text));
-    for (const re of CLIENTS) {
-      if (re.test(text) && !(ALLOWED[rel] ?? []).some((a) => a.source === re.source)) found.push(`${rel}: ${re.source}`);
-    }
+    found.push(...pinnedProblems(rel, text), ...clientProblems(rel, text));
   }
   expect(found).toEqual([]);
+});
+
+test("app070: a spaced TcpStream :: connect is flagged like the plain spelling", () => {
+  const spaced = "fn x() { let _ = std::net::TcpStream :: connect(addr); }\n";
+  const split = "fn x() { let _ = TcpStream\n    ::connect(addr); }\n";
+  for (const text of [spaced, split]) {
+    expect(clientProblems("src-tauri/src/other.rs", text).length, text).toBeGreaterThan(0);
+    // labels.rs holds exactly one connect: a second one, however spaced, moves the pinned count.
+    const labels = shipped(fs.readFileSync(path.join(root, "src-tauri/src/labels.rs"), "utf8"));
+    expect(pinnedProblems("src-tauri/src/labels.rs", labels + text).length, text).toBeGreaterThan(0);
+  }
 });
 
 test("app070: a second network client in browser.rs fails the audit in each listed form", () => {
