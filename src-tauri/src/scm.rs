@@ -2157,14 +2157,18 @@ fn safe_pr_url(url: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<Option<Pr>, String> {
+pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<crate::pr_review::PrAnswer, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
-        if let Some(url) = linked {
-            return pr_link(&gh_program()?, dir, &url).map(Some);
-        }
-        let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
-        pr_find(&gh_program()?, dir, &branch)
+        // Row 953: gh is asked only for a GitHub remote (a hand link included); any other provider answers which one it is.
+        let provider = crate::pr_review::provider_for(repo_id::primary_host(dir, &ssh_config())?.as_deref());
+        crate::pr_review::pr_for(&provider, || {
+            if let Some(url) = linked {
+                return pr_link(&gh_program()?, dir, &url).map(Some);
+            }
+            let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
+            pr_find(&gh_program()?, dir, &branch)
+        })
     })
     .await
     .map_err(|e| e.to_string())?

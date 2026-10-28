@@ -5,7 +5,7 @@
 // or fails is a note and never blocks starting a pull request.
 import { invoke } from "@tauri-apps/api/core";
 import { forkNotice, loadPushTarget, type PushTarget } from "./forkPush";
-import { prStateWord, type Pr, type Status } from "./model";
+import { needsGitHub, prStateWord, type Pr, type Status } from "./model";
 
 export type ReviewLookup =
   | { kind: "found"; pr: Pr; target: string | null }
@@ -48,15 +48,15 @@ async function lookupOf(dir: string, status: Pick<Status, "base">, push: PushTar
   }
 }
 
-/** What the composer says, one line each. */
-export function reviewLines(f: ReviewFacts): string[] {
+/** What the composer says, one line each. `createBlocked`: creating is blocked on this remote too, so the unsupported lookup and the block are said once. */
+export function reviewLines(f: ReviewFacts, createBlocked = false): string[] {
   const l = f.lookup;
   const out: string[] = [];
   if (l.kind === "found") {
     out.push(`Pull request #${l.pr.number} (${prStateWord(l.pr)})${l.pr.title ? `: ${l.pr.title}` : ""}`);
     if (l.target) out.push(`Targets ${l.target}`);
   } else if (l.kind === "none") out.push(l.repo ? `No pull request for this branch in ${l.repo}.` : "No pull request found for this branch."); // gh searches origin, which is the fork when the repository was forked; no repo means no location to name
-  else if (l.kind === "unsupported") out.push(`Finding a linked pull request or merge request is not available for ${l.host ?? "this repository"}.`);
+  else if (l.kind === "unsupported") out.push((createBlocked && needsGitHub("Finding or creating", l.provider, l.host)) || `Finding a linked pull request or merge request is not available for ${l.host ?? "this repository"}.`);
   else out.push(`The linked pull request could not be looked up: ${l.message}`);
   const fork = forkNotice(f.push);
   if (fork) out.push(fork);
