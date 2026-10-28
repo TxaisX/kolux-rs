@@ -269,8 +269,8 @@ function structureProblem(body: string, saved: string, prev: string, out: string
   const ones = (t: string) => t.replace(/^([ \t]*)\d+([.)])/gm, "$11$2");
   const spelt = (t: string) => ones(t).replace(/^([ \t]*)[*+](?=[ \t])/gm, "$1-").replace(/_/g, "*").trimEnd();
   const view = listEntries(ones(prev));
-  // Row 936 (seed 95): an edit that only renumbers an ordered list changes nothing the numbers-as-1 text shows.
-  const e = changeBetween(ones(prev), ones(out));
+  // Row 936 (seed 95): a renumber-only edit changes nothing the numbers-as-1 text shows; row 981: the other lists are still checked, on the raw change.
+  const e = changeBetween(ones(prev), ones(out)) ?? changeBetween(prev, out);
   if (!e) return null;
   // A lone carriage return (typed inside a CRLF note) is a line end to marked and plain text to the view.
   if (/\r(?!\n)/.test(body)) return null;
@@ -544,5 +544,31 @@ describe("oracle: row 936 false positives", () => {
     expect(readsAs(nb, out)).toBe(true);
     expect(readsAs(nb.replace("\r\n\r\n  ```", "\r\n  y\r\n  ```"), out)).toBe(false);
     expect(readsAs(nb.replace("- b", "- c"), out)).toBe(false);
+  });
+});
+
+// Row 981 (review of row 936): the 936 exemptions were wider than the false positives they fixed. Each check below is pinned with a twin it must still flag.
+describe("oracle: row 981 tightened exemptions", () => {
+  const typed = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    return { prev, out: roundTrip(prev.replace(from, to))! };
+  };
+  const saved = (body: string, prev: string, out: string) => {
+    const c = richChange(body, out, prev);
+    return c ? body.slice(0, c.from) + c.insert + body.slice(c.to) : body;
+  };
+
+  // Seed 95 early return: a renumber-only edit skipped every list check, so a lost blank line above a list item went unseen.
+  it("a renumber-only edit still has its other lists checked: a dropped blank line above item 1 is flagged", () => {
+    const body = "- a\n\n- b\n\nPara\n\n1. x\n2. y\n";
+    const { prev, out } = typed(body, "1. x", "2. x");
+    const real = saved(body, prev, out);
+    expect(real).toBe("- a\n\n- b\n\nPara\n\n2. x\n3. y\n");
+    expect(structureProblem(body, real, prev, out)).toBeNull();
+    expect(structureProblem(body, "- a\n- b\n\nPara\n\n2. x\n3. y\n", prev, out)).toMatch(/blank line above item 1 .* is gone/);
+  });
+  it("the seed 95 shape (a renumber after a nested list) still has no structure problem", () => {
+    const body = "- a\n  - n1\n\n  - n2\n- b\n\n1. x\n2. y\n";
+    expect(structureProblem(body, body.replace("2. y", "3. y"), "1. x\n2. y", "1. x\n3. y")).toBeNull();
   });
 });
