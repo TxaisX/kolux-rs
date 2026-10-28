@@ -88,6 +88,9 @@ pub mod pdf;
 #[allow(dead_code)]
 #[path = "browser_tower.rs"]
 pub mod tower;
+// Row 954 (b): a tab whose own window a page destroyed is built again, never in a loop.
+#[path = "browser_selfclose.rs"]
+pub mod selfclose;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -120,10 +123,11 @@ const ICON_MAX: usize = 256 * 1024;
 /// network or the operating system, and a page that has no script of ours sees nothing.
 const CHORD_SCHEME: &str = "kolux-chord:";
 
-/// Runs in a tab's main frame before the page's own script (row 954, BROW-001): the page's
-/// `window.close()` does nothing. wry answers the engine's close request by destroying the tab's
-/// window, which left a dead page under the "stopped responding" overlay. Popups do not get it:
-/// a sign-in popup closes itself when it is done.
+/// Runs in a tab before the page's own script (row 954, BROW-001): the page's `window.close()`
+/// does nothing. On Windows the engine runs it in the tab's child frames too; popups do not get it
+/// (a sign-in popup closes itself when it is done), so a popup can still call `close` on the tab's
+/// window: `selfclose` rebuilds the tab then. wry answers the engine's close request by destroying
+/// the tab's window, which left a dead page under the "stopped responding" overlay.
 pub const NO_CLOSE_SCRIPT: &str = r#"(() => {
   const keep = function close() {};
   try { Object.defineProperty(window, "close", { value: keep, writable: false, configurable: false }); } catch (_) { try { window.close = keep; } catch (_) {} }
@@ -1163,6 +1167,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let chord_app = app.clone();
     let window_app = app.clone();
     let permission_app = app.clone();
+    #[cfg(windows)]
+    let self_close_app = app.clone();
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
     let download_app = app.clone();
@@ -1385,6 +1391,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         engine::permissions(id, &pw, permission_app);
         // T-286-b (APP-040): the engine's process failures become crash records when real.
         engine::watch_page_failures(id, &pw, crash_dir);
+        // Row 954 (b): a page that destroyed its own tab gets it built again.
+        engine::watch_self_close(id, &pw, self_close_app);
     });
     #[cfg(not(windows))]
     let _ = page;
@@ -2360,6 +2368,15 @@ mod tests {
         assert!(include_str!("browser.rs").contains(&install), "the tab builder installs it");
         // Popups close themselves when a sign-in ends, so they never get it.
         assert!(!include_str!("browser_popup.rs").contains("NO_CLOSE_SCRIPT"));
+    }
+
+    // Row 954 (b): the close request is observed on tab views only; a popup closing itself is normal.
+    #[test]
+    fn row954b_only_tab_views_hear_their_close_request() {
+        let hook = format!("engine::{}(id, &pw, self_close_app)", "watch_self_close"); // not spelled out, so this test cannot match itself
+        assert!(include_str!("browser.rs").contains(&hook), "the tab builder hooks it");
+        assert!(!include_str!("browser_popup.rs").contains("watch_self_close"));
+        assert!(!include_str!("browser_popup.rs").contains("selfclose"));
     }
 
     #[test]

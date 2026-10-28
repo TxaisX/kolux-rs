@@ -37,6 +37,7 @@ mod imp {
     use tauri::webview::cookie::SameSite;
     use std::path::PathBuf;
     use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, GetCookiesCompletedHandler, NavigationStartingEventHandler, PermissionRequestedEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
+    use webview2_com::WindowCloseRequestedEventHandler;
     use windows::core::{w, Interface, BOOL, HSTRING, PWSTR};
     use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -139,7 +140,8 @@ mod imp {
                 f.module = unsafe { take(|p| a3.FailureSourceModulePath(p)) };
             }
             let open = match source {
-                crash::Source::Page(id) => crate::browser::tabs().iter().any(|t| t.id == id),
+                // Row 954 (b): a report right after the tab's own close request is that close, not a crash.
+                crash::Source::Page(id) => crate::browser::tabs().iter().any(|t| t.id == id) && !crate::browser::selfclose::aftermath(id),
                 crash::Source::App => true,
             };
             let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -149,6 +151,21 @@ mod imp {
         let mut token = 0i64;
         // SAFETY: the handler lives as long as the engine holds it; the token is written once.
         let _ = unsafe { core.add_ProcessFailed(&handler, &mut token) };
+    }
+
+    /// Row 954 (b): observes the tab's close request. wry's own handler (registered first) has
+    /// already destroyed the tab's window by the time this one runs, and the event cannot be
+    /// vetoed, so the pane is told to build the tab again (browser_selfclose.rs decides).
+    pub fn watch_self_close(id: u32, controller: &ICoreWebView2Controller, app: tauri::AppHandle) {
+        // SAFETY: CoreWebView2 hands back the page's engine object.
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        let handler = WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+            crate::browser::selfclose::requested(&app, id);
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_WindowCloseRequested(&handler, &mut token) };
     }
 
     /// Forgets the engine's remembered certificate allowances for one page's engine.
@@ -435,6 +452,14 @@ pub fn watch_page_failures(id: u32, pw: &tauri::webview::PlatformWebview, dir: O
     if let Some(dir) = dir {
         imp::watch_failures(super::crash::Source::Page(id), &pw.controller(), dir);
     }
+}
+
+/// Row 954 (b): a tab (never a popup) hears its page's close request (main thread, from
+/// `browser_open`'s web view callback). Off Windows there is no such hook: the engine there
+/// closes a tab's view without telling Kolux, and `NO_CLOSE_SCRIPT` is the only guard.
+#[cfg(windows)]
+pub fn watch_self_close(id: u32, pw: &tauri::webview::PlatformWebview, app: AppHandle) {
+    imp::watch_self_close(id, &pw.controller(), app);
 }
 
 /// T-286-b (APP-040): the app's own view reports its engine's process failures (an interface

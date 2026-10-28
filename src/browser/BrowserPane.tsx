@@ -24,6 +24,7 @@ import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as s
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
 import { namesPane, openPage, type ProfileEvent, reopenPage } from "./reopen";
+import { SELF_CLOSE_EVENT, type SelfClosed, selfCloseNotice } from "./selfClose";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
@@ -321,6 +322,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           setBlocked((b) => blockedAgain(b, Date.now()));
           window.clearTimeout(blockedTimer.current);
           blockedTimer.current = window.setTimeout(() => setBlocked(null), BLOCKED_SHOW_MS);
+        }),
+      );
+      // Row 954 (b): a page destroyed this tab's window; it is built again at its last address,
+      // or stays closed when it keeps doing it. Either way the pane says so in one line.
+      unlisteners.push(
+        await listen<SelfClosed>(SELF_CLOSE_EVENT, (e) => {
+          if (e.payload.id !== id) return;
+          setNote(selfCloseNotice(e.payload));
+          feed({ t: "selfclosed", reopen: e.payload.reopen });
         }),
       );
       // T-272-b (BROW-032): a page here was refused a permission; the toolbar names it.
