@@ -691,7 +691,7 @@ pub(crate) fn ssh_config() -> String {
 
 /// GIT-060: `HOST/OWNER/REPO` for gh's `--repo`, from origin, so gh never has to guess the host
 /// from a remote it cannot read (an SSH alias, an Enterprise host).
-fn gh_repo_arg(worktree: &Path, ssh_config: &str) -> Option<String> {
+pub(crate) fn gh_repo_arg(worktree: &Path, ssh_config: &str) -> Option<String> {
     let url = run(&["remote", "get-url", "origin"], Some(worktree)).ok()?;
     github_repo(&url, ssh_config).map(|g| format!("{}/{}/{}", g.host, g.owner, g.name))
 }
@@ -706,11 +706,6 @@ pub async fn scm_github_repo(worktree: String) -> Option<GhRepo> {
 /// GIT-066: the signed-in gh login, read from gh's own config (no network); None without gh.
 pub fn gh_login() -> Option<String> {
     gh_account(&gh_program().ok()?, "github.com")
-}
-
-/// Row 76: true when gh holds a sign-in for `host`, which is how a GitHub Enterprise Server host is told from any other self-hosted one. No network.
-pub(crate) fn gh_signed_in_on(host: &str) -> bool {
-    gh_program().ok().and_then(|p| gh_account(&p, host)).is_some()
 }
 
 /// GIT-043 / GIT-066: the account gh is signed in with on `host`, from gh's own config (no network).
@@ -1029,11 +1024,16 @@ pub struct Check {
 }
 
 /// VIEW-073: the Checks panel's answer; `pr` is None when the branch has no pull request.
+/// Row 76: `provider`/`host` are set (and otherwise left out of the wire) when the remote is not GitHub, so gh was never asked.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default)]
 pub struct PrChecks {
     pub pr: Option<Pr>,
     pub conflict: bool,
     pub checks: Vec<Check>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 const CHECK_FIELDS: &str = "number,url,state,title,headRefName,isDraft,mergeable,statusCheckRollup";
@@ -1088,7 +1088,7 @@ pub fn checks_from(text: &str) -> Result<PrChecks, String> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok(PrChecks { pr: Some(pr), conflict: v["mergeable"] == "CONFLICTING", checks })
+    Ok(PrChecks { pr: Some(pr), conflict: v["mergeable"] == "CONFLICTING", checks, ..Default::default() })
 }
 
 /// VIEW-073: the checks of the pull request for `target` (a branch or a hand-linked PR link).
@@ -2179,7 +2179,9 @@ pub async fn scm_pr_checks(worktree: String, linked: Option<String>) -> Result<P
             return pr_checks_linked(&gh_program()?, dir, &url);
         }
         let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
-        pr_checks(&gh_program()?, dir, &branch)
+        // Row 76: gh is asked only for a GitHub remote; any other provider answers "no pull request" and names itself.
+        let provider = crate::pr_review::provider_for(repo_id::primary_host(dir, &ssh_config())?.as_deref());
+        crate::pr_review::checks_for(&provider, || pr_checks(&gh_program()?, dir, &branch))
     })
     .await
     .map_err(|e| e.to_string())?

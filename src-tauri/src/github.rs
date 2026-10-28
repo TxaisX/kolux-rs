@@ -183,7 +183,7 @@ pub(crate) fn host_allowed(gh: &Path, host: &str) -> Result<(), String> {
 /// How long one `gh config get` may take (it reads gh's own config files and goes nowhere).
 const GH_CONFIG_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(), String> {
+pub(crate) fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(), String> {
     host_allowed_within(gh, host, gh_host, GH_CONFIG_LIMIT)
 }
 
@@ -192,7 +192,7 @@ fn host_allowed_within(gh: &Path, host: &str, gh_host: Option<&str>, limit: std:
 }
 
 /// The gate with the `gh config get` reader handed in, so a test can make a read fail.
-fn host_allowed_reading(gh: &Path, host: &str, gh_host: Option<&str>, read: &dyn Fn(&[&str]) -> ConfigRead) -> Result<(), String> {
+pub(crate) fn host_allowed_reading(gh: &Path, host: &str, gh_host: Option<&str>, read: &dyn Fn(&[&str]) -> ConfigRead) -> Result<(), String> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -240,7 +240,7 @@ fn host_allowed_reading(gh: &Path, host: &str, gh_host: Option<&str>, read: &dyn
 }
 
 /// What one `gh config get` came to.
-enum ConfigRead {
+pub(crate) enum ConfigRead {
     Value(String),
     Unset,
     Failed,

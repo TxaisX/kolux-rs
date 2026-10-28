@@ -153,12 +153,12 @@ export default function PrStart({ dir, onCreated }: Props) {
       {facts ? (
         <div className="pr-start-review" data-pr-review={facts.lookup.kind}>
           {reviewLines(facts).map((line, i) => (
-            <div key={i} className={`sb-hint${facts.lookup.kind === "failed" && i === 0 ? " warn" : ""}`}>
+            <div key={i} className={facts.lookup.kind === "failed" && i === 0 ? "note warn" : "sb-hint"}>
               {line}
             </div>
           ))}
           {facts.lookup.kind === "found" && (
-            <button className="btn" data-pr-linked-open onClick={() => void invoke("open_external", { url: facts.lookup.kind === "found" ? facts.lookup.pr.url : "" })}>
+            <button type="button" className="btn" data-pr-linked-open onClick={() => void invoke("open_external", { url: facts.lookup.kind === "found" ? facts.lookup.pr.url : "" }).catch((err) => fail(String(err)))}>
               Open pull request
             </button>
           )}

@@ -3,7 +3,8 @@
 import type { Pr } from "./model";
 
 export type Check = { name: string; outcome: "passed" | "failed" | "running" | "skipped" | "cancelled" | "unresolved" | "neutral"; workflow?: string | null; link?: string | null; started?: string | null; finished?: string | null; description?: string | null };
-export type PrChecks = { pr: Pr | null; conflict: boolean; checks: Check[] };
+/** `provider`/`host` are sent only for a remote that is not GitHub (row 76): gh was not asked, and the answer is "no pull request". */
+export type PrChecks = { pr: Pr | null; conflict: boolean; checks: Check[]; provider?: string; host?: string | null };
 
 /** How often running checks are asked about again while the panel is in view. */
 export const CHECKS_POLL_MS = 15_000;
@@ -62,4 +63,15 @@ export function showing(pr: Pr | null | undefined, unlinked: Unlinked | undefine
   if (!pr || hostUnlinked(pr)) return { kind: "none" };
   if (unlinked && unlinked.number === pr.number) return { kind: "unlinked", pr: unlinked };
   return { kind: "pr", pr };
+}
+
+export type PanelBody = "workspace" | "error" | "looking" | "unlinked" | "start" | "review";
+/** Row 76: which body the Checks panel draws. A non-GitHub remote answers without an error and without a pull request, so it is
+ *  "start": the composer, which says the lookup is not available there, never the gh sign-in banner an error would bring. */
+export function panelBody(p: { dir: string | null; error: string | null; data: PrChecks | null; view: Showing["kind"] | null }): PanelBody {
+  if (p.dir === null) return "workspace";
+  if (p.error) return "error";
+  if (!p.data) return "looking";
+  if (p.view === "unlinked") return "unlinked";
+  return p.view === "pr" ? "review" : "start";
 }

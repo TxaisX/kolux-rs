@@ -14,7 +14,7 @@ import CommentsPanel from "./CommentsPanel";
 import ConflictPanel from "./ConflictPanel";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
-import { CHECKS_POLL_MS, CHECKS_UNLINKED_KEY, checksSummary, reuseNoPr, showing, stillRunning, unlinkedPrs, withUnlinkedPr, type PrChecks } from "./checks";
+import { CHECKS_POLL_MS, CHECKS_UNLINKED_KEY, checksSummary, panelBody, reuseNoPr, showing, stillRunning, unlinkedPrs, withUnlinkedPr, type PrChecks } from "./checks";
 import { prStateWord } from "./model";
 import { recordChecks } from "./prSearch";
 import { CHECK_CAP, capped, checkGroups } from "./review";
@@ -86,6 +86,7 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
   const pr = view?.kind === "pr" ? view.pr : null;
   const unlink = () => dir !== null && pr && void save({ [CHECKS_UNLINKED_KEY]: withUnlinkedPr(unlinkedAll, dir, { number: pr.number, url: pr.url }) });
   const linkAgain = () => dir !== null && void save({ [CHECKS_UNLINKED_KEY]: withUnlinkedPr(unlinkedAll, dir, null) });
+  const body = panelBody({ dir, error: shown?.error ?? null, data, view: view?.kind ?? null });
   return (
     <aside className="sidebar-wrap right">
       <div className="sidebar scm checks-panel">
@@ -102,11 +103,11 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
         </div>
         {dir === null ? (
           <div className="sb-hint">Open a workspace to see its pull request's checks.</div>
-        ) : shown?.error ? (
-          classify(shown.error) !== "other" ? (
-            <GhBanner error={shown.error} onRetry={() => load(true)} />
+        ) : body === "error" ? (
+          classify(shown!.error!) !== "other" ? (
+            <GhBanner error={shown!.error!} onRetry={() => load(true)} />
           ) : (
-            <div className="note error">The checks could not be read: {shown.error}</div>
+            <div className="note error">The checks could not be read: {shown!.error}</div>
           )
         ) : !data ? (
           <div className="sb-hint">Looking for this branch's pull request…</div>
@@ -117,7 +118,7 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
               Link again
             </button>
           </div>
-        ) : !pr ? (
+        ) : body === "start" || !pr ? (
           <PrStart dir={dir} onCreated={() => load(true)} />
         ) : (
           <>

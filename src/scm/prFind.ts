@@ -9,12 +9,12 @@ import { prStateWord, type Pr, type Status } from "./model";
 
 export type ReviewLookup =
   | { kind: "found"; pr: Pr; target: string | null }
-  | { kind: "none" }
+  | { kind: "none"; repo: string | null }
   | { kind: "unsupported"; provider: "gitlab" | "other" | "none"; host: string | null }
   | { kind: "failed"; message: string };
 export type ReviewFacts = { lookup: ReviewLookup; push: PushTarget | null };
 
-type Answer = { provider?: string; host?: string | null; pr?: Pr | null };
+type Answer = { provider?: string; host?: string | null; pr?: Pr | null; repo?: string | null };
 type FindArgs = { remoteBranch: string | null; forkOwner: string | null; defaultBranch: string };
 export type FindPorts = {
   find: (dir: string, a: FindArgs) => Promise<Answer>;
@@ -33,7 +33,7 @@ const ownerOf = (fork: string | null | undefined): string | null => /^([\w.-]+)\
 
 /** One lookup for this branch. It never throws: a failure is a `failed` answer. */
 export async function readReview(dir: string, status: Pick<Status, "branch" | "base">, ports: FindPorts = realFindPorts): Promise<ReviewFacts> {
-  if (!status.branch) return { lookup: { kind: "none" }, push: null };
+  if (!status.branch) return { lookup: { kind: "none", repo: null }, push: null };
   const push = await ports.pushTarget(dir).catch(() => null);
   return { lookup: await lookupOf(dir, status, push, ports), push };
 }
@@ -42,7 +42,7 @@ async function lookupOf(dir: string, status: Pick<Status, "base">, push: PushTar
   try {
     const a = await ports.find(dir, { remoteBranch: push?.remoteBranch ?? null, forkOwner: ownerOf(push?.fork), defaultBranch: (status.base ?? "").replace(/^origin\//, "") });
     if (a.provider === "gitlab" || a.provider === "other" || a.provider === "none") return { kind: "unsupported", provider: a.provider, host: a.host ?? null };
-    return a.pr ? { kind: "found", pr: a.pr, target: reviewTarget(a.pr.url) } : { kind: "none" };
+    return a.pr ? { kind: "found", pr: a.pr, target: reviewTarget(a.pr.url) } : { kind: "none", repo: a.repo ?? null };
   } catch (err) {
     return { kind: "failed", message: String(err) };
   }
@@ -55,7 +55,7 @@ export function reviewLines(f: ReviewFacts): string[] {
   if (l.kind === "found") {
     out.push(`Pull request #${l.pr.number} (${prStateWord(l.pr)})${l.pr.title ? `: ${l.pr.title}` : ""}`);
     if (l.target) out.push(`Targets ${l.target}`);
-  } else if (l.kind === "none") out.push("No pull request for this branch yet.");
+  } else if (l.kind === "none") out.push(`No pull request for this branch in ${l.repo ?? "origin"}.`); // gh searches origin, which is the fork when the repository was forked
   else if (l.kind === "unsupported") out.push(`Finding a linked pull request or merge request is not available for ${l.host ?? "this repository"}.`);
   else out.push(`The linked pull request could not be looked up: ${l.message}`);
   const fork = forkNotice(f.push);

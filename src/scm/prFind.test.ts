@@ -16,7 +16,7 @@ import { readReview, reviewKey, reviewLines, reviewSettle, reviewShown, type Rev
 const status = { branch: "feat", base: "origin/main", upstream: "origin/feat", upstreamRemote: "origin" } as unknown as Status;
 const pr = { number: 12, url: "https://github.com/acme/app/pull/12", state: "OPEN", title: "Add login", head: "feat", draft: false };
 const findCalls = () => calls.filter((c) => c.cmd === "scm_pr_find");
-const github = (found: unknown) => (cmd: string) => (cmd === "scm_pr_find" ? { provider: "github", host: null, pr: found } : null);
+const github = (found: unknown, repo: string | null = "github.com/acme/app") => (cmd: string) => (cmd === "scm_pr_find" ? { provider: "github", host: null, pr: found, repo } : null);
 
 describe("row 76 linked pull request lookup in the composer", () => {
   beforeEach(() => {
@@ -34,11 +34,23 @@ describe("row 76 linked pull request lookup in the composer", () => {
     expect(reviewLines(f).some((l) => l.includes("acme/app"))).toBe(true);
   });
 
-  it("a GitHub remote with no pull request says there is none yet", async () => {
+  it("a GitHub remote with no pull request names the repository that was searched", async () => {
     reply = github(null);
     const f = await readReview("C:/w", status);
-    expect(f.lookup).toEqual({ kind: "none" });
-    expect(reviewLines(f)).toEqual(["No pull request for this branch yet."]);
+    expect(f.lookup).toEqual({ kind: "none", repo: "github.com/acme/app" });
+    expect(reviewLines(f)).toEqual(["No pull request for this branch in github.com/acme/app."]);
+  });
+
+  it("with the user's fork as origin the none answer names the fork, never the upstream it was forked from", async () => {
+    reply = github(null, "github.com/me/app");
+    const text = reviewLines(await readReview("C:/w", status)).join(" ");
+    expect(text).toContain("in github.com/me/app.");
+    expect(text).not.toMatch(/acme|yet/);
+  });
+
+  it("a none answer without a repository still says where gh looked", async () => {
+    reply = github(null, null);
+    expect(reviewLines(await readReview("C:/w", status))).toEqual(["No pull request for this branch in origin."]);
   });
 
   it("a branch pushed to a fork asks with the fork's owner and renamed branch and names the fork", async () => {
@@ -92,12 +104,12 @@ describe("row 76 linked pull request lookup in the composer", () => {
   it("a detached head asks nothing", async () => {
     const f = await readReview("C:/w", { ...status, branch: null });
     expect(calls).toHaveLength(0);
-    expect(f.lookup).toEqual({ kind: "none" });
+    expect(f.lookup).toEqual({ kind: "none", repo: null });
   });
 
   it("an answer for another worktree or branch is never shown, and a late stale answer does not replace the current one", async () => {
     const a: ReviewFacts = { lookup: { kind: "found", pr, target: null }, push: null };
-    const b: ReviewFacts = { lookup: { kind: "none" }, push: null };
+    const b: ReviewFacts = { lookup: { kind: "none", repo: null }, push: null };
     const keyA = reviewKey("C:/a", "feat");
     const keyB = reviewKey("C:/b", "feat");
     expect(keyA).not.toBe(keyB);
