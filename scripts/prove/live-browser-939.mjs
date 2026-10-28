@@ -68,7 +68,17 @@ const outsideRows = (seen) => rowsOf(seen).filter((r) => !local(r.split(" -> ")[
 async function restart(ctx, log) {
   const { app } = ctx;
   const closed = await app.closeAndCount(app.pid);
-  log(`quit: ${closed.how}; pre-close tree ${closed.tree.length} (${app.byName(closed.tree)}); survivors ${closed.survivors.length}`);
+  log(`quit: ${closed.how}; pre-close tree ${closed.tree.length} (${app.byName(closed.tree)}); survivors ${closed.survivors.length} (${app.byName(closed.survivors)})`);
+  // Leftover webview processes still hold the data folder with the old arguments; the engine refuses a second set on one folder.
+  const alive = async (pid) => (await run("tasklist", ["/FI", `PID eq ${pid}`, "/NH"], { windowsHide: true })).stdout.includes(String(pid));
+  for (let i = 0; i < 40; i++) {
+    const left = [];
+    for (const p of closed.survivors) if (await alive(p.pid ?? p)) left.push(p.pid ?? p);
+    if (!left.length) break;
+    if (i === 20) for (const pid of left) await run("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }).catch(() => {});
+    await sleep(500);
+  }
+  log("survivors of the old tree gone before relaunch");
   await app.relaunch();
   await dismissFirstRun(app, log);
   await sleep(5000);
@@ -77,6 +87,7 @@ async function restart(ctx, log) {
 
 export async function run939(ctx, { check, log }, p) {
   const { app } = ctx;
+  app.rawKey = ctx.rawKey; // savedProxy (live-T-323-proxy.mjs) presses the Settings chord through the app object
   const S = (n, name, ok, detail) => check(`step ${n}: ${name}`, ok, detail);
 
   // ---- Step 1: save the proxy (Settings > Network proxy), restart, open the page
