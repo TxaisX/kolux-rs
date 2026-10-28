@@ -92,3 +92,39 @@ LIVE 2026-10-28 (real Claude, test account) VIEW-025-12b: FAIL
     at async file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-025-reproof.mjs:10:1
   close: [true,"window close over CDP, exited in 3.5 s; pre-close tree 10 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, claude.exe x1); survivors 0 (none)"]
   RESULT: FAIL
+
+<<live-v12:SUBAGENT-418>>
+LIVE 2026-10-28 (real Claude, test account) SUBAGENT-418: FAIL
+  LIVE 2026-10-28 SUBAGENT-418: claude.exe <home>/.local/bin/claude.exe, version 2.1.312 (Claude Code); account <account-a>; scratch repo under G:/Temp/live-v12/work
+  launching: pnpm tauri dev (identifier com.txaisxiong.kolux-rs.prove, vite 1470, CDP 9290; log G:\Temp\live-v12\run-SUBAGENT-418\tauri-dev.log)
+  app pid 49416 (G:\Dev\kolux-rs-lanes\prove\src-tauri\target\debug\kolux-rs.exe); window: moved off-screen
+    (first-run screen "Yes, I trust": chose Yes, I trust this folder for the scratch repo)
+  claude ready: ❯ Try "create a util logging.py that..." | ────────────────────────────────────────────────────────────────────────────────────────────────────────────── | ⏸ manual mode on · ← for agents                                                         ◐ medium · /effort
+  ask s1.txt: first permission event {"t":1793177899369,"paneKey":3,"terminal":2,"state":"permission","tool":"Bash","boundary":false,"children":[{"id":"a5f96080e605147e6","kind":"general-purpose","state":"permission","started":1793177896583}],"reply":"The sub-agent is still running. I'll reply wi
+  (A) Board card before: {"word":"Needs you","line":"Bash","buttons":["Approve","Deny"]}; event tool Bash
+  (A) screenshot before: G:/Temp/live-v12-logs/SUBAGENT-418-a-before.png
+  PASS (A) Deny clicked on the card: button found
+  (A) sub-agent prompt, Board Deny, card word: 285ms Working > 6481ms Done
+  FAIL (A) sub-agent prompt, Board Deny, card word: at 6000 ms out of Permission and not Working: at 6 s: Working
+  PASS (A) sub-agent prompt, Board Deny, card word: still not Permission/Working at 12 s: at 12 s: Done
+  (A) screenshot after: G:/Temp/live-v12-logs/SUBAGENT-418-a-after.png
+  PASS (A) the command did not run (s1.txt missing): 
+  ask s2.txt: first permission event {"t":1793177921313,"paneKey":3,"terminal":2,"state":"permission","tool":"Bash","boundary":false,"children":[{"id":"a70a0f822deee824d","kind":"general-purpose","state":"permission","started":1793177918753}],"reply":"The sub-agent is still running. I'll reply on
+  terminal_write target: id undefined generation 1793177885097416 (host sessions 0: )
+  ERROR TypeError: Cannot read properties of undefined (reading 'id')
+    at writeEsc (file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-SUBAGENT-418.mjs:45:51)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-SUBAGENT-418.mjs:90:3
+    at async scenario (file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-claude-common.mjs:108:5)
+    at async file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-SUBAGENT-418.mjs:13:1
+  close: [true,"window close over CDP, exited in 3.2 s; pre-close tree 10 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, claude.exe x1); survivors 0 (none)"]
+  RESULT: FAIL
+
+BATCH 12 SUMMARY (2026-10-28, after MERGE 413 row 992, main b32d7981 for the last run)
+  (a) Board card Deny at a plain prompt: PASS twice (VIEW-025-12 and -12b): card Working at ~0.25 s, Stopped (Interrupted) at 3.7 s / 4.3 s, still Stopped at 12 s, a.txt never created. The VIEW-025 b1/b2 boxes stay ticked on that reading.
+  (b) Esc typed into the pane (CDP key Escape on the focused terminal): FAIL twice; the pane stayed "Needs you" for 12 s and the screen still showed the permission menu (second run waited for "Esc to cancel" first). NOT proven a product bug: a CDP-dispatched Escape reaches the textarea as a DOM keydown (prevented) but live-ESC-diag.mjs (plain shell) could not show a byte reaching the pty, so this may be the harness's key path. Row 992's byte-level path (terminal_write "\x1b") is untested; scripts/prove/live-SUBAGENT-418.mjs (case C) does it. Unproven, not ticked, no after.md BUG row.
+  (c) chat card Deny: never reached in run 1 or 2 (the prompt after (b) stayed open); case D of live-SUBAGENT-418.mjs does it first-hand. Unproven.
+  Session cap: 12 real Claude sessions used in batch 12 (ROW-989 x2, SAFE-023 x1, SAFE-024 x6, VIEW-025 x2, SUBAGENT-418 x1) plus one `claude auth status` probe (no model call, loggedIn true).
+
+TASK 4 NOTE (sub-agent prompt, after MERGE 418 = 7012edc5, observe + pass/fail; run SUBAGENT-418 above, case A)
+  A fixed prompt made Claude start one Task sub-agent that ran one Bash command (touch s1.txt). Kolux's hook event arrived as state permission, tool Bash, with children [{kind general-purpose, state permission}], and the Board card read "Needs you / Bash" with Approve and Deny. Deny from the card: the card word went Working at 0.29 s and stayed Working until it read Done at 6.5 s (the main agent kept talking after the refusal: its reply began "The sub-agent is still running. I'll reply ..."), s1.txt was never created; the pane left Permission at once but, read strictly (not Working at 6 s), it missed the 6 s limit by about 0.5 s, so case A is recorded FAIL on the strict reading (a refusal does not stop the turn, unlike the Esc interrupt of case (a) above, where the pane read Stopped at ~4 s). Esc at the sub-agent's prompt and the count of hook lines in kolux.log after it were NOT measured: the script's pty lookup was wrong (terminal_host_sessions is empty in the dev app; the terminal id is on the hook event, now fixed in the script) and the session cap was used up. No box was ticked.
