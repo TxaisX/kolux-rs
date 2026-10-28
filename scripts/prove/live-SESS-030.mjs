@@ -5,7 +5,7 @@
 // the process, one Claude only, the pane key unchanged, and the agent's answer after the reopen (it names the code only the first prompt held).
 import { readFileSync } from "node:fs";
 import { scenario, send, sleep, excerpt } from "./live-claude-common.mjs";
-import { waitFor, CLAUDE } from "./live-common.mjs";
+import { waitFor, CLAUDE, dismissFirstRun } from "./live-common.mjs";
 
 const mode = process.argv[2] === "b2" ? "b2" : "b1";
 const CODE = mode === "b1" ? "blue-heron-5521" : "green-otter-6637";
@@ -70,8 +70,15 @@ await scenario(
     h.check("no Claude of this run is left between the two launches", stillClaude === "0", `count ${stillClaude}`);
 
     // Launch 2: the same profile.
-    await app.relaunch();
+    try {
+      await app.relaunch();
+    } catch (e) {
+      const body = await app.evalJs(`document.body.innerText.replace(/\\s+/g, " ").slice(0, 500) + " || root children " + (document.getElementById("root")?.children.length ?? "none")`).catch((x) => `no page: ${x.message}`);
+      h.log(`relaunch did not reach the sidebar: ${e.message}; page says: ${body}; screenshot ${await h.shot("relaunch-stuck")}`);
+      throw e;
+    }
     await app.evalJs(`(async () => { window.__proveEvents = []; const cb = window.__TAURI_INTERNALS__.transformCallback((e) => window.__proveEvents.push({ t: Date.now(), ...e.payload })); await window.__TAURI_INTERNALS__.invoke("plugin:event|listen", { event: "agent-status", target: { kind: "Any" }, handler: cb }); return true; })()`);
+    h.log(`first-run guide on the relaunched profile: ${(await dismissFirstRun(app, h.log)) ? "closed" : "still open"}`);
     await waitFor("a Claude pane back", () => app.shown(CLAUDE), 90000, 500);
     await waitFor("its input field", () => app.exists(`${CLAUDE} .xterm-helper-textarea`), 30000, 500);
     const screen2 = await ctx.ready(120000);
@@ -85,14 +92,15 @@ await scenario(
     h.check("the same pane key carries the session", keptKey === pane1?.key, `${keptKey} vs ${pane1?.key}`);
 
     // The conversation itself: ask for the code, which only the first prompt held.
-    const n0 = count(flat(await ctx.screenText()), CODE);
+    const rowsWith = async () => (await ctx.screenText()).split("\n").map((l) => flat(l).trim()).filter((l) => l.includes(CODE));
+    const n0 = (await rowsWith()).length;
     const t2 = await send(ctx, "What code did I ask you to remember? Reply with the code only.");
     const sawWork = await ctx.waitEvent((e) => e.t >= t2 && e.state === "done", 120000, "the agent to answer").then(() => true, () => false);
     await sleep(1500);
-    const t = flat(await ctx.screenText());
-    const n1 = count(t, CODE);
-    h.log(`after the reopen: the code is on screen ${n0} time(s) before the question, ${n1} after; answer finished ${sawWork}; screen tail: ${excerpt(await ctx.screenText(), 5)}`);
-    h.check("the resumed agent answers with the code from before the quit", sawWork && n1 > n0 && n1 >= 1, `before ${n0}, after ${n1}`);
+    const rows = await rowsWith();
+    const answer = rows.find((l) => new RegExp(`^●\\s*\`?${CODE}`).test(l));
+    h.log(`after the reopen: screen rows holding the code: ${n0} before the question, ${rows.length} after; answer row: ${answer ?? "(none)"}; rows: ${JSON.stringify(rows.map((l) => l.slice(0, 80)))}; tail: ${excerpt(await ctx.screenText(), 6)}`);
+    h.check("the resumed agent answers with the code from before the quit", sawWork && !!answer, `answer row ${answer ?? "none"}`);
     const key2 = await ctx.paneKey();
     h.log(`launch 2 events: ${(await ctx.events()).map((e) => `${e.state}${e.tool ? `/${e.tool}` : ""}`).join(">")}; pane key ${key2}`);
     h.log(`screenshot: ${await h.shot("after")}`);
