@@ -32,7 +32,7 @@ const M2 = `APP052-B${tag}-END`;
 // The home folder is written as %USERPROFILE% in every log and evidence line.
 // (Taken from LOCALAPPDATA: USERPROFILE points at a scratch home while this script runs.)
 const HOME = (LA ?? "").replace(/[\\/]AppData[\\/]Local$/i, "");
-const homeRe = HOME ? new RegExp(HOME.split(/[\\/]/).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\\\/]"), "gi") : null;
+const homeRe = HOME ? new RegExp(HOME.split(/[\\/]/).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\\\/]+"), "gi") : null;
 const mask = (s) => (homeRe ? s.replace(homeRe, "%USERPROFILE%") : s);
 const rep = reporter();
 const ev = rep.lines;
