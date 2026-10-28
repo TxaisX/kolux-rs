@@ -8,6 +8,33 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Counts every finished `git worktree add/remove/move/prune/repair` Kolux ran, by any route, so a
+/// reader that cached the worktree list (the file fence) knows its copy is stale.
+static WORKTREE_CHANGES: AtomicU64 = AtomicU64::new(0);
+
+pub fn worktree_changes() -> u64 {
+    WORKTREE_CHANGES.load(Ordering::SeqCst)
+}
+
+/// Bumps [`WORKTREE_CHANGES`] when dropped, i.e. after the command ended, pass or fail (a failed add can still leave a folder).
+struct WorktreeChange(bool);
+
+impl WorktreeChange {
+    fn watch(args: &[&str]) -> Self {
+        let sub = args.iter().position(|a| *a == "worktree").and_then(|i| args.get(i + 1));
+        WorktreeChange(sub.is_some_and(|s| ["add", "remove", "move", "prune", "repair"].contains(s)))
+    }
+}
+
+impl Drop for WorktreeChange {
+    fn drop(&mut self) {
+        if self.0 {
+            WORKTREE_CHANGES.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Git {
@@ -216,6 +243,7 @@ fn gated(args: &[&str], cwd: Option<&Path>, limiter: &Limiter, limit: std::time:
 
 /// git with no turn and no time limit: the long-running and writing commands.
 fn plain_output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
+    let _changed = WorktreeChange::watch(args);
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(out.stdout)
@@ -453,6 +481,7 @@ fn run_within_raw(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration)
 fn bytes_within(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration) -> Result<Vec<u8>, String> {
     use std::io::Read;
     use std::process::Stdio;
+    let _changed = WorktreeChange::watch(args);
     let mut child = command(args, cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
     let drain = |mut r: Box<dyn Read + Send>| {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1133,6 +1162,17 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn cli018_only_commands_that_change_the_worktree_list_count_as_a_change() {
+        let counts = |args: &[&str]| WorktreeChange::watch(args).0;
+        for args in [&["worktree", "add", "-b", "x", "d", "main"][..], &["-c", "gc.auto=0", "worktree", "remove", "d"], &["worktree", "move", "a", "b"], &["worktree", "prune"], &["worktree", "repair"]] {
+            assert!(counts(args), "{args:?}");
+        }
+        for args in [&["worktree", "list", "--porcelain"][..], &["status"], &["branch", "-D", "worktree"], &["worktree"], &[]] {
+            assert!(!counts(args), "{args:?}");
+        }
     }
 
     #[test]
