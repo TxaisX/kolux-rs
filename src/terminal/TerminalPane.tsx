@@ -32,7 +32,7 @@ import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { notePrinted } from "../browser/preview";
-import { encodeHistory, replay, replayGate, restoreTail, viewTop } from "./history";
+import { afterReplay, encodeHistory, replay, replayGate, viewTop } from "./history";
 import { claimsClick } from "./linkClick";
 import { modeView, resetAfterExit } from "./modeReset";
 import { dragWantsHint, SHIFT_HINT, shownAgain, WheelDrain, type KeptView } from "./mouseFeel";
@@ -992,6 +992,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         // of them (an idle shell writes nothing more) and lets go at the first key. A key, not
         // onData: the terminal's own answers to the shell's start-up questions go through onData.
         let keepInView = false;
+        let replayedOld = false;
         if (restored) {
           setRestoredMark(resumed === false ? "restored without resume" : "restored");
           const unmark = () => {
@@ -1001,18 +1002,16 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           };
           const key = term.onKey(unmark);
           box.current?.addEventListener("mousedown", unmark);
+          // APP-052: read once the service linked, which first adds what a kept terminal printed with no window open.
+          await tauriService.info().catch(() => null);
+          if (!alive) return;
           const saved = await invoke<string>("terminal_history", { paneKey: number }).catch(() => "");
           if (!alive) return;
           const text = replay(saved);
           if (text) {
             await replayed.during(() => new Promise<void>((done) => term.write(text, done)));
             if (!alive) return;
-            const tail = restoreTail(term.buffer.normal, term.rows);
-            await replayed.during(() => new Promise<void>((done) => term.write(tail, done)));
-            if (!alive) return;
-            await invoke("terminal_history_append", { paneKey: number, data: encodeHistory(tail) }).catch(() => {});
-            if (!alive) return;
-            keepInView = true;
+            replayedOld = true;
           }
         }
         // TERM-113: a pane that is not on screen at mount lets the shown ones start first.
@@ -1032,6 +1031,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           }
           serviceRef.current = back.service;
           if (back.kind === "replaced") setFlash("The terminal service was replaced; the pane starts again on the new one");
+        }
+        const tail = replayedOld ? afterReplay(term.buffer.normal, term.rows, back?.kind === "attached") : "";
+        if (tail) {
+          await replayed.during(() => new Promise<void>((done) => term.write(tail, done)));
+          if (!alive) return;
+          await invoke("terminal_history_append", { paneKey: number, data: encodeHistory(tail) }).catch(() => {});
+          if (!alive) return;
+          keepInView = true;
         }
         // TERM-088: the program whose history was just replayed is gone unless the service still runs it (attached);
         // what it left on (mouse capture first) is turned off, so a plain drag selects again in the new shell.

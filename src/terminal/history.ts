@@ -43,6 +43,13 @@ export function restoreTail(buf: Rows, rows: number): string {
   return RESET + placeNote(buf, rows) + NOTE + "\r\n".repeat(rows) + "\x1b[H";
 }
 
+/** APP-052: what follows the replay once the pane knows what it reattached to. A terminal the service
+ *  kept running is the program the replay ends with, so its screen stays as drawn (pushing it up left
+ *  the pane blank, as an idle shell redraws nothing); only a new shell gets `restoreTail`. */
+export function afterReplay(buf: Rows, rows: number, takenBack: boolean): string {
+  return takenBack ? "" : restoreTail(buf, rows);
+}
+
 /** The scrollback row to show at the top so the row the cursor is on (the new prompt) is the last
  *  one in view, with the note and the old output above it. */
 export function viewTop(buf: { baseY: number }, rows: number): number {
