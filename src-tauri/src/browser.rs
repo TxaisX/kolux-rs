@@ -1961,15 +1961,9 @@ fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>,
     let shared = || proxy::DEFAULT_FOLDER.to_string();
     let profile = profile.or_else(|| given_profile(rebuild, url));
     let Ok(root) = profiles::root() else { return (b, true, shared()) };
-    let mut store = profiles::load(&root);
-    let before = store.tabs.clone();
     // Row 954 (c): a rebuild (crash, self-close) passes no profile but keeps the tab's saved one; any other open rewrites the row.
-    let profile = profiles::resolve_open(&mut store, id, profile, rebuild);
-    if store.tabs != before {
-        let _ = profiles::save(&root, &store);
-    }
+    let (profile, spoof) = profiles::open_tab(&root, id, profile, rebuild);
     let Some(p) = profile else { return (b, true, shared()) };
-    let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
         Some(dir) => {
             profiles::page_opened(id, &p); // after-list 153: a deleted profile's folder waits for its last page

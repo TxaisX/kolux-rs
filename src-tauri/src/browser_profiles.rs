@@ -23,7 +23,7 @@ pub struct Profile {
     pub ua_spoof: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Store {
     #[serde(default)]
     pub profiles: Vec<Profile>,
@@ -107,7 +107,8 @@ pub fn tab_profile(store: &Store, page: u32) -> String {
 pub fn resolve_open(store: &mut Store, page: u32, given: Option<String>, rebuild: bool) -> Option<String> {
     let keep_saved = given.is_none() && rebuild;
     let want = given.or_else(|| rebuild.then(|| tab_profile(store, page))).filter(|p| p != DEFAULT);
-    if keep_saved {
+    // A saved row naming a profile that is gone falls through to the default and clears the row.
+    if keep_saved && want.as_deref().is_none_or(|p| get(store, p).is_some()) {
         return want;
     }
     if set_tab(store, page, want.as_deref().unwrap_or(DEFAULT)).is_err() {
@@ -115,6 +116,17 @@ pub fn resolve_open(store: &mut Store, page: u32, given: Option<String>, rebuild
         return None;
     }
     want
+}
+
+/// What a pane's open does to the saved store, under the store lock: resolves the profile (see
+/// `resolve_open`), saves the row change and answers the profile plus whether it spoofs the identity.
+pub fn open_tab(root: &Path, page: u32, given: Option<String>, rebuild: bool) -> (Option<String>, bool) {
+    let (out, _) = edit(root, |s| {
+        let profile = resolve_open(s, page, given, rebuild);
+        let spoof = profile.as_deref().is_none_or(|p| spoofs(s, p));
+        (profile, spoof)
+    });
+    out
 }
 
 /// A copy of a profile (label "<label> copy"); with a page, that tab moves to the copy.
@@ -221,14 +233,40 @@ fn sweep() {
     }
 }
 
-pub fn load(root: &Path) -> Store {
+fn read_file(root: &Path) -> Store {
     std::fs::read(root.join(FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Row 954 (e): one lock for every read-change-write of the store file; held load to save, never across an await.
+static STORE_LOCK: Mutex<()> = Mutex::new(());
+
+fn store_lock() -> std::sync::MutexGuard<'static, ()> {
+    STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A read of the store, never torn by a writer mid-save.
+pub fn load(root: &Path) -> Store {
+    let _g = store_lock();
+    read_file(root)
+}
+
+/// Loads the store, lets `f` change it and saves it when it changed, all under the store lock, so two
+/// writers (panes opening together, the command line) never overwrite each other's rows. The save
+/// result comes back beside `f`'s own.
+pub fn edit<R>(root: &Path, f: impl FnOnce(&mut Store) -> R) -> (R, Result<(), String>) {
+    let _g = store_lock();
+    let mut store = read_file(root);
+    let before = store.clone();
+    let out = f(&mut store);
+    let saved = if store == before { Ok(()) } else { save(root, &store) };
+    (out, saved)
 }
 
 pub fn save(root: &Path, store: &Store) -> Result<(), String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let text = serde_json::to_vec_pretty(store).map_err(|e| e.to_string())?;
-    std::fs::write(root.join(FILE), text).map_err(|e| format!("{}: {e}", root.join(FILE).display()))
+    let (file, tmp) = (root.join(FILE), root.join(format!("{FILE}.tmp")));
+    std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &file)).map_err(|e| format!("{}: {e}", file.display()))
 }
 
 /// The app's data folder, told by the app once a browser tab reports (the command line has no app
@@ -394,6 +432,66 @@ mod tests {
         assert_eq!(resolve_open(&mut s, 5, None, true), Some("work".into()), "a Retry too");
         assert_eq!(resolve_open(&mut s, 5, Some("default".into()), false), None, "an explicit default open clears the row");
         assert_eq!(resolve_open(&mut s, 5, None, true), None);
+    }
+
+    #[test]
+    fn row_954e_panes_opening_together_never_bring_back_each_others_stale_rows() {
+        let dir = scratch("race");
+        let tabs: Vec<u32> = (1..=24).collect();
+        for _ in 0..40 {
+            // Session 1 left a "work" row for every tab; session 2 restores them all in the default at once.
+            let mut s = Store::default();
+            create(&mut s, "Work", None, true).unwrap();
+            for t in &tabs {
+                set_tab(&mut s, *t, "work").unwrap();
+            }
+            save(&dir, &s).unwrap();
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(tabs.len()));
+            let joins: Vec<_> = tabs
+                .iter()
+                .map(|t| {
+                    let (dir, gate, t) = (dir.clone(), gate.clone(), *t);
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        open_tab(&dir, t, None, false)
+                    })
+                })
+                .collect();
+            for j in joins {
+                assert_eq!(j.join().unwrap(), (None, true));
+            }
+            let left = load(&dir).tabs;
+            assert!(left.is_empty(), "stale rows survived the parallel opens: {left:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_954e_edit_saves_only_a_changed_store_and_hands_back_the_save_result() {
+        let dir = scratch("edit");
+        let (made, saved) = edit(&dir, |s| create(s, "Work", None, true).map(|p| p.id));
+        assert_eq!((made, saved), (Ok("work".to_string()), Ok(())));
+        assert_eq!(load(&dir).profiles.len(), 1);
+        let before = std::fs::metadata(dir.join(FILE)).unwrap().modified().unwrap();
+        let (n, saved) = edit(&dir, |s| s.profiles.len());
+        assert_eq!((n, saved), (1, Ok(())));
+        assert_eq!(std::fs::metadata(dir.join(FILE)).unwrap().modified().unwrap(), before, "an unchanged store is not rewritten");
+        assert!(!dir.join(format!("{FILE}.tmp")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_954e_a_saved_row_naming_a_deleted_profile_rebuilds_in_the_default_and_is_cleared() {
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        set_tab(&mut s, 7, "work").unwrap();
+        // The profile goes but its row survives (a lost update, a hand edit).
+        s.profiles.clear();
+        assert_eq!(resolve_open(&mut s, 7, None, true), None, "a rebuild of a tab whose profile is gone runs in the default");
+        assert_eq!(tab_profile(&s, 7), DEFAULT, "the dead row is cleared");
+        create(&mut s, "Work", None, true).unwrap();
+        set_tab(&mut s, 7, "work").unwrap();
+        assert_eq!(resolve_open(&mut s, 7, None, true), Some("work".into()), "a live profile is still kept");
     }
 
     #[test]
