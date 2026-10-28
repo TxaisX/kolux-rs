@@ -189,6 +189,8 @@ pub struct Session {
     cancelled: bool,
     /// When that keystroke came (ms), so a turn that never sends its Stop settles anyway.
     cancelled_at: u64,
+    /// That cancel is a Claude Deny (card or typed Esc): its settle sets the busy children aside.
+    deny: bool,
     /// The current turn ended on a cancel; late tool events cannot bring it back to working.
     interrupted: bool,
     /// The tool ids the lead has started this turn, newest last (T-123-c).
@@ -198,6 +200,8 @@ pub struct Session {
     killed: Vec<String>,
     /// The tool ids a Claude Deny (card or typed Esc) refused: their late Post* never mean the turn went on.
     denied: Vec<String>,
+    /// Children a deny settle took off the roster; their own events or the interrupt's undo bring them back.
+    parked: Vec<Child>,
     /// Every tool the lead and the sub-agents started this turn, newest last (VIEW-025 b5).
     started: Vec<Started>,
     /// Hash of the input of the tool the lead's `pending` waits on.
@@ -293,8 +297,9 @@ impl Session {
         self.agent = Some(agent);
         // A sub-agent starting or starting a tool inside a cancel's grace proves the turn went on.
         if self.cancelled && self.child_alive(agent, name, event) {
-            self.cancelled = false;
+            self.drop_cancel();
         }
+        self.restore_parked(event);
         let before = self.resolved();
         let mut announce = None;
         // Council FIX-3 (chat e5412ff, FS1): the tool a sub-agent just started, named on the change.
@@ -401,9 +406,10 @@ impl Session {
         // the cancel proves it (goes_on): the cancel is dropped inside the grace, and a settled
         // interrupt is undone, its misread history line with it.
         if self.goes_on(agent, name, event) {
-            self.cancelled = false;
+            self.drop_cancel();
             if self.interrupted {
                 self.interrupted = false;
+                self.restore_all_parked();
                 self.own = Some("working");
                 if self.history.back().is_some_and(|e| e.state == "interrupted" && e.interrupted) {
                     self.history.pop_back();
@@ -428,10 +434,11 @@ impl Session {
                 self.prompt = change.prompt.clone();
                 self.pending = None;
                 self.interrupted = false;
-                self.cancelled = false;
+                self.drop_cancel();
                 self.tools.clear();
                 self.killed.clear();
                 self.denied.clear();
+                self.parked.clear();
                 self.started.clear();
                 self.reply = None;
                 self.own = Some("working");
@@ -439,7 +446,7 @@ impl Session {
             "Stop" => {
                 // T-120-b: Amp says itself when a turn was cancelled.
                 // STAT-013: Droid's stops never count a Ctrl+C as an interruption.
-                let ctrl_c = std::mem::take(&mut self.cancelled) && event.get("kolux_no_cancel").and_then(Value::as_bool) != Some(true);
+                let ctrl_c = self.drop_cancel() && event.get("kolux_no_cancel").and_then(Value::as_bool) != Some(true);
                 self.interrupted = ctrl_c || event.get("kolux_interrupted").and_then(Value::as_bool) == Some(true);
                 self.pending = None;
                 self.reply = str_of(event, "last_assistant_message").map(clean_reply);
@@ -452,7 +459,7 @@ impl Session {
             "StopFailure" => {
                 self.pending = None;
                 // A failure after a Kolux cancel is the interruption, not a stop (STAT-022).
-                if std::mem::take(&mut self.cancelled) {
+                if self.drop_cancel() {
                     self.interrupted = true;
                     self.own = Some("interrupted");
                 } else {
@@ -522,6 +529,7 @@ impl Session {
     fn mark_cancel(&mut self, deny: bool) {
         if self.own == Some("working") && !self.background && (deny || !self.children.iter().any(|c| c.state == "working")) {
             self.cancelled = true;
+            self.deny = deny;
             self.cancelled_at = now_ms();
             self.killed.clone_from(&self.tools);
             self.denied.clear();
@@ -566,6 +574,33 @@ impl Session {
             }
     }
 
+    /// Drops the cancel (and its deny mark); says whether one stood.
+    fn drop_cancel(&mut self) -> bool {
+        self.deny = false;
+        std::mem::take(&mut self.cancelled)
+    }
+
+    /// A child a deny settle set aside speaks again: it is back on the roster before its event is handled
+    /// (never for the denied tool's own late report, which proves nothing).
+    fn restore_parked(&mut self, event: &Value) {
+        let Some(id) = str_of(event, "agent_id") else { return };
+        let denied_tool = str_of(event, "tool_use_id").is_some_and(|t| self.denied.iter().any(|d| d == t));
+        if denied_tool || self.children.iter().any(|c| c.id == id) || self.children.len() >= MAX_CHILDREN {
+            return;
+        }
+        if let Some(i) = self.parked.iter().position(|c| c.id == id) {
+            let child = self.parked.remove(i);
+            self.children.push(child);
+        }
+    }
+
+    /// The interrupt was undone: every child set aside is on the roster again.
+    fn restore_all_parked(&mut self) {
+        let room = MAX_CHILDREN.saturating_sub(self.children.len()).min(self.parked.len());
+        self.children.extend(self.parked.drain(..room));
+        self.parked.clear();
+    }
+
     /// T-123-c-c: the cancel has settled, or its grace is over.
     fn past_grace(&self) -> bool {
         self.interrupted || now_ms().saturating_sub(self.cancelled_at) >= CANCEL_GRACE_MS
@@ -606,11 +641,12 @@ impl Session {
         self.signal();
         let before = self.resolved();
         if state == "working" {
-            self.cancelled = false;
+            self.drop_cancel();
             self.interrupted = false;
             self.tools.clear();
             self.killed.clear();
             self.denied.clear();
+            self.parked.clear();
             self.started.clear();
         }
         self.pending = None;
@@ -627,12 +663,20 @@ impl Session {
         if !self.cancelled || self.own != Some("working") || now.saturating_sub(self.cancelled_at) < CANCEL_GRACE_MS {
             return false;
         }
-        self.cancelled = false;
+        let deny = self.deny;
+        self.drop_cancel();
         self.interrupted = true;
         self.pending = None;
         self.own = Some("interrupted");
-        // The interrupt took every child with it; the window knows no "interrupted" child state.
-        self.children.retain(|c| !matches!(c.state, "working" | "permission"));
+        // A Deny's Esc interrupts every child too, and the window knows no "interrupted" child state, so
+        // the busy ones are set aside (parked), not forgotten: the interrupt may be undone (VIEW-025).
+        if deny {
+            let (busy, kept) = std::mem::take(&mut self.children).into_iter().partition(|c| matches!(c.state, "working" | "permission" | "waiting"));
+            self.children = kept;
+            self.parked.extend(busy);
+            let over = self.parked.len().saturating_sub(MAX_CHILDREN);
+            self.parked.drain(..over);
+        }
         self.remember("interrupted");
         true
     }
@@ -830,7 +874,7 @@ pub fn settle_cancels() -> Vec<Status> {
             .filter_map(|(key, session)| {
                 session.settle_cancel(now).then(|| {
                     crate::activity::note_from(*key, session.terminal, "interrupted");
-                    status_of(*key, session.terminal, session, Change { state: "interrupted", ..Change::default() }, None)
+                    status_of(*key, session.terminal, session, Change { state: session.resolved(), ..Change::default() }, None)
                 })
             })
             .collect()
@@ -1929,7 +1973,9 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","agent_id":"a","tool_name":"Bash","tool_use_id":"c1"}"#), None);
         assert_eq!(s.resolved(), "interrupted");
         // (c) a typed Esc at A's prompt is the same deny.
+        // A working sibling B must not make the typed Esc a refused plain cancel (it did before the deny path).
         let mut s = child_asking();
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"b","agent_type":"w"}"#);
         s.typed_cancel();
         assert!(s.cancelled);
         assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
@@ -2040,6 +2086,112 @@ mod tests {
         state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a","tool_name":"Bash","tool_use_id":"c1"}"#);
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a","tool_name":"Bash"}"#), Some("permission"));
         s
+    }
+
+    /// A Claude lead running a Task `t0` with sub-agent `b` inside one Bash tool, then asking permission for its own Bash `t1`.
+    fn lead_asking_while_b_works() -> Session {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Task","tool_use_id":"t0"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"b","agent_type":"w"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"b","tool_name":"Bash","tool_use_id":"b1"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#), Some("permission"));
+        s
+    }
+
+    fn ids(s: &Session) -> Vec<&str> {
+        s.children.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn p81_a_child_a_deny_settle_set_aside_is_announced_and_answered_when_it_finishes() {
+        let mut s = lead_asking_while_b_works();
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!((s.resolved(), s.children.len()), ("interrupted", 0));
+        let (_, announce) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"SubagentStop","agent_id":"b","last_assistant_message":"all set"}"#)).unwrap();
+        assert_eq!(announce.as_deref(), Some("w"), "B's finish is announced by role");
+        assert_eq!(s.reply.as_deref(), Some("all set"));
+        // B's next tool is heard too: it is back on the roster, though the lead stays interrupted.
+        let mut s = lead_asking_while_b_works();
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"b","tool_name":"Read","tool_use_id":"b2"}"#);
+        assert_eq!((ids(&s), s.resolved()), (vec!["b"], "interrupted"));
+    }
+
+    #[test]
+    fn p81_undoing_the_interrupt_brings_the_set_aside_children_back() {
+        let mut s = lead_asking_while_b_works();
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert!(s.children.is_empty());
+        // The lead's Task finishing past the grace is the turn going on.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Task","tool_use_id":"t0"}"#), Some("working"));
+        assert_eq!((ids(&s), s.resolved(), s.interrupted), (vec!["b"], "working", false));
+        // A new turn forgets what was set aside: a stranger's late event is ignored.
+        let mut s = lead_asking_while_b_works();
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"b","tool_name":"Read","tool_use_id":"b2"}"#), None);
+        assert!(s.children.is_empty());
+    }
+
+    #[test]
+    fn p81_a_plain_cancel_that_settles_leaves_the_roster_as_it_was() {
+        // A child at a prompt: Esc settles the lead, the child still asks.
+        let mut s = child_asking();
+        s.cancel();
+        assert!(s.cancelled);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!((ids(&s), s.resolved()), (vec!["a"], "permission"));
+        // An idle teammate stays too.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a","agent_type":"w"}"#);
+        state(&mut s, r#"{"hook_event_name":"TeammateIdle","agent_id":"a"}"#);
+        s.cancel();
+        assert!(s.cancelled);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.children.iter().map(|c| (c.id.as_str(), c.state)).collect::<Vec<_>>(), vec![("a", "idle")]);
+    }
+
+    #[test]
+    fn p81_a_deny_settle_sets_a_waiting_child_aside_and_both_readings_say_interrupted() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"b","agent_type":"w"}"#);
+        // Only a Codex child reports "waiting" (its request_user_input tool).
+        let waiting = s.apply(Agent::Codex, &ev(r#"{"hook_event_name":"PreToolUse","agent_id":"b","tool_name":"request_user_input"}"#)).map(|(c, _)| c.state);
+        assert_eq!(waiting, Some("waiting"));
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#);
+        s.answer(Agent::Claude, false);
+        s.cancelled_at -= CANCEL_GRACE_MS + 1;
+        const KEY: u32 = 4_081_001;
+        with_sessions(|m| m.insert(KEY, s));
+        let settled = settle_cancels().into_iter().find(|x| x.pane_key == KEY).expect("the deny settled");
+        let resolved = with_sessions(|m| m.remove(&KEY)).map(|x| x.resolved());
+        assert_eq!((settled.change.state, resolved), ("interrupted", Some("interrupted")));
+        assert!(settled.children.is_empty());
+    }
+
+    #[test]
+    fn p81_the_set_aside_children_are_bounded_and_a_new_turn_clears_them() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#);
+        for i in 0..MAX_CHILDREN + 3 {
+            state(&mut s, &format!(r#"{{"hook_event_name":"SubagentStart","agent_id":"c{i}","agent_type":"w"}}"#));
+        }
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#);
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!((s.children.len(), s.parked.len()), (0, MAX_CHILDREN));
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        assert!(s.parked.is_empty());
     }
 
     #[test]
