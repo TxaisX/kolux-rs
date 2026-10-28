@@ -2164,20 +2164,70 @@ mod tests {
 
     /// Every call that makes a webview, as the scan below knows them.
     const WEBVIEW_BUILDERS: [&str; 5] = ["WebviewWindowBuilder::new(", "WebviewBuilder::new(", "WebviewWindow::builder(", "Webview::builder(", "WebviewWindowBuilder::from_config("];
-    /// A builder call that sets the browser arguments, the data folder, or takes the opener's engine.
-    const WEBVIEW_ARG_CALLS: [&str; 3] = [".additional_browser_args(", ".data_directory(", ".window_features("];
-    /// What ends a builder chain: the window is built, or the web view is added to its window.
-    const WEBVIEW_CHAIN_ENDS: [&str; 3] = [".build()", ".build(", "add_child("];
+    /// What a builder chain must itself contain: the one source's string, a data folder, or the
+    /// opener's engine. A hardcoded string, or a neighbour's call, does not count.
+    const WEBVIEW_ARG_CALLS: [&str; 4] = [".additional_browser_args(&browser_args_now())", ".additional_browser_args(&crate::resources::recovery::browser_args_now())", ".data_directory(", ".window_features("];
 
-    /// The builder calls in `code` (line numbers, 1-based) whose chain, up to the call that ends it,
-    /// sets none of `WEBVIEW_ARG_CALLS`: each one is paired on its own, not once per file.
+    /// Where the statement that holds the builder at `from` ends: its own `;` (so `?;` too) outside
+    /// any bracket, or the bracket that closes it when it is the tail expression.
+    fn statement_end(code: &str, from: usize) -> usize {
+        let (mut depth, mut chars) = (0i32, code[from..].char_indices());
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '"' => {
+                    while let Some((_, s)) = chars.next() {
+                        if s == '\\' {
+                            chars.next();
+                        } else if s == '"' {
+                            break;
+                        }
+                    }
+                }
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return from + i;
+                    }
+                }
+                ';' if depth == 0 => return from + i,
+                _ => {}
+            }
+        }
+        code.len()
+    }
+
+    /// The builder at `at`: its own statement, plus, when it is held in a variable, the later
+    /// statements of that block that name the variable (a neighbour's statements are not its own).
+    fn builder_chain(code: &str, at: usize) -> String {
+        let end = statement_end(code, at);
+        let mut chain = code[at..end].to_string();
+        let start = code[..at].rfind([';', '{', '}']).map_or(0, |i| i + 1);
+        let Some(rest) = code[start..at].trim().strip_prefix("let ") else { return chain };
+        let name: String = rest.trim_start_matches("mut ").chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        let names = |s: &str| s.match_indices(&name).any(|(i, _)| !s[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_') && !s[i + name.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'));
+        let mut pos = end + 1;
+        while pos < code.len() {
+            let stop = statement_end(code, pos);
+            if names(&code[pos..stop]) {
+                chain.push_str(&code[pos..stop]);
+            }
+            if code[stop..].starts_with([')', ']', '}']) {
+                break;
+            }
+            pos = stop + 1;
+        }
+        chain
+    }
+
+    /// The builder calls in `code` (line numbers, 1-based) whose own statement sets none of
+    /// `WEBVIEW_ARG_CALLS`: each one is paired on its own, not once per file and not by a neighbour.
     fn builders_without_args(code: &str) -> Vec<(usize, &'static str)> {
         let mut bad = Vec::new();
         for ctor in WEBVIEW_BUILDERS {
             for (at, _) in code.match_indices(ctor) {
-                let rest = &code[at + ctor.len()..];
-                let stop = WEBVIEW_CHAIN_ENDS.iter().filter_map(|e| rest.find(e)).min().unwrap_or(rest.len());
-                if !WEBVIEW_ARG_CALLS.iter().any(|c| rest[..stop].contains(c)) {
+                let chain = builder_chain(code, at);
+                if !WEBVIEW_ARG_CALLS.iter().any(|c| chain.contains(c)) {
                     bad.push((code[..at].matches('\n').count() + 1, ctor));
                 }
             }
@@ -2210,12 +2260,12 @@ mod tests {
                 let found = WEBVIEW_BUILDERS.iter().map(|c| code.matches(c).count()).sum::<usize>();
                 seen += found;
                 if !exempt.contains(&name.as_str()) {
-                    let bad = builders_without_args(code);
+                    let mut bad = builders_without_args(code);
+                    // The tab's builder reaches its string through variables (launch -> tab_setup -> args), so
+                    // this one builder is vouched for by those three links, not by the file containing a call.
+                    let tab_links = ["let launch = crate::resources::recovery::browser_args_now();", "proxy::tab_setup(&launch,", ".additional_browser_args(&args)"];
+                    bad.retain(|(line, ctor)| !(name == "browser.rs" && *ctor == "WebviewBuilder::new(" && code.lines().nth(line - 1).is_some_and(|l| l.contains("with_profile(")) && tab_links.iter().all(|l| code.contains(l))));
                     assert!(bad.is_empty(), "{name} builds a webview without browser arguments, a data folder or window features: {bad:?}");
-                    if found > 0 {
-                        // Every browser-argument call in these files must be the one source's string.
-                        assert!(code.contains("browser_args_now()") || code.contains(".window_features(") || code.contains(".data_directory("), "{name} does not take its string from browser_args_now");
-                    }
                 }
             }
         }
@@ -2227,12 +2277,12 @@ mod tests {
     #[test]
     fn row955_the_scan_pairs_each_builder_not_each_file() {
         let fixture = r#"
-fn a(app: &App) { WebviewWindowBuilder::new(app, "a", url).additional_browser_args(&x).title("a").build().unwrap(); }
+fn a(app: &App) { WebviewWindowBuilder::new(app, "a", url).additional_browser_args(&browser_args_now()).title("a").build().unwrap(); }
 fn b(app: &App) {
     WebviewWindowBuilder::new(app, "b", url).title("b").build().unwrap();
 }
 fn c(w: &Window) { let c = WebviewBuilder::new("c", url).zoom_hotkeys_enabled(false); w.add_child(c, pos, size); }
-fn d(app: &App) { let d = WebviewBuilder::new("d", url); d.data_directory(dir); w.add_child(d, pos, size); }
+fn d(app: &App) { let d = WebviewBuilder::new("d", url).data_directory(dir); w.add_child(d, pos, size); }
 fn e(app: &App) { WebviewWindow::builder(app, "e", url).build(); Webview::builder("f", url).window_features(f); WebviewWindowBuilder::from_config(app, cfg).unwrap().build(); }
 "#;
         let bad = builders_without_args(fixture);
@@ -2241,5 +2291,23 @@ fn e(app: &App) { WebviewWindow::builder(app, "e", url).build(); Webview::builde
             vec![(4, "WebviewWindowBuilder::new("), (6, "WebviewBuilder::new("), (8, "WebviewWindow::builder("), (8, "WebviewWindowBuilder::from_config(")],
             "the argless builders are found one by one, the paired ones are not"
         );
+    }
+
+    // Row 954c: a builder held in a variable ends at its own statement, so a neighbour's arguments
+    // after it cannot pay for it; and a hardcoded string is not the one source.
+    #[test]
+    fn row954c_a_builder_is_judged_by_its_own_statement() {
+        let fixture = r#"
+fn a(app: &App) {
+    let w = WebviewWindowBuilder::new(app, "a", url).title("a");
+    let ok = WebviewWindowBuilder::new(app, "b", url).additional_browser_args(&browser_args_now()).build()?;
+    w.build()?;
+}
+fn b(app: &App) { WebviewWindowBuilder::new(app, "c", url).additional_browser_args("--disable-web-security").build()?; }
+fn c(app: &App) { WebviewWindowBuilder::new(app, "d; e", url).additional_browser_args(&browser_args_now()).on_page_load(|w, _| { w.eval("x;"); }).build()?; }
+fn d(app: &App) -> R { WebviewWindowBuilder::new(app, "f", url) }
+"#;
+        let bad = builders_without_args(fixture);
+        assert_eq!(bad.iter().map(|b| b.0).collect::<Vec<_>>(), vec![3, 7, 9], "the argless variable, the hardcoded string and the tail builder are found; the quoted and closure semicolons are not statement ends");
     }
 }
