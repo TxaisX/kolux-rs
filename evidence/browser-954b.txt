@@ -1,0 +1,113 @@
+Row 954 (b): a page that destroys its own browser tab through an escape the shim cannot stop
+lane/browser-proxy, kolux-34 browser. Windows only (WebView2). Nothing here was run live (no app launches in a builder).
+
+ROOT CAUSE
+- NO_CLOSE_SCRIPT makes a tab page's own window.close() a no-op, but it is page script. A popup (exempt from the shim) can run
+  window.close.call(opener); a cross-origin popup can run opener.close(); a cross-origin iframe can run top.close(); a fresh
+  about:blank iframe can run f.contentWindow.close.call(top). None of these run the shim in the tab's realm.
+- WebView2 then raises WindowCloseRequested on the tab. wry registers its handler first and answers with DestroyWindow(hwnd)
+  (wry-0.57.0 src/webview2/mod.rs:683-685). The event has no "handled" flag and wry throws its token away, so the destroy cannot be
+  vetoed from the host. It can only be observed: a handler added later still fires.
+- Before this change the pane got no probe answer from the dead page: three misses, one automatic reload, then the "This page
+  stopped responding" overlay on a tab that was gone.
+
+DECISION (coordinator ruling kolux-15, option b, no wry fork): detect the destroy, rebuild the tab at its last address, say so.
+
+WHAT WAS BUILT
+- Observe: src-tauri/src/browser_engine.rs imp::watch_self_close adds a WindowCloseRequestedEventHandler on the tab's
+  ICoreWebView2 (browser_engine.rs:159-168; public #[cfg(windows)] wrapper at :461), wired in browser_open right after
+  watch_page_failures (browser.rs:1395). Tab views only: browser_popup.rs never calls it (test
+  row954b_only_tab_views_hear_their_close_request).
+- Decide: src-tauri/src/browser_selfclose.rs, pure seam on_self_close(history, now) -> Reopen | LeaveClosed. A tab already rebuilt
+  twice within 10 s is LeaveClosed (a refusal is not recorded, so it does not extend the count); older rebuilds age out.
+  requested() emits the event "browser-selfclosed" {id, reopen}.
+- Rebuild: src/browser/BrowserPane.tsx listens for the event on its own tab id and feeds {t:"selfclosed", reopen} to the
+  loadState machine (src/browser/loadState.ts). reopen=true goes to phase "loading" with the action "rebuild", which is the
+  existing reopenPage path (browser_close then browser_open): same id/slot, same profile data folder, same browser_args_now(),
+  same NO_CLOSE_SCRIPT, at the pane's last URL. No second tab builder was written.
+- Notice: the existing .notice (role=alert) channel via setNote(selfCloseNotice(payload)) in src/browser/selfClose.ts:
+  "This page closed itself; Kolux reopened it" or, on LeaveClosed, "This page keeps closing itself; Kolux left it closed".
+- Left closed: new phase "closed" and overlay "This page closed itself" / "It keeps closing itself, so Kolux left it closed. Press
+  Retry to open it again." Retry rebuilds (the 10 s window has usually passed by then; if not, it is simply refused again).
+
+WHAT THE USER SEES
+- A popup kills the tab: the tab blinks and comes back on the same address (a fresh load, so unsaved page state is lost), with the
+  line "This page closed itself; Kolux reopened it". No "stopped responding" overlay.
+- A page that does it in a loop (row 954c): the tab is left closed after 2 rebuilds inside 10 s, OR 3 inside 5 minutes (a page
+  closing itself every 5.1 s is reopened at 0, 5.1 and 10.2 s, then left closed at 15.3 s: three rebuilds, closed on the fourth
+  request). Once closed it stays closed: only Retry reopens it, and Retry also
+  clears the record. The destroyed page is closed for real (browser_close), so it stops running and its popup goes.
+  Other tabs and the rest of the app are unaffected.
+- A rebuild keeps the tab's profile (the saved one, so cookies survive), never takes keyboard focus, and re-applies where the
+  pane is NOW. If the reopen itself fails, the tab shows "This page could not be reopened" with Retry.
+- A popup closing itself (sign-in flows): unchanged, it just closes (popups have no hook).
+
+STOPPED-RESPONDING OVERLAY AND THE PROCESSFAILED DOUBLE REPORT
+- The overlay: the selfclosed event moves the machine to "loading" (or "closed") before the probe-miss path can reach "crashed";
+  the "closed" phase ignores late probe results. Tested in loadState.test.ts (describe "row 954b: a tab that closed itself").
+- ProcessFailed (row 954c replaces the 2 s by-id window): each browser_open makes an Engine record (selfclose::register). The
+  close-request handler, the probe's IsWindow fallback and browser_close mark THAT engine destroyed, and only that engine's
+  failure handler ignores a later Source::Page failure (it also ignores one when its own container HWND is gone, which covers
+  the order where the failure arrives before the close request). A failure in the rebuilt tab is a different engine and is
+  always reported. NOT verified live: whether WebView2 raises ProcessFailed at all after DestroyWindow.
+- H2 (order-independent detector): wry destroys the window in its own close-request handler, and WebView2 documents no handler
+  order, so our WindowCloseRequested handler may never run. browser_probe (browser.rs:1637) calls selfclose::probe_missed when the
+  tab gives no answer: IsWindow(recorded container) false means a self-close through the same on_self_close seam and event;
+  true is the existing crash path. Both detectors call Engine::mark_destroyed (browser_selfclose.rs:138), which is true only
+  for the first caller, so one destroy gives one decision. No new command, no lib.rs change, no FLAG patch.
+- Focus: selfclose::focuses_after_open (browser_selfclose.rs:107) is the seam; a rebuild (auto or retry) never focuses, a user
+  open does. The set_focus call site itself in browser_open is reachable only live (step 12).
+
+OFF WINDOWS
+- The hook and the pane-side wiring that needs it are #[cfg(windows)]; browser_selfclose.rs carries
+  #![cfg_attr(not(windows), allow(dead_code))] so it still compiles clean. macOS and Linux have no such hook today: their tab is
+  guarded only by NO_CLOSE_SCRIPT, so the same escapes are not caught there (the engine on those platforms is not WebView2 and
+  Kolux has no equivalent close event yet). The pure seam and the frontend are platform-neutral if a hook is added later.
+
+2d (955): SKIPPED. Main after the merge does not register browser::tower::tower_window_open in lib.rs, so the dead-code allow, the
+in-page fallback in src/tower/ownWindow.ts and the capability stay. No FLAG patch.
+
+PROOF (red then green)
+- cargo: row_954b_* x5 in browser_selfclose.rs: 3 failed (left: Reopen right: LeaveClosed) against a stub, then 5 passed.
+  row954b_only_tab_views_hear_their_close_request: red with the hook line commented out (browser.rs:2377), green restored.
+- vitest: selfClose.test.ts + 4 new loadState.test.ts cases: red (missing module, 4 failed), then 32 passed across both files.
+
+LIVE PROOF PENDING (prover lane; loopback only, scratch profile; Windows)
+ 1. Serve a loopback page. In a tab run window.open(location.href,'','width=400,height=300'); in the popup run
+    window.close.call(opener). Expect: the tab comes back at the same URL with "This page closed itself; Kolux reopened it", no
+    "stopped responding" overlay, no crash report in the crash folder.
+ 2. Repeat step 1 three times within 10 s. Expect: the tab stays closed with "This page closed itself" and the keeps-closing notice.
+    Press Retry after 10 s: the tab opens.
+ 3. With 2 or 3 other tabs open, switch between them during and after steps 1-2. Expect normal switching, no stray window left.
+ 4. Open a popup (window.open) whose own script calls window.close(). Expect it just closes, no notice, the tab untouched.
+ 5. Also try the cross-origin case: a tab page at 127.0.0.1:A opens a popup at 127.0.0.1:B whose script runs opener.close().
+    Expect the same as step 1.
+
+LIVE PROOF PENDING, ROW 954c (prover lane; loopback only, scratch profile; Windows)
+ 6. Which detector fires (H2). Run step 1 with a log line (or the tracing output) at selfclose::destroyed and
+    selfclose::probe_missed. Record: close-request handler, probe IsWindow fallback, or both; and which came first. If only
+    the probe fallback ever fires, the tab shows the loading state until the next probe (a few seconds): note the delay.
+ 7. Profile (H1). Give the tab the profile "work" (kolux tab profile), set a cookie on the loopback page, run step 1. Expect: the
+    rebuilt page still sends the cookie and "kolux tab list" still says "work". Then open a NEW tab that reuses the closed tab's
+    id and check it runs in the default profile, not "work". (Row 954d, N1.) For that reused-id default tab, open a loopback page
+    that closes itself (step 1) and let it rebuild: it must stay in the default profile (no "work" cookie sent, "kolux tab list"
+    says default). Then crash it (kill its renderer) and press Retry: it must still be default. Finally repeat both on a real
+    "work" tab: it must keep "work" through the rebuild and the Retry.
+ 8. Hidden pane (H4). Switch to another tab so the first tab's pane is hidden, run step 1 in the hidden tab (open it via a script
+    timer). Expect: the rebuilt tab stays hidden, and the keyboard stays where it was (type in the visible tab). If the hidden
+    rebuilt page holds the keyboard anyway (skipping set_focus can leave it on the new page), report it.
+ 9. Cadence (H3/H4). A page that calls the popup trick every 5.1 s for 60 s. Expect: reopened at 0 / 5.1 / 10.2 s (three rebuilds),
+    left closed at 15.3 s (the fourth request); it stays closed with no further rebuild; Retry reopens it and starts the count again.
+10. Network after LeaveClosed (H3). With the page from step 9 closed, watch the loopback server's request log for 30 s. Expect no
+    further requests from the destroyed page (browser_close ended it). Also check the process list: its WebView2 renderer is gone.
+11. ProcessFailed after the destroy. Watch the crash folder and the overlay across steps 1 and 9. Expect no crash report and no
+    "stopped responding" overlay; if a report appears, note whether it names the destroyed engine or the rebuilt one.
+12. Focus (user vs rebuild). Click a tab (user open): it takes the keyboard. Run step 1 in a shown tab: the rebuilt tab does not
+    steal focus from where the user last clicked or typed.
+13. Pane unmount (H5). Start step 1 and close the tab's pane within a moment (close the tab while it rebuilds). Expect no orphan
+    window left shown or focused; "kolux tab list" lists no ghost.
+14. Hidden tab destroyed with no close event (row 954d, H2). Put the page of tab A in the background (switch to tab B), then end tab
+    A's container window without a close request (script popup trick with the close event suppressed, or close the engine window
+    from outside). No event reaches the app while A is hidden. Show tab A again. Expect: the first probe after it is shown gets no
+    answer, selfclose::probe_missed finds the container gone (also when the probe's query could not be sent at all), and the tab
+    is rebuilt at its URL with the notice "This page closed itself; Kolux reopened it" (once, not a crash overlay).

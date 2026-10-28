@@ -1328,17 +1328,17 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
         }
         "browser.tab-profile-set" | "browser.tab-profile-use-default" | "browser.tab-profile-clone" => {
             let id = current(None)?;
-            let (root, mut s) = store()?;
-            let p = match req.command.as_str() {
-                "browser.tab-profile-set" => profiles::set_tab(&mut s, id, &text("profile").unwrap_or_default()),
-                "browser.tab-profile-use-default" => profiles::set_tab(&mut s, id, profiles::DEFAULT),
+            let (root, _) = store()?;
+            let (p, saved) = profiles::edit(&root, |s| match req.command.as_str() {
+                "browser.tab-profile-set" => profiles::set_tab(s, id, &text("profile").unwrap_or_default()),
+                "browser.tab-profile-use-default" => profiles::set_tab(s, id, profiles::DEFAULT),
                 _ => {
-                    let from = profiles::tab_profile(&s, id);
-                    profiles::clone_profile(&mut s, &from, Some(id))
+                    let from = profiles::tab_profile(s, id);
+                    profiles::clone_profile(s, &from, Some(id))
                 }
-            }
-            .map_err(|m| Fail::new("not_found", m))?;
-            profiles::save(&root, &s).map_err(fail)?;
+            });
+            let p = p.map_err(|m| Fail::new("not_found", m))?;
+            saved.map_err(fail)?;
             tell(PROFILE_EVENT, json!({ "page": id, "profile": p.id })).map_err(fail)?;
             json!({ "page": id, "profile": p, "summary": format!("page {id} uses profile {}; the pane reopens its page there", p.id) })
         }
@@ -1348,18 +1348,21 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
             json!({ "profiles": list, "summary": format!("{} profile(s)", list.len()) })
         }
         "browser.profiles-create" => {
-            let (root, mut s) = store()?;
-            let p = profiles::create(&mut s, &text("label").unwrap_or_default(), text("scope").as_deref(), !on("no-ua-spoof")).map_err(args)?;
-            profiles::save(&root, &s).map_err(fail)?;
+            let (root, _) = store()?;
+            let (p, saved) = profiles::edit(&root, |s| profiles::create(s, &text("label").unwrap_or_default(), text("scope").as_deref(), !on("no-ua-spoof")));
+            let p = p.map_err(args)?;
+            saved.map_err(fail)?;
             json!({ "profile": p, "summary": format!("profile {} created ({})", p.id, p.scope) })
         }
         "browser.profiles-delete" => {
-            let (root, mut s) = store()?;
+            let (root, _) = store()?;
             let id = text("profile").unwrap_or_default();
-            let users: Vec<&String> = s.tabs.iter().filter(|(_, v)| **v == id).map(|(k, _)| k).collect();
-            let users: Vec<u32> = users.into_iter().filter_map(|k| k.parse().ok()).collect();
-            let p = profiles::delete(&mut s, &id).map_err(|m| if m.contains("default") { args(m) } else { Fail::new("not_found", m) })?;
-            profiles::save(&root, &s).map_err(fail)?;
+            let (gone, saved) = profiles::edit(&root, |s| {
+                let users: Vec<u32> = s.tabs.iter().filter(|(_, v)| **v == id).filter_map(|(k, _)| k.parse().ok()).collect();
+                profiles::delete(s, &id).map(|p| (p, users))
+            });
+            let (p, users) = gone.map_err(|m| if m.contains("default") { args(m) } else { Fail::new("not_found", m) })?;
+            saved.map_err(fail)?;
             // after-list 153: its tabs reopen on the default now; the data folder goes once none of them is open in it.
             for page in users {
                 tell(PROFILE_EVENT, json!({ "page": page, "profile": profiles::DEFAULT })).map_err(fail)?;

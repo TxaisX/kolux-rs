@@ -232,3 +232,44 @@ describe("BROW-009: Retry rebuilds a page a reload cannot bring back", () => {
     expect(step(h, { t: "retry" })[1]).toBe("rebuild");
   });
 });
+
+// Row 954 (b): a page destroyed its own tab (a popup's opener.close(), a frame's top.close()).
+describe("row 954b: a tab that closed itself", () => {
+  const url = "https://example.com/app";
+
+  it("is rebuilt at once at its last address, and no 'stopped responding' overlay ever shows", () => {
+    const ok = run(loaded(url)).h;
+    const [h, action] = step(ok, { t: "selfclosed", reopen: true });
+    expect(action).toBe("rebuild");
+    expect(h.url).toBe(url);
+    expect(overlayOf(h)).toBeNull();
+    // The destroyed page answers no probe while the new one loads; the dead-page count must not run.
+    const waiting = run(dead(), h);
+    expect(waiting.h.phase).toBe("loading");
+    expect(waiting.actions).toEqual([]);
+    expect(overlayOf(waiting.h)).toBeNull();
+  });
+
+  it("the rebuilt page's own load brings the tab back to ok", () => {
+    const h = step(run(loaded(url)).h, { t: "selfclosed", reopen: true })[0];
+    expect(run([{ t: "started", url }, { t: "finished", url }, { t: "probe", answer: "page" }], h).h.phase).toBe("ok");
+  });
+
+  it("left closed: the closed overlay goes up, probes are ignored, Retry rebuilds", () => {
+    const ok = run(loaded(url)).h;
+    const [h, action] = step(ok, { t: "selfclosed", reopen: false });
+    expect(action).toBe("overlay");
+    expect(overlayOf(h)).toEqual({ kind: "closed", url });
+    expect(run(dead(), h).actions).toEqual([]);
+    expect(step(h, { t: "retry" })[1]).toBe("rebuild");
+    expect(step(h, { t: "woke" })[1]).toBe("none");
+  });
+
+  it("the closed overlay says the page closed itself, not that it stopped responding", () => {
+    const m = overlayModel({ kind: "closed", url }, null, null);
+    expect(m.title).toBe("This page closed itself");
+    expect(m.text).toContain("keeps closing itself");
+    expect(m.advice).toBeNull();
+    expect(m.openExternally).toBe(true);
+  });
+});
