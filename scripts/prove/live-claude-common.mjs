@@ -1,4 +1,4 @@
-// Shared scaffolding for the REAL-Claude live proofs (live-v10, test account A only): one scenario() per script runs a hidden dev app,
+// Shared scaffolding for the REAL-Claude live proofs (live-v11, test account A only): one scenario() per script runs a hidden dev app,
 // a real signed-in Claude Code pane (startProve in live-common.mjs), the assertions of the script, then writes the evidence section.
 // Nothing here opens a credential file; account A is only named as CLAUDE_CONFIG_DIR for the pane's claude.
 import { execFileSync } from "node:child_process";
@@ -9,7 +9,7 @@ import { checker, pickScreen } from "./live-views-dom.mjs";
 export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A, BASE } from "./live-common.mjs";
 export const CLAUDE_EXE = "C:/Users/XiongT/.local/bin/claude.exe"; // what the registry PATH resolves (TERM-120, batch 8)
 export const DATE = "2026-10-27";
-const MARK = (id) => `<<live-v10:${id}>>`;
+const MARK = (id) => `<<live-v11:${id}>>`;
 const redact = (s) => String(s).replace(/[\w.+-]+@[\w.-]+\.\w+/g, "<account-a>").replace(/C:[\\/]+Users[\\/]+XiongT/gi, "<home>").replace(/Users[\\/]+txais/gi, "<home>");
 
 export const claudeVersion = () => {

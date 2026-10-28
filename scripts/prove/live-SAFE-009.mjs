@@ -2,7 +2,7 @@
 //   node live-SAFE-009.mjs b1     manual permission mode: Claude's prompt shows the Kolux reason; refuse -> the scratch remote's main is unchanged.
 //   node live-SAFE-009.mjs auto   box 5, part 1: Claude's automatic permission mode; records whether the ask still appears.
 //   node live-SAFE-009.mjs skip   box 5, part 2: permission checks skipped; records whether the ask still appears.
-// The remote is a scratch bare repo under G:/Temp/live-v10/remote; startProve refuses a skipping run on any other remote.
+// The remote is a scratch bare repo under G:/Temp/live-v11/remote; startProve refuses a skipping run on any other remote.
 // Asserted on Kolux's side: the pane status word, the agent-status events, Claude's screen, and the scratch remote's main commit.
 import { mkdirSync, rmSync } from "node:fs";
 import { BASE, scenario, sleep, git, send } from "./live-claude-common.mjs";
@@ -37,7 +37,7 @@ await scenario(
   async (ctx, h) => {
     const remote = (await git(ctx.repo, ["remote", "-v"])).trim().split(/\r?\n/).map((l) => l.replace(/\s+/g, " "));
     h.log(`git remote -v (checked before the prompt): ${remote.join(" ; ")}`);
-    h.check("the repo's only remote is a scratch bare repo under G:/Temp/live-v10", remote.length > 0 && remote.every((l) => l.split(" ")[1]?.replace(/\\/g, "/").startsWith(`${BASE}/remote/`)), remote.join(" ; "));
+    h.check("the repo's only remote is a scratch bare repo under G:/Temp/live-v11", remote.length > 0 && remote.every((l) => l.split(" ")[1]?.replace(/\\/g, "/").startsWith(`${BASE}/remote/`)), remote.join(" ; "));
     const before = (await git(BARE, ["rev-parse", "main"])).trim();
     const local = (await git(ctx.repo, ["rev-parse", "HEAD"])).trim();
     h.check("setup: local main is ahead of the scratch remote's main (a force-push would move it)", before !== local, `remote ${before.slice(0, 8)} local ${local.slice(0, 8)}`);
