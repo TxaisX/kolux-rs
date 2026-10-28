@@ -130,6 +130,12 @@ fn workspace_paths(store: &crate::state::Store) -> Vec<String> {
         .collect()
 }
 
+/// The first non-external listener row that passes `target_of`: a row bound to this PC's network
+/// address is skipped when a loopback one follows.
+fn first_target(rows: Vec<crate::ports::PortRow>) -> Option<String> {
+    rows.into_iter().filter(|r| !r.external).find_map(|r| target_of(&format!("{}:{}", loopback(&r.addr), r.port)))
+}
+
 /// The target for a label: the first dev server listening inside the workspace whose folder has
 /// that label (its own process tree, not an outside service).
 pub fn resolve_in(app: &tauri::AppHandle, label: &str) -> Option<String> {
@@ -137,7 +143,7 @@ pub fn resolve_in(app: &tauri::AppHandle, label: &str) -> Option<String> {
     let path = paths.into_iter().find(|p| label_of(p) == label)?;
     // The Ports back end's own command (VIEW-078), so this module needs nothing private from it.
     let rows = tauri::async_runtime::block_on(crate::ports::ports_list(app.state::<crate::terminal::Terminals>(), vec![path.clone()], path)).ok()?;
-    rows.into_iter().find(|r| !r.external).map(|r| format!("{}:{}", loopback(&r.addr), r.port))
+    first_target(rows)
 }
 
 #[tauri::command]
@@ -234,6 +240,15 @@ mod tests {
         assert_eq!(target_of("localhost:3000"), Some("127.0.0.1:3000".into()));
         assert_eq!(target_of("[::]:3000"), Some("[::1]:3000".into()));
         assert_eq!(target_of("[::1]:3000"), Some("[::1]:3000".into()));
+    }
+
+    #[test]
+    fn proj088_resolves_to_the_first_loopback_listener_not_the_first_row() {
+        let row = |addr: &str, port: u16, external: bool| crate::ports::PortRow { port, addr: addr.into(), pid: 1, external };
+        let rows = vec![row("192.168.1.5", 3000, false), row("127.0.0.1", 3000, false)];
+        assert_eq!(first_target(rows), Some("127.0.0.1:3000".into()));
+        assert_eq!(first_target(vec![row("192.168.1.5", 3000, false)]), None, "no loopback listener at all");
+        assert_eq!(first_target(vec![row("127.0.0.1", 1, true), row("0.0.0.0", 3000, false)]), Some("127.0.0.1:3000".into()), "external rows stay skipped");
     }
 
     fn fake_server(body: &'static str) -> (u16, std::thread::JoinHandle<Vec<u8>>) {
