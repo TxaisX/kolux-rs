@@ -76,7 +76,12 @@ pub fn probe(program: &str, args: &[&str], limit: Duration) -> Ran {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0); // own group, so a hang takes the whole tree
     let Ok(mut child) = cmd.spawn() else { return Ran::NotFound };
+    // ponytail: a grandchild started before the assignment escapes the job (std cannot spawn suspended).
+    #[cfg(windows)]
+    let job = crate::procs::Job::new().ok().filter(|j| j.assign_pid(child.id()).is_ok());
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     if let Some(mut s) = child.stdout.take() {
         std::thread::spawn(move || {
@@ -102,6 +107,10 @@ pub fn probe(program: &str, args: &[&str], limit: Duration) -> Ran {
             }
             Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                #[cfg(windows)]
+                drop(job); // kill-on-close ends every member
+                #[cfg(unix)]
+                crate::procs::kill_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 return Ran::Hung;
@@ -695,6 +704,35 @@ mod tests {
             Ran::Exited(true, out) => assert!(out.contains("finished"), "got {out:?}"),
             other => panic!("expected Exited(true, ..), got {other:?}"),
         }
+    }
+
+    // Card 39: a hung probe ends the whole tree, not just the direct child (a .cmd shim's grandchild).
+    #[test]
+    fn row965_a_hung_probe_ends_the_grandchild_it_started() {
+        let dir = std::env::temp_dir().join(format!("kolux-row965-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("grandchild.pid");
+        let (win, unix) = (
+            format!("@echo off\nstart /b powershell -NoProfile -Command \"$PID | Out-File -Encoding ascii -FilePath '{}'; Start-Sleep -Seconds 20\"\nping -n 30 127.0.0.1 >nul\n", pidfile.display()),
+            format!("sleep 30 &\necho $! > '{}'\nsleep 30\n", pidfile.display()),
+        );
+        // The limit leaves a slow machine time to start the grandchild before the hang.
+        let got = probe_script("tree", &win, &unix, Duration::from_secs(4));
+        let pid = std::fs::read_to_string(&pidfile).ok().and_then(|t| t.trim().parse::<u32>().ok());
+        let gone = pid.is_some_and(|p| {
+            let end = Instant::now() + Duration::from_secs(2);
+            while crate::procs::alive(p) != Some(false) && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            crate::procs::alive(p) == Some(false)
+        });
+        if let Some(p) = pid.filter(|_| !gone) {
+            crate::procs::kill_tree(p);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(got, Ran::Hung);
+        assert!(pid.is_some(), "the grandchild never reported its pid");
+        assert!(gone, "grandchild {pid:?} outlived the hung probe");
     }
 
     #[test]
