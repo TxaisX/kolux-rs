@@ -77,9 +77,10 @@ type Read = ReturnType<typeof read>;
 const WHOLE_NOTE_LINES = 400;
 const MARGIN_LINES = 60;
 
-const lineEnds = (s: string) => {
+/** The line ends (\n) in `s` before offset `end`. */
+const lineEnds = (s: string, end = s.length) => {
   let n = 0;
-  for (let i = s.indexOf("\n"); i >= 0; i = s.indexOf("\n", i + 1)) n++;
+  for (let i = s.indexOf("\n"); i >= 0 && i < end; i = s.indexOf("\n", i + 1)) n++;
   return n;
 };
 
@@ -119,11 +120,7 @@ function check(body: string, next: string, prev: string, out: string): string | 
   const NL = next.split("\n");
   const before = pw.filter((w) => w.e <= e.from).length;
   const after = pw.filter((w) => w.s >= e.to).length;
-  const lineAt = (off: number) => {
-    let n = 0;
-    for (let i = body.indexOf("\n"); i >= 0 && i < off; i = body.indexOf("\n", i + 1)) n++;
-    return n;
-  };
+  const lineAt = (off: number) => lineEnds(body, off);
   const lo0 = before ? lineAt(bw[before - 1].e - 1) : 0;
   const hi0 = after ? lineAt(bw[bw.length - after].s) : BL.length - 1;
   // A lone CR is no line end here but is one to the lexer, so such a note is never sliced.
