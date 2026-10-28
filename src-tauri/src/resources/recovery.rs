@@ -2168,6 +2168,35 @@ mod tests {
     /// opener's engine. A hardcoded string, or a neighbour's call, does not count.
     const WEBVIEW_ARG_CALLS: [&str; 4] = [".additional_browser_args(&browser_args_now())", ".additional_browser_args(&crate::resources::recovery::browser_args_now())", ".data_directory(", ".window_features("];
 
+    /// The three links by which the tab's builder reaches the one browser-argument source, through
+    /// variables: launch string -> proxy setup -> the window's `args`.
+    const TAB_LINKS: [&str; 3] = ["let launch = crate::resources::recovery::browser_args_now();", "proxy::tab_setup(&launch,", ".additional_browser_args(&args)"];
+
+    /// Whether the tab builder at `line` (1-based) sits inside `browser_open` and its links appear
+    /// there in order with nothing rebinding `args` after the setup hands it over.
+    fn tab_builder_vouched(code: &str, line: usize) -> bool {
+        let Some(start) = code.find("pub async fn browser_open(") else { return false };
+        let end = code[start..].find("\n}").map_or(code.len(), |i| start + i);
+        let body = &code[start..end];
+        let at = code.split('\n').take(line - 1).map(|l| l.len() + 1).sum::<usize>();
+        if at < start || at > end {
+            return false;
+        }
+        let Some(p1) = body.find(TAB_LINKS[0]) else { return false };
+        let Some(p2) = body[p1..].find(TAB_LINKS[1]).map(|i| p1 + i) else { return false };
+        let Some(p3) = body[p2..].find("let (args,").map(|i| p2 + i) else { return false };
+        let Some(p4) = body[p3..].find(TAB_LINKS[2]).map(|i| p3 + i) else { return false };
+        let between = &body[p3 + "let (args,".len()..p4];
+        let word = |t: &str| t.match_indices("args").any(|(i, _)| !t[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_') && !t[i + 4..].starts_with(|c: char| c.is_alphanumeric() || c == '_'));
+        let rebinds = between.split(';').any(|stmt| {
+            let stmt = stmt.trim_start();
+            let target = stmt.strip_prefix("let ").map_or(stmt, |p| p.split('=').next().unwrap_or(""));
+            let assigns = stmt.match_indices("args").any(|(i, _)| word(&stmt[i..i + 4]) && !stmt[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.') && { let t = stmt[i + 4..].trim_start(); (t.starts_with('=') && !t.starts_with("==")) || t.starts_with("+=") });
+            (stmt.starts_with("let ") && word(target)) || assigns
+        });
+        !rebinds
+    }
+
     /// Where the statement that holds the builder at `from` ends: its own `;` (so `?;` too) outside
     /// any bracket, or the bracket that closes it when it is the tail expression.
     fn statement_end(code: &str, from: usize) -> usize {
@@ -2205,6 +2234,10 @@ mod tests {
         let start = code[..at].rfind([';', '{', '}']).map_or(0, |i| i + 1);
         let Some(rest) = code[start..at].trim().strip_prefix("let ") else { return chain };
         let name: String = rest.trim_start_matches("mut ").chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        // A pattern (`let (a, b) = ...`) binds no one name; an empty name would match every later statement.
+        if name.is_empty() {
+            return chain;
+        }
         let names = |s: &str| s.match_indices(&name).any(|(i, _)| !s[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_') && !s[i + name.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'));
         let mut pos = end + 1;
         while pos < code.len() {
@@ -2262,9 +2295,8 @@ mod tests {
                 if !exempt.contains(&name.as_str()) {
                     let mut bad = builders_without_args(code);
                     // The tab's builder reaches its string through variables (launch -> tab_setup -> args), so
-                    // this one builder is vouched for by those three links, not by the file containing a call.
-                    let tab_links = ["let launch = crate::resources::recovery::browser_args_now();", "proxy::tab_setup(&launch,", ".additional_browser_args(&args)"];
-                    bad.retain(|(line, ctor)| !(name == "browser.rs" && *ctor == "WebviewBuilder::new(" && code.lines().nth(line - 1).is_some_and(|l| l.contains("with_profile(")) && tab_links.iter().all(|l| code.contains(l))));
+                    // this one builder is vouched for by those links in order inside browser_open, not by the file containing them.
+                    bad.retain(|(line, ctor)| !(name == "browser.rs" && *ctor == "WebviewBuilder::new(" && code.lines().nth(line - 1).is_some_and(|l| l.contains("with_profile(")) && tab_builder_vouched(code, *line)));
                     assert!(bad.is_empty(), "{name} builds a webview without browser arguments, a data folder or window features: {bad:?}");
                 }
             }
@@ -2309,5 +2341,68 @@ fn d(app: &App) -> R { WebviewWindowBuilder::new(app, "f", url) }
 "#;
         let bad = builders_without_args(fixture);
         assert_eq!(bad.iter().map(|b| b.0).collect::<Vec<_>>(), vec![3, 7, 9], "the argless variable, the hardcoded string and the tail builder are found; the quoted and closure semicolons are not statement ends");
+    }
+
+    // Row 954d (N3): a destructuring `let (a, b) = ...` binds no single name, so the builder is
+    // judged by its own statement; an empty name used to match every later statement.
+    #[test]
+    fn row954d_a_destructured_builder_is_judged_by_its_own_statement() {
+        let fixture = r#"
+fn a(app: &App) {
+    let (w, n) = (WebviewWindowBuilder::new(app, "a", url).title("a"), 1);
+    other.additional_browser_args(&browser_args_now());
+    w.build()?;
+}
+fn b(app: &App) {
+    let [w] = [WebviewBuilder::new("b", url)];
+    w.data_directory(dir);
+}
+fn c(app: &App) {
+    let w = WebviewWindowBuilder::new(app, "c", url);
+    w.additional_browser_args(&browser_args_now()).build()?;
+}
+"#;
+        let bad = builders_without_args(fixture);
+        assert_eq!(bad.iter().map(|b| b.0).collect::<Vec<_>>(), vec![3, 8], "both destructured builders are found; the named one is still paid for by its own later call");
+    }
+
+    const BROWSER_FIXTURE: &str = r#"
+pub async fn browser_open(app: AppHandle) -> Result<(), String> {
+    let (builder, spoof, folder) = with_profile(WebviewBuilder::new(label(id), url), id, profile, true, &key);
+    let launch = crate::resources::recovery::browser_args_now();
+    let setup = proxy::tab_setup(&launch, &folder, saved.as_ref());
+    let (args, url_proxy) = setup?;
+    let builder = builder
+        .additional_browser_args(&args)
+        .focused(false);
+    Ok(())
+}
+
+fn elsewhere() {
+    let launch = crate::resources::recovery::browser_args_now();
+    let setup = proxy::tab_setup(&launch, &f, None);
+    let (args, p) = setup?;
+    b.additional_browser_args(&args);
+}
+"#;
+
+    // Row 954d: the tab builder's three links must sit in order inside browser_open itself.
+    #[test]
+    fn row954d_the_tab_builders_links_must_be_in_order_inside_browser_open() {
+        assert!(tab_builder_vouched(BROWSER_FIXTURE, 3), "the good shape passes");
+        let before_builder = |extra: &str| BROWSER_FIXTURE.replace("    let builder = builder", &format!("    {extra}
+    let builder = builder"));
+        assert!(!tab_builder_vouched(&before_builder("let args = \"--x\".to_string();"), 3), "a later hardcoded args string fails");
+        assert!(!tab_builder_vouched(&before_builder("args = \"--x\".to_string();"), 3), "reassigning args fails");
+        assert!(!tab_builder_vouched(&before_builder("let (args, _) = (String::new(), 1);"), 3), "shadowing args in a pattern fails");
+        assert!(tab_builder_vouched(&before_builder("let shown = format!(\"{args}\");"), 3), "reading args is not rebinding it");
+        let (l, s) = ("    let launch = crate::resources::recovery::browser_args_now();", "    let setup = proxy::tab_setup(&launch, &folder, saved.as_ref());");
+        let swapped = BROWSER_FIXTURE.replace(&format!("{l}
+{s}"), &format!("{s}
+{l}"));
+        assert!(!tab_builder_vouched(&swapped, 3), "links out of order fail");
+        assert!(!tab_builder_vouched(BROWSER_FIXTURE, 14), "links in another function do not vouch for a builder there");
+        let gone = BROWSER_FIXTURE.replace("pub async fn browser_open(", "pub async fn browser_open_two(");
+        assert!(!tab_builder_vouched(&gone, 3), "no browser_open, no vouch");
     }
 }
