@@ -293,6 +293,20 @@ try {
   // The page's own Close button (run 2: a CDP Escape after the switch click left Settings open).
   await app.click('.settings button[aria-label="Close Settings"]');
   await waitFor("Settings closed", async () => !(await app.exists('.settings[role=dialog][aria-label="Settings"]')), 5000);
+  // Log only (kolux-12): does the same CDP Escape close a freshly opened Settings?
+  try {
+    await key({ key: ",", code: "Comma", windowsVirtualKeyCode: 188, modifiers: 2 });
+    await waitFor("the Settings page again", () => app.exists('.settings[role=dialog][aria-label="Settings"]'), 10000);
+    await sleep(500);
+    await key({ key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    const closes = await waitFor("Settings closed by Escape", async () => !(await app.exists('.settings[role=dialog][aria-label="Settings"]')), 3000).then(() => true, () => false);
+    log(`Escape closes Settings: ${closes ? "yes" : "no"} (opened fresh with Ctrl+, then a CDP rawKeyDown/keyUp Escape)`);
+    if (!closes) await app.click('.settings button[aria-label="Close Settings"]');
+  } catch (e) {
+    log(`Escape closes Settings: not measured (${e.message})`);
+  }
+  if (await app.exists('.settings[role=dialog][aria-label="Settings"]')) await app.click('.settings button[aria-label="Close Settings"]');
+  await waitFor("Settings closed", async () => !(await app.exists('.settings[role=dialog][aria-label="Settings"]')), 5000);
   await app.evalJs(`(() => { window.__t544csp = []; document.addEventListener("securitypolicyviolation", e => window.__t544csp.push(e.violatedDirective + " " + e.blockedURI)); return 1; })()`);
   await app.focusPane(TERM, 0, ".xterm-helper-textarea");
   await app.click('.pane.focused button[title^="Split right"]');
