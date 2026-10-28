@@ -18,3 +18,9 @@ LIVE 2026-10-27 re-proof after MERGE 409 (lane/prove on main b55c5656; scripts/p
   batch 9 (before MERGE 409): app still running after 75 s, exited 1.5 s after the holder was released (78 s)
   reading: the stall no longer holds the quit (bounded, 15 s deadline + the watchdog's 0.5 s WATCHDOG_LOG_WAIT + teardown), but the exit lands 0.7 to 0.8 s AFTER the 15 s deadline, so the strict box limit is not met. Box stays unticked.
   log: G:/Temp/live-v11-logs/APP-050.run.txt, APP-050.run2.txt
+
+LIVE 2026-10-28 (batch 12, after MERGE 417 = cc66025f quit watchdog; main b32d7981 merged, one rebuild) scripts/prove/live-APP-050.mjs: PASS
+  holder took the oplock on <profile>/logs/kolux.log (GRANTED), window close over CDP -> app pid gone after 14.2 s (box limit 15 s)
+  checks: the quit is bounded (14.2 s); the app exits within the quit deadline itself (14.2 s, final save 5 s)
+  reading: the exit now lands inside the 15 s deadline (batch 11: 15.7 s / 15.8 s; batch 9: stuck 75 s), so the strict box is met. Box ticked.
+  log: G:/Temp/live-v12-logs/APP050-419.log
