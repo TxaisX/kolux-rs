@@ -28,7 +28,8 @@ pub fn proxy_flag(proxy: &Url) -> Result<String, String> {
         "http" => proxy.port_or_known_default(),
         "socks5" => Some(proxy.port().unwrap_or(SOCKS_PORT)),
         _ => None,
-    };
+    }
+    .filter(|p| *p != 0); // port 0 names no listener
     // Only a host Chromium reads as one host: `=`, `;` or `,` turn the value into a per-scheme rule
     // list it drops, and the engine goes direct.
     let host = proxy.host_str().filter(|h| (h.starts_with('[') && h.ends_with(']')) || (!h.is_empty() && h.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))));
@@ -194,6 +195,26 @@ mod tests {
         }
         for ok in ["http://proxy.corp-1.example:3128", "http://10.0.0.1:80", "http://[::1]:8080", "http://localhost:8080", "socks5://proxy_1.test:1080", "http://PROXY.Test:80"] {
             assert!(proxy_flag(&url(ok)).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn row939b_port_zero_refuses() {
+        for saved in ["http://127.0.0.1:0", "socks5://proxy.test:0", "http://[::1]:0", "http://localhost:0"] {
+            let u = url(saved);
+            assert_eq!(proxy_flag(&u), Err(SHAPE_REFUSED.to_string()), "{saved}");
+            assert_eq!(tab_setup("--a", DEFAULT_FOLDER, Some(&u)), Err(SHAPE_REFUSED.to_string()), "{saved}");
+        }
+        assert!(proxy_flag(&url("http://127.0.0.1:1")).is_ok());
+    }
+
+    // Row 939b: shapes the engine would read as something else. Each must stop at the setting (proxy_of
+    // refuses) or at the switch (proxy_flag refuses); none may come out as a proxy.
+    #[test]
+    fn row939b_odd_host_shapes_refuse_instead_of_going_direct() {
+        for saved in ["http://[::1]=x:8080", "http://[::1]=x", "http://[fe80::1%25eth0]:8080", "http://[fe80::1%eth0]:8080", "http://a%0Ab:3128", "http://a%0Db:3128", "http://[::1\n]:8080", "socks5://[::1]=x:1080", "http://proxy.test\n=x:3128", "http://proxy.\ntest:3128", "http://proxy.test:3128\n--no-sandbox"] {
+            let got = crate::browser::proxy_of(Some(saved)).and_then(|p| p.map_or(Ok(String::new()), |u| proxy_flag(&u)));
+            assert!(got.is_err(), "{saved} must refuse, got {got:?}");
         }
     }
 
