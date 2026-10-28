@@ -24,3 +24,15 @@ RESULT: FAIL
 2026-10-27 box 3 (fix: closable now follows the shown-pane count):
 box 3: src/sessions/__cards__/SESS-007-b3.test.ts::"SESS-007 b3: a lone grid chooser has no Close this chooser button" + "a chooser beside another pane has the Close this chooser button" + "the New session sheet keeps its close button even with no other pane" — VITEST_MAX_WORKERS=2 pnpm exec vitest run src/sessions/__cards__/SESS-007-b3.test.ts — Test Files  1 passed (1), Tests  3 passed (3) (red first: 1 failed | 2 passed with chooserClosable returning true)
   (real ChooserPane rendered with closable = chooserClosable(shown, inSheet); App.tsx renderChooser passes panesIn(panes, activeDir).length, the same count removeTarget uses; MIRROR App.tsx renderChooser: the call-site count is glue, live spawn re-confirms)
+
+LIVE 2026-10-27 (box 3, re-run on the merged lane, hidden dev app, scratch <home>): PASS
+  scripts/prove/live-SESS-007.mjs classic and new (stand-in agents only; no real agent sign-in).
+  Classic look: the New-session menu item "Open a pane that asks..." put a chooser in the grid (section.pane.chooser inside div.grid.classic).
+    With the shell pane still there the chooser had its close button (button "Close this chooser": true). After closing the other pane the chooser was
+    the grid's only pane (visible panes: ["Session 3 chooser"]) and the close button was absent (button present=false). RESULT: PASS.
+    screenshot: G:/Temp/live-v6-logs/SESS-007-classic.png ; run log: G:/Temp/live-v6-logs/SESS-007-classic.run.txt
+  New look: the chooser does not open as a grid pane. It opens as the New session sheet (section.pane.chooser.sheet; grid-pane choosers=0) and that
+    sheet carries its own close button ("Close (Esc)"), which is the card's other half (the New session sheet keeps its close). The box's state, a chooser
+    left as the grid's only pane, does not exist in the New look; the box is proven by the classic run. RESULT: PASS (sheet present, own close button).
+    screenshot: G:/Temp/live-v6-logs/SESS-007-new.png ; run log: G:/Temp/live-v6-logs/SESS-007-new.run.txt
+  Observation: the New-look run's pre-close process tree listed grok.exe x1 (classic run: none). Likely the sheet's agent detection probe; survivors 0.

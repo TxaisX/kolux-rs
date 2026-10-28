@@ -14,13 +14,14 @@ pub const GRANT_CAP: usize = 100;
 /// Where the picked-file grants are kept, so a restored tab for a picked file opens again.
 const KEY_GRANTS: &str = "file_grants";
 /// ponytail: worktree folders are read from Git at most this often on a miss; a worktree added
-/// outside Kolux opens after this delay at worst.
+/// outside Kolux opens after this delay at worst (one Kolux makes or removes re-reads at once).
 const TREES_FRESH: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
 pub struct Fence {
     grants: Mutex<VecDeque<PathBuf>>,
-    trees: Mutex<Option<(Instant, Vec<PathBuf>)>>,
+    /// When it was read, `git::worktree_changes()` then, and the worktree folders.
+    trees: Mutex<Option<(Instant, u64, Vec<PathBuf>)>>,
     /// The paths of the latest drop from outside Kolux: the Explorer may copy these in.
     drop: Mutex<Vec<PathBuf>>,
 }
@@ -204,11 +205,13 @@ impl Fence {
             return Ok(p);
         }
         let mut trees = self.trees.lock().map_err(|e| e.to_string())?;
-        if !trees.as_ref().is_some_and(|(at, _)| at.elapsed() < TREES_FRESH) {
+        // The count is read before Git lists, so a worktree made meanwhile still forces a re-read.
+        let changes = crate::git::worktree_changes();
+        if !trees.as_ref().is_some_and(|(at, seen, _)| at.elapsed() < TREES_FRESH && *seen == changes) {
             let all = projects.iter().flat_map(|p| git.worktrees(Path::new(&p.path)).unwrap_or_default()).map(|w| PathBuf::from(w.path)).collect();
-            *trees = Some((Instant::now(), all));
+            *trees = Some((Instant::now(), changes, all));
         }
-        roots.extend(trees.as_ref().map(|(_, t)| t.clone()).unwrap_or_default());
+        roots.extend(trees.as_ref().map(|(_, _, t)| t.clone()).unwrap_or_default());
         check(path, &roots, &grants, exact)
     }
 }
@@ -468,5 +471,52 @@ mod tests {
         assert_eq!(store.get(KEY_GRANTS).unwrap(), None::<String>, "a refusal saves nothing");
         f.grant(&t.0.join("outside/picked.txt"), &store).unwrap();
         assert_eq!(f.grants.lock().unwrap().len(), 1, "the one shape that is let in");
+    }
+
+    /// A repository saved as the only project, with the Fence and Git that read it.
+    fn project_repo(t: &Temp) -> (Mutex<Store>, PathBuf, Git) {
+        let repo = t.0.join("project");
+        let git = |args: &[&str]| crate::git::run(args, Some(&repo)).unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "Kolux RS test"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "first"]);
+        let store = Mutex::new(Store::open(&t.0.join("data")).unwrap());
+        let entry = crate::projects::Project { id: "p1".into(), name: "p".into(), path: repo.to_string_lossy().into_owned(), workspaces_dir: None, base: None, display_name: None };
+        crate::projects::save_projects(&store.lock().unwrap(), &[entry]).unwrap();
+        (store, repo, Git::detect().unwrap())
+    }
+
+    // CLI-018 b2 (live proof 2026-10-27): a miss filled the worktree cache, then Kolux made a
+    // worktree inside the cache's 3 s window and the Explorer was refused it.
+    #[test]
+    fn cli018_a_worktree_kolux_just_made_opens_at_once_after_an_earlier_miss() {
+        let t = temp("fresh-worktree");
+        let (store, repo, git) = project_repo(&t);
+        let fence = Fence::default();
+        let elsewhere = t.0.join("ws/a");
+        git.worktree_add(&repo, &elsewhere, "a", "HEAD").unwrap();
+        assert!(fence.allow(&elsewhere.to_string_lossy(), &store, &git, false).is_ok(), "the first worktree fills the cache");
+        let made = t.0.join("ws/c");
+        assert!(fence.allow(&made.to_string_lossy(), &store, &git, false).is_err(), "not made yet: a miss, cached");
+        git.worktree_add(&repo, &made, "c", "HEAD").unwrap();
+        let spelled = made.to_string_lossy().to_lowercase().replace('\\', "/");
+        assert!(fence.allow(&made.to_string_lossy(), &store, &git, false).is_ok(), "made through Kolux, opened at once");
+        assert!(fence.allow(&spelled, &store, &git, false).is_ok(), "the CLI's lowercase forward-slash spelling: {spelled}");
+        git.worktree_remove(&repo, &made, Some("c")).unwrap();
+        assert!(fence.allow(&made.to_string_lossy(), &store, &git, false).is_err(), "removed through Kolux: no longer a root");
+    }
+
+    #[test]
+    fn cli018_a_path_outside_every_project_stays_refused_after_a_worktree_is_made() {
+        let t = temp("fresh-worktree-outside");
+        let (store, repo, git) = project_repo(&t);
+        let fence = Fence::default();
+        let outside = t.0.join("outside/other.txt");
+        assert!(fence.allow(&outside.to_string_lossy(), &store, &git, false).is_err());
+        git.worktree_add(&repo, &t.0.join("ws/c"), "c", "HEAD").unwrap();
+        assert!(fence.allow(&outside.to_string_lossy(), &store, &git, false).is_err(), "a new worktree widens nothing else");
+        assert!(fence.allow(&t.0.join("ws/c/../../outside/other.txt").to_string_lossy(), &store, &git, false).is_err(), "dot-dot out of a worktree");
     }
 }

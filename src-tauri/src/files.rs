@@ -60,6 +60,11 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     replace_with(path, |f| f.write_all(text.as_bytes()))
 }
 
+/// The same all-or-nothing save for raw bytes (row 947).
+pub(crate) fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    replace_with(path, |f| f.write_all(bytes))
+}
+
 /// EDIT-046: the all-or-nothing save. `put` fills a temporary file beside `path`; the file is
 /// flushed to disk and only then moved over `path`. Any failure removes the temporary file and
 /// leaves `path` exactly as it was. A copy left by an app that died mid-save is cleared the next

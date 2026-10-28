@@ -295,15 +295,21 @@ pub fn login_command(program: &Path, home: &Path, device: bool) -> CommandBuilde
 /// sign-in sealed into the vault; only a sign-in the login changed counts. On failure the home is
 /// removed, unless it already holds a working sign-in.
 pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
+    // Row 944: the id comes from the renderer and is joined into paths, so an unsafe one is refused before anything touches the disk.
+    if !crate::cli_accounts::safe_id(id) {
+        return Err(Attention::new("unknown", "That account id is not valid."));
+    }
     // Row 923: a NEW account never reuses a taken id, so a clash cannot overwrite a listed account's home or sealed copy.
     // Row 929: `existing` at an id that is not listed (a stale screen) is a new account too, so it claims a free id.
-    let listed: Vec<String> = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|a| a.id).collect();
-    let (id, home) = if existing && listed.iter().any(|l| l == id) {
+    // Row 932: a list that cannot be read fails here, before the login; it never routes a listed account to a new id.
+    let listed_ids: Vec<String> = crate::orchestration::kept::load::<Vec<Account>>(&*store.lock().map_err(|e| e.to_string())?, LIST_KEY)?.into_iter().map(|a| a.id).collect();
+    // Row 940: an unlisted id whose home is there (a list set aside as corrupt leaves the homes) is still that sign-in; a removed account's home is gone, so a stale screen claims a new id.
+    let (id, home) = if existing && (listed_ids.iter().any(|l| l == id) || profile.join(FOLDER).join(id).is_dir()) {
         let home = profile.join(FOLDER).join(id);
         fs::create_dir_all(&home).map_err(|e| e.to_string())?;
         (id.to_string(), home)
     } else {
-        crate::claude_accounts::claim_new_folder(profile, FOLDER, "codex", &listed, id)?
+        crate::claude_accounts::claim_new_folder(profile, FOLDER, "codex", &listed_ids, id)?
     };
     let id = id.as_str();
     let auth = home.join("auth.json");
@@ -311,7 +317,7 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     // ACCT-019: only a home with no sign-in file at all is removed; one that cannot be read (a
     // locked file) may still hold a working sign-in.
     let roll_back = || {
-        if !auth.exists() {
+        if matches!(auth.try_exists(), Ok(false)) {
             let _ = fs::remove_dir_all(&home);
         }
     };
@@ -324,7 +330,7 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     }
     let text = fs::read_to_string(&auth).map_err(|e| e.to_string())?;
     let vault = profile.join(secrets::VAULT).join(format!("codex-{id}.json"));
-    let vault_was_there = vault.exists();
+    let vault_was_there = !matches!(vault.try_exists(), Ok(false));
     if let Err(e) = secrets::write_file(&vault, &text) {
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
@@ -846,21 +852,28 @@ pub fn codex_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Stor
 /// Takes the account off the list, deletes its home (only one inside Kolux's own folder) and
 /// sealed copy, and hands new panes back to the system default when it was the active one.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    if !crate::cli_accounts::safe_id(id) {
+        return Err("That Codex account id is not valid.".into());
+    }
     let mut list: Vec<Account> = crate::orchestration::kept::load(store, LIST_KEY)?;
     let Some(at) = list.iter().position(|a| a.id == id) else {
         return Err("That Codex account is no longer listed.".into());
     };
     let gone = list.remove(at);
     store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
-        store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
+    // Row 947: the list is already saved, so a marker that will not clear is logged and reported at the end, after the sealed copy and home are gone.
+    let cleared = if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) { store.set(ACTIVE_KEY, "").map_err(|e| e.to_string()) } else { Ok(()) };
+    if let Err(e) = &cleared {
+        eprintln!("kolux-rs: could not clear the active Codex account ({e})");
     }
+    // Row 944: the sealed copy goes first, so a home that will not delete never leaves a copy a stale sign-in could unseal.
+    crate::claude_accounts::remove_sealed_copy(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
     let home = PathBuf::from(&gone.home);
-    if home.starts_with(profile.join(FOLDER)) {
+    // Row 944: only the account's own home directly under the accounts folder is deleted (a ".." or a nested path is not).
+    if home.parent() == Some(profile.join(FOLDER).as_path()) && home.file_name().is_some_and(|n| n == id) {
         remove_dir_patiently(&home).map_err(|e| format!("The account was removed, but its Codex home could not be deleted: {e}"))?;
     }
-    let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
-    Ok(())
+    cleared
 }
 
 #[tauri::command]
@@ -948,9 +961,10 @@ mod tests {
         let profile = temp("row912");
         let store = Mutex::new(Store::open(&profile).unwrap());
         let broken = "[{\"id\":\"c1\",\"email\":\"sam@exa\u{0}\u{fffd} half";
-        store.lock().unwrap().set(LIST_KEY, broken).unwrap();
-        crate::orchestration::kept::refuse_copies(&profile);
+        // The list breaks while the login runs: one that is broken at the start fails before the login (row 932).
         let got = sign_in(&store, &profile, "c9", false, 1, |home: &Path| {
+            store.lock().unwrap().set(LIST_KEY, broken).unwrap();
+            crate::orchestration::kept::refuse_copies(&profile);
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
             (String::new(), Ended::Exited(Some(0)), None)
         });
@@ -1313,11 +1327,163 @@ mod tests {
         assert_eq!(load(&store.lock().unwrap()).len(), 2);
     }
 
+    // Row 932: a store that cannot be read at the start fails a re-sign-in before the login, rather than routing a listed account to a new id.
+    #[test]
+    fn row932_an_existing_codex_sign_in_fails_up_front_when_the_list_cannot_be_read() {
+        let profile = temp("row932-unreadable");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", false, 1, ok).unwrap();
+        let ran = std::cell::Cell::new(false);
+        let side = crate::orchestration::kept::Unreadable::new(&profile);
+        let got = sign_in(&store, &profile, "c1", true, 2, |h: &Path| {
+            ran.set(true);
+            ok(h)
+        });
+        side.restore();
+        assert!(got.is_err(), "an unreadable list is an error, not a new account");
+        assert!(!ran.get(), "and the login never started");
+        let homes: Vec<_> = fs::read_dir(profile.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(homes, ["c1"], "no duplicate account folder");
+        assert_eq!(load(&store.lock().unwrap()).len(), 1);
+    }
+
+    // Row 938: with nothing listed at all an existing re-sign-in keeps its own id and home.
+    #[test]
+    fn row938_an_existing_codex_sign_in_with_an_empty_list_and_its_home_keeps_its_own_id() {
+        let profile = temp("row938-empty");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        let first = sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
+        let got = sign_in(&store, &profile, "c1", true, 2, ok("lee@example.com")).unwrap();
+        assert_eq!(got.id, "c1", "the account keeps its id, not c2");
+        assert_eq!(got.home, first.home, "and its home");
+        let homes: Vec<_> = fs::read_dir(profile.join(FOLDER)).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(homes, ["c1"], "no second account home");
+    }
+
+    // Row 944: the sealed copy goes before the home, so a home that will not delete never leaves an orphan copy that a stale sign-in could unseal.
+    #[test]
+    fn row944_a_failed_home_delete_still_removes_the_sealed_copy() {
+        let profile = temp("row944-order");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        sign_in(&store, &profile, "c1", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
+        let home = profile.join(FOLDER).join("c1");
+        fs::remove_dir_all(&home).unwrap();
+        fs::write(&home, "not a folder").unwrap();
+        let vault = profile.join(secrets::VAULT).join("codex-c1.json");
+        assert!(vault.is_file());
+        assert!(remove(&store.lock().unwrap(), &profile, "c1").is_err(), "the home delete still reports its failure");
+        assert!(!vault.exists(), "the sealed copy is gone");
+    }
+
+    // Row 947: the guard's false side: a listed safe id whose stored home is outside the accounts folder is unlisted but that home is never deleted.
+    #[test]
+    fn row947_removing_a_listed_id_whose_home_is_elsewhere_deletes_that_home_never() {
+        let profile = temp("row947-elsewhere");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let elsewhere = profile.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let marker = elsewhere.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let s = store.lock().unwrap();
+        let odd = Account { id: "c1".into(), email: None, home: elsewhere.to_string_lossy().into_owned(), last_sign_in: 0, sign_in_error: false, label: None };
+        s.set(LIST_KEY, &serde_json::to_string(&[odd]).unwrap()).unwrap();
+        remove(&s, &profile, "c1").unwrap();
+        assert!(crate::orchestration::kept::load::<Vec<Account>>(&s, LIST_KEY).unwrap().is_empty(), "the account is unlisted");
+        assert!(marker.exists(), "the home outside the accounts folder is untouched");
+    }
+
+    // Row 947: removing an account whose listed id is ".." must not delete the profile folder (the same guard as the Claude side).
+    #[test]
+    fn row947_removing_a_path_id_deletes_nothing() {
+        let profile = temp("row947-dotdot");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let marker = profile.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let s = store.lock().unwrap();
+        let odd = Account { id: "..".into(), email: None, home: profile.join(FOLDER).join("..").to_string_lossy().into_owned(), last_sign_in: 0, sign_in_error: false, label: None };
+        s.set(LIST_KEY, &serde_json::to_string(&[odd]).unwrap()).unwrap();
+        assert!(remove(&s, &profile, "..").is_err(), "an unsafe id is refused");
+        assert!(marker.exists(), "the profile folder is still there");
+    }
+
+    // Row 947: an active marker that will not clear is reported at the end, after the list is saved and the sealed copy and home are gone.
+    #[test]
+    fn row947_a_marker_that_will_not_clear_still_removes_the_vault_and_home() {
+        let profile = temp("row947-marker");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        sign_in(&store, &profile, "c1", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
+        let s = store.lock().unwrap();
+        s.set(ACTIVE_KEY, "c1").unwrap();
+        s.poison(ACTIVE_KEY);
+        assert!(remove(&s, &profile, "c1").is_err(), "the failure to clear the marker is still reported");
+        assert!(crate::orchestration::kept::load::<Vec<Account>>(&s, LIST_KEY).unwrap().is_empty(), "the list was saved");
+        assert!(!profile.join(secrets::VAULT).join("codex-c1.json").exists(), "the sealed copy is gone");
+        assert!(!profile.join(FOLDER).join("c1").exists(), "and so is the home");
+    }
+
+    // Row 944: an id like ".." is never an account home; a cancelled login must not roll back (delete) the profile folder.
+    #[test]
+    fn row944_a_codex_sign_in_with_a_path_id_is_refused_before_the_login() {
+        let profile = temp("row944-signin");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let marker = profile.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let called = std::cell::Cell::new(false);
+        let got = sign_in(&store, &profile, "..", true, 1, |_: &Path| {
+            called.set(true);
+            (String::new(), Ended::Cancelled, None)
+        });
+        assert!(got.is_err(), "an unsafe id is refused");
+        assert!(!called.get(), "the login never ran");
+        assert!(marker.exists(), "nothing outside the accounts folder was touched");
+    }
+
+    // Row 940: a non-empty list that lacks the id but a home that is there is a still-existing sign-in (the list lost it), so it keeps its id.
+    #[test]
+    fn row940_an_existing_codex_sign_in_at_an_unlisted_id_with_a_home_keeps_its_id() {
+        let profile = temp("row940-home");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", false, 1, ok("kim@example.com")).unwrap();
+        let home = profile.join(FOLDER).join("c2");
+        fs::create_dir_all(&home).unwrap();
+        let got = sign_in(&store, &profile, "c2", true, 2, ok("lee@example.com")).unwrap();
+        assert_eq!(got.id, "c2", "the account keeps its id, not a new one");
+        assert_eq!(got.home, home.to_string_lossy());
+        assert_eq!(load(&store.lock().unwrap()).len(), 2);
+    }
+
     // Row 929: existing:true at an id that is not listed (a stale screen) is a new account, so an orphan sealed copy at that id is never overwritten.
     #[test]
     fn row929_an_existing_codex_sign_in_at_an_unlisted_id_claims_a_free_one() {
         let profile = temp("row929-stale");
         let store = Mutex::new(Store::open(&profile).unwrap());
+        // Row 938: a stale screen means a non-empty list that lacks the id; an empty list keeps the id.
+        sign_in(&store, &profile, "c1", false, 1, |home: &Path| {
+            fs::write(home.join("auth.json"), token("lee@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        })
+        .unwrap();
         let vault = profile.join(secrets::VAULT).join("codex-c7.json");
         secrets::write_file(&vault, "orphan sealed text").unwrap();
         let orphan = fs::read(&vault).unwrap();
