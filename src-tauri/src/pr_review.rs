@@ -626,7 +626,7 @@ pub async fn scm_review_send(app: tauri::AppHandle, worktree: String, text: Stri
         let git = app.state::<crate::git::Git>();
         let notify = |_: serde_json::Value| {};
         let front = || -> Result<(), String> { Ok(()) };
-        let ctx = crate::cli::Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front };
+        let ctx = crate::cli::Ctx { claude_config: crate::claude_accounts::trust_config_file(&store), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front };
         let req = crate::cli::Request {
             id: format!("review-send-{terminal}"),
             token: String::new(),

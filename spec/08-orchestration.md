@@ -73,8 +73,8 @@ Rules: the line gives the count and the exact check command, adding the Run when
   handing the pane back to the terminal, or the chat session has no attachment on this computer, the
   line waits instead of landing in the wrong place.
 Acceptance:
-  - [ ] Coordinator idle, a worker sends to run:<id> → within a few seconds the coordinator pane
-      shows the line and the agent runs check.
+  - [x] Coordinator idle, a worker sends to run:<id> → within a few seconds the coordinator pane
+      shows the line and the agent runs check. (cards live; evidence/cards-ORCH-007.txt)
   - [x] Coordinator in the middle of a turn → no line until the turn ends. (cards; evidence/cards-ORCH-007.txt)
   - [x] Coordinator blocked in a waiting check → nothing typed; the wait returns the message. (cards; evidence/cards-ORCH-007.txt)
 Compat: —
@@ -345,8 +345,8 @@ Rules: without inject nothing is typed into the target; the dispatch carries con
   alone proves nothing: an agent-like title over a generic wrapper process, or Claude's own
   agent-management screen, does not count as a running agent.
 Acceptance:
-  - [ ] Dispatch a task with inject to an idle Claude pane → the pane receives the brief and starts
-      work.
+  - [x] Dispatch a task with inject to an idle Claude pane → the pane receives the brief and starts
+      work. (cards live; evidence/cards-ORCH-013.txt)
   - [ ] Dispatch to the coordinator's own pane → turned away with a reason.
   - [x] Dispatch with dry-run → the plan is printed and the task is still ready. (cards; evidence/cards-ORCH-013.txt)
 Compat: `kolux orchestration dispatch --task <id> --to <handle> [--inject] [--dry-run] [--return-preamble] [--json]`.

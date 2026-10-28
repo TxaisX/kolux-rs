@@ -971,6 +971,8 @@ pub fn run() {
                 tools::reopen_main(app);
             }
             if let tauri::RunEvent::Exit = event {
+                // APP-050 b2: exit paths that never destroy the main window (tray Quit, recovery exit, session end) get the kill-switch too; a stall past it skips install_on_quit.
+                lifecycle::quit_watchdog(app);
                 // T-324-b-rest: a sign-out, shutdown or restart is logged before anything that may be cut short.
                 lifecycle::note_session_end(app);
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
