@@ -16,8 +16,8 @@ import { createApp, sleep, waitFor } from "../evidence/app-launch.mjs";
 export { sleep, waitFor };
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
 export const ACCOUNT_A = "G:/Dev/kolux-scratch/live-signin/account-a";
-export const BASE = "G:/Temp/live-v9";
-export const LOGS = "G:/Temp/live-v9-logs";
+export const BASE = "G:/Temp/live-v10";
+export const LOGS = "G:/Temp/live-v10-logs";
 export const CLAUDE = 'section.pane[data-agent*="claude"]';
 
 // Nothing of the old app, no token variable and no API key may reach the app, its panes or Claude.
@@ -56,10 +56,13 @@ export const git = (cwd, args) =>
  * settings.json; a permissions-skipping flag is refused). opts.files: {name: text} committed on main.
  * opts.branch: a branch checked out after the first commit. opts.trace: a folder GIT_TRACE2 points at for the app.
  * opts.dirty: {name: text} written (uncommitted) after the first commit.
+ * opts.prepare(repo): more repo setup before the app starts (e.g. a scratch bare remote). opts.allowSkip: true lets claudeArgs skip
+ * permission checks, but only when the repo has no remote outside BASE (every remote URL is a scratch bare repo under BASE).
  */
 export async function startProve(id, opts) {
   const { log } = opts.report;
-  if (/dangerously|bypassPermissions|yolo/i.test(opts.claudeArgs)) throw new Error("refused: a permissions-skipping flag is not allowed in this lane");
+  const skipping = /dangerously|bypassPermissions|yolo/i.test(opts.claudeArgs);
+  if (skipping && !opts.allowSkip) throw new Error("refused: a permissions-skipping flag is not allowed in this lane");
   const TEMP = `${BASE}/run-${id}`;
   const repo = `${BASE}/work/${id}`;
   const settingsFile = `${TEMP}/tmp/claude-config/settings.json`;
@@ -85,6 +88,12 @@ export async function startProve(id, opts) {
     await git(repo, ["commit", "-q", "-m", "branch work"]);
   }
   for (const [name, text] of Object.entries(opts.dirty ?? {})) writeFileSync(join(repo, name), text);
+  if (opts.prepare) await opts.prepare(repo);
+  if (skipping) {
+    const urls = (await git(repo, ["remote", "-v"])).split(/\r?\n/).filter(Boolean).map((l) => l.split(/\s+/)[1]);
+    log(`git remote -v in ${repo}: ${urls.join(", ") || "(no remote)"}`);
+    if (urls.length === 0 || urls.some((u) => !u.replace(/\\/g, "/").startsWith(`${BASE}/`))) throw new Error(`refused: skipping permission checks needs every remote to be a scratch bare repo under ${BASE}`);
+  }
   if (opts.trace) {
     rmSync(opts.trace, { recursive: true, force: true });
     mkdirSync(opts.trace, { recursive: true });
@@ -139,6 +148,19 @@ export async function startProve(id, opts) {
       for (;;) {
         const t = await ctx.screenText();
         if (/login method|please run \/login|not logged in|log in to claude|Paste code here|Invalid API key|Anthropic Console|Sign in/i.test(t)) throw new NeedsLogin(`claude asks for a login: ${t.split("\n").filter(Boolean).slice(0, 4).join(" | ").slice(0, 200)}`);
+        // Only with opts.allowSkip (a scratch repo + scratch bare remote): Claude's own "Bypass Permissions mode" warning; the pre-selected answer is "No, exit".
+        if (/Bypass Permissions mode/i.test(t) && /Yes, I accept/i.test(t)) {
+          if (Date.now() - last > 4000) {
+            last = Date.now();
+            log('  (bypass-permissions warning: chose "Yes, I accept" for the scratch repo)');
+            await ctx.focus();
+            await cdp("key", "ArrowDown");
+            await sleep(300);
+            await ctx.enter();
+          }
+          await sleep(1000);
+          continue;
+        }
         // First-run questions of the test account (the sign-in is already there): accept the pre-selected answer, one Enter each.
         const first = /Choose the text style|Press Enter to continue|trust this folder|Do you trust|Yes, I trust|Use recommended settings/i.exec(t);
         if (first) {
@@ -189,6 +211,13 @@ export async function startProve(id, opts) {
       return (await ctx.events())[0]?.paneKey ?? null;
     },
     history: (paneKey) => app.invoke("agent_history", { paneKey }),
+    /** Types a line into the n-th shown pane matching sel (default: a shell pane) through the input pipeline, then Enter. */
+    async typeInto(index, line, sel = 'section.pane[data-agent="shell"]') {
+      await focusPane(sel, index, ".xterm-helper-textarea");
+      await cdp("insert", line, "enter");
+    },
+    /** A CDP page screenshot (PNG) written to LOGS/<name>.png. */
+    shot: async (name) => (await import("./live-claude-common.mjs")).shot(name),
     stop: () => app.closeApp(),
   };
   return ctx;
@@ -206,8 +235,8 @@ export function hookEventsInstalled(settingsFile) {
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
 
 // ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
-export const LIVE_BASE = "G:/Temp/live-v9";
-export const LIVE_LOGS = "G:/Temp/live-v9-logs";
+export const LIVE_BASE = "G:/Temp/live-v10";
+export const LIVE_LOGS = "G:/Temp/live-v10-logs";
 export const TERM = "section.pane[data-agent]";
 export const SHELL = 'section.pane[data-agent="shell"]';
 

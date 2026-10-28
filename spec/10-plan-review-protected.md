@@ -122,8 +122,8 @@ Rules: Approve stays clickable for as long as the plan is still pending, with or
 Acceptance:
   - [x] Open the sheet and click Approve → Claude leaves plan mode and starts the work, and the
         review button is gone. (cards live; evidence/cards-SAFE-003.txt)
-  - [ ] Write a comment, then click Approve → Approve was clickable, Claude proceeds, and the
-        comment is not kept.
+  - [x] Write a comment, then click Approve → Approve was clickable, Claude proceeds, and the
+        comment is not kept. (cards live; evidence/cards-SAFE-003.txt)
 Compat: —
 Source: D-10-003
 
@@ -172,13 +172,13 @@ Rules: only Claude Code is guarded, through its PreToolUse hook, and the Safety 
   protected-command check; the master switch and the list of rules switched off are both settings,
   read from the settings file on every command; the proof through a signed-in Claude is T-058-b.)
 Acceptance:
-  - [ ] Claude force-pushes main → Claude's permission prompt shows the Kolux reason; refuse →
-        nothing is pushed.
+  - [x] Claude force-pushes main → Claude's permission prompt shows the Kolux reason; refuse →
+        nothing is pushed. (cards live; evidence/cards-SAFE-009.txt)
   - [x] Claude asks for the working-tree status → no prompt. (cards; evidence/cards-SAFE-009.txt)
   - [x] Switch the matching rule off and try again → the command runs with no prompt. (cards; evidence/cards-SAFE-009.txt)
   - [x] Send the hook a garbled body → neutral answer, and Claude carries on. (cards; evidence/cards-SAFE-009.txt)
-  - [ ] Run Claude in its automatic permission mode, and again with permission checks skipped, then
-        force-push main → record whether the ask still appears (never verified at 0.15.0).
+  - [x] Run Claude in its automatic permission mode, and again with permission checks skipped, then
+        force-push main → record whether the ask still appears (never verified at 0.15.0). (cards live; evidence/cards-SAFE-009.txt)
 Compat: Claude Code's PreToolUse protocol: the reply is either an empty object, meaning no opinion,
   or a hook-specific output block that names the PreToolUse event, sets the permission decision to
   ask and gives a reason; Kolux reads the tool name (Bash or PowerShell) and the command from the
