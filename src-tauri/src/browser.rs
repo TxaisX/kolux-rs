@@ -56,6 +56,9 @@ pub mod helpers;
 pub mod popup;
 #[path = "browser_certs.rs"]
 pub mod certs;
+// Row 939: the saved proxy reaches the engine as a browser argument; a tab that cannot have it is refused.
+#[path = "browser_proxy.rs"]
+pub mod proxy;
 // T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
 #[path = "browser_engine.rs"]
 pub mod engine;
@@ -934,8 +937,19 @@ fn set_system_proxy_for_test(on: bool) {
 /// The sealed proxy setting as saved (None without a store or a value).
 fn saved_proxy(app: &AppHandle) -> Result<Option<String>, String> {
     match app.try_state::<Mutex<crate::state::Store>>() {
-        Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy"),
+        Some(store) => proxy_in_settings(store.lock().map_err(|e| e.to_string())?.try_settings()),
         None => Ok(None),
+    }
+}
+
+const SETTINGS_UNREADABLE: &str = "Kolux can't read its settings, so the in-app browser won't open pages in case a proxy is set. Nothing was loaded directly; restart Kolux or check settings.json.";
+
+/// The saved `httpProxy`, opened. A file that cannot be read is an error, never "no proxy"; a file
+/// that is simply not there (first run) reads as no settings.
+fn proxy_in_settings(read: std::io::Result<serde_json::Value>) -> Result<Option<String>, String> {
+    match read.map_err(|_| SETTINGS_UNREADABLE.to_string())?.get("httpProxy") {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => crate::secrets::unseal(s).map(Some),
+        _ => Ok(None),
     }
 }
 
@@ -1120,21 +1134,27 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let download_app = app.clone();
     // T-240 (BROW-033): every tab of every profile goes through the configured proxy; a value the
     // engine cannot take leaves the tab unopened rather than going direct.
-    let proxy = saved_proxy(&app)?;
+    let saved = proxy_of(saved_proxy(&app)?.as_deref())?;
     #[cfg(windows)]
     let crash_dir = app.path().app_data_dir().ok();
     // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
     let key = url.to_string();
-    let (builder, spoof) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
-    let builder = match proxy_of(proxy.as_deref())? {
+    let (builder, spoof, folder) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
+    // Row 939: on Windows wry drops `.proxy_url()` whenever browser arguments are passed, so the proxy
+    // rides in them; elsewhere `.proxy_url()` is the only road and stays. Tabs already open keep the
+    // proxy they opened with until Kolux restarts.
+    let launch = crate::resources::recovery::browser_args_now();
+    let setup = proxy::tab_setup(&launch, &folder, saved.as_ref());
+    let (args, url_proxy) = setup.inspect_err(|_| profiles::page_closed(id))?; // no engine page was made: the profile's folder is not in use
+    let builder = match url_proxy {
         Some(u) => builder.proxy_url(u),
         None => builder,
     };
     let builder = builder
         .focused(false)
-        // T-286-b (APP-017): the same browser arguments as the window (throttling exemption, safe
-        // graphics), or the engine refuses a second set on the same data folder.
-        .additional_browser_args(&crate::resources::recovery::browser_args_now())
+        // T-286-b (APP-017): the window's browser arguments (throttling exemption, safe graphics),
+        // or the engine refuses a second set on the same data folder; plus the saved proxy.
+        .additional_browser_args(&args)
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
         .zoom_hotkeys_enabled(false)
         .initialization_script(CHORD_SCRIPT)
@@ -1869,22 +1889,24 @@ pub fn take_profile(url: &str) -> Option<String> {
 
 /// A tab in a profile other than the default runs in that profile's own engine data folder; the
 /// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
-fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, url: &str) -> (WebviewBuilder<tauri::Wry>, bool) {
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, url: &str) -> (WebviewBuilder<tauri::Wry>, bool, String) {
+    let shared = || proxy::DEFAULT_FOLDER.to_string();
     let profile = profile.or_else(|| take_profile(url));
-    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true) };
-    let Ok(root) = profiles::root() else { return (b, true) };
+    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true, shared()) };
+    let Ok(root) = profiles::root() else { return (b, true, shared()) };
     let mut store = profiles::load(&root);
     if profiles::set_tab(&mut store, id, &p).is_err() {
-        return (b, true);
+        return (b, true, shared());
     }
     let _ = profiles::save(&root, &store);
     let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
         Some(dir) => {
             profiles::page_opened(id, &p); // after-list 153: a deleted profile's folder waits for its last page
-            (b.data_directory(dir), spoof)
+            let folder = dir.to_string_lossy().into_owned();
+            (b.data_directory(dir), spoof, folder)
         }
-        None => (b, spoof),
+        None => (b, spoof, shared()),
     }
 }
 
@@ -2899,6 +2921,21 @@ mod tests {
         assert_eq!(hand_off(&local, Some("/real.ico"), None), Some(u("http://localhost:3000/real.ico")));
         assert_eq!(hand_off(&local, Some("http://127.0.0.1:8745/"), None), None);
         assert_eq!(hand_off(&local, Some("http://localhost:1420/x"), Some(&u("http://localhost:1420"))), None);
+    }
+
+    #[test]
+    fn row939_an_unreadable_settings_file_is_an_error_not_no_proxy() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row939-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        assert_eq!(proxy_in_settings(store.try_settings()), Ok(None), "no file yet (first run) is no proxy");
+        std::fs::write(dir.join("settings.json"), "{ half written").unwrap();
+        assert_eq!(proxy_in_settings(store.try_settings()), Err(SETTINGS_UNREADABLE.to_string()), "corrupt with no usable backup");
+        assert!(!icon_fetch_allowed(&proxy_in_settings(store.try_settings())), "and no icon goes direct either");
+        std::fs::write(dir.join("settings.json"), r#"{"httpProxy":"http://127.0.0.1:3128"}"#).unwrap();
+        assert_eq!(proxy_in_settings(store.try_settings()), Ok(Some("http://127.0.0.1:3128".to_string())));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // T-323-c: a saved proxy means no icon fetch at all; the icon clients only ever connect directly.

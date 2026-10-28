@@ -221,9 +221,11 @@ pub fn run() {
     // T-286-b (APP-017): every window is excused from background throttling (WebView2 browser
     // arguments; later webviews on the same data folder reuse the same string).
     let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
+    // Row 939: the window's browser arguments carry the proxy saved in the profile, like its tabs'.
+    let identifier = context.config().identifier.clone();
     for w in &mut context.config_mut().app.windows {
         w.create = false;
-        w.additional_browser_args = Some(resources::recovery::launch_browser_args(w.additional_browser_args.as_deref(), safe));
+        w.additional_browser_args = Some(resources::recovery::launch_browser_args_for(w.additional_browser_args.as_deref(), safe, &identifier));
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
