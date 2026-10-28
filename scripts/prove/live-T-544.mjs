@@ -165,9 +165,11 @@ const key = async (k) => {
 };
 
 const app = createApp({ root: ROOT, port: "1", cdp: String(CDP), identifier: ID, temp: RUN, offscreen: true, attach: true, log });
+// A release build has no __koluxTerm (dev only), so this reads the DOM renderer's visible rows: terminalGpu must be off
+// (item 4 runs first). i = -1: every visible pane.
 const paneLines = async (i) => {
-  const r = await app.evalJs(`(() => { const p = [...document.querySelectorAll(${JSON.stringify(TERM)})].filter(e => e.offsetParent !== null)[${i}]; if (!p) return null; for (const d of p.querySelectorAll("div")) { const t = d.__koluxTerm; if (t) { const b = t.buffer.active; const out = []; for (let y = 0; y < b.length; y++) out.push(b.getLine(y)?.translateToString(true) ?? ""); return out; } } return null; })()`);
-  return (r ?? []).map((l) => l.trim());
+  const r = await app.evalJs(`(() => { const ps = [...document.querySelectorAll(${JSON.stringify(TERM)})].filter(e => e.offsetParent !== null); return (${i} < 0 ? ps : ps.slice(${i}, ${i} + 1)).flatMap(p => [...p.querySelectorAll(".xterm-rows > div")].map(r => r.textContent)); })()`);
+  return (Array.isArray(r) ? r : []).map((l) => l.replace(/ /g, " ").trim());
 };
 const typeInto = async (i, line) => {
   await app.focusPane(TERM, i, ".xterm-helper-textarea");
@@ -277,15 +279,6 @@ try {
   await app.cdp("insert", REPO, "enter");
   await back("launch 1");
 
-  // Item 2: the RS command line comes first in a pane of the installed app.
-  const w = await run(0, "where.exe kolux", "W");
-  const first = w.find((l) => /^[a-z]:\\[^>]*\\kolux\.(exe|cmd|bat|ps1)$/i.test(l)) ?? ""; // a path line, not the echoed prompt
-  const whereOk = norm(first) === norm(CLI);
-  check("item2", "where.exe kolux lists the install's bin\\kolux.exe first", whereOk, JSON.stringify(w));
-  if (whereOk) {
-    const v = await run(0, "kolux --version", "V");
-    check("item2", "kolux --version prints 0.1.0", v.some((l) => /\b0\.1\.0\b/.test(l)), JSON.stringify(v));
-  } else check("item2", "kolux --version prints 0.1.0", false, "not run: the first kolux on PATH is not the install's");
 
   // Item 4: terminalGpu off through Settings > Appearance, a new shell pane, `dir`.
   await key({ key: ",", code: "Comma", windowsVirtualKeyCode: 188, modifiers: 2 });
@@ -322,9 +315,21 @@ try {
     `renderer ${look.renderer}, ${look.rows} rows, heights ${JSON.stringify(look.heights)}, ascending ${look.ascending}, dir output ${look.dirHeader}, colour ${look.color} vs theme ${rgb(look.themeFg)}, font ${look.font}, CSP violations ${look.csp.length}`);
   log(`screenshot: ${await shot("T-544-item4-dom-dir")}`);
 
+  // Item 2: the RS command line comes first in a pane of the installed app (pane 1: DOM rows, cleared so all fits on screen).
+  await typeInto(1, "cls");
+  await sleep(1500);
+  const w = await run(1, "where.exe kolux", "W");
+  const first = w.find((l) => /^[a-z]:\\[^>]*\\kolux\.(exe|cmd|bat|ps1)$/i.test(l)) ?? ""; // a path line, not the echoed prompt
+  const whereOk = norm(first) === norm(CLI);
+  check("item2", "where.exe kolux lists the install's bin\\kolux.exe first", whereOk, mask(JSON.stringify(w)));
+  if (whereOk) {
+    const v = await run(1, "kolux --version", "V");
+    check("item2", "kolux --version prints 0.1.0", v.some((l) => /\b0\.1\.0\b/.test(l)), JSON.stringify(v));
+  } else check("item2", "kolux --version prints 0.1.0", false, "not run: the first kolux on PATH is not the install's");
+
   // APP-052 b1: a marker survives three quit + relaunch rounds.
-  await typeInto(0, `echo ${M1}`);
-  await waitFor("marker 1", async () => (await paneLines(0)).includes(M1), 30000, 500);
+  await typeInto(1, `echo ${M1}`);
+  await waitFor("marker 1", async () => (await paneLines(1)).includes(M1), 30000, 500);
   for (let round = 1; round <= 3; round++) {
     const closed = await app.closeAndCount(app.pid);
     const left = mine();
@@ -332,7 +337,7 @@ try {
     await app.killAll(closed.survivors.filter((s) => !left.some((m) => m.pid === s.pid)));
     await launch(`relaunch ${round}`);
     await back(`relaunch ${round}`);
-    const l = await paneLines(0);
+    const l = await paneLines(-1);
     check("b1", `round ${round}: the marker is shown after the relaunch`, l.includes(M1), `${l.length} buffer rows, panes shown ${await app.shown(TERM)}`);
     log(`screenshot: ${await shot(`T-544-APP052-round${round}`)}`);
   }
@@ -341,8 +346,8 @@ try {
   const svc = mine();
   check("b2", "exactly one terminal service is tied to the install (its command line names the install or its data folder)", svc.length === 1, `${svc.length}: ${JSON.stringify(svc.map((s) => mask(s.cmd).slice(0, 240)))}`);
   if (svc.length === 1) {
-    await typeInto(0, `echo ${M2}`);
-    await waitFor("marker 2", async () => (await paneLines(0)).includes(M2), 30000, 500);
+    await typeInto(1, `echo ${M2}`);
+    await waitFor("marker 2", async () => (await paneLines(1)).includes(M2), 30000, 500);
     await sleep(2500);
     const others = services().filter((s) => s.pid !== svc[0].pid).map((s) => s.pid).sort();
     ps(`Stop-Process -Id ${svc[0].pid} -Force`);
@@ -355,7 +360,7 @@ try {
     await app.killAll(closed.survivors.filter((s) => !mine().some((m) => m.pid === s.pid)));
     await launch("relaunch after the kill");
     await back("relaunch after the kill");
-    const l = await paneLines(0);
+    const l = await paneLines(-1);
     check("b2", "after the kill and a relaunch the terminal is back with its earlier output (marker 2)", l.includes(M2), `${l.length} buffer rows; marker 1 kept ${l.includes(M1)}; tail ${JSON.stringify(l.filter(Boolean).slice(-4))}`);
     log(`screenshot: ${await shot("T-544-APP052-after-kill")}`);
   }
