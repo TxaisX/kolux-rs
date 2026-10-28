@@ -111,3 +111,14 @@ LIVE PROOF PENDING, ROW 954c (prover lane; loopback only, scratch profile; Windo
     from outside). No event reaches the app while A is hidden. Show tab A again. Expect: the first probe after it is shown gets no
     answer, selfclose::probe_missed finds the container gone (also when the probe's query could not be sent at all), and the tab
     is rebuilt at its URL with the notice "This page closed itself; Kolux reopened it" (once, not a crash overlay).
+
+LIVE PROOF PENDING (rows 977 + 978; needs evidence/browser-979-App.patch applied to src/App.tsx first, else restored tabs open in the default as before)
+15. Restore keeps the profile (row 977). Put a browser tab in the "work" profile (kolux tab profile set <id> work), quit Kolux, start it
+    again. Expect the tab comes back in work (its login is still there; the profile row is unchanged) and the keyboard stays where it
+    was (not in the restored tab). A second tab left in the default comes back in the default, never in work.
+16. Deleted profile (row 977). Repeat step 15, but delete the profile while Kolux is closed from the profile list (or delete it, quit,
+    start). Expect the tab opens in the default and the toolbar shows "This tab's saved profile is gone; it opened in the default
+    profile" once; restart again: no notice, the row is gone.
+17. Background tab does not take focus (row 978). With the cursor in a terminal pane, have an agent run "kolux tab create <url>" so the
+    tab opens behind the user (its section hidden). Expect the typing cursor stays in the terminal. A tab the user opens with Ctrl+T
+    still takes the keyboard for its address bar.
