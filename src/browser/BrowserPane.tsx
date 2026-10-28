@@ -23,7 +23,7 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
-import { namesPane, openPage, type ProfileEvent, reopenPage } from "./reopen";
+import { namesPane, openPage, type ProfileEvent, reopenPage, type Why } from "./reopen";
 import { SELF_CLOSE_EVENT, type SelfClosed, selfCloseNotice } from "./selfClose";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
@@ -200,12 +200,19 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [connecting, setConnecting] = useState(false);
   // BROW-009 / T-241: close the page and open it again at the pane's spot and colour, for a page
   // that cannot reload and for a tab whose profile changed (`profile` names the new one).
-  const reopen = (to: string, profile?: string) => {
+  // Row 954 (c): the id this pane is mounted for (null once unmounted) and its latest bounds sender,
+  // so a rebuild that outlives the pane closes what it built, and the rebuilt page is put where the
+  // pane is NOW (shown or hidden, size) instead of where it was when the rebuild began.
+  const mountedFor = useRef<number | null>(null);
+  const sendBounds = useRef<(() => void) | null>(null);
+  const reopen = (to: string, profile?: string, why: Why = "auto") => {
     const body = host.current;
     if (!body) return setBusy(false);
-    reopenPage(invoke, id, { url: to || BLANK, spot: spot(body), background: backgroundBehind(body), shown: body.clientWidth > 0 && body.clientHeight > 0, profile }).catch((err) => {
+    const live = { alive: () => mountedFor.current === id, sync: () => sendBounds.current?.() };
+    reopenPage(invoke, id, { url: to || BLANK, spot: spot(body), background: backgroundBehind(body), shown: body.clientWidth > 0 && body.clientHeight > 0, profile }, why, live).catch((err) => {
       setBusy(false);
       setNote(String(err));
+      feed({ t: "openfailed" }); // H6: no overlay and no Retry otherwise
     });
   };
   const feed = (e: LoadEvent) => {
@@ -219,9 +226,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       setCert(null);
     }
     if (action === "reload") invoke("browser_go", { id, what: "reload" }).catch(() => {});
-    if (action === "rebuild") reopen(h.url);
+    if (action === "rebuild") reopen(h.url, undefined, e.t === "retry" ? "retry" : "auto");
     if (action === "overlay") {
       setBusy(false);
+      // H3: a tab left closed has no use for its destroyed page, its handlers or its popups; Retry opens a new one.
+      if (h.phase === "closed" && !h.openFailed) invoke("browser_close", { id }).catch(() => {});
       const at = h.url;
       invoke<boolean | null>("browser_external_handler", { url: at })
         .then((v) => health.current.url === at && setHandler(v))
@@ -261,6 +270,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
 
   useEffect(() => {
     let alive = true;
+    mountedFor.current = id;
     const unlisteners: UnlistenFn[] = [];
     (async () => {
       // T-283 (BROW-010): one wake signal for every pane; each rechecks its own page.
@@ -405,6 +415,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     })();
     return () => {
       alive = false;
+      mountedFor.current = null;
       unlisteners.forEach((u) => u());
       if (opened.current) invoke("browser_close", { id }).catch(() => {});
     };
@@ -422,6 +433,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       invoke("browser_bounds", { id, spot: shown ? spot(el) : { x: 0, y: 0, w: 0, h: 0 }, shown, background }).catch(() => {});
     };
     send();
+    sendBounds.current = () => send();
     const resized = () => send();
     const observer = new ResizeObserver(resized);
     observer.observe(el);
@@ -437,6 +449,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     });
     themed.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-mode"] });
     return () => {
+      sendBounds.current = null;
       observer.disconnect();
       themed.disconnect();
       window.removeEventListener("resize", resized);

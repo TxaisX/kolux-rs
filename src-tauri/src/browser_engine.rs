@@ -38,6 +38,8 @@ mod imp {
     use std::path::PathBuf;
     use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, GetCookiesCompletedHandler, NavigationStartingEventHandler, PermissionRequestedEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
     use webview2_com::WindowCloseRequestedEventHandler;
+    use crate::browser::selfclose::Engine;
+    use std::sync::Arc;
     use windows::core::{w, Interface, BOOL, HSTRING, PWSTR};
     use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -117,7 +119,7 @@ mod imp {
     /// T-286-b (APP-040): hooks a view's process-failed event; each failure is read as far as the
     /// runtime goes (kind; reason, exit code and process on newer runtimes; the faulting module on
     /// newer still) and handed to `crash::report` with the memory reading taken now.
-    pub fn watch_failures(source: crash::Source, controller: &ICoreWebView2Controller, dir: PathBuf) {
+    pub fn watch_failures(source: crash::Source, controller: &ICoreWebView2Controller, dir: PathBuf, built: Option<Arc<Engine>>) {
         // SAFETY: CoreWebView2 hands back the view's engine object.
         let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
         let handler = ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
@@ -140,8 +142,10 @@ mod imp {
                 f.module = unsafe { take(|p| a3.FailureSourceModulePath(p)) };
             }
             let open = match source {
-                // Row 954 (b): a report right after the tab's own close request is that close, not a crash.
-                crash::Source::Page(id) => crate::browser::tabs().iter().any(|t| t.id == id) && !crate::browser::selfclose::aftermath(id),
+                // Row 954 (c): a report from an engine that was destroyed (its flag, or its container window
+                // already gone, whichever order the engine raised them in) is that destroy, not a crash. Only
+                // THIS engine's reports are hidden: a failure in the rebuilt tab always counts.
+                crash::Source::Page(id) => crate::browser::tabs().iter().any(|t| t.id == id) && !built.as_ref().is_some_and(|e| e.destroyed() || e.container().is_some_and(|c| !holder::window_exists(c))),
                 crash::Source::App => true,
             };
             let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -153,14 +157,16 @@ mod imp {
         let _ = unsafe { core.add_ProcessFailed(&handler, &mut token) };
     }
 
-    /// Row 954 (b): observes the tab's close request. wry's own handler (registered first) has
-    /// already destroyed the tab's window by the time this one runs, and the event cannot be
-    /// vetoed, so the pane is told to build the tab again (browser_selfclose.rs decides).
-    pub fn watch_self_close(id: u32, controller: &ICoreWebView2Controller, app: tauri::AppHandle) {
+    /// Row 954 (b): observes the tab's close request. wry's own handler is registered first and
+    /// destroys the tab's window, and the event cannot be vetoed, so the pane is told to build the
+    /// tab again (browser_selfclose.rs decides). That wry runs first, and that this handler runs at
+    /// all after the destroy, is UNVERIFIED (WebView2 documents no handler order): the probe's
+    /// `IsWindow` check on the container is the order-independent fallback, and `engine` dedupes both.
+    pub fn watch_self_close(id: u32, controller: &ICoreWebView2Controller, app: tauri::AppHandle, engine: Arc<Engine>) {
         // SAFETY: CoreWebView2 hands back the page's engine object.
         let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
         let handler = WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
-            crate::browser::selfclose::requested(&app, id);
+            crate::browser::selfclose::destroyed(&app, id, &engine);
             Ok(())
         }));
         let mut token = 0i64;
@@ -448,9 +454,9 @@ pub fn popup_identity(w: &tauri::WebviewWindow, spoof: bool) {
 /// T-286-b (APP-040): a browser page's engine reports its process failures (main thread, from
 /// `browser_open`'s web view callback); `dir` is the profile folder holding the crash store.
 #[cfg(windows)]
-pub fn watch_page_failures(id: u32, pw: &tauri::webview::PlatformWebview, dir: Option<PathBuf>) {
+pub fn watch_page_failures(id: u32, pw: &tauri::webview::PlatformWebview, dir: Option<PathBuf>, built: std::sync::Arc<super::selfclose::Engine>) {
     if let Some(dir) = dir {
-        imp::watch_failures(super::crash::Source::Page(id), &pw.controller(), dir);
+        imp::watch_failures(super::crash::Source::Page(id), &pw.controller(), dir, Some(built));
     }
 }
 
@@ -458,15 +464,15 @@ pub fn watch_page_failures(id: u32, pw: &tauri::webview::PlatformWebview, dir: O
 /// `browser_open`'s web view callback). Off Windows there is no such hook: the engine there
 /// closes a tab's view without telling Kolux, and `NO_CLOSE_SCRIPT` is the only guard.
 #[cfg(windows)]
-pub fn watch_self_close(id: u32, pw: &tauri::webview::PlatformWebview, app: AppHandle) {
-    imp::watch_self_close(id, &pw.controller(), app);
+pub fn watch_self_close(id: u32, pw: &tauri::webview::PlatformWebview, app: AppHandle, built: std::sync::Arc<super::selfclose::Engine>) {
+    imp::watch_self_close(id, &pw.controller(), app, built);
 }
 
 /// T-286-b (APP-040): the app's own view reports its engine's process failures (an interface
 /// process crash is a crash). Called once at startup.
 pub fn watch_app_failures(w: &tauri::WebviewWindow, dir: PathBuf) {
     #[cfg(windows)]
-    let _ = w.with_webview(move |pw| imp::watch_failures(super::crash::Source::App, &pw.controller(), dir));
+    let _ = w.with_webview(move |pw| imp::watch_failures(super::crash::Source::App, &pw.controller(), dir, None));
     #[cfg(not(windows))]
     let _ = (w, dir);
 }

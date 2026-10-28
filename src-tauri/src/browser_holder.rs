@@ -38,6 +38,19 @@ pub fn record(id: u32, container: isize) {
     }
 }
 
+/// Whether a window handle still names a window (row 954 c). Off Windows nothing is known: true.
+#[cfg(windows)]
+pub fn window_exists(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindow;
+    // SAFETY: IsWindow only looks the handle up; a stale or reused one answers a plain bool.
+    unsafe { IsWindow(hwnd as _) != 0 }
+}
+
+#[cfg(not(windows))]
+pub fn window_exists(_hwnd: isize) -> bool {
+    true
+}
+
 /// Every recorded page container, as plain window numbers (after-list 746).
 pub fn containers() -> Vec<isize> {
     CONTAINERS.lock().map(|c| c.values().copied().collect()).unwrap_or_default()

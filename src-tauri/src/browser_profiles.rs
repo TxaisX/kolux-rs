@@ -100,6 +100,13 @@ pub fn tab_profile(store: &Store, page: u32) -> String {
     store.tabs.get(&page.to_string()).cloned().unwrap_or_else(|| DEFAULT.into())
 }
 
+/// Row 954 (c): the profile a tab opens in. One handed over (the command line, a profile change)
+/// wins; a REBUILD of a tab (crash, self-close) with none keeps the tab's saved profile; a brand-new
+/// tab never reads the saved row, so a reused id cannot inherit an old tab's cookies.
+pub fn open_profile(store: &Store, page: u32, given: Option<String>, rebuild: bool) -> Option<String> {
+    given.or_else(|| rebuild.then(|| tab_profile(store, page)).filter(|p| p != DEFAULT))
+}
+
 /// A copy of a profile (label "<label> copy"); with a page, that tab moves to the copy.
 pub fn clone_profile(store: &mut Store, id: &str, page: Option<u32>) -> Result<Profile, String> {
     let from = get(store, id).ok_or_else(|| format!("no profile is called {id}"))?;
@@ -339,6 +346,19 @@ mod tests {
         assert_eq!(delete(&mut s, DEFAULT).unwrap_err(), "the default profile cannot be deleted");
         assert_eq!(create(&mut s, " ", None, true).unwrap_err(), "--label is required");
         assert!(create(&mut s, "x", Some("shared"), true).unwrap_err().contains("isolated|imported"));
+    }
+
+    #[test]
+    fn row_954c_a_rebuilt_tab_keeps_its_saved_profile_and_a_new_tab_does_not_inherit_one() {
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        set_tab(&mut s, 4, "work").unwrap();
+        assert_eq!(open_profile(&s, 4, None, true), Some("work".into()), "a rebuild keeps the saved profile");
+        assert_eq!(open_profile(&s, 4, None, false), None, "a new tab with a reused id starts in the default");
+        assert_eq!(open_profile(&s, 4, Some("other".into()), true), Some("other".into()), "a handed-over profile wins");
+        assert_eq!(open_profile(&s, 9, None, true), None, "a rebuilt tab with no saved row stays default");
+        set_tab(&mut s, 4, DEFAULT).unwrap();
+        assert_eq!(open_profile(&s, 4, None, true), None);
     }
 
     #[test]

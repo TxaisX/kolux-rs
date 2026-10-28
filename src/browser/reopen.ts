@@ -12,11 +12,24 @@ export type ProfileEvent = { page: number; profile: string };
 /** Does this profile change name the pane with this id? */
 export const namesPane = (e: ProfileEvent, id: number): boolean => e.page === id;
 
+/** Why the page is rebuilt: the pane's own recovery ("auto") or the user's Retry ("retry"). The back
+ *  end keeps the tab's saved profile for both, never hands them the keyboard, and lets only "retry"
+ *  clear a page's record of closing itself (row 954 c). */
+export type Why = "auto" | "retry";
+/** What a rebuild asks the pane while it runs (row 954 c, H5): is the pane still there, and put the
+ *  page where the pane is NOW (the size, and shown or hidden, may have changed during the rebuild). */
+export type Live = { alive: () => boolean; sync: () => void };
+
 /** Closes the tab's page, then opens it again where the pane is. A close that fails (the page is
- *  already gone) does not stop the reopen; an open that fails rejects so the pane can say so. */
-export async function reopenPage(call: Call, id: number, at: Opening): Promise<void> {
+ *  already gone) does not stop the reopen; an open that fails rejects so the pane can say so. A pane
+ *  that unmounted meanwhile gets no page, or the one just built is closed again. */
+export async function reopenPage(call: Call, id: number, at: Opening, why: Why = "auto", live?: Live): Promise<void> {
   await call("browser_close", { id }).catch(() => {});
-  await openPage(call, id, { url: at.url, spot: at.spot, background: at.background, shown: at.shown, ...(at.profile === undefined ? {} : { profile: at.profile }) });
+  if (live && !live.alive()) return;
+  await openPage(call, id, { url: at.url, spot: at.spot, background: at.background, shown: at.shown, rebuild: why, ...(at.profile === undefined ? {} : { profile: at.profile }) });
+  if (!live) return;
+  if (!live.alive()) return void (await call("browser_close", { id }).catch(() => {}));
+  live.sync();
 }
 
 /** Opens the tab's page, then tells the back end the pane is up (after-list 719): permission and
