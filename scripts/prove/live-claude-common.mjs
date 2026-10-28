@@ -1,20 +1,23 @@
-// Shared scaffolding for the REAL-Claude live proofs (live-v12, test account A only): one scenario() per script runs a hidden dev app,
+// Shared scaffolding for the REAL-Claude live proofs (live-v13, test account A only): one scenario() per script runs a hidden dev app,
 // a real signed-in Claude Code pane (startProve in live-common.mjs), the assertions of the script, then writes the evidence section.
 // Nothing here opens a credential file; account A is only named as CLAUDE_CONFIG_DIR for the pane's claude.
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { ACCOUNT_A, CLAUDE, LOGS, NeedsLogin, ROOT, excerpt, reporter, sleep, startProve, waitFor } from "./live-common.mjs";
 import { checker, pickScreen } from "./live-views-dom.mjs";
 
 export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A, BASE } from "./live-common.mjs";
 export const CLAUDE_EXE = "C:/Users/XiongT/.local/bin/claude.exe"; // what the registry PATH resolves (TERM-120, batch 8)
 export const DATE = "2026-10-28";
-const MARK = (id) => `<<live-v12:${id}>>`;
+const MARK = (id) => `<<live-v13:${id}>>`;
 const redact = (s) => String(s).replace(/[\w.+-]+@[\w.-]+\.\w+/g, "<account-a>").replace(/C:[\\/]+Users[\\/]+XiongT/gi, "<home>").replace(/Users[\\/]+txais/gi, "<home>");
 
+// Batch 13 counts every claude.exe start, so the version is read from the install folder (the versioned copy with the same size), never by running --version.
 export const claudeVersion = () => {
   try {
-    return execFileSync(CLAUDE_EXE, ["--version"], { encoding: "utf8", env: { ...process.env, CLAUDE_CONFIG_DIR: `${LOGS}/version-scratch` } }).trim();
+    const dir = `${CLAUDE_EXE.replace(/\/bin\/claude\.exe$/, "")}/share/claude/versions`;
+    const size = statSync(CLAUDE_EXE).size;
+    const hit = readdirSync(dir).find((n) => statSync(`${dir}/${n}`).size === size);
+    return hit ? `${hit} (matched by file size, not run)` : "unknown (no versioned copy matches)";
   } catch (e) {
     return `unreadable (${String(e.message).slice(0, 60)})`;
   }

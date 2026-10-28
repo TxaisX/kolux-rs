@@ -67,6 +67,7 @@ await scenario("SUBAGENT-418", { cards: ["VIEW-025"], settings: { uiLook: "new" 
   };
 
   // ---- (A) sub-agent prompt, Board Deny ----
+  if (!process.env.SKIP_A) {
   const pa = await askSub("s1.txt");
   await goScreen(app, "Board");
   const c1 = await waitFor("the Board card with its buttons", async () => { const c = await boardChip(app); return c?.buttons?.length ? c : null; }, 20000, 500);
@@ -77,7 +78,9 @@ await scenario("SUBAGENT-418", { cards: ["VIEW-025"], settings: { uiLook: "new" 
   verdict("(A) sub-agent prompt, Board Deny, card word", await sample(ta, async () => (await boardChip(app))?.word ?? null));
   h.log(`(A) screenshot after: ${await h.shot("a-after")}`);
   h.check("(A) the command did not run (s1.txt missing)", !existsSync(`${ctx.repo}/s1.txt`), "");
+  }
 
+  if (!process.env.ONLY_D) {
   // ---- (B) sub-agent prompt, Esc byte to the pty ----
   await backToPrompt();
   await askSub("s2.txt");
@@ -105,12 +108,20 @@ await scenario("SUBAGENT-418", { cards: ["VIEW-025"], settings: { uiLook: "new" 
   h.log(`(C) hook/permission lines in kolux.log: before ${hc0}, after ${hookCount()}`);
   h.check("(C) the command did not run (c.txt missing)", !existsSync(`${ctx.repo}/c.txt`), "");
 
+  }
   // ---- (D) plain prompt, the chat card's Deny ----
+  const closeGuide = () => app.evalJs(`(() => { const b = [...document.querySelectorAll("button")].find((x) => /^\\s*(Get started|Skip)/i.test(x.textContent)); if (b) { b.click(); return true; } return false; })()`);
+  // The first-run guide can cover the screen; close it, and open the Agents screen once so its chat listens before the prompt.
+  h.log(`(D) guide closed: ${await closeGuide()}`);
+  await goScreen(app, "Agents");
+  await sleep(1500);
   await backToPrompt();
   await askPlain("d.txt");
   await goScreen(app, "Agents");
+  h.log(`(D) guide closed again: ${await closeGuide()}`);
   const card = await waitFor("the chat permission card", async () => ((await app.evalJs(`!!document.querySelector(".chat-permission .deny")`)) ? true : null), 25000, 500).catch(() => null);
   h.log(`(D) chat permission card shown: ${!!card}`);
+  if (!card) h.log(`(D) chat dom: ${JSON.stringify(await app.evalJs(`(() => ({ perm: document.querySelectorAll(".chat-permission").length, note: [...document.querySelectorAll("*")].filter((e) => e.children.length === 0 && /asking something/i.test(e.textContent)).map((e) => e.textContent.slice(0, 80)), tail: (document.querySelector(".chat")?.innerText ?? "").slice(-300) }))()`)).slice(0, 700)}`);
   h.check("(D) the chat shows the permission card with Deny", !!card, "");
   if (card) {
     const td = Date.now();

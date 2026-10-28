@@ -65,8 +65,8 @@ Rules: before any agent process starts, Kolux works out every worktree folder th
   Claude process rewriting its configuration cannot wipe out the mark a sibling has just added; the
   step is best effort, and a failure never stops the worktrees from opening.
 Acceptance:
-  - [ ] Start six Claude agents in new worktrees at once → a single configuration write covers all
-        six folders, and every agent starts without a trust menu.
+  - [x] Start six Claude agents in new worktrees at once → a single configuration write covers all
+        six folders, and every agent starts without a trust menu. (cards live; evidence/cards-SAFE-024.txt)
   - [x] Ask to pre-trust 13 names → refused before any folder path is worked out. (cards; evidence/cards-SAFE-024.txt)
 Compat: —
 Source: D-10-024
