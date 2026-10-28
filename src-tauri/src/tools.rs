@@ -100,7 +100,8 @@ pub fn probe(program: &str, args: &[&str], limit: Duration) -> Ran {
                 let deadline = (start + limit).max(Instant::now() + DRAIN_IDLE);
                 let mut bytes = Vec::new();
                 // Ends at EOF, once the pipe has been quiet for DRAIN_IDLE, or at the deadline.
-                while let Ok(chunk) = rx.recv_timeout(DRAIN_IDLE.min(deadline.saturating_duration_since(Instant::now()))) {
+                while Instant::now() < deadline {
+                    let Ok(chunk) = rx.recv_timeout(DRAIN_IDLE.min(deadline.saturating_duration_since(Instant::now()))) else { break };
                     bytes.extend_from_slice(&chunk);
                 }
                 return Ran::Exited(status.success(), String::from_utf8_lossy(&bytes).into_owned());
@@ -698,7 +699,8 @@ mod tests {
     fn row961_a_grandchild_holding_stdout_open_does_not_stall_the_probe() {
         let start = Instant::now();
         let limit = Duration::from_secs(3);
-        let got = probe_script("held", "@echo off\nstart /b ping -n 9 127.0.0.1\necho finished\n", "sleep 9 &\necho finished\n", limit);
+        // ping -n 6 / sleep 5 outlast limit + 1 s (so a stalled drain still fails) yet end soon after.
+        let got = probe_script("held", "@echo off\nstart /b ping -n 6 127.0.0.1\necho finished\n", "sleep 5 &\necho finished\n", limit);
         assert!(start.elapsed() < limit + Duration::from_secs(1), "took {:?}", start.elapsed());
         match got {
             Ran::Exited(true, out) => assert!(out.contains("finished"), "got {out:?}"),
