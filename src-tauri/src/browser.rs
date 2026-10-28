@@ -1619,20 +1619,23 @@ pub fn probe_result(answer: &str) -> &'static str {
     }
 }
 
+/// The probe's verdict: a query the engine refused to send is silence too, and silence makes the caller check the container (row 954 d, H2).
+pub fn probe_verdict(sent: bool, answer: Option<&str>) -> &'static str {
+    if sent { answer.map_or("no-answer", probe_result) } else { "no-answer" }
+}
+
 /// Asks a tab's page where it is: `"page"`, `"error-page"` or `"no-answer"` (see `probe_result`).
 #[tauri::command]
 pub async fn browser_probe(app: AppHandle, id: u32) -> Result<&'static str, String> {
     let v = view(&app, id)?;
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    if v.eval_with_callback(PROBE_QUERY, move |answer| {
-        let _ = tx.send(answer);
-    })
-    .is_err()
-    {
-        return Ok("no-answer");
-    }
-    let answer = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(PROBE_WAIT).ok()).await.map_err(|e| e.to_string())?;
-    let verdict = answer.as_deref().map_or("no-answer", probe_result);
+    let sent = v
+        .eval_with_callback(PROBE_QUERY, move |answer| {
+            let _ = tx.send(answer);
+        })
+        .is_ok();
+    let answer = if sent { tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(PROBE_WAIT).ok()).await.map_err(|e| e.to_string())? } else { None };
+    let verdict = probe_verdict(sent, answer.as_deref());
     if verdict == "no-answer" {
         selfclose::probe_missed(&app, id, holder::window_exists); // row 954 (c): a destroyed container is a self-close, not a crash
     }
@@ -1946,20 +1949,26 @@ pub fn take_profile(url: &str) -> Option<String> {
     Some(n.remove(at).1)
 }
 
+/// The profile the command line handed over for a NEW tab at `url`. A rebuild never takes one: it
+/// would steal the entry meant for a new tab at the same address (row 954 d, N2).
+fn given_profile(rebuild: bool, url: &str) -> Option<String> {
+    if rebuild { None } else { take_profile(url) }
+}
+
 /// A tab in a profile other than the default runs in that profile's own engine data folder; the
 /// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
 fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, rebuild: bool, url: &str) -> (WebviewBuilder<tauri::Wry>, bool, String) {
     let shared = || proxy::DEFAULT_FOLDER.to_string();
-    let profile = profile.or_else(|| take_profile(url));
+    let profile = profile.or_else(|| given_profile(rebuild, url));
     let Ok(root) = profiles::root() else { return (b, true, shared()) };
     let mut store = profiles::load(&root);
-    // Row 954 (c): a rebuild (crash, self-close) passes no profile but keeps the tab's saved one.
-    let profile = profiles::open_profile(&store, id, profile, rebuild);
-    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true, shared()) };
-    if profiles::set_tab(&mut store, id, &p).is_err() {
-        return (b, true, shared());
+    let before = store.tabs.clone();
+    // Row 954 (c): a rebuild (crash, self-close) passes no profile but keeps the tab's saved one; any other open rewrites the row.
+    let profile = profiles::resolve_open(&mut store, id, profile, rebuild);
+    if store.tabs != before {
+        let _ = profiles::save(&root, &store);
     }
-    let _ = profiles::save(&root, &store);
+    let Some(p) = profile else { return (b, true, shared()) };
     let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
         Some(dir) => {
@@ -2287,6 +2296,15 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_954d_a_rebuild_leaves_the_pending_cli_profile_for_the_new_tab() {
+        hand_profile("https://n2.example/", "work".into());
+        assert_eq!(given_profile(true, "https://n2.example/"), None, "a rebuild takes nothing");
+        assert_eq!(given_profile(true, "https://n2.example/"), None);
+        assert_eq!(given_profile(false, "https://n2.example/"), Some("work".into()), "the new tab still gets it");
+        assert_eq!(given_profile(false, "https://n2.example/"), None);
+    }
 
     #[test]
     fn two_tab_creates_close_together_each_open_in_their_own_profile() {
@@ -3301,6 +3319,14 @@ mod t074_tests {
         assert_eq!(probe_result("null"), "no-answer");
         assert_eq!(probe_result(""), "no-answer");
         assert_eq!(probe_result("{}"), "no-answer");
+    }
+
+    #[test]
+    fn row_954d_a_probe_the_engine_refused_to_send_is_no_answer_so_the_container_is_checked() {
+        assert_eq!(probe_verdict(false, None), "no-answer");
+        assert_eq!(probe_verdict(false, Some("\"https://example.com/\"")), "no-answer");
+        assert_eq!(probe_verdict(true, None), "no-answer");
+        assert_eq!(probe_verdict(true, Some("\"https://example.com/\"")), "page");
     }
 
     #[test]

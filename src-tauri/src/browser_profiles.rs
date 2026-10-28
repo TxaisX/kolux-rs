@@ -100,11 +100,21 @@ pub fn tab_profile(store: &Store, page: u32) -> String {
     store.tabs.get(&page.to_string()).cloned().unwrap_or_else(|| DEFAULT.into())
 }
 
-/// Row 954 (c): the profile a tab opens in. One handed over (the command line, a profile change)
-/// wins; a REBUILD of a tab (crash, self-close) with none keeps the tab's saved profile; a brand-new
-/// tab never reads the saved row, so a reused id cannot inherit an old tab's cookies.
-pub fn open_profile(store: &Store, page: u32, given: Option<String>, rebuild: bool) -> Option<String> {
-    given.or_else(|| rebuild.then(|| tab_profile(store, page)).filter(|p| p != DEFAULT))
+/// Row 954 (c): the profile a tab opens in, and the saved row to match. A handed-over profile (the
+/// command line, a profile change) wins; a REBUILD with none keeps the saved row. Every other open
+/// persists what it resolved, the default included (clears the row), so a reused tab id never
+/// inherits an old tab's profile on its first rebuild.
+pub fn resolve_open(store: &mut Store, page: u32, given: Option<String>, rebuild: bool) -> Option<String> {
+    let keep_saved = given.is_none() && rebuild;
+    let want = given.or_else(|| rebuild.then(|| tab_profile(store, page))).filter(|p| p != DEFAULT);
+    if keep_saved {
+        return want;
+    }
+    if set_tab(store, page, want.as_deref().unwrap_or(DEFAULT)).is_err() {
+        store.tabs.remove(&page.to_string());
+        return None;
+    }
+    want
 }
 
 /// A copy of a profile (label "<label> copy"); with a page, that tab moves to the copy.
@@ -353,12 +363,37 @@ mod tests {
         let mut s = Store::default();
         create(&mut s, "Work", None, true).unwrap();
         set_tab(&mut s, 4, "work").unwrap();
-        assert_eq!(open_profile(&s, 4, None, true), Some("work".into()), "a rebuild keeps the saved profile");
-        assert_eq!(open_profile(&s, 4, None, false), None, "a new tab with a reused id starts in the default");
-        assert_eq!(open_profile(&s, 4, Some("other".into()), true), Some("other".into()), "a handed-over profile wins");
-        assert_eq!(open_profile(&s, 9, None, true), None, "a rebuilt tab with no saved row stays default");
-        set_tab(&mut s, 4, DEFAULT).unwrap();
-        assert_eq!(open_profile(&s, 4, None, true), None);
+        assert_eq!(resolve_open(&mut s, 4, None, true), Some("work".into()), "a rebuild keeps the saved profile");
+        assert_eq!(tab_profile(&s, 4), "work", "a rebuild leaves the row alone");
+        assert_eq!(resolve_open(&mut s, 4, Some("other".into()), true), None, "an unknown handed-over profile falls back to the default");
+        assert_eq!(tab_profile(&s, 4), DEFAULT);
+        assert_eq!(resolve_open(&mut s, 9, None, true), None, "a rebuilt tab with no saved row stays default");
+        set_tab(&mut s, 4, "work").unwrap();
+        assert_eq!(resolve_open(&mut s, 4, None, false), None, "a new tab with a reused id starts in the default");
+    }
+
+    #[test]
+    fn row_954d_a_fresh_default_open_clears_a_reused_ids_stale_profile_for_every_rebuild() {
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        // Session 1: tab 5 ran in "work" and was closed last; the row stays behind.
+        set_tab(&mut s, 5, "work").unwrap();
+        // Session 2 reuses id 5 in the default.
+        assert_eq!(resolve_open(&mut s, 5, None, false), None);
+        assert_eq!(tab_profile(&s, 5), DEFAULT, "the fresh default open cleared the stale row");
+        assert_eq!(resolve_open(&mut s, 5, None, true), None, "the automatic rebuild stays default");
+        assert_eq!(resolve_open(&mut s, 5, None, true), None, "a crash Retry stays default");
+    }
+
+    #[test]
+    fn row_954d_a_fresh_open_in_a_profile_is_what_a_rebuild_then_keeps() {
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        assert_eq!(resolve_open(&mut s, 5, Some("work".into()), false), Some("work".into()));
+        assert_eq!(resolve_open(&mut s, 5, None, true), Some("work".into()));
+        assert_eq!(resolve_open(&mut s, 5, None, true), Some("work".into()), "a Retry too");
+        assert_eq!(resolve_open(&mut s, 5, Some("default".into()), false), None, "an explicit default open clears the row");
+        assert_eq!(resolve_open(&mut s, 5, None, true), None);
     }
 
     #[test]

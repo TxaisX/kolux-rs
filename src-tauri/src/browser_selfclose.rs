@@ -93,7 +93,9 @@ impl Rebuild {
         match arg {
             Some("auto") => Rebuild::Auto,
             Some("retry") => Rebuild::Retry,
-            _ => Rebuild::Fresh,
+            None => Rebuild::Fresh,
+            // Fail closed: an unknown word is still a rebuild (keeps the profile, never takes focus, keeps the loop record).
+            Some(_) => Rebuild::Auto,
         }
     }
     /// A rebuild keeps the tab's saved profile (row 954 c, H1).
@@ -297,7 +299,6 @@ mod tests {
         assert_eq!(Rebuild::from_arg(None), Rebuild::Fresh);
         assert_eq!(Rebuild::from_arg(Some("auto")), Rebuild::Auto);
         assert_eq!(Rebuild::from_arg(Some("retry")), Rebuild::Retry);
-        assert_eq!(Rebuild::from_arg(Some("junk")), Rebuild::Fresh, "an unknown word is a fresh open");
         assert!(Rebuild::Auto.keeps_profile() && Rebuild::Retry.keeps_profile() && !Rebuild::Fresh.keeps_profile());
     }
 
@@ -325,6 +326,16 @@ mod tests {
         });
         register(id, Rebuild::Fresh);
         assert!(HISTORIES.lock().unwrap().get(&id).is_none_or(|h| h.refusals() == 0), "a fresh tab on a reused id starts clean");
+    }
+
+    #[test]
+    fn row_954d_an_unknown_rebuild_word_is_an_automatic_rebuild_not_a_fresh_open() {
+        assert_eq!(Rebuild::from_arg(None), Rebuild::Fresh);
+        assert_eq!(Rebuild::from_arg(Some("auto")), Rebuild::Auto);
+        assert_eq!(Rebuild::from_arg(Some("retry")), Rebuild::Retry);
+        assert_eq!(Rebuild::from_arg(Some("")), Rebuild::Auto);
+        assert_eq!(Rebuild::from_arg(Some("fresh")), Rebuild::Auto);
+        assert_eq!(Rebuild::from_arg(Some("RETRY")), Rebuild::Auto);
     }
 
     #[test]
