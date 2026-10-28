@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AgentState } from "../projects/rows";
 import { LIMIT } from "../terminal/paste";
 import { ASKING_NOTE, asksInTerminal, cancelQueued, enqueue, epochOf, pasteSteps, sendSteps, typeSteps, type Step } from "./composer";
+import { hearAsks } from "./ask";
 
 /** CHAT-022: what the box says when Kolux has no hook reading for the pane (hooks off for it, Codex
  * trust not given, an agent with no hook route, no event yet, or only an event from an earlier run). */
@@ -74,6 +75,8 @@ export const setClock = (f: () => number) => void (clock = f);
 /** One listener for the whole window: it keeps every pane's newest hook state, so a send to a pane
  * that left the screen still hears that pane's menu open. Safe to call on every mount. */
 export function hearStates(listen: Listen): Promise<unknown> {
+  // Row 1032: the window calls this at start, so prompts are counted before the Agents screen first opens.
+  void hearAsks(listen).catch(() => {});
   if (!hearing)
     hearing = listen("agent-status", (e) => {
       const { paneKey, state, tool, terminal } = e.payload;
