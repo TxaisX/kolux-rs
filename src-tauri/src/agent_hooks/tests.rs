@@ -2424,3 +2424,62 @@ fn row_989_a_file_reached_two_ways_is_one_target_and_a_fenced_run_refuses_an_unm
     let _ = fs::remove_dir_all(&dir);
     let _ = fs::remove_dir_all(&bare);
 }
+
+// Row 989 round-2 N3: an account folder removed after the target list was made gets nothing and is not
+// made again; the default file and the user's own folder, which may not exist yet, still are written.
+#[test]
+fn row_989_an_account_folder_removed_after_the_list_was_made_is_not_recreated() {
+    let (dir, _home, profile, cfg) = r989_scene("r989-listed-then-removed");
+    let kept = r989_account(&profile, "a1", Some(R989_USER));
+    let gone = r989_account(&profile, "a2", Some(R989_USER));
+    let own = dir.join("own-no-file-yet");
+    fs::create_dir_all(&own).unwrap();
+    let settings = r989_own_settings(&own);
+    let targets = with_claude_config(&cfg, || claude_targets(&settings, &profile));
+    assert_eq!(targets.iter().filter(|t| t.is_ok()).count(), 4, "default, own, two accounts: {targets:?}");
+    fs::remove_dir_all(&gone).unwrap();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let out = each_listed_target(targets, &profile, |f| {
+        seen.borrow_mut().push(f.to_path_buf());
+        fs::create_dir_all(f.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::write(f, "{}").map_err(|e| e.to_string())
+    });
+    assert_eq!(out, Ok(()));
+    assert!(!gone.exists(), "the removed account's folder did not come back");
+    assert!(!seen.borrow().iter().any(|f| f.starts_with(&gone)), "and it was never a step target");
+    assert!(kept.join("settings.json").is_file() && cfg.join("settings.json").is_file(), "the other accounts and the default file are written");
+    assert!(own.join("settings.json").is_file(), "the user's own folder gets its file, as the default one does");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// Row 989 round-2 (coordinator): hooks off (`clear`, what `kolux agent hooks off` runs) on the user's own
+// CLAUDE_CONFIG_DIR takes out Kolux's entries and nothing else. `clear_in` is `clear` over a scratch home.
+#[test]
+fn row_989_hooks_off_leaves_the_users_own_config_dir_as_it_was() {
+    let (dir, home, profile, cfg) = r989_scene("r989-off-own");
+    let own = dir.join("own-claude");
+    fs::create_dir_all(&own).unwrap();
+    let file = own.join("settings.json");
+    fs::write(&file, R989_USER).unwrap();
+    fs::write(own.join(".credentials.json"), R989_CREDS).unwrap();
+    fs::write(own.join(".claude.json"), R989_STATE).unwrap();
+    let settings = r989_own_settings(&own);
+    let names = |d: &Path| {
+        let mut n: Vec<String> = fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        n.sort();
+        n
+    };
+    assert_eq!(with_claude_config(&cfg, || apply(&home, &profile, &settings, "claude", Plan::Install)), Ok("installed"));
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed");
+    let outcomes = with_claude_config(&cfg, || clear_in(&home, &settings, &profile));
+    assert_eq!(outcomes.iter().find(|(id, _)| *id == "claude").map(|(_, r)| r.clone()), Some(Ok("removed")), "{outcomes:?}");
+    let v = ev(&fs::read_to_string(&file).unwrap());
+    assert_eq!(v, ev(R989_USER), "settings.json is the user's original again");
+    assert!(v.get("statusLine").is_none() && !v.to_string().contains(SCRIPT_DIR), "no Kolux hook entry or status line");
+    assert_eq!(fs::read_to_string(own.join(".credentials.json")).unwrap(), R989_CREDS);
+    assert_eq!(fs::read_to_string(own.join(".claude.json")).unwrap(), R989_STATE);
+    // Install made `settings.json.bak-kolux` (the one copy before the first write); off leaves it, and nothing else is new.
+    assert_eq!(names(&own), [".claude.json", ".credentials.json", "settings.json", "settings.json.bak-kolux"], "no other file appeared");
+    assert_eq!(ev(&fs::read_to_string(own.join("settings.json.bak-kolux")).unwrap()), ev(R989_USER), "the copy is the user's original");
+    let _ = fs::remove_dir_all(&dir);
+}

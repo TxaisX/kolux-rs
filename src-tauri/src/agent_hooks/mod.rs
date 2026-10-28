@@ -523,7 +523,16 @@ fn claude_targets(settings: &Value, profile: &Path) -> Vec<Result<PathBuf, Strin
 
 /// `step` on every Claude settings file; all are tried, and the failures come back together.
 fn each_claude_target(settings: &Value, profile: &Path, step: impl Fn(&Path) -> Result<(), String>) -> Result<(), String> {
-    let failed: Vec<String> = claude_targets(settings, profile).into_iter().filter_map(|t| t.and_then(|f| step(&f)).err()).collect();
+    each_listed_target(claude_targets(settings, profile), profile, step)
+}
+
+/// `each_claude_target` over a list already made. Row 989: a managed account's folder that has gone
+/// since the list was made (the account was removed meanwhile) is left as it was, not created again;
+/// the default file and the user's own folder may legitimately not exist yet.
+fn each_listed_target(targets: Vec<Result<PathBuf, String>>, profile: &Path, step: impl Fn(&Path) -> Result<(), String>) -> Result<(), String> {
+    let accounts = profile.join(crate::claude_accounts::FOLDER);
+    let gone = |f: &Path| f.parent().is_some_and(|d| d.parent() == Some(accounts.as_path()) && !d.is_dir());
+    let failed: Vec<String> = targets.into_iter().filter_map(|t| t.and_then(|f| if gone(&f) { Ok(()) } else { step(&f) }).err()).collect();
     if failed.is_empty() {
         Ok(())
     } else {
@@ -562,11 +571,16 @@ fn install_claude_all(home: &Path, settings: &Value, profile: &Path) -> Result<(
     each_claude_target(settings, profile, |file| install_claude_at(home, file))
 }
 
-/// Row 989: `f` while holding the install lock `sync` takes, so an account folder is not deleted while
-/// hooks are being written into it. A lock that cannot be had in a few seconds is logged and `f`
-/// runs anyway: removing an account must never fail on it.
-pub fn with_install_lock<T>(f: impl FnOnce() -> T) -> T {
-    let lock = Lock::take_within(&home_dir().join(SCRIPT_DIR), LOCK_STALE, Duration::from_secs(5));
+/// The home folder Kolux's hook scripts and install lock live under.
+pub fn user_home() -> PathBuf {
+    home_dir()
+}
+
+/// Row 989: `f` while holding the install lock `sync` takes under `home`, so an account folder is not
+/// deleted while hooks are being written into it. A lock that cannot be had in a few seconds is
+/// logged and `f` runs anyway: removing an account must never fail on it.
+pub fn with_install_lock<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+    let lock = Lock::take_within(&home.join(SCRIPT_DIR), LOCK_STALE, Duration::from_secs(5));
     if let Err(e) = &lock {
         eprintln!("kolux-rs: agent hooks: {e}");
     }
@@ -720,7 +734,11 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
 /// STAT-002: the user switched the status hooks off: Kolux's own entries come out of every agent
 /// (the user's own hooks stay), and nothing else is written, not even Kolux's scripts.
 pub fn clear(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
-    let home = home_dir();
+    clear_in(&home_dir(), settings, profile)
+}
+
+/// `clear` with the home folder (scripts, install lock, vendor files) named, so a test stays in a scratch one.
+fn clear_in(home: &Path, settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
     let _lock = match Lock::take(&home.join(SCRIPT_DIR)) {
         Ok(l) => l,
         Err(e) => {
@@ -728,7 +746,7 @@ pub fn clear(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'st
             return Vec::new();
         }
     };
-    MANAGED.iter().map(|&id| (id, apply(&home, profile, settings, id, Plan::Remove))).collect()
+    MANAGED.iter().map(|&id| (id, apply(home, profile, settings, id, Plan::Remove))).collect()
 }
 
 /// Each agent's outcome as `kolux agent hooks on|off` and the Agents page show it: `agent`, `done`

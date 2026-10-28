@@ -598,6 +598,11 @@ pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Sto
 /// hands new panes back to the system default when it was the active one. Only a folder inside
 /// Kolux's own accounts folder is ever deleted.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    remove_in(store, profile, id, &crate::hooks::agent_hooks::user_home())
+}
+
+/// `remove` with the home folder whose hooks install lock it takes named, so a test never touches the real one.
+pub(crate) fn remove_in(store: &Store, profile: &Path, id: &str, home: &Path) -> Result<(), String> {
     if !crate::cli_accounts::safe_id(id) {
         return Err("That Claude account id is not valid.".into());
     }
@@ -618,18 +623,28 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     // Row 944: only the account's own folder directly under the accounts folder is deleted (a ".." or a nested path is not).
     if dir.parent() == Some(profile.join(FOLDER).as_path()) && dir.file_name().is_some_and(|n| n == id) {
         // Row 989: under the hooks install lock, so a sign-in's hook install cannot recreate the folder as it goes.
-        crate::hooks::agent_hooks::with_install_lock(|| crate::codex_accounts::remove_dir_patiently(&dir)).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
+        crate::hooks::agent_hooks::with_install_lock(home, || crate::codex_accounts::remove_dir_patiently(&dir)).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
     }
     cleared
 }
 
+/// Off the window's thread: the folder delete can wait up to 5 s for the hooks install lock (row 989).
 #[tauri::command]
-pub fn claude_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
+pub async fn claude_account_remove(app: AppHandle, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
     if sign_ins.running.lock().map_err(|e| e.to_string())?.is_some() {
         return Err("Finish or cancel the sign-in first.".into());
     }
     let profile = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let result = remove(&*store.lock().map_err(|e| e.to_string())?, &profile, &id);
+    let result = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || {
+            let store = app.state::<Mutex<Store>>();
+            let guard = store.lock().map_err(|e| e.to_string())?;
+            remove(&guard, &profile, &id)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let _ = app.emit(EVENT, ());
     result
 }
@@ -915,10 +930,10 @@ mod tests {
         store.set(LIST_KEY, &serde_json::to_string(&vec![a]).unwrap()).unwrap();
         let side = crate::orchestration::kept::Unreadable::new(&dir);
         assert!(mark_stale(&store, "a1", true).is_err());
-        assert!(remove(&store, &dir, "a1").is_err());
+        assert!(remove_in(&store, &dir, "a1", &dir.join("home")).is_err());
         side.restore();
         assert_eq!(mark_stale(&store, "a1", true), Ok(true));
-        assert!(remove(&store, &dir, "a1").is_ok());
+        assert!(remove_in(&store, &dir, "a1", &dir.join("home")).is_ok());
         assert!(load(&store).is_empty());
     }
 
@@ -1196,7 +1211,7 @@ mod tests {
         fs::write(&folder, "not a folder").unwrap();
         let vault = dir.join(secrets::VAULT).join("claude-a1.json");
         assert!(vault.is_file());
-        assert!(remove(&store.lock().unwrap(), &dir, "a1").is_err(), "the folder delete still reports its failure");
+        assert!(remove_in(&store.lock().unwrap(), &dir, "a1", &dir.join("home")).is_err(), "the folder delete still reports its failure");
         assert!(!vault.exists(), "the sealed copy is gone");
     }
 
@@ -1209,7 +1224,7 @@ mod tests {
         let s = store.lock().unwrap();
         let odd = Account { id: "..".into(), email: None, organization: None, config_dir: dir.join(FOLDER).join("..").to_string_lossy().into_owned(), last_sign_in: 1, stale: false };
         save(&s, &[odd]).unwrap();
-        assert!(remove(&s, &dir, "..").is_err(), "an unsafe id is refused");
+        assert!(remove_in(&s, &dir, "..", &dir.join("home")).is_err(), "an unsafe id is refused");
         assert!(marker.exists(), "the profile folder is still there");
     }
 
@@ -1224,7 +1239,7 @@ mod tests {
         let s = store.lock().unwrap();
         let odd = Account { id: "a1".into(), email: None, organization: None, config_dir: elsewhere.to_string_lossy().into_owned(), last_sign_in: 1, stale: false };
         save(&s, &[odd]).unwrap();
-        remove(&s, &dir, "a1").unwrap();
+        remove_in(&s, &dir, "a1", &dir.join("home")).unwrap();
         assert!(load(&s).is_empty(), "the account is unlisted");
         assert!(marker.exists(), "the folder outside the accounts folder is untouched");
     }
@@ -1237,7 +1252,7 @@ mod tests {
         let s = store.lock().unwrap();
         activate(&s, Some("a1")).unwrap();
         s.poison(ACTIVE_KEY);
-        assert!(remove(&s, &dir, "a1").is_err(), "the failure to clear the marker is still reported");
+        assert!(remove_in(&s, &dir, "a1", &dir.join("home")).is_err(), "the failure to clear the marker is still reported");
         assert!(load(&s).is_empty(), "the list was saved");
         assert!(!dir.join(secrets::VAULT).join("claude-a1.json").exists(), "the sealed copy is gone");
         assert!(!dir.join(FOLDER).join("a1").exists(), "and so is the folder");
@@ -1350,14 +1365,16 @@ mod tests {
         assert_eq!(active(&s).as_deref(), Some("a2"));
         assert!(activate(&s, Some("gone")).is_err());
         assert_eq!(active(&s).as_deref(), Some("a2"), "a failed change keeps the earlier choice");
-        remove(&s, &dir, "a2").unwrap();
+        let home = dir.join("scratch-home");
+        remove_in(&s, &dir, "a2", &home).unwrap();
+        assert!(home.join(".kolux-rs").join("agent-hooks").is_dir(), "the removal took the hooks install lock under the home it was given, not the real one");
         assert_eq!(active(&s), None, "the system default takes over");
         assert!(!dir.join(FOLDER).join("a2").exists() && !dir.join("vault").join("claude-a2.json").exists());
         assert_eq!(load(&s).len(), 1);
         activate(&s, Some("a1")).unwrap();
         activate(&s, None).unwrap();
         assert_eq!(active(&s), None, "the system default can be picked again");
-        assert!(remove(&s, &dir, "a2").is_err());
+        assert!(remove_in(&s, &dir, "a2", &home).is_err());
         drop(s);
     }
 
