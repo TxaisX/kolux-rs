@@ -3145,6 +3145,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     // BROW-037: notes go to an agent pane in the tab's own worktree, by the review-notes paste path.
                     targets={() => sendTargets(panes, (x) => x.cwd !== null && p.cwd !== null && sameDir(x.cwd, p.cwd) && ptys.current[x.key] !== undefined, stamp, Date.now(), (x) => tabName(x, titles))}
                     onSend={(key, text) => pasteInto(key, text)}
+                    restored={restoredKeys.current.has(p.key)}
                   />
                 ) : p.kind === "editor" && p.path ? (
                   <EditorPane

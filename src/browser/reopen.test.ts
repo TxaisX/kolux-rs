@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import src from "./BrowserPane.tsx?raw";
-import { type Call, namesPane, type Opening, openPage, reopenPage } from "./reopen";
+import { type Call, namesPane, type Opening, openFirstPage, openPage, reopenPage, takesBarFocus } from "./reopen";
 import { fresh, overlayModel, overlayOf, step } from "./loadState";
 
 const at: Opening = { url: "https://example.com/", spot: { x: 10, y: 40, w: 800, h: 600 }, background: [18, 18, 20], shown: true };
@@ -191,8 +191,93 @@ describe("row 954c: BrowserPane wires the rebuild guards", () => {
 });
 
 describe("after-list 719: BrowserPane uses the announcing open", () => {
-  it("the pane's mount opens through openPage, never a bare browser_open", () => {
-    expect(src).toMatch(/await openPage\(invoke, id,/);
+  it("the pane's mount opens through openFirstPage (openPage inside), never a bare browser_open", () => {
+    expect(src).toMatch(/await openFirstPage\(invoke, id,/);
     expect(src).not.toMatch(/invoke\("browser_open"/);
+  });
+});
+
+describe("row 977: a restored pane's first open reads its own saved profile", () => {
+  const first = { url: "https://example.com/", shown: true };
+  const record = () => {
+    const calls: [string, Record<string, unknown>][] = [];
+    return { calls, call: (async (cmd, args) => void calls.push([cmd, args])) as Call };
+  };
+
+  it("the first browser_open of a restored pane carries rebuild restore", async () => {
+    const { calls, call } = record();
+    await openFirstPage(call, 5, first, true, { current: false });
+    expect(calls[0]).toEqual(["browser_open", { id: 5, ...first, rebuild: "restore" }]);
+    expect(calls[1]).toEqual(["browser_pane_ready", { id: 5 }]);
+  });
+
+  it("a pane that was not restored names no rebuild", async () => {
+    const { calls, call } = record();
+    await openFirstPage(call, 5, first, false, { current: false });
+    expect("rebuild" in calls[0][1]).toBe(false);
+  });
+
+  it("the second open of a restored pane is not a restore", async () => {
+    const { calls, call } = record();
+    const spent = { current: false };
+    await openFirstPage(call, 5, first, true, spent);
+    calls.length = 0;
+    await openFirstPage(call, 5, first, true, spent);
+    expect("rebuild" in calls[0][1]).toBe(false);
+  });
+
+  it("a first open that fails leaves the restore for the next try", async () => {
+    const spent = { current: false };
+    await expect(openFirstPage(async () => { throw new Error("cannot open"); }, 5, first, true, spent)).rejects.toThrow("cannot open");
+    const { calls, call } = record();
+    await openFirstPage(call, 5, first, true, spent);
+    expect(calls[0][1].rebuild).toBe("restore");
+  });
+
+  it("a reopen or Retry keeps naming its own reason, never restore", async () => {
+    const { calls, call } = record();
+    await reopenPage(call, 5, at, "retry");
+    await reopenPage(call, 5, at);
+    expect(calls.filter((c) => c[0] === "browser_open").map((c) => c[1].rebuild)).toEqual(["retry", "auto"]);
+  });
+
+  it("BrowserPane takes a restored prop that defaults to false and spends it once", () => {
+    expect(src).toContain("restored?: boolean");
+    expect(src).toContain("restored = false");
+    expect(src).toContain("restored, restoreSpent)");
+  });
+});
+
+describe("row 979 (F2): the address bar takes the keyboard only for a focused, not-restored pane", () => {
+  const first = { url: "https://example.com/", shown: true };
+
+  it("a restored pane's first open does not focus the bar", async () => {
+    const restoring = await openFirstPage((async () => {}) as Call, 5, first, true, { current: false });
+    expect(restoring).toBe(true);
+    expect(takesBarFocus(true, restoring)).toBe(false);
+    expect(takesBarFocus(false, restoring)).toBe(false);
+  });
+
+  it("a pane that is not the focused one does not focus the bar", async () => {
+    const restoring = await openFirstPage((async () => {}) as Call, 5, first, false, { current: false });
+    expect(restoring).toBe(false);
+    expect(takesBarFocus(false, restoring)).toBe(false);
+  });
+
+  it("a focused fresh pane's first open does (BROW-001)", async () => {
+    const restoring = await openFirstPage((async () => {}) as Call, 5, first, false, { current: false });
+    expect(takesBarFocus(true, restoring)).toBe(true);
+  });
+
+  it("a restored pane's second open is not a restore, so a focused pane takes the bar", async () => {
+    const spent = { current: false };
+    await openFirstPage((async () => {}) as Call, 5, first, true, spent);
+    expect(await openFirstPage((async () => {}) as Call, 5, first, true, spent)).toBe(false);
+  });
+
+  it("BrowserPane reads focused through a ref at the moment the open finishes", () => {
+    expect(src).toContain("focusedNow.current = focused");
+    expect(src).toContain("takesBarFocus(focusedNow.current, restoring)");
+    expect(src).not.toMatch(/^\s*bar\.current\?\.focus\(\)/m); // never an unconditional focus
   });
 });

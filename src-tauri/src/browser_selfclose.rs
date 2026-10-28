@@ -86,6 +86,9 @@ pub enum Rebuild {
     Auto,
     /// The user pressed Retry on the overlay.
     Retry,
+    /// The pane came back from the saved layout (row 977): it reads its own saved profile row, and
+    /// is no loop-guard rebuild: it never counts toward the self-close cap and never clears the record.
+    Restore,
 }
 
 impl Rebuild {
@@ -93,21 +96,27 @@ impl Rebuild {
         match arg {
             Some("auto") => Rebuild::Auto,
             Some("retry") => Rebuild::Retry,
+            Some("restore") => Rebuild::Restore,
             None => Rebuild::Fresh,
             // Fail closed: an unknown word is still a rebuild (keeps the profile, never takes focus, keeps the loop record).
             Some(_) => Rebuild::Auto,
         }
     }
-    /// A rebuild keeps the tab's saved profile (row 954 c, H1).
+    /// A rebuild keeps the tab's saved profile (row 954 c, H1). A restore reads the row itself, see `restores`.
     pub fn keeps_profile(self) -> bool {
-        self != Rebuild::Fresh
+        matches!(self, Rebuild::Auto | Rebuild::Retry)
+    }
+    /// A restore opens in the profile its own saved row names, or the default with a notice (row 977).
+    pub fn restores(self) -> bool {
+        self == Rebuild::Restore
     }
 }
 
-/// Whether opening a tab hands the keyboard back to the app's view. A rebuild never does, shown
-/// or hidden: focus goes only to a tab the user clicked.
-pub fn focuses_after_open(rebuild: Rebuild) -> bool {
-    rebuild == Rebuild::Fresh
+/// Whether opening a tab hands the keyboard back to the app's view. A rebuild or a restore never
+/// does, and neither does a tab opened hidden (`shown` false, row 978): focus goes only to a tab
+/// the user can see and just opened.
+pub fn focuses_after_open(rebuild: Rebuild, shown: Option<bool>) -> bool {
+    rebuild == Rebuild::Fresh && shown != Some(false)
 }
 
 /// What a probe that got no answer means, given whether the tab's container window still exists
@@ -157,10 +166,10 @@ static ENGINES: LazyLock<Mutex<HashMap<u32, Arc<Engine>>>> = LazyLock::new(Mutex
 /// A page is being built for tab `id`: a new engine record becomes the tab's current one, and
 /// the tab's history starts over unless this is the pane's own rebuild.
 pub fn register(id: u32, rebuild: Rebuild) -> Arc<Engine> {
-    // Only the pane's own automatic rebuild keeps the record; Retry and a fresh tab start over.
+    // Only the pane's own automatic rebuild (and a restore, which no page can ask for) keeps the record; Retry and a fresh tab start over.
     if let Ok(mut all) = HISTORIES.lock() {
         match (rebuild, all.get_mut(&id)) {
-            (Rebuild::Auto, _) => {}
+            (Rebuild::Auto | Rebuild::Restore, _) => {}
             (_, Some(h)) => h.reset(),
             _ => {}
         }
@@ -340,9 +349,42 @@ mod tests {
 
     #[test]
     fn row_954c_a_rebuild_never_takes_the_keyboard_and_a_users_open_does() {
-        assert!(focuses_after_open(Rebuild::Fresh));
-        assert!(!focuses_after_open(Rebuild::Auto), "a hidden or shown rebuild must not focus");
-        assert!(!focuses_after_open(Rebuild::Retry));
+        assert!(focuses_after_open(Rebuild::Fresh, Some(true)));
+        assert!(!focuses_after_open(Rebuild::Auto, Some(true)), "a hidden or shown rebuild must not focus");
+        assert!(!focuses_after_open(Rebuild::Retry, Some(true)));
+    }
+
+    #[test]
+    fn row_978_a_tab_opened_hidden_and_a_restore_never_take_the_keyboard() {
+        assert!(focuses_after_open(Rebuild::Fresh, None), "no word on shown means a tab the user sees");
+        assert!(!focuses_after_open(Rebuild::Fresh, Some(false)), "a tab opened behind the user keeps focus where it was");
+        for kind in [Rebuild::Fresh, Rebuild::Auto, Rebuild::Retry, Rebuild::Restore] {
+            assert!(!focuses_after_open(kind, Some(false)), "{kind:?} hidden");
+        }
+        assert!(!focuses_after_open(Rebuild::Restore, Some(true)), "a restored tab is not one the user just clicked");
+        assert!(!focuses_after_open(Rebuild::Restore, None));
+    }
+
+    #[test]
+    fn row_977_restore_is_its_own_word_and_not_a_loop_guard_rebuild() {
+        assert_eq!(Rebuild::from_arg(Some("restore")), Rebuild::Restore);
+        assert!(Rebuild::Restore.restores());
+        assert!(!Rebuild::Auto.restores() && !Rebuild::Retry.restores() && !Rebuild::Fresh.restores());
+        assert!(!Rebuild::Restore.keeps_profile(), "restore reads the row itself, it is not a rebuild");
+    }
+
+    #[test]
+    fn row_977_a_restore_neither_counts_toward_the_cap_nor_clears_the_loop_record() {
+        let id = 9_003;
+        HISTORIES.lock().unwrap().insert(id, {
+            let mut h = History::default();
+            for s in 0..3 {
+                on_self_close(&mut h, at(s));
+            }
+            h
+        });
+        register(id, Rebuild::Restore);
+        assert_eq!(HISTORIES.lock().unwrap()[&id].refusals(), 1, "a restore keeps a left-closed tab's record: a page cannot clear it by asking");
     }
 
     #[test]
