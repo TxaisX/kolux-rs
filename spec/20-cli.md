@@ -224,8 +224,8 @@ Rules: `--task` names an existing task, while `--spec` creates one in the same s
   way out; if the app would quietly drop the launch choices, the command fails before starting
   anything.
 Acceptance:
-  - [ ] `kolux orchestration worker-start --spec x --tier build` starts a worker on the model routed
-        for build and prints a ready receipt.
+  - [x] `kolux orchestration worker-start --spec x --tier build` starts a worker on the model routed
+        for build and prints a ready receipt. (cards live; evidence/cards-CLI-035.txt)
   - [x] `kolux orchestration worker-start --spec x --effort high` with no `--model` is refused. (cards; evidence/cards-CLI-035.txt)
 Compat: orchestration worker-start; `--task`, `--spec`, `--task-title`, `--deps`, `--parent`,
   `--worktree`, `--name`, `--repo`, `--base-branch`, `--display-name`, `--comment`,
