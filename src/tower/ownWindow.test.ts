@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { isTowerWindow, openTowerWindow, pickScreen, snapshotChanged, TOWER_HASH, TOWER_LABEL, type Screen, type WindowApi } from "./ownWindow";
+import { createViaRust, isTowerWindow, openTowerWindow, pickScreen, snapshotChanged, TOWER_HASH, TOWER_LABEL, type Screen, type WindowApi } from "./ownWindow";
 
 const main: Screen = { x: 0, y: 0, width: 2560, height: 1440, scale: 1.25 };
 const left: Screen = { x: -1920, y: 0, width: 1920, height: 1080, scale: 1 };
@@ -109,4 +109,29 @@ test("FIX-4: snapshotChanged does not write the snapshots out again on every ren
   } finally {
     spy.mockRestore();
   }
+});
+
+// Rows 955 / 959: made from the page, the Tower window passed no browser arguments and the engine
+// refused it (0x8007139F) next to the main window's. Rust builds it with the main window's string.
+test("rows 955/959: the Tower window is opened by Rust with the place the page worked out", async () => {
+  const calls: Array<[string, unknown]> = [];
+  const invoke = async (cmd: string, args?: Record<string, unknown>) => void calls.push([cmd, args]);
+  const legacy = vi.fn(async () => true);
+  const second = { url: `index.html${TOWER_HASH}`, title: "Kolux Tower", focus: true, x: -1920, y: 0, width: 1920, height: 1080, maximized: true };
+  expect(await createViaRust(invoke, second, legacy)).toBe(true);
+  expect(await createViaRust(invoke, { url: "x", center: true, width: 1200, height: 800, maximized: false }, legacy)).toBe(true);
+  expect(calls).toEqual([
+    ["tower_window_open", { place: { x: -1920, y: 0, width: 1920, height: 1080, center: false, maximized: true } }],
+    ["tower_window_open", { place: { width: 1200, height: 800, center: true, maximized: false } }],
+  ]);
+  expect(legacy).not.toHaveBeenCalled();
+});
+
+test("rows 955/959: a refusal from Rust reports failed; only a build without the command falls back to the page's own window", async () => {
+  const legacy = vi.fn(async () => true);
+  const opts = { center: true, width: 1200, height: 800 };
+  expect(await createViaRust(async () => Promise.reject("a webview with the label `tower` already exists"), opts, legacy)).toBe(false);
+  expect(legacy).not.toHaveBeenCalled();
+  expect(await createViaRust(async () => Promise.reject("Command tower_window_open not found"), opts, legacy)).toBe(true);
+  expect(legacy).toHaveBeenCalledTimes(1);
 });

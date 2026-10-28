@@ -743,7 +743,11 @@ fn saved_proxy_in(dir: &Path) -> Option<tauri::Url> {
 
 /// What a webview opened later (a browser tab on the default profile) passes.
 pub fn browser_args_now() -> String {
-    LAUNCH_ARGS.get().cloned().unwrap_or_else(|| browser_args(None, false))
+    args_for_later_window(LAUNCH_ARGS.get().map(String::as_str))
+}
+
+fn args_for_later_window(launch: Option<&str>) -> String {
+    launch.map(str::to_string).unwrap_or_else(|| browser_args(None, false))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2142,5 +2146,52 @@ mod tests {
         assert_eq!(launch.split_whitespace().filter(|a| a.starts_with("--proxy-server=")).count(), 1);
         let cleared = proxy::tab_browser_args(&proxy::without_proxy(&launch), None).unwrap();
         assert!(!proxy::same_args(&launch, &cleared), "a cleared setting is a different string from the window's, so the tab is refused");
+    }
+
+    // Rows 955 / 959: a window that passes no browser arguments gets wry's defaults, and the engine
+    // refuses a second set on the default data folder (0x8007139F). The window's own string always
+    // carries the throttling exemption, so the mismatch needs no proxy and no safe graphics.
+    #[test]
+    fn row955_the_window_string_never_equals_what_an_argless_window_passes() {
+        let url = tauri::Url::parse("http://127.0.0.1:8080").unwrap();
+        for (label, safe, proxy) in [("neither", false, None), ("proxy", false, Some(&url)), ("safe graphics", true, None), ("both", true, Some(&url))] {
+            let main = launch_string(None, safe, proxy);
+            assert_ne!(main, WRY_DEFAULT_ARGS, "{label}: an argless second window would be refused");
+            assert_eq!(args_for_later_window(Some(&main)), main, "{label}: a later window passes the window's string as it is");
+        }
+        assert_eq!(args_for_later_window(None), browser_args(None, false), "before the launch string exists the plain string stands in");
+    }
+
+    // Rows 955 / 959: every webview built on the default data folder takes its string from
+    // browser_args_now, so no window can drift from the main one again. Popups reuse the opener's
+    // engine (window_features) and the main window is built from the config whose string lib.rs sets.
+    #[test]
+    fn row955_every_top_level_webview_gets_its_browser_args_from_the_one_source() {
+        let exempt = ["browser_popup.rs", "tools.rs"];
+        let (mut seen, mut stack) = (0, vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")]);
+        while let Some(dir) = stack.pop() {
+            for e in fs::read_dir(&dir).unwrap().flatten() {
+                let path = e.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if !name.ends_with(".rs") || name == "recovery.rs" {
+                    continue;
+                }
+                let src = fs::read_to_string(&path).unwrap();
+                let end = ["\nmod tests {", "\nmod agent_tests {"].iter().filter_map(|m| src.find(m)).min().unwrap_or(src.len());
+                let code = &src[..end];
+                if !(code.contains("WebviewWindowBuilder::new(") || code.contains("WebviewBuilder::new(")) {
+                    continue;
+                }
+                seen += 1;
+                if !exempt.contains(&name.as_str()) {
+                    assert!(code.contains(".additional_browser_args(&crate::resources::recovery::browser_args_now())") || code.contains("let launch = crate::resources::recovery::browser_args_now();"), "{name} builds a webview without the one browser_args_now string");
+                }
+            }
+        }
+        assert!(seen >= 3, "the scan found the window builders: {seen}");
     }
 }

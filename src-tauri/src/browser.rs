@@ -83,6 +83,11 @@ pub mod drag;
 // T-316-b (EDIT-018): a markdown note printed to a PDF by a hidden page.
 #[path = "browser_pdf.rs"]
 pub mod pdf;
+// Rows 955 / 959: the Tower's own window, built here so its browser arguments are the main window's.
+// Dead until lib.rs registers tower_window_open (evidence/browser-955-lib.rs.patch).
+#[allow(dead_code)]
+#[path = "browser_tower.rs"]
+pub mod tower;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -114,6 +119,15 @@ const ICON_MAX: usize = 256 * 1024;
 /// navigation handler turns it into `CHORD_EVENT` and cancels it, so it never reaches the
 /// network or the operating system, and a page that has no script of ours sees nothing.
 const CHORD_SCHEME: &str = "kolux-chord:";
+
+/// Runs in a tab's main frame before the page's own script (row 954, BROW-001): the page's
+/// `window.close()` does nothing. wry answers the engine's close request by destroying the tab's
+/// window, which left a dead page under the "stopped responding" overlay. Popups do not get it:
+/// a sign-in popup closes itself when it is done.
+pub const NO_CLOSE_SCRIPT: &str = r#"(() => {
+  const keep = function close() {};
+  try { Object.defineProperty(window, "close", { value: keep, writable: false, configurable: false }); } catch (_) { try { window.close = keep; } catch (_) {} }
+})();"#;
 
 /// Runs in every page's main frame before the page's own script (BROW-003, BROW-005): the
 /// browser chords pressed while the keyboard is inside the page, Mod+L, Alt+Left / Alt+Right
@@ -1178,6 +1192,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
         .zoom_hotkeys_enabled(false)
         .initialization_script(CHORD_SCRIPT)
+        .initialization_script(NO_CLOSE_SCRIPT)
         // BROW-014: a link or script asking for a new window becomes another Kolux tab, in front.
         .on_new_window(move |url, features| {
             // T-159 (BROW-040): a document preview's popups and script-opened windows are blocked;
@@ -2334,6 +2349,17 @@ mod tests {
         for needle in ["kolux-chord:", "ArrowLeft", "ArrowRight", "preventDefault", "window.top"] {
             assert!(CHORD_SCRIPT.contains(needle), "{needle}");
         }
+    }
+
+    // Row 954 (BROW-001): wry destroys a tab's window when the page asks to close (WindowCloseRequested),
+    // so the page's own close() is made a no-op before its scripts run.
+    #[test]
+    fn row954_a_tab_page_cannot_close_its_own_tab() {
+        assert!(NO_CLOSE_SCRIPT.contains("\"close\"") && NO_CLOSE_SCRIPT.contains("defineProperty"), "close is replaced on the window");
+        let install = format!(".initialization_script({})", "NO_CLOSE_SCRIPT");
+        assert!(include_str!("browser.rs").contains(&install), "the tab builder installs it");
+        // Popups close themselves when a sign-in ends, so they never get it.
+        assert!(!include_str!("browser_popup.rs").contains("NO_CLOSE_SCRIPT"));
     }
 
     #[test]
