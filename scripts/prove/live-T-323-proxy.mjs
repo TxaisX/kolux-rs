@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 import { reporter, startPlain, finish, sleep, poll, checker } from "./live-proj-common.mjs";
 
 const run = promisify(execFile);
-const HOST = "10.254.254.254:8080";
+export const HOST = "10.254.254.254:8080";
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const PAGE = '<!doctype html><title>Proxy proof page</title><link rel="icon" href="/favicon.ico"><p>proxy-proof-body</p><a href="/download.bin">download</a>';
 const browserUa = (ua) => /Mozilla\//.test(ua);
@@ -38,7 +38,7 @@ async function listen(server) {
 }
 
 /** netstat samples of every process in the app's tree; keeps each distinct (process, remote, state). */
-function sampler(app, log) {
+export function sampler(app, log) {
   const seen = new Map();
   let stop = false;
   let names = new Map();
@@ -66,9 +66,9 @@ function sampler(app, log) {
   })();
   return { stop: async () => ((stop = true), await loop, seen) };
 }
-const local = (remote) => /^(127\.0\.0\.1|\[::1\]|0\.0\.0\.0|\[::\]):/.test(remote);
+export const local = (remote) => /^(127\.0\.0\.1|\[::1\]|0\.0\.0\.0|\[::\]):/.test(remote);
 
-async function openBrowserAt(app, url) {
+export async function openBrowserAt(app, url) {
   if (!(await app.exists("section.pane.browser"))) {
     await app.rawKey({ key: "B", code: "KeyB", vk: 66, mods: 2 | 8 });
     await app.waitFor("a browser pane", () => app.exists("section.pane.browser"), 20000);
@@ -76,18 +76,18 @@ async function openBrowserAt(app, url) {
   }
   await go(app, url);
 }
-async function go(app, url) {
+export async function go(app, url) {
   await app.focusField('section.pane.browser input[aria-label="Address"]');
   await sleep(300);
   await app.evalJs(`document.querySelector('section.pane.browser input[aria-label="Address"]').select()`);
   await app.cdp("insert", url, "enter");
 }
-const pageTarget = async (needle) => {
+export const pageTarget = async (needle) => {
   const ts = await (await fetch("http://127.0.0.1:9290/json")).json();
   return ts.find((t) => t.type === "page" && t.url.includes(needle)) ?? null;
 };
 
-async function savedProxy(app, address, log) {
+export async function savedProxy(app, address, log) {
   await app.rawKey({ key: ",", code: "Comma", vk: 188, mods: 2 });
   const ui = await poll(async () => ((await app.exists('input[aria-label="Proxy address"]')) ? true : null), 10000, 400);
   if (ui) {
