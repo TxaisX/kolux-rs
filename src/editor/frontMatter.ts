@@ -26,7 +26,18 @@ export function splitFront(text: string): { front: string; body: string; kind: "
 /** The change to the buffer for one rich edit: `now` is the buffer's text, `out` the markdown the
  *  rich view gives back for the body, `prev` what it gave back before this edit. Null when the body
  *  is unchanged, or when the edit could not be placed (then `refused` is called and nothing is written). */
-export function richChange(now: string, out: string, prev?: string, refused?: () => void): { from: number; to: number; insert: string } | null {
+export function richChange(now: string, out: string, prev?: string, refused?: () => void): Edit | null {
+  // Row 937: any throw on the way (placement, line ends, the invariant) is a refusal, so the pane gets the banner and writes nothing.
+  let said = false;
+  try {
+    return placeChange(now, out, prev, refused && (() => ((said = true), refused())));
+  } catch {
+    if (!said) placeStats.refused++, refused?.();
+    return null;
+  }
+}
+
+function placeChange(now: string, out: string, prev?: string, refused?: () => void): Edit | null {
   const { front, body } = splitFront(now);
   const placed = prev === undefined ? out : mapEdit(body, out, prev);
   if (placed === null) return refused?.(), null;
