@@ -31,7 +31,10 @@ export function richChange(now: string, out: string, prev?: string, refused?: ()
   let said = false;
   try {
     return placeChange(now, out, prev, refused && (() => ((said = true), refused())));
-  } catch {
+  } catch (e) {
+    // Row 981: a throw is a bug, kept apart from the ordinary refusals so the fuzz can assert there are none.
+    console.error("[richChange] threw, save refused", e);
+    placeStats.threw++;
     if (!said) placeStats.refused++, refused?.();
     return null;
   }
@@ -84,7 +87,7 @@ type Edit = { from: number; to: number; insert: string };
 
 /** How each rich edit was placed (the fuzz test reads it): by word number, by retyping the touched blocks, or refused;
  *  `whole` counts the placements that needed a whole list or section, not just its touched item or child. */
-export const placeStats = { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0 };
+export const placeStats = { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0, threw: 0 };
 
 /** The body with the rich edit (`prev` -> `out`) made in it, or null when the edit cannot be placed for sure.
  *  Round 3 of row 94: the word-mapped placement keeps every byte, but the word check cannot see a marker or a line break
