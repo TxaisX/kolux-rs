@@ -1,16 +1,19 @@
 // LIVE proof, after.md row 962 (fix-other card 37 NIT): the New session sheet still lists models when `grok models` and
-// `cursor-agent --list-models` run with stdout piped, stdin null, stderr dropped and only exit 0 accepted.
-// Stand-in grok.cmd / cursor-agent.cmd sit in a scratch folder at the front of the app's PATH BEFORE it starts (no real
-// agent is ever run). The listing is asked once per agent per app run, so there are two launches:
-//   node live-962.mjs 1   grok = fixed list; cursor-agent = a list followed by about 200 KB of banner (over the 64 KB pipe buffer)
-//   node live-962.mjs 2   grok = waits on stdin (findstr reads NUL) then prints its list; cursor-agent = hangs for an hour
-// Run 2 times the app against the 10 s listing limit and checks no stand-in process outlives the listing.
+// `cursor-agent --list-models` run with stdout piped, stdin null, stderr dropped, only exit 0 accepted and a 10 s limit.
+// A stand-in cursor-agent.cmd sits in a scratch folder at the front of the app's PATH BEFORE the app starts. The app searches
+// the registry PATH (the real machine and user PATH) before the process PATH, so the real grok.exe in WinGet's Links folder
+// beats any grok.cmd stand-in; Grok is therefore observed through its own `grok models` (listing only, no sign-in) and the
+// big-output / hang / stdin-wait variants run through cursor-agent, which is not installed on this machine.
+// The listing is asked once per agent per app run, so each variant is its own launch:
+//   node live-962.mjs 1   cursor-agent = a list followed by about 200 KB of banner (over the 64 KB pipe buffer)
+//   node live-962.mjs 2   cursor-agent = hangs for an hour: the 10 s listing limit and the kill of its process tree
+//   node live-962.mjs 3   cursor-agent = waits on stdin (findstr reads NUL) then prints its list
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { reporter, startPlain, finish, sleep, LIVE_BASE, LIVE_LOGS } from "./live-common.mjs";
+import { reporter, startPlain, finish, sleep, LIVE_BASE } from "./live-common.mjs";
 import { PLUS } from "./live-SESS-004.mjs";
 
-const RUN = process.argv[2] === "2" ? 2 : 1;
+const RUN = Number(process.argv[2]) || 1;
 const rep = reporter();
 const { log, lines: ev } = rep;
 let ctx;
@@ -25,32 +28,23 @@ const BIN = `${LIVE_BASE}/standin-962-${RUN}`;
 const CALLS = `${LIVE_BASE}/standin-962-${RUN}-calls.log`;
 const HANG = 3600 + RUN; // unique ping count, so the pid check finds only this stand-in's child
 const ps = (cmd) => execFileSync("powershell", ["-NoProfile", "-Command", cmd], { encoding: "utf8" }).trim();
-const stand = () => ps(`Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.Name -match '^(cmd|ping|findstr)\\.exe$' -and $_.CommandLine -match 'standin-962|ping -n ${HANG}|findstr' } | ForEach-Object { "$($_.ProcessId):$($_.Name)" }`).split(/\r?\n/).filter(Boolean);
+const stand = () => ps(`Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.Name -match '^(cmd|ping|findstr)\\.exe$' -and $_.CommandLine -match 'standin-962|ping -n ${HANG}' } | ForEach-Object { "$($_.ProcessId):$($_.Name)" }`).split(/\r?\n/).filter(Boolean);
+const clock = (d = new Date()) => d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0").slice(0, 2);
 
-function writeStandins() {
+const VARIANT = { 1: "list + about 200 KB banner", 2: "hangs", 3: "waits on stdin, then lists" }[RUN];
+function writeStandin() {
   if (existsSync(BIN)) rmSync(BIN, { recursive: true, force: true });
   mkdirSync(BIN, { recursive: true });
   writeFileSync(CALLS, "");
   const calls = win(CALLS);
-  const head = (who) => [`@echo off`, `if "%~1"=="--version" (echo ${who} 0.0.0-standin & exit /b 0)`, `echo %time% ${who} start %* >> "${calls}"`];
-  const rows = (pairs) => pairs.map(([id, name]) => `echo ${id} - ${name}`);
-  let grok;
-  let cursor;
-  if (RUN === 1) {
-    grok = [...head("grok"), `echo Available models`, ...rows([["grok-standin-alpha", "Standin Alpha"], ["grok-standin-beta", "Standin Beta"]]), `echo %time% grok end >> "${calls}"`, `exit /b 0`];
-    cursor = [
-      ...head("cursor-agent"),
-      ...rows([["cursor-standin-one", "Standin One"], ["cursor-standin-two", "Standin Two"]]),
-      `for /L %%i in (1,1,3000) do echo Tip %%i: this banner line only pads the output well past the 64 KB pipe buffer xxxxxxxxxxxx`,
-      `echo %time% cursor-agent end >> "${calls}"`,
-      `exit /b 0`,
-    ];
-  } else {
-    grok = [...head("grok"), `findstr "^" >nul`, `echo %time% grok stdin returned >> "${calls}"`, ...rows([["grok-standin-alpha", "Standin Alpha"], ["grok-standin-beta", "Standin Beta"]]), `exit /b 0`];
-    cursor = [...head("cursor-agent"), `ping -n ${HANG} 127.0.0.1 >nul`, `echo %time% cursor-agent end >> "${calls}"`, ...rows([["cursor-standin-late", "Standin Late"]]), `exit /b 0`];
-  }
-  writeFileSync(`${BIN}/grok.cmd`, grok.join("\r\n") + "\r\n");
-  writeFileSync(`${BIN}/cursor-agent.cmd`, cursor.join("\r\n") + "\r\n");
+  const head = [`@echo off`, `if "%~1"=="--version" (echo cursor-agent 0.0.0-standin & exit /b 0)`, `echo %time% cursor-agent start %* >> "${calls}"`];
+  const row = (id, name) => `echo ${id} - ${name}`;
+  const body = {
+    1: [row("cursor-standin-one", "Standin One"), row("cursor-standin-two", "Standin Two"), `for /L %%i in (1,1,3000) do echo Tip %%i: this banner line only pads the output well past the 64 KB pipe buffer xxxxxxxxxxxx`, `echo %time% cursor-agent end >> "${calls}"`],
+    2: [`ping -n ${HANG} 127.0.0.1 >nul`, `echo %time% cursor-agent end >> "${calls}"`, row("cursor-standin-late", "Standin Late")],
+    3: [`findstr "^" >nul`, `echo %time% cursor-agent stdin returned >> "${calls}"`, row("cursor-standin-one", "Standin One"), row("cursor-standin-two", "Standin Two")],
+  }[RUN];
+  writeFileSync(`${BIN}/cursor-agent.cmd`, [...head, ...body, `exit /b 0`].join("\r\n") + "\r\n");
 }
 
 const radios = (app, group) =>
@@ -63,16 +57,17 @@ const pickAi = (app, re) =>
     return new Promise(r => setTimeout(() => { l = [...g().querySelectorAll("label.choice")].find(l => ${re}.test(l.textContent)); if (!l) return r(null); l.querySelector("input").click(); r({ text: l.textContent.trim(), title: l.title }); }, 400));
   })()`);
 const labelsOf = async (app) => ((await radios(app, "Seat 1: which model")) ?? []).map((r) => r.t.replace(/^Model/, ""));
-const realExes = async (app) => (await app.treeOf(app.pid)).filter((p) => /^(claude|codex|grok|cursor-agent|cursor)(\.exe)?$/i.test(p.name)).map((p) => `${p.name}:${p.pid}`);
+const agentExes = async (app) => (await app.treeOf(app.pid)).filter((p) => /^(claude|codex|grok|cursor-agent|cursor)(\.exe)?$/i.test(p.name)).map((p) => `${p.name}:${p.pid}`);
 
 try {
-  writeStandins();
-  log(`run ${RUN}: stand-ins in ${BIN} (grok.cmd, cursor-agent.cmd), call log ${CALLS}`);
+  writeStandin();
+  log(`run ${RUN} (${VARIANT}): cursor-agent.cmd stand-in in ${BIN}, call log ${CALLS}`);
   ctx = await startPlain(`962-${RUN}`, { report: rep, pathDirs: [BIN] });
   const { app } = ctx;
   await sleep(3000);
-  log(`real agent exes in the app tree at start: ${JSON.stringify(await realExes(app))}`);
+  log(`agent exes in the app tree at start: ${JSON.stringify(await agentExes(app))}`);
   const t0 = Date.now();
+  log(`opening the sheet at ${clock()}`);
   await app.evalJs(`document.querySelector(${JSON.stringify(PLUS)}).click()`);
   for (let i = 0; i < 30 && !(await app.exists('[role=menu][aria-label="New session"]')); i++) await sleep(300);
   await app.evalJs(`(() => { const b = [...document.querySelectorAll('[role=menu][aria-label="New session"] [role=menuitem]')].find(b => /^Open a pane that asks/.test(b.title)); b.click(); return true; })()`);
@@ -81,65 +76,73 @@ try {
     sheet = await app.exists('[role=radiogroup][aria-label="Seat 1: which AI"]');
     if (!sheet) await sleep(300);
   }
-  check("the chooser opens with the Seat 1 AI choices", sheet, `${Date.now() - t0} ms after the click`);
+  check("the New session sheet opens with the Seat 1 AI choices", sheet, `${Date.now() - t0} ms after the click`);
   log(`AI choices: ${JSON.stringify((await radios(app, "Seat 1: which AI")).map((r) => r.t))}`);
   log(`screenshot: ${await ctx.shot(`962-${RUN}-chooser`)}`);
 
-  // Which agent file did the app resolve?
-  const grokPick = await pickAi(app, "/grok/i");
-  log(`picked Grok: ${JSON.stringify(grokPick)}`);
-  check("Grok resolves to the stand-in grok.cmd on the scratch PATH", !!grokPick && /standin-962/i.test(grokPick.title ?? ""), JSON.stringify(grokPick));
-
-  // Poll for the discovered models of Grok.
-  const seen = async (re, ms) => {
-    const s = Date.now();
-    for (;;) {
-      const l = await labelsOf(app);
-      if (l.some((x) => re.test(x))) return { at: Date.now() - t0, labels: l };
-      if (Date.now() - s > ms) return { at: null, labels: l };
-      await sleep(400);
-    }
-  };
-  const g = await seen(/Standin Alpha/, 25000);
-  log(`Grok model choices after ${g.at ?? "never (25 s)"} ms from the open: ${JSON.stringify(g.labels)}`);
-  check("Grok's model choices are the stand-in's own list (Standin Alpha, Standin Beta)", g.at !== null && g.labels.some((x) => /Standin Beta/.test(x)), `${JSON.stringify(g.labels)} at ${g.at} ms`);
+  // Grok: the real install answers (the sheet asks it once when it opens).
+  const grok = await pickAi(app, "/grok/i");
+  let gl = [];
+  for (let i = 0; i < 30; i++) {
+    gl = await labelsOf(app);
+    if (gl.length && !gl.includes("Grok 4")) break;
+    await sleep(500);
+  }
+  log(`Grok: ${JSON.stringify(grok)}; model choices ${JSON.stringify(gl)} (the built-in list holds only "Grok 4")`);
+  check("Grok's model choices come from its own listing (more than the built-in default alone)", gl.some((x) => x !== "Program default") && !gl.includes("Grok 4"), `${JSON.stringify(gl)} (polled up to 15 s)`);
   log(`screenshot: ${await ctx.shot(`962-${RUN}-grok`)}`);
 
+  // Cursor: the stand-in.
   const cur = await pickAi(app, "/cursor/i");
-  log(`picked Cursor: ${JSON.stringify(cur)}`);
+  log(`Cursor: ${JSON.stringify(cur)}`);
   check("Cursor resolves to the stand-in cursor-agent.cmd on the scratch PATH", !!cur && /standin-962/i.test(cur.title ?? ""), JSON.stringify(cur));
-  if (RUN === 1) {
-    const c = await seen(/Standin One/, 25000);
-    log(`Cursor model choices after ${c.at ?? "never (25 s)"} ms from the open: ${JSON.stringify(c.labels)}`);
-    check("a listing over 64 KB (rows first, about 200 KB of banner after) is still read: Cursor shows Standin One and Standin Two", c.at !== null && c.labels.some((x) => /Standin Two/.test(x)), `${JSON.stringify(c.labels)} at ${c.at} ms`);
+  if (RUN !== 2) {
+    let labels = [];
+    for (let i = 0; i < 40; i++) {
+      labels = await labelsOf(app);
+      if (labels.some((x) => /Standin Two/.test(x))) break;
+      await sleep(500);
+    }
+    log(`Cursor model choices ${Date.now() - t0} ms after the sheet opened: ${JSON.stringify(labels)}`);
+    check(RUN === 1 ? "a listing over 64 KB (rows first, about 200 KB of banner after) is still read: Standin One and Standin Two show" : "a listing that first waits on stdin is read (stdin is null, so it does not hang): Standin One and Standin Two show", labels.some((x) => /Standin One/.test(x)) && labels.some((x) => /Standin Two/.test(x)), JSON.stringify(labels));
     log(`screenshot: ${await ctx.shot(`962-${RUN}-cursor`)}`);
   } else {
-    // Hanging cursor-agent: the listing is cut off at the 10 s limit; the sheet must stay usable meanwhile.
+    // The hanging stand-in: watch its process tree appear and disappear; the sheet must stay usable meanwhile.
+    let firstSeen = null;
+    let goneAt = null;
     const lat = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 60 && goneAt === null; i++) {
       const s = Date.now();
       await app.evalJs("1+1");
       lat.push(Date.now() - s);
+      const alive = stand();
+      if (alive.length && firstSeen === null) {
+        firstSeen = Date.now();
+        log(`stand-in tree first seen ${firstSeen - t0} ms after the sheet opened: ${JSON.stringify(alive)}`);
+      }
+      if (!alive.length && firstSeen !== null) goneAt = Date.now();
       await sleep(500);
     }
-    log(`while the cursor-agent stand-in hangs: page answers in ${JSON.stringify(lat)} ms; stand-in processes now: ${JSON.stringify(stand())}`);
-    check("the sheet stays responsive while a listing hangs (page round-trips under 1 s)", Math.max(...lat) < 1000, JSON.stringify(lat));
-    await sleep(Math.max(0, 15000 - (Date.now() - t0)));
+    // The listing starts when the sheet opens; the call log (written by the stand-in itself) holds its start time.
+    const m = /^(\d+):(\d+):(\d+)\.(\d+)/.exec(readFileSync(CALLS, "utf8").trim());
+    const started = m ? new Date().setHours(+m[1], +m[2], +m[3], +m[4] * 10) : firstSeen;
+    const lived = goneAt !== null && started ? goneAt - started : null;
+    log(`stand-in listing started ${started - t0} ms after the click (its own call log) and was gone by ${goneAt - t0} ms: about ${lived} ms (limit 10000, sampled every ~1.5 s); page round-trips while it hung: max ${Math.max(...lat)} ms over ${lat.length} samples`);
+    check("the hanging listing is cut off at the 10 s limit and its whole process tree ends (cmd and ping gone)", lived !== null && lived >= 9500 && lived <= 13500, `${lived} ms`);
+    check("the sheet stays responsive while a listing hangs (page round-trips under 1 s)", Math.max(...lat) < 1000, `max ${Math.max(...lat)} ms`);
     const c = await labelsOf(app);
-    log(`Cursor model choices at ${Date.now() - t0} ms from the open: ${JSON.stringify(c)}`);
+    log(`Cursor model choices ${Date.now() - t0} ms after the sheet opened: ${JSON.stringify(c)}`);
     check("the hanging listing adds no models (Cursor keeps its default choices)", !c.some((x) => /Standin Late/.test(x)), JSON.stringify(c));
     log(`screenshot: ${await ctx.shot(`962-${RUN}-cursor-hang`)}`);
   }
 
-  // No stand-in outlives the listing.
-  await sleep(RUN === 2 ? 4000 : 2000);
+  await sleep(2000);
   const left = stand();
-  log(`stand-in processes (cmd/ping/findstr of the stand-ins) still alive ${Date.now() - t0} ms after the open: ${JSON.stringify(left)}`);
+  log(`stand-in processes (cmd/ping/findstr of the stand-in) alive ${Date.now() - t0} ms after the sheet opened: ${JSON.stringify(left)}`);
   check("no stand-in process outlives the listing", left.length === 0, JSON.stringify(left));
   log(`stand-in call log:\n${readFileSync(CALLS, "utf8").trim()}`);
-  const exes = await realExes(app);
-  log(`real agent exes in the app tree: ${JSON.stringify(exes)}`);
-  check("no real agent program ran under the app", exes.length === 0, JSON.stringify(exes));
+  const exes = await agentExes(app);
+  log(`agent exes in the app tree now: ${JSON.stringify(exes)} (a real grok.exe, if listed, ran only its own listing command)`);
   ok = asserts.every(Boolean);
 } catch (e) {
   log(`ERROR ${e.stack ?? e}`);
@@ -147,7 +150,7 @@ try {
 const code = ctx ? await finish(ctx, `962-${RUN}`, ev, ok) : 1;
 const evidence = "G:/Dev/kolux-rs-lanes/prove/evidence/live-962-model-listing.txt";
 const stamp = new Date().toISOString().slice(0, 10);
-const section = `LIVE ${stamp} (batch 8) run ${RUN} of 2: ${RUN === 1 ? "grok = fixed list; cursor-agent = list + about 200 KB banner" : "grok = waits on stdin; cursor-agent = hangs"} (scripts/prove/live-962.mjs ${RUN})\n${ev.join("\n")}\nresult: ${ok ? "PASS" : "FAIL"}\n\n`;
-if (RUN === 1) writeFileSync(evidence, `After.md row 962: do grok models / cursor-agent --list-models (stdout piped, stdin null, 10 s limit) still fill the New session sheet?\nStand-in scripts only; no real agent was run.\n\n${section}`);
+const section = `LIVE ${stamp} (batch 8) run ${RUN} of 3: cursor-agent stand-in ${VARIANT} (scripts/prove/live-962.mjs ${RUN})\n${ev.join("\n")}\nresult: ${ok ? "PASS" : "FAIL"}\n\n`;
+if (RUN === 1) writeFileSync(evidence, `After.md row 962: do grok models / cursor-agent --list-models (stdout piped, stdin null, 10 s limit) still fill the New session sheet?\nGrok answers from the real install (WinGet link; the app searches the registry PATH first); cursor-agent is a stand-in script.\n\n${section}`);
 else appendFileSync(evidence, section);
 process.exit(code);
