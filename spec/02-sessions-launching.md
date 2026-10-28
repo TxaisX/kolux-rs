@@ -221,8 +221,8 @@ Rules: works for every agent that can resume, among them Claude Code, Codex, Dev
   catalogue come back at their prompt until T-066-b; a resume starts on the agent's standing start
   line, so its permission mode and the user's own arguments return with it.)
 Acceptance:
-  - [ ] Run Claude Code, quit, reopen → the same conversation carries on in the same pane.
-  - [ ] Kill Kolux during a session and reopen → the session resumes.
+  - [x] Run Claude Code, quit, reopen → the same conversation carries on in the same pane. (cards live; evidence/cards-SESS-030.txt)
+  - [x] Kill Kolux during a session and reopen → the session resumes. (cards live; evidence/cards-SESS-030.txt)
   - [x] On Windows, with a project path that contains spaces → resume still starts. (cards; evidence/cards-SESS-030.txt)
 Compat: —
 Source: D-02-030
