@@ -475,11 +475,37 @@ fn fenced_by(profile: &Path, test_or_debug: bool, var: impl Fn(&str) -> Option<s
 /// and below a scratch marker, so a run that inherited the user's own variables (or a TEMP set to
 /// a drive root) can never reach his file.
 pub fn claude_target(profile: &Path) -> Result<PathBuf, String> {
-    let file = claude_settings_file();
+    fenced_file(profile, claude_settings_file())
+}
+
+/// `file` itself, or the refusal a fenced run gets for it.
+fn fenced_file(profile: &Path, file: PathBuf) -> Result<PathBuf, String> {
     if fenced(profile) {
         scratch_only(&file, &std::env::temp_dir(), &home_dir())?;
     }
     Ok(file)
+}
+
+/// Row 989: the folders of the Claude accounts Kolux manages. A pane on one runs with
+/// `CLAUDE_CONFIG_DIR` there, so Claude Code reads that folder's `settings.json`, not the default.
+fn managed_claude_accounts(profile: &Path) -> Vec<PathBuf> {
+    fs::read_dir(profile.join(crate::claude_accounts::FOLDER)).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default()
+}
+
+/// Every Claude settings file Kolux keeps hooks in: the default one, then each managed account's
+/// (under the same fence). Each is its own result, so one refused file never hides the others.
+fn claude_targets(profile: &Path) -> Vec<Result<PathBuf, String>> {
+    std::iter::once(claude_target(profile)).chain(managed_claude_accounts(profile).into_iter().map(|d| fenced_file(profile, d.join("settings.json")))).collect()
+}
+
+/// `step` on every Claude settings file; all are tried, and the failures come back together.
+fn each_claude_target(profile: &Path, step: impl Fn(&Path) -> Result<(), String>) -> Result<(), String> {
+    let failed: Vec<String> = claude_targets(profile).into_iter().filter_map(|t| t.and_then(|f| step(&f)).err()).collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    }
 }
 
 /// `file`'s folder lies inside `scratch` and it, or a folder above it that is still strictly below
@@ -510,7 +536,27 @@ pub fn scratch_only(file: &Path, scratch: &Path, home: &Path) -> Result<(), Stri
 
 /// Claude Code's scripts, hooks and status line, after its settings were copied once.
 fn install_claude_all(home: &Path, profile: &Path) -> Result<(), String> {
-    install_claude_at(home, &claude_target(profile)?)
+    each_claude_target(profile, |file| install_claude_at(home, file))
+}
+
+/// Row 989: a Claude account was just added, so its `settings.json` gets Kolux's hooks now rather
+/// than at the next start. Only when the status hooks are on and a sync would install Claude's;
+/// takes the lock `sync` takes. Slow only for the program search, so call it off the UI thread.
+pub fn install_claude_account(settings: &Value, profile: &Path, dir: &Path) -> Result<&'static str, String> {
+    let (installed, searched) = detect_installed();
+    install_claude_account_with(settings, profile, dir, &installed, searched)
+}
+
+fn install_claude_account_with(settings: &Value, profile: &Path, dir: &Path, installed: &[String], searched: bool) -> Result<&'static str, String> {
+    if !plan(settings, installed, searched).contains(&("claude", Plan::Install)) {
+        return Ok("left as it was");
+    }
+    if dir.parent() != Some(profile.join(crate::claude_accounts::FOLDER).as_path()) {
+        return Err(format!("{} is not one of Kolux's Claude account folders; hooks not installed", dir.display()));
+    }
+    let home = home_dir();
+    let _lock = Lock::take(&home.join(SCRIPT_DIR))?;
+    install_claude_at(&home, &fenced_file(profile, dir.join("settings.json"))?).map(|_| "installed")
 }
 
 pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
@@ -567,10 +613,7 @@ fn managed_codex_homes(profile: &Path) -> Vec<PathBuf> {
 fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
     match (id, plan) {
         ("claude", Plan::Install) => install_claude_all(home, profile).map(|_| "installed"),
-        ("claude", Plan::Remove) => {
-            let file = claude_target(profile)?;
-            remove_claude(&file, &target_dir(home, &file).join(STATUS_PREV)).map(|_| "removed")
-        }
+        ("claude", Plan::Remove) => each_claude_target(profile, |file| remove_claude(file, &target_dir(home, file).join(STATUS_PREV)).map(|_| ())).map(|_| "removed"),
         // T-152 (6): the user's own Codex home is neither written nor cleared while T-025-e is off
         // the cutline, so on and off leave its bytes exactly as they were; only the managed homes a
         // pane starts in (Kolux's own folders) are cleared.
@@ -587,6 +630,15 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
         (id @ ("cursor" | "droid" | "command-code" | "kimi" | "copilot" | "grok" | "devin" | "pi" | "hermes"), Plan::Install | Plan::Remove) => more::apply(home, profile, id, plan),
         _ => Ok("left as it was"),
     }
+}
+
+/// The agents found on this computer (one search of the program folders), and whether the search ran.
+fn detect_installed() -> (Vec<String>, bool) {
+    let searched = !crate::agents::search_dirs().is_empty();
+    if !searched {
+        eprintln!("kolux-rs: agent hooks: no program folder could be searched, so no hooks were installed");
+    }
+    (if searched { crate::agents::catalogue().into_iter().filter(|a| a.installed).map(|a| a.id).collect() } else { Vec::new() }, searched)
 }
 
 /// At start, and whenever an agent is switched on or off: Kolux's scripts are refreshed, then
@@ -611,11 +663,7 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
             eprintln!("kolux-rs: agent hook script: {e}");
         }
     }
-    let searched = !crate::agents::search_dirs().is_empty();
-    if !searched {
-        eprintln!("kolux-rs: agent hooks: no program folder could be searched, so no hooks were installed");
-    }
-    let installed: Vec<String> = if searched { crate::agents::catalogue().into_iter().filter(|a| a.installed).map(|a| a.id).collect() } else { Vec::new() };
+    let (installed, searched) = detect_installed();
     plan(settings, &installed, searched)
         .into_iter()
         .map(|(id, p)| {

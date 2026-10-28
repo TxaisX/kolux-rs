@@ -524,6 +524,7 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
             },
             |dir| auth_status(&program, Some(dir)),
         );
+        let signed_in = result.as_ref().ok().map(|a| a.config_dir.clone());
         let sign_ins = app.state::<SignIns>();
         if let Ok(mut g) = sign_ins.attention.lock() {
             *g = result.err().filter(|e| e.reason != "cancelled");
@@ -533,6 +534,12 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
             *g = None;
         }
         let _ = app.emit(EVENT, ());
+        // Row 989: a pane on this account reads its own settings.json, so it gets Kolux's hooks now; after the card is released, on this worker thread, and nothing after a failed sign-in.
+        if let Some(dir) = signed_in {
+            if let Ok(Err(e)) = store.lock().map(|s| s.settings()).map(|s| crate::hooks::agent_hooks::install_claude_account(&s, &profile, Path::new(&dir))) {
+                eprintln!("kolux-rs: claude account hooks: {e}");
+            }
+        }
     });
     Ok(())
 }
