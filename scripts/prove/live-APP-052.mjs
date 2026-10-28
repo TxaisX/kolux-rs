@@ -2,6 +2,8 @@
 // b1: print a marker, quit and relaunch three times -> the marker is shown after each launch.
 // b2: kill ONLY the terminal-service process tied to this scratch root (its data-folder argument lies under it), relaunch
 // -> the terminal comes back from its saved history.
+// A development build links the background terminal service only with KOLUX_TERMINAL_SERVICE=1 (pty_link.rs `wanted`; an
+// installed build always does), so this script sets it for the app it launches (live-common strips every KOLUX_ variable at import).
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { reporter, startPlain, finish, sleep, waitFor, dismissFirstRun, TERM, LIVE_BASE } from "./live-common.mjs";
@@ -37,6 +39,7 @@ const back = async (app) => {
   await sleep(4000);
 };
 try {
+  process.env.KOLUX_TERMINAL_SERVICE = "1";
   ctx = await startPlain("APP-052", { report: rep });
   const { app } = ctx;
   await sleep(3000);

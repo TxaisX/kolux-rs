@@ -1,2 +1,10 @@
 box 1: NOT TICKED (LIVE) — needs the real app quit/relaunch three times. Partial unit evidence: src-tauri/src/pty_service.rs t075b_a_terminal_outlives_its_window_and_a_new_window_gets_its_output_back, terminal.rs generation tests, src/terminal/reattach.test.ts. Live steps: launch hidden app, print a marker in a shell pane, quit via Exit and relaunch (x3) with the same scratch profile, expect the marker in the pane's buffer text each time.
 box 2: NOT TICKED (LIVE) — needs a real terminal service process. Live steps: after a marker is printed, kill only the terminal-service pid under the scratch root, relaunch the app, expect the pane to show its saved history (marker) with a fresh shell.
+
+LIVE 2026-10-27 (batch 8, scripts/prove/live-APP-052.mjs; log G:/Temp/live-v8-logs/APP-052.run.txt; diag scripts/prove/diag-APP-052-service-exit.mjs)
+setup: hidden dev app, scratch root G:/Temp/live-v8/run-APP-052, KOLUX_TERMINAL_SERVICE=1 (a dev build links the terminal service only then; pty_link.rs wanted()).
+b1: marker printed in a shell pane; three rounds of window-close quit (3.2-3.3 s, 0 survivors) and relaunch: marker visible after each (53, 55, 57 buffer rows). The pane header reads "Ended restored" and the buffer says "restored after a restart - the shell below is new", and the app log says "terminal service linked (0 terminals taken back)" every launch: the marker comes from the saved history replay, not from a terminal that kept running.
+b2: exactly one terminal-service process was tied to the scratch root (its command line ends with the profile folder), but a second marker typed into the restored pane never appeared (30 s timeout; the pane is ended).
+diag: the service ended within 50 ms of the app in both a window-close quit and a hard Stop-Process of the app pid only; app and service are both inside a job object in this harness. So a terminal outliving the window cannot be shown here.
+result: NOT ticked. b1 and b2 stay LIVE: they need the same run on an installed build, where the service is expected to survive the quit (DT-C27 reversed 2026-10-20).
+screenshot: G:/Temp/live-v8-logs/APP-052-round3.png
