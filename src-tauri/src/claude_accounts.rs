@@ -403,14 +403,12 @@ pub(crate) fn claim_new_folder(profile: &Path, folder: &str, agent: &str, listed
 
 const CLAIM_TRIES: u32 = 8;
 
-/// Row 923: puts earlier bytes (a sealed copy or the live sign-in file) back through a temp file and a rename, so a crash never leaves a truncated copy; a failure is logged by path and kind only. True when the bytes are back.
+/// Rows 923, 947: puts earlier bytes (a sealed copy or the live sign-in file) back through the app's all-or-nothing save, which keeps the file's mode, syncs and sweeps stale copies; a failure is logged without the bytes. True when the bytes are back.
 fn restore_sealed_copy(path: &Path, bytes: &[u8]) -> bool {
-    let tmp = path.with_extension("tmp");
-    match fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, path)) {
+    match crate::files::write_bytes(path, bytes) {
         Ok(()) => true,
         Err(e) => {
-            eprintln!("kolux-rs: could not put the sealed copy back {} ({:?})", path.display(), e.kind());
-            let _ = fs::remove_file(&tmp);
+            eprintln!("kolux-rs: could not put {} back ({e})", path.display());
             false
         }
     }
@@ -924,6 +922,44 @@ mod tests {
         assert_eq!(fs::read(&vault).unwrap(), sealed, "the sealed copy is the earlier one again");
         assert_eq!(secrets::read_file(&vault, &dir).unwrap().as_deref(), Some(CREDS));
         assert_eq!(fs::read_to_string(Path::new(&a.config_dir).join(CREDENTIALS)).unwrap(), CREDS, "and so is the live file");
+    }
+
+    /// Row 947: no save copy (`*.tmp` or `.kolux-save-*`) is left in a folder.
+    fn no_save_copies_in(folder: &Path) -> bool {
+        fs::read_dir(folder).unwrap().flatten().all(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            !n.ends_with(".tmp") && !n.contains(".kolux-save-")
+        })
+    }
+
+    // Row 947: the write-back of the earlier live bytes and sealed copy leaves no temp file in the account folder or the vault.
+    #[test]
+    fn row947_a_refused_re_sign_in_leaves_no_save_copy_behind() {
+        let (dir, store) = profile("row947-leftovers");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, breaks_list(&store, &dir, broken, new), |_| Some(SIGNED_IN.into())).is_err());
+        let live = Path::new(&a.config_dir);
+        assert_eq!(fs::read_to_string(live.join(CREDENTIALS)).unwrap(), CREDS, "the earlier live bytes are back");
+        assert!(no_save_copies_in(live), "no save copy in the account folder");
+        assert!(no_save_copies_in(&dir.join(secrets::VAULT)), "no save copy in the vault");
+    }
+
+    // Row 947: a live credentials file kept at owner-only mode is still owner-only after a refused re-sign-in writes the earlier bytes back. unix only, so it is not run on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn row947_a_refused_re_sign_in_keeps_the_live_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, store) = profile("row947-mode");
+        let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let live = Path::new(&a.config_dir).join(CREDENTIALS);
+        fs::set_permissions(&live, fs::Permissions::from_mode(0o600)).unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        let new = r#"{"claudeAiOauth":{"accessToken":"fake-new"}}"#;
+        assert!(sign_in(&store, &dir, "a1", true, 9, breaks_list(&store, &dir, broken, new), |_| Some(SIGNED_IN.into())).is_err());
+        assert_eq!(fs::read_to_string(&live).unwrap(), CREDS);
+        assert_eq!(fs::metadata(&live).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     // Row 923 (1): with the live file gone, a refused re-sign-in leaves neither the vault nor the live file on the new sign-in.
