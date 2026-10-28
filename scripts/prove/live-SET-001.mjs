@@ -37,8 +37,13 @@ export async function run001b3(ctx, { check, log }) {
   log(`screenshot (main, Rose): ${await ctx.shot("SET-001-main-rose")}`);
 
   // The pop-out: the Tower window, made hidden and off-screen so nothing shows on the desktop.
-  const made = await app.evalJs(`window.__TAURI_INTERNALS__.invoke("plugin:webview|create_webview_window", { options: { label: "tower", url: "index.html#tower-window", title: "Kolux Tower", visible: false, focus: false, x: -32000, y: -32000, width: 900, height: 600 } }).then(() => "created", (e) => "error: " + String(e))`).catch((e) => `eval error ${e.message}`);
-  log(`create tower window: ${JSON.stringify(made)}`);
+  const attempt = (opts) => app.evalJs(`window.__TAURI_INTERNALS__.invoke("plugin:webview|create_webview_window", { options: ${JSON.stringify(opts)} }).then(() => "created", (e) => "error: " + String(e))`).catch((e) => `eval error ${e.message}`);
+  let made = await attempt({ label: "tower", url: "index.html#tower-window", title: "Kolux Tower", visible: false, focus: false, x: -32000, y: -32000, width: 900, height: 600 });
+  log(`create tower window (hidden, off-screen): ${JSON.stringify(made)}`);
+  if (/error/.test(made)) {
+    made = await attempt({ label: "tower", url: "index.html#tower-window", title: "Kolux Tower", visible: false, focus: false });
+    log(`create tower window (hidden, no placement): ${JSON.stringify(made)}`);
+  }
   const tower = await poll(async () => (await targets()).find((t) => t.type === "page" && /tower-window/.test(t.url)), 30000, 500);
   log(`tower target: ${tower ? tower.url : "none"}`);
   check("the pop-out window opened (a second page target for #tower-window exists)", !!tower, tower?.url ?? String(made));

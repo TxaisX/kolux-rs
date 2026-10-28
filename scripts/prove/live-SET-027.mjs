@@ -8,7 +8,7 @@ import { reporter, startPlain, finish, sleep, poll, checker, LIVE_LOGS } from ".
 import { ROOT, LIVE_BASE, writeStandinClaude } from "./live-common.mjs";
 import { TODAY } from "./live-browser-common.mjs";
 
-const CHORD = { key: "Y", code: "KeyY", vk: 89, mods: 1 | 2 | 8 }; // Ctrl+Alt+Shift+Y, bound to tab.newAgent through the scratch keybindings.json
+const CHORD = { key: "F8", code: "F8", vk: 119, mods: 2 | 8 }; // Ctrl+Shift+F8 (Ctrl+Alt+letter hits the AltGr guard), bound to tab.newAgent through the scratch keybindings.json
 const ID = "SET-027";
 const NL = "\n";
 const STUB ="@echo off\r\necho stand-in\r\n";
@@ -41,8 +41,11 @@ export async function run027(ctx, { check, log }, ev) {
   const A = installed.includes("claude") ? "claude" : installed[0];
   const B = installed.find((id) => id !== A);
   if (!A || !B) { sub("at least two agents are installed (one to be the default, one to take over)", false, JSON.stringify(installed)); return; }
-  await app.evalJs(`(() => { const s = document.querySelector(${JSON.stringify(SELECT)}); const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set; set.call(s, ${JSON.stringify(A)}); s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
-  await sleep(1200);
+  await sleep(2500);
+  for (let i = 0; i < 3 && (await settingsNow(app)).defaultAgent !== A; i++) {
+    await app.evalJs(`(() => { const s = document.querySelector(${JSON.stringify(SELECT)}); const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set; set.call(s, ${JSON.stringify(A)}); s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await sleep(1500);
+  }
   const withDefault = await page(app);
   const savedA = await settingsNow(app);
   note(`default set to ${A}: page ${JSON.stringify(withDefault)}; saved ${JSON.stringify(savedA)}`);
@@ -131,13 +134,14 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const pathDir = `${LIVE_BASE}/pathdir-${ID}`;
     rmSync(pathDir, { recursive: true, force: true });
     mkdirSync(pathDir, { recursive: true });
+    process.env.KOLUX_KEYBINDINGS_HOME = join(TEMP, "home"); // the app's home_dir() ignores USERPROFILE on Windows; this points the shortcuts file at the scratch home
     ctx = await startPlain(ID, {
       report: rep,
       settings: { agentOptions },
       pathDirs: [pathDir],
       prepare: async () => {
         mkdirSync(join(TEMP, "home", ".kolux"), { recursive: true });
-        writeFileSync(join(TEMP, "home", ".kolux", "keybindings.json"), JSON.stringify({ version: 1, keybindings: { "tab.newAgent": "Ctrl+Alt+Shift+Y" } }));
+        writeFileSync(join(TEMP, "home", ".kolux", "keybindings.json"), JSON.stringify({ version: 1, keybindings: { "tab.newAgent": "Mod+Shift+F8" } }));
       },
     });
     await sleep(3000);
