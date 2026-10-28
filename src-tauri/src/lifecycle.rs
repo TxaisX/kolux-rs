@@ -724,6 +724,7 @@ mod tests {
         let mut exited = None;
         watchdog_run(Duration::from_millis(100), || std::thread::sleep(Duration::from_secs(5)), || exited = Some(start.elapsed()));
         let at = exited.expect("the watchdog exits");
+        assert!(at >= Duration::from_millis(100), "exit came {at:?} after the start, before the deadline");
         assert!(at < Duration::from_millis(100) + Duration::from_secs(1), "exit came {at:?} after the start; a stalled log write held it");
     }
 
