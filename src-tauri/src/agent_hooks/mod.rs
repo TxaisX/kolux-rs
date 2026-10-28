@@ -489,18 +489,41 @@ fn fenced_file(profile: &Path, file: PathBuf) -> Result<PathBuf, String> {
 /// Row 989: the folders of the Claude accounts Kolux manages. A pane on one runs with
 /// `CLAUDE_CONFIG_DIR` there, so Claude Code reads that folder's `settings.json`, not the default.
 fn managed_claude_accounts(profile: &Path) -> Vec<PathBuf> {
-    fs::read_dir(profile.join(crate::claude_accounts::FOLDER)).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default()
+    // `file_type` does not follow links, so a symlink or junction under the folder is not an account.
+    fs::read_dir(profile.join(crate::claude_accounts::FOLDER)).map(|d| d.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path()).collect()).unwrap_or_default()
 }
 
-/// Every Claude settings file Kolux keeps hooks in: the default one, then each managed account's
-/// (under the same fence). Each is its own result, so one refused file never hides the others.
-fn claude_targets(profile: &Path) -> Vec<Result<PathBuf, String>> {
-    std::iter::once(claude_target(profile)).chain(managed_claude_accounts(profile).into_iter().map(|d| fenced_file(profile, d.join("settings.json")))).collect()
+/// `file` as a comparison key: its folder resolved, so the same file spelled two ways matches.
+fn path_key(file: &Path) -> String {
+    let resolved = file.parent().and_then(|d| fs::canonicalize(d).ok()).zip(file.file_name()).map(|(d, n)| d.join(n)).unwrap_or_else(|| file.to_path_buf());
+    let key = resolved.to_string_lossy().into_owned();
+    if cfg!(windows) { key.to_lowercase() } else { key }
+}
+
+/// Every Claude settings file Kolux keeps hooks in: the default one, the one a `CLAUDE_CONFIG_DIR`
+/// the user set for Claude's panes names (row 989 ruling, the folder trust uses), then each managed
+/// account's (under the same fence). Each is its own result, so one refused file never hides the
+/// others; a file reached twice is listed once.
+fn claude_targets(settings: &Value, profile: &Path) -> Vec<Result<PathBuf, String>> {
+    let own = crate::claude_accounts::user_config_dir(settings).map(|d| fenced_file(profile, d.join("settings.json")));
+    let accounts = managed_claude_accounts(profile).into_iter().map(|d| fenced_file(profile, d.join("settings.json")));
+    let mut seen = Vec::new();
+    std::iter::once(claude_target(profile))
+        .chain(own)
+        .chain(accounts)
+        .filter(|t| t.as_ref().map_or(true, |f| {
+            let key = path_key(f);
+            !seen.contains(&key) && {
+                seen.push(key);
+                true
+            }
+        }))
+        .collect()
 }
 
 /// `step` on every Claude settings file; all are tried, and the failures come back together.
-fn each_claude_target(profile: &Path, step: impl Fn(&Path) -> Result<(), String>) -> Result<(), String> {
-    let failed: Vec<String> = claude_targets(profile).into_iter().filter_map(|t| t.and_then(|f| step(&f)).err()).collect();
+fn each_claude_target(settings: &Value, profile: &Path, step: impl Fn(&Path) -> Result<(), String>) -> Result<(), String> {
+    let failed: Vec<String> = claude_targets(settings, profile).into_iter().filter_map(|t| t.and_then(|f| step(&f)).err()).collect();
     if failed.is_empty() {
         Ok(())
     } else {
@@ -535,8 +558,21 @@ pub fn scratch_only(file: &Path, scratch: &Path, home: &Path) -> Result<(), Stri
 }
 
 /// Claude Code's scripts, hooks and status line, after its settings were copied once.
-fn install_claude_all(home: &Path, profile: &Path) -> Result<(), String> {
-    each_claude_target(profile, |file| install_claude_at(home, file))
+fn install_claude_all(home: &Path, settings: &Value, profile: &Path) -> Result<(), String> {
+    each_claude_target(settings, profile, |file| install_claude_at(home, file))
+}
+
+/// Row 989: `f` while holding the install lock `sync` takes, so an account folder is not deleted while
+/// hooks are being written into it. A lock that cannot be had in a few seconds is logged and `f`
+/// runs anyway: removing an account must never fail on it.
+pub fn with_install_lock<T>(f: impl FnOnce() -> T) -> T {
+    let lock = Lock::take_within(&home_dir().join(SCRIPT_DIR), LOCK_STALE, Duration::from_secs(5));
+    if let Err(e) = &lock {
+        eprintln!("kolux-rs: agent hooks: {e}");
+    }
+    let out = f();
+    drop(lock);
+    out
 }
 
 /// Row 989: a Claude account was just added, so its `settings.json` gets Kolux's hooks now rather
@@ -544,19 +580,23 @@ fn install_claude_all(home: &Path, profile: &Path) -> Result<(), String> {
 /// takes the lock `sync` takes. Slow only for the program search, so call it off the UI thread.
 pub fn install_claude_account(settings: &Value, profile: &Path, dir: &Path) -> Result<&'static str, String> {
     let (installed, searched) = detect_installed();
-    install_claude_account_with(settings, profile, dir, &installed, searched)
+    install_claude_account_with(&home_dir(), settings, profile, dir, &installed, searched)
 }
 
-fn install_claude_account_with(settings: &Value, profile: &Path, dir: &Path, installed: &[String], searched: bool) -> Result<&'static str, String> {
+fn install_claude_account_with(home: &Path, settings: &Value, profile: &Path, dir: &Path, installed: &[String], searched: bool) -> Result<&'static str, String> {
     if !plan(settings, installed, searched).contains(&("claude", Plan::Install)) {
         return Ok("left as it was");
     }
-    if dir.parent() != Some(profile.join(crate::claude_accounts::FOLDER).as_path()) {
+    let named = dir.components().next_back().is_some_and(|c| matches!(c, std::path::Component::Normal(_)));
+    if !named || dir.parent() != Some(profile.join(crate::claude_accounts::FOLDER).as_path()) {
         return Err(format!("{} is not one of Kolux's Claude account folders; hooks not installed", dir.display()));
     }
-    let home = home_dir();
     let _lock = Lock::take(&home.join(SCRIPT_DIR))?;
-    install_claude_at(&home, &fenced_file(profile, dir.join("settings.json"))?).map(|_| "installed")
+    // Checked under the lock `claude_accounts::remove` also takes, so a folder removed meanwhile does not come back.
+    if !dir.is_dir() {
+        return Ok("left as it was");
+    }
+    install_claude_at(home, &fenced_file(profile, dir.join("settings.json"))?).map(|_| "installed")
 }
 
 pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
@@ -610,10 +650,10 @@ fn managed_codex_homes(profile: &Path) -> Vec<PathBuf> {
     fs::read_dir(profile.join(crate::codex_accounts::FOLDER)).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default()
 }
 
-fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
+fn apply(home: &Path, profile: &Path, settings: &Value, id: &str, plan: Plan) -> Result<&'static str, String> {
     match (id, plan) {
-        ("claude", Plan::Install) => install_claude_all(home, profile).map(|_| "installed"),
-        ("claude", Plan::Remove) => each_claude_target(profile, |file| remove_claude(file, &target_dir(home, file).join(STATUS_PREV)).map(|_| ())).map(|_| "removed"),
+        ("claude", Plan::Install) => install_claude_all(home, settings, profile).map(|_| "installed"),
+        ("claude", Plan::Remove) => each_claude_target(settings, profile, |file| remove_claude(file, &target_dir(home, file).join(STATUS_PREV)).map(|_| ())).map(|_| "removed"),
         // T-152 (6): the user's own Codex home is neither written nor cleared while T-025-e is off
         // the cutline, so on and off leave its bytes exactly as they were; only the managed homes a
         // pane starts in (Kolux's own folders) are cleared.
@@ -667,7 +707,7 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
     plan(settings, &installed, searched)
         .into_iter()
         .map(|(id, p)| {
-            let out = apply(&home, profile, id, p);
+            let out = apply(&home, profile, settings, id, p);
             match &out {
                 Ok(what) => eprintln!("kolux-rs: {id} hooks: {what}"),
                 Err(e) => eprintln!("kolux-rs: {id} hooks: {e}"),
@@ -679,7 +719,7 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
 
 /// STAT-002: the user switched the status hooks off: Kolux's own entries come out of every agent
 /// (the user's own hooks stay), and nothing else is written, not even Kolux's scripts.
-pub fn clear(profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
+pub fn clear(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
     let home = home_dir();
     let _lock = match Lock::take(&home.join(SCRIPT_DIR)) {
         Ok(l) => l,
@@ -688,7 +728,7 @@ pub fn clear(profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)
             return Vec::new();
         }
     };
-    MANAGED.iter().map(|&id| (id, apply(&home, profile, id, Plan::Remove))).collect()
+    MANAGED.iter().map(|&id| (id, apply(&home, profile, settings, id, Plan::Remove))).collect()
 }
 
 /// Each agent's outcome as `kolux agent hooks on|off` and the Agents page show it: `agent`, `done`
@@ -706,7 +746,7 @@ pub fn outcomes(all: Vec<(&'static str, Result<&'static str, String>)>) -> Vec<V
 pub async fn agent_hooks_sync(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, clear: Option<bool>) -> Result<Vec<Value>, String> {
     let (settings, profile) = store.lock().map(|s| (s.settings(), s.dir())).map_err(|e| e.to_string())?;
     let off = clear == Some(true) && !switch::on(&settings);
-    let all = tauri::async_runtime::spawn_blocking(move || if off { self::clear(&profile) } else { sync(&settings, &profile) }).await.map_err(|e| e.to_string())?;
+    let all = tauri::async_runtime::spawn_blocking(move || if off { self::clear(&settings, &profile) } else { sync(&settings, &profile) }).await.map_err(|e| e.to_string())?;
     Ok(outcomes(all))
 }
 

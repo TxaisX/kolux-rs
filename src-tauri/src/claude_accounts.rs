@@ -617,7 +617,8 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     let dir = PathBuf::from(&gone.config_dir);
     // Row 944: only the account's own folder directly under the accounts folder is deleted (a ".." or a nested path is not).
     if dir.parent() == Some(profile.join(FOLDER).as_path()) && dir.file_name().is_some_and(|n| n == id) {
-        crate::codex_accounts::remove_dir_patiently(&dir).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
+        // Row 989: under the hooks install lock, so a sign-in's hook install cannot recreate the folder as it goes.
+        crate::hooks::agent_hooks::with_install_lock(|| crate::codex_accounts::remove_dir_patiently(&dir)).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
     }
     cleared
 }
@@ -735,14 +736,26 @@ pub fn active_dir(store: &Store) -> Option<String> {
 /// Same precedence as the pane's launch (`pane_env`): an active managed account outside key mode
 /// reads its own folder; otherwise the pane inherits the app's `process_file`.
 pub fn pane_config_file(store: &Store, process_file: PathBuf) -> PathBuf {
-    let settings = store.settings();
+    pane_config_dir(&store.settings(), active_dir(store)).map_or(process_file, |d| d.join(".claude.json"))
+}
+
+/// The `CLAUDE_CONFIG_DIR` the user set for Claude's panes (`agentOptions.claude.env`); the last
+/// line naming it wins, as in the pane's environment. Blank or relative counts as unset: Kolux
+/// cannot know what a relative folder is relative to.
+pub fn user_config_dir(settings: &Value) -> Option<PathBuf> {
+    let env = crate::agents::parse_env(crate::agents::option_field(settings, "claude", "env")?);
+    let named = |k: &str| if cfg!(windows) { k.eq_ignore_ascii_case(CONFIG_ENV) } else { k == CONFIG_ENV };
+    env.iter().rev().find(|(k, _)| named(k)).map(|(_, v)| PathBuf::from(v)).filter(|d| d.is_absolute())
+}
+
+/// The folder a new Claude pane runs with as `CLAUDE_CONFIG_DIR`, `None` = the app's own. The pane's
+/// order (terminal.rs applies the user's variables first, then Kolux's account variable): the
+/// active managed account (`pane_env`: not key mode, the program credited to Claude, so a custom
+/// command counts), else the user's own `CLAUDE_CONFIG_DIR`. Trust and the agent hooks both read it.
+pub fn pane_config_dir(settings: &Value, active_dir: Option<String>) -> Option<PathBuf> {
     let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(Value::as_str) == Some(crate::claude_key::KEY_MODE);
-    // The pane runs the user's own command when set, and only a command credited to Claude gets the account.
-    let program = crate::agents::command_override(&settings, "claude").unwrap_or("claude");
-    match pane_env(Some(program), key_mode, active_dir(store)) {
-        Some((_, dir)) => PathBuf::from(dir).join(".claude.json"),
-        None => process_file,
-    }
+    let program = crate::agents::command_override(settings, "claude").unwrap_or("claude");
+    pane_env(Some(program), key_mode, active_dir).map(|(_, d)| PathBuf::from(d)).or_else(|| user_config_dir(settings))
 }
 
 /// `pane_config_file` read from the live store at call time, so an account switch is honoured.
@@ -1558,5 +1571,42 @@ mod tests {
         assert_eq!(ctx.claude_config, t.account_file);
         crate::trust::trust_folders(&ctx.claude_config, "claude", std::slice::from_ref(&t.worktree)).unwrap();
         assert!(trusted_in(&t.account_file, &t));
+    }
+
+    // Row 989 ruling: a CLAUDE_CONFIG_DIR the user set in the pane env decides trust too, below the managed account.
+    fn own_config_dir(t: &Trust, line: &str) {
+        let set = serde_json::Map::from_iter([(crate::agents::OPTIONS_FIELD.to_string(), json!({ "claude": { "env": line } }))]);
+        t.store.lock().unwrap().patch_settings(&set, &[]).unwrap();
+    }
+
+    #[test]
+    fn row989_trust_follows_the_users_config_dir_when_no_account_is_active() {
+        let t = trust_fixture("row989-own", false);
+        let own = t.worktree.parent().unwrap().join("own-claude");
+        own_config_dir(&t, &format!("OTHER=1\nCLAUDE_CONFIG_DIR={}", own.display()));
+        assert_eq!(pane_config_file(&t.store.lock().unwrap(), t.process_file.clone()), own.join(".claude.json"));
+        crate::trust::trust_for_launch(&t.store, &t.process_file, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert!(trusted_in(&own.join(".claude.json"), &t), "the user's own folder carries the trust");
+        assert!(!t.process_file.exists());
+    }
+
+    #[test]
+    fn row989_an_active_account_wins_over_the_users_config_dir_and_key_mode_does_not() {
+        let t = trust_fixture("row989-both", true);
+        let own = t.worktree.parent().unwrap().join("own-claude");
+        own_config_dir(&t, &format!("claude_config_dir={}", own.display()));
+        let file = || pane_config_file(&t.store.lock().unwrap(), t.process_file.clone());
+        assert_eq!(file(), t.account_file, "Kolux's account variable is applied after the user's");
+        key_mode(&t);
+        assert_eq!(file(), own.join(".claude.json"), "key mode hands no account, so the user's own folder is what the pane gets");
+    }
+
+    #[test]
+    fn row989_a_blank_or_relative_user_config_dir_is_ignored() {
+        let t = trust_fixture("row989-rel", false);
+        for line in ["CLAUDE_CONFIG_DIR=", "CLAUDE_CONFIG_DIR=relative/dir", "NOT_IT=C:/x"] {
+            own_config_dir(&t, line);
+            assert_eq!(pane_config_file(&t.store.lock().unwrap(), t.process_file.clone()), t.process_file, "{line}");
+        }
     }
 }
