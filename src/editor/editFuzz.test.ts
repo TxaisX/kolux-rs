@@ -364,24 +364,32 @@ function readsAs(nb: string, out: string): boolean {
   // Row 936 (seeds 119, 95, 108): the app gives the view LF text. The raw CRLF text drops the spaces before a line end in the round trip and keeps a CR on code lines, so both sides are read as LF.
   const rowGap = (t: string | null) => t?.replace(/\n\n(?=\|)/g, "\n");
   const lf = (t: string) => t.replace(/\r\n/g, "\n");
-  return rowGap(trimFenceEdges(roundTrip(lf(nb)))) === rowGap(trimFenceEdges(lf(out)));
+  // Row 981: only a text with a CR has the CR-only code lines to forgive; an LF save keeps every blank line in a fence.
+  const trim = (nb + out).includes("\r") ? trimFenceEdges : (t: string | null) => t;
+  return rowGap(trim(roundTrip(lf(nb)))) === rowGap(trim(lf(out)));
 }
 
-/** Row 936 (seeds 114, 117, 51 and more): the fuzz feeds raw CRLF, so a code line ends in a CR; deleting its text leaves a CR-only line that the LF view drops. Blank lines at the very start or end of a ``` body are not compared. */
+/** Row 936 (seeds 114, 117, 51 and more): the fuzz feeds raw CRLF, so a code line ends in a CR; deleting its text leaves a CR-only line that the LF view drops.
+ *  Blank lines at the very start or end of a fenced body are not compared. Row 981: one indent rule (up to 3 spaces) on both edges, and a fence closes only on its own character, at least as long. */
 function trimFenceEdges(t: string | null): string | null {
   if (t === null) return t;
-  const rows = t.split(String.fromCharCode(10));
   const kept: string[] = [];
-  let open = false;
-  for (const r of rows) {
-    if (/^ {0,3}```/.test(r)) {
-      if (open) while (kept.length && kept[kept.length - 1] === "") kept.pop();
-      open = !open;
-      kept.push(r);
-    } else if (open && r === "" && kept[kept.length - 1]?.startsWith("```")) continue;
-    else kept.push(r);
+  let fence: { ch: string; len: number } | null = null;
+  let opener = -1;
+  for (const r of t.split("\n")) {
+    const m = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(r);
+    if (!fence) {
+      if (m && !(m[1][0] === "`" && m[2].includes("`"))) {
+        fence = { ch: m[1][0], len: m[1].length };
+        opener = kept.length;
+      }
+    } else if (m && m[1][0] === fence.ch && m[1].length >= fence.len && m[2].trim() === "") {
+      while (kept.length - 1 > opener && kept[kept.length - 1] === "") kept.pop();
+      fence = null;
+    } else if (r === "" && kept.length - 1 === opener) continue;
+    kept.push(r);
   }
-  return kept.join(String.fromCharCode(10));
+  return kept.join("\n");
 }
 
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
@@ -570,5 +578,38 @@ describe("oracle: row 981 tightened exemptions", () => {
   it("the seed 95 shape (a renumber after a nested list) still has no structure problem", () => {
     const body = "- a\n  - n1\n\n  - n2\n- b\n\n1. x\n2. y\n";
     expect(structureProblem(body, body.replace("2. y", "3. y"), "1. x\n2. y", "1. x\n3. y")).toBeNull();
+  });
+});
+
+// Row 981: trimFenceEdges ran on every note, so an LF save that added a blank first line to an untouched fence read as the view's text.
+describe("oracle: row 981 fence-edge trimming", () => {
+  const typed = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    return { prev, out: roundTrip(prev.replace(from, to))! };
+  };
+  it("an LF note's save that adds a blank first line to an untouched fence is flagged; the real save passes", () => {
+    const body = "Intro\n\n```\nx\ny\n```\n\nEnd\n";
+    const { out } = typed(body, "Intro", "Intra");
+    expect(readsAs("Intra\n\n```\nx\ny\n```\n\nEnd\n", out)).toBe(true);
+    expect(readsAs("Intra\n\n```\n\nx\ny\n```\n\nEnd\n", out)).toBe(false);
+    // A blank last code line is not told apart here: the view itself drops it (the kept-ends and invariant checks hold that byte).
+  });
+  it("the same inside a <details> note", () => {
+    const body = "<details>\n<summary>S</summary>\n\nInner\n\n</details>\n\nIntro\n\n```\nx\ny\n```\n\nEnd\n";
+    const { out } = typed(body, "Intro", "Intra");
+    const bad = body.replace("Intro", "Intra").replace("```\nx", "```\n\nx");
+    expect(readsAs(body.replace("Intro", "Intra"), out)).toBe(true);
+    expect(readsAs(bad, out)).toBe(false);
+  });
+  it("a CRLF note still reads an emptied code line as the LF view does", () => {
+    const out = roundTrip("- 3\r\n  ```\r\n  x\r\n  ```\r\n- b\r\n")!.replace("x\r", "\r");
+    expect(readsAs("- 3\r\n  ```\r\n\r\n  ```\r\n- b\r\n", out)).toBe(true);
+  });
+  it("both edges use the same indent rule, and a longer fence is not closed by a shorter one inside it", () => {
+    expect(trimFenceEdges("  ```\n\nx\n\n  ```")).toBe("  ```\nx\n  ```");
+    expect(trimFenceEdges("    ```\n\nx\n\n    ```")).toBe("    ```\n\nx\n\n    ```");
+    expect(trimFenceEdges("````\nq\n\n```\n\n````")).toBe("````\nq\n\n```\n````");
+    expect(trimFenceEdges("````\n```\n\nx\n````")).toBe("````\n```\n\nx\n````");
+    expect(trimFenceEdges("```\n\nx\n```\n\nafter\n")).toBe("```\nx\n```\n\nafter\n");
   });
 });
