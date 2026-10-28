@@ -2475,6 +2475,7 @@ fn row_989_hooks_off_leaves_the_users_own_config_dir_as_it_was() {
     assert_eq!(outcomes.iter().find(|(id, _)| *id == "claude").map(|(_, r)| r.clone()), Some(Ok("removed")), "{outcomes:?}");
     let v = ev(&fs::read_to_string(&file).unwrap());
     assert_eq!(v, ev(R989_USER), "settings.json is the user's original again");
+    assert_eq!(fs::read_to_string(&file).unwrap(), R989_USER, "settings.json is byte-for-byte the user's original text");
     assert!(v.get("statusLine").is_none() && !v.to_string().contains(SCRIPT_DIR), "no Kolux hook entry or status line");
     assert_eq!(fs::read_to_string(own.join(".credentials.json")).unwrap(), R989_CREDS);
     assert_eq!(fs::read_to_string(own.join(".claude.json")).unwrap(), R989_STATE);
