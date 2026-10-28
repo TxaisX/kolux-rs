@@ -147,6 +147,8 @@ pub struct Status {
 pub struct Session {
     /// The terminal the pane's hooks last reported for, so a keystroke can find the session.
     pub terminal: Option<u32>,
+    /// The agent whose hook last reported, so a typed keystroke knows whose prompt it lands on.
+    agent: Option<Agent>,
     /// The lead's own last state; `None` when Kolux holds nothing for it yet.
     own: Option<&'static str>,
     /// The tool the lead is waiting on a permission for; cleared only when that tool resumes.
@@ -165,6 +167,8 @@ pub struct Session {
     /// The tool ids already started when the cancel keystroke came: their own late reports say
     /// nothing about the turn, while a tool id outside this list proves the turn went on (T-123-c).
     killed: Vec<String>,
+    /// The tool a Claude Deny (card or typed Esc) refused: its late Post* never means the turn went on.
+    denied: Option<String>,
     prompt: Option<String>,
     pub reply: Option<String>,
     /// The stop the session is blocked on, kept until a turn reaches done (STAT-022).
@@ -233,15 +237,27 @@ impl Session {
     }
 
     fn reset(&mut self) {
-        let terminal = self.terminal;
+        let (terminal, agent) = (self.terminal, self.agent);
         let history = std::mem::take(&mut self.history);
-        *self = Session { terminal, history, ..Session::default() };
+        *self = Session { terminal, agent, history, ..Session::default() };
     }
 
     /// Folds one event in and says what the window should be told, or `None` when nothing changed.
     pub fn apply(&mut self, agent: Agent, event: &Value) -> Option<(Change, Option<String>)> {
+        // VIEW-025 b3: a cancel whose grace ran out settles before this event is judged, so the
+        // 2 s settle tick cannot let a late report from the killed tool pass as the turn going on.
+        let settled = self.settle_cancel(now_ms());
+        let applied = self.fold(agent, event);
+        match applied {
+            None if settled => Some((Change { state: self.resolved(), ..Change::default() }, None)),
+            _ => applied,
+        }
+    }
+
+    fn fold(&mut self, agent: Agent, event: &Value) -> Option<(Change, Option<String>)> {
         let name = event.get("hook_event_name")?.as_str()?;
         self.signal();
+        self.agent = Some(agent);
         let before = self.resolved();
         let mut announce = None;
         // Council FIX-3 (chat e5412ff, FS1): the tool a sub-agent just started, named on the change.
@@ -376,6 +392,7 @@ impl Session {
                 self.cancelled = false;
                 self.tools.clear();
                 self.killed.clear();
+                self.denied = None;
                 self.reply = None;
                 self.own = Some("working");
             }
@@ -460,6 +477,18 @@ impl Session {
             self.cancelled = true;
             self.cancelled_at = now_ms();
             self.killed.clone_from(&self.tools);
+            self.denied = None;
+        }
+    }
+
+    /// Ctrl+C or Escape typed into the pane (terminal_write and the CLI's interrupt reach here).
+    /// VIEW-025 b3: at a Claude hook permission prompt a typed Esc (or Ctrl+C, which the caller cannot
+    /// tell apart) is the deny, answered like a card's; Codex keeps its prompt and its own hooks.
+    pub fn typed_cancel(&mut self) {
+        if self.agent == Some(Agent::Claude) && self.own == Some("permission") && self.pending.is_some() {
+            self.answer(Agent::Claude, false);
+        } else {
+            self.cancel();
         }
     }
 
@@ -473,7 +502,8 @@ impl Session {
             // running when the key landed counts only once the grace is over (or the cancel settled):
             // inside it, that report is the cancelled tool's own hook finishing, not the turn going on.
             _ if event.get("is_interrupt").and_then(Value::as_bool) == Some(true) => false,
-            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || self.past_grace() || !self.killed.iter().any(|k| k == id))),
+            // VIEW-025 b4: the tool a Deny refused never counts, whenever its Post lands (the 2 s tick may not have run).
+            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || (self.denied.as_deref() != Some(id) && (self.past_grace() || !self.killed.iter().any(|k| k == id))))),
             Agent::Codex | Agent::Vendor => self.fresh_tool(name, event),
         }
     }
@@ -522,6 +552,7 @@ impl Session {
             self.interrupted = false;
             self.tools.clear();
             self.killed.clear();
+            self.denied = None;
         }
         self.pending = None;
         self.own = Some(state);
@@ -563,9 +594,14 @@ impl Session {
     /// VIEW-025 b2: the card's answer. A Claude Deny types Esc, which real Claude takes as an interrupt
     /// and answers with no hook, so the deny is marked as a cancel and settles like STAT-028's.
     pub fn answer(&mut self, agent: Agent, approve: bool) -> &'static str {
+        // The lead's prompt is for the tool it started last (its PreToolUse comes before the PermissionRequest).
+        let asked = if self.own == Some("permission") && self.pending.is_some() { self.tools.last().cloned() } else { None };
         let state = self.answer_state();
         if agent == Agent::Claude && !approve {
             self.cancel();
+            if self.cancelled {
+                self.denied = asked;
+            }
         }
         state
     }
@@ -867,7 +903,7 @@ pub fn limit_stops() -> Vec<(u32, Stop)> {
 pub fn cancel(terminal: u32) {
     with_sessions(|s| {
         for session in s.values_mut().filter(|x| x.terminal == Some(terminal)) {
-            session.cancel();
+            session.typed_cancel();
         }
     });
 }
@@ -1700,6 +1736,8 @@ mod tests {
         assert!(s.cancelled, "the deny is marked as a cancel");
         let at = s.cancelled_at;
         // The denied tool's own late report proves nothing; a PreToolUse with a new id is the turn going on.
+        state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"t1","error":"denied"}"#);
+        assert!(s.cancelled, "the denied tool's own report inside the grace leaves the cancel standing");
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"t2"}"#), Some("working"));
         assert!(!s.settle_cancel(at + CANCEL_GRACE_MS));
         assert_eq!(s.resolved(), "working");
@@ -1709,6 +1747,98 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("done"));
         assert!(!s.settle_cancel(at + CANCEL_GRACE_MS));
         assert_eq!(s.resolved(), "done");
+    }
+
+    #[test]
+    fn view025b3_esc_typed_at_a_claude_permission_prompt_settles_interrupted_like_a_card_deny() {
+        let mut s = asking();
+        assert!(s.answerable());
+        s.typed_cancel();
+        assert!(s.cancelled, "the typed Esc answered the prompt and marked the cancel");
+        assert_eq!(s.resolved(), "working", "the prompt is gone");
+        assert!(!s.answerable());
+        assert!(!s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS - 1), "Claude gets its moment first");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS), "Claude fires no hook after Esc: the quiet turn was interrupted");
+        assert_eq!(s.resolved(), "interrupted");
+        // Codex keeps its own prompt: its turn goes on and reports, so nothing is marked.
+        let mut c = Session::default();
+        c.apply(Agent::Codex, &ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#));
+        c.apply(Agent::Codex, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#));
+        assert_eq!(c.resolved(), "permission");
+        c.typed_cancel();
+        assert!(!c.cancelled && !c.settle_cancel(u64::MAX));
+        assert_eq!(c.resolved(), "permission");
+        // A working Claude lead keeps STAT-028's rule.
+        let mut w = Session::default();
+        state(&mut w, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        w.typed_cancel();
+        assert!(w.cancelled);
+        assert!(w.settle_cancel(w.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(w.resolved(), "interrupted");
+    }
+
+    #[test]
+    fn view025b3_a_deny_whose_grace_ran_out_before_the_tick_settles_before_the_next_event_is_judged() {
+        let mut s = asking();
+        s.answer(Agent::Claude, false);
+        s.cancelled_at -= CANCEL_GRACE_MS + 1;
+        // The denied tool's own report lands past the grace but before settle_cancels ticks.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"t1","error":"denied"}"#), Some("interrupted"));
+        assert_eq!((s.resolved(), s.interrupted, s.cancelled), ("interrupted", true, false));
+        assert_eq!(s.history.back().map(|e| (e.state, e.interrupted)), Some(("interrupted", true)));
+        // A fresh tool after the settled interrupt is the turn going on, as for any settled interrupt.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"t2"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted), ("working", false));
+        assert!(s.history.back().is_some_and(|e| e.state == "working"), "the misread interrupted line is gone");
+    }
+
+    #[test]
+    fn view025b4_the_denied_tools_post_never_counts_as_the_turn_going_on_however_the_cancel_settled() {
+        // Settled by the tick: the denied tool's late report must not undo the interrupt.
+        let mut s = asking();
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"t1","error":"denied"}"#), None);
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        // Settled by apply itself (grace ran out before the tick): same verdict.
+        let mut s = asking();
+        s.answer(Agent::Claude, false);
+        s.cancelled_at -= CANCEL_GRACE_MS + 1;
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t1"}"#), Some("interrupted"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t1"}"#), None);
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        // A typed Esc at the prompt goes through answer() and gets the same rule.
+        let mut s = asking();
+        s.typed_cancel();
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"t1","error":"denied"}"#), None);
+        assert_eq!(s.resolved(), "interrupted");
+        // Only the denied tool is exempt: another pre-cancel tool's Post past the grace is the turn going on.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"t0"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#);
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#);
+        s.answer(Agent::Claude, false);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"t0"}"#), Some("working"));
+        // A new turn forgets the denial.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        assert!(s.denied.is_none());
+    }
+
+    #[test]
+    fn view025b4_a_user_esc_while_working_judges_the_killed_tools_post_the_same_before_or_after_the_tick() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        s.cancel();
+        assert!(s.denied.is_none(), "no permission prompt, nothing denied");
+        // Past the grace, before any tick: apply settles first, then the Post is the turn going on (as after a tick).
+        s.cancelled_at -= CANCEL_GRACE_MS + 1;
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted, s.cancelled), ("working", false, false));
+        assert_eq!(s.history.back().map(|e| e.state), Some("working"));
     }
 
     #[test]
