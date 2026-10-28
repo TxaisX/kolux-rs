@@ -1896,6 +1896,11 @@ pub struct Ctx<'a> {
     pub front: &'a (dyn Fn() -> Result<(), String> + Sync),
 }
 
+/// The context for one CLI request; Claude's config is read now so an account switch is followed (row 984).
+pub(crate) fn request_ctx<'a>(store: &'a Mutex<Store>, git: &'a Git, terminals: &'a Terminals, notify: &'a (dyn Fn(Value) + Sync), front: &'a (dyn Fn() -> Result<(), String> + Sync)) -> Ctx<'a> {
+    Ctx { claude_config: crate::claude_accounts::trust_config_file(store), git, store, terminals, notify, front }
+}
+
 fn lower(p: &Path) -> String {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase()
 }
@@ -4990,7 +4995,7 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
                 let _ = w.unminimize();
                 w.show().and_then(|_| w.set_focus()).map_err(|e| e.to_string())
             };
-            dispatch(&Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front }, req)
+            dispatch(&request_ctx(&store, &git, &terminals, &notify, &front), req)
         });
     });
     Ok(())

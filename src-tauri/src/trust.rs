@@ -235,7 +235,17 @@ pub fn made_by_kolux(store: &std::sync::Mutex<crate::state::Store>, paths: &[Pat
 #[tauri::command]
 pub fn trust_folders_cmd(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, agent: String, paths: Vec<String>) -> Result<usize, String> {
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    trust_folders(&claude_config_file(), &agent, &made_by_kolux(&store, &paths))
+    trust_for_launch(&store, &claude_config_file(), &agent, &paths)
+}
+
+/// Row 984: the trust goes into the `.claude.json` the launching pane reads (its managed
+/// account's folder), not the app's own; `process_file` is that fallback.
+pub(crate) fn trust_for_launch(store: &std::sync::Mutex<crate::state::Store>, process_file: &Path, agent: &str, paths: &[PathBuf]) -> Result<usize, String> {
+    let file = match store.lock() {
+        Ok(s) => crate::claude_accounts::pane_config_file(&s, process_file.to_path_buf()),
+        Err(_) => process_file.to_path_buf(),
+    };
+    trust_folders(&file, agent, &made_by_kolux(store, paths))
 }
 
 #[cfg(test)]

@@ -568,6 +568,16 @@ pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prom
     start_line_as(settings, id, extra, prompt, picked, Start::Fresh)
 }
 
+/// One of the user's own per-agent options (`args`, `command`, `env`), trimmed; blank counts as unset.
+fn option_field<'a>(settings: &'a serde_json::Value, id: &str, key: &str) -> Option<&'a str> {
+    settings.get(OPTIONS_FIELD)?.get(id)?.get(key)?.as_str().map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// The program the user set for `id` in place of the built-in one, if any.
+pub fn command_override<'a>(settings: &'a serde_json::Value, id: &str) -> Option<&'a str> {
+    option_field(settings, id, "command")
+}
+
 /// `start_line` for a fresh tab or a restored one (SESS-030): a restore adds the agent's own
 /// resume form after the extra arguments. The restore path passes no resume of its own (T-066-c),
 /// so the form is only ever added here, once.
@@ -577,15 +587,14 @@ pub fn start_line_as(settings: &serde_json::Value, id: &str, extra: &[String], p
         Start::Fresh => Vec::new(),
         Start::Restore(session) => resume_args(id, session),
     };
-    let mine = settings.get(OPTIONS_FIELD).and_then(|o| o.get(id));
-    let field = |k: &str| mine.and_then(|m| m.get(k)).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty());
+    let field = |k: &str| option_field(settings, id, k);
     let own = field("args").map(split_args);
     let mut extra = extra.to_vec();
     if !picked && id == "claude" && !names_model(own.as_deref().unwrap_or(&[])) && !names_model(&extra) {
         extra.splice(0..0, CLAUDE_UNPICKED.iter().map(|a| a.to_string()));
     }
     let mut line = line_for(id, own.as_deref(), yolo, &extra, &resume, prompt)?;
-    line.program = field("command").map(str::to_string);
+    line.program = command_override(settings, id).map(str::to_string);
     line.env = field("env").map(parse_env).unwrap_or_default();
     if let Some((k, v)) = built_in_env(id, yolo && own.is_none()) {
         if !line.env.iter().any(|(n, _)| n.eq_ignore_ascii_case(k)) {

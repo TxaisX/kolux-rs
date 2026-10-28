@@ -724,6 +724,29 @@ pub fn active_dir(store: &Store) -> Option<String> {
     load(store).into_iter().find(|a| a.id == id).map(|a| a.config_dir).filter(|d| PathBuf::from(d).is_dir())
 }
 
+/// Row 984: the `.claude.json` a new Claude pane will read, which is where its folder trust goes.
+/// Same precedence as the pane's launch (`pane_env`): an active managed account outside key mode
+/// reads its own folder; otherwise the pane inherits the app's `process_file`.
+pub fn pane_config_file(store: &Store, process_file: PathBuf) -> PathBuf {
+    let settings = store.settings();
+    let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(Value::as_str) == Some(crate::claude_key::KEY_MODE);
+    // The pane runs the user's own command when set, and only a command credited to Claude gets the account.
+    let program = crate::agents::command_override(&settings, "claude").unwrap_or("claude");
+    match pane_env(Some(program), key_mode, active_dir(store)) {
+        Some((_, dir)) => PathBuf::from(dir).join(".claude.json"),
+        None => process_file,
+    }
+}
+
+/// `pane_config_file` read from the live store at call time, so an account switch is honoured.
+pub fn trust_config_file(store: &Mutex<Store>) -> PathBuf {
+    let process_file = crate::trust::claude_config_file();
+    match store.lock() {
+        Ok(store) => pane_config_file(&store, process_file),
+        Err(_) => process_file,
+    }
+}
+
 /// Tests only: the bytes of every `<key>.corrupt-<ms>[-n]` copy in the store, read straight from
 /// its table. (It used to probe the last 10 s of millisecond names one query each, so a PC slow
 /// enough to take 10 s over the first call missed the copy on the second.)
@@ -1424,5 +1447,109 @@ mod tests {
         assert_eq!(sign_in_overrides(&env(&[("anthropic_auth_token", "t")]), true), vec!["anthropic_auth_token".to_string()], "Windows names ignore case");
         assert!(sign_in_overrides(&env(&[("anthropic_auth_token", "t")]), false).is_empty(), "elsewhere names are exact");
         assert_eq!(sign_in_overrides(&env(&[("CLAUDE_CODE_OAUTH_TOKEN", "t")]), false).len(), 1);
+    }
+
+    // Row 984: a store with one managed account (its folder exists), a Kolux-made worktree, and the
+    // app's own file path; nothing here reads or writes the real ~/.claude.
+    struct Trust {
+        _dir: crate::test_dir::TempDir,
+        store: Mutex<Store>,
+        account_file: PathBuf,
+        process_file: PathBuf,
+        worktree: PathBuf,
+    }
+
+    fn trust_fixture(tag: &str, active_account: bool) -> Trust {
+        let (dir, store) = profile(tag);
+        let (account_dir, worktree) = (dir.join("acct1"), dir.join("wt"));
+        fs::create_dir_all(&account_dir).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        {
+            let s = store.lock().unwrap();
+            save(&s, &[Account { id: "a1".into(), email: None, organization: None, config_dir: account_dir.to_string_lossy().into(), last_sign_in: 1, stale: false }]).unwrap();
+            if active_account {
+                activate(&s, Some("a1")).unwrap();
+            }
+            crate::projects::set_origin(&s, &worktree.to_string_lossy(), Some(&json!({ "madeBy": "app" }))).unwrap();
+        }
+        Trust { account_file: account_dir.join(".claude.json"), process_file: dir.join("process").join(".claude.json"), worktree, store, _dir: dir }
+    }
+
+    fn key_mode(t: &Trust) {
+        let set = serde_json::Map::from_iter([(crate::claude_key::MODE_FIELD.to_string(), json!(crate::claude_key::KEY_MODE))]);
+        t.store.lock().unwrap().patch_settings(&set, &[]).unwrap();
+    }
+
+    fn trusted_in(file: &Path, t: &Trust) -> bool {
+        let doc: Value = serde_json::from_str(&fs::read_to_string(file).unwrap_or_else(|_| "{}".into())).unwrap();
+        doc["projects"][crate::trust::claude_key(&t.worktree).unwrap()]["hasTrustDialogAccepted"] == true
+    }
+
+    #[test]
+    fn row984_a_launch_trusts_the_active_accounts_file_and_leaves_the_process_file_alone() {
+        let t = trust_fixture("row984-managed", true);
+        let n = crate::trust::trust_for_launch(&t.store, &t.process_file, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert_eq!(n, 1);
+        assert!(trusted_in(&t.account_file, &t), "the account's own .claude.json carries the trust");
+        assert!(!t.process_file.exists(), "the app's file is not created");
+    }
+
+    #[test]
+    fn row984_key_mode_trusts_the_process_file() {
+        let t = trust_fixture("row984-key", true);
+        key_mode(&t);
+        crate::trust::trust_for_launch(&t.store, &t.process_file, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert!(trusted_in(&t.process_file, &t));
+        assert!(!t.account_file.exists(), "key mode pane gets no account folder");
+    }
+
+    #[test]
+    fn row984_no_active_account_trusts_the_process_file_and_a_switch_is_followed() {
+        let t = trust_fixture("row984-none", false);
+        assert_eq!(pane_config_file(&t.store.lock().unwrap(), t.process_file.clone()), t.process_file);
+        crate::trust::trust_for_launch(&t.store, &t.process_file, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert!(trusted_in(&t.process_file, &t));
+        assert!(!t.account_file.exists());
+        activate(&t.store.lock().unwrap(), Some("a1")).unwrap();
+        assert_eq!(pane_config_file(&t.store.lock().unwrap(), t.process_file.clone()), t.account_file, "read at launch time, so the switch counts");
+    }
+
+    fn claude_command(t: &Trust, command: &str) {
+        let set = serde_json::Map::from_iter([(crate::agents::OPTIONS_FIELD.to_string(), json!({ "claude": { "command": command } }))]);
+        t.store.lock().unwrap().patch_settings(&set, &[]).unwrap();
+    }
+
+    // Review M1: the pane runs the user's own command, so trust follows what that command gets.
+    #[test]
+    fn row984_a_custom_command_the_pane_gets_no_account_for_trusts_the_process_file() {
+        let t = trust_fixture("row984-npx", true);
+        claude_command(&t, "  npx @anthropic-ai/claude-code ");
+        crate::trust::trust_for_launch(&t.store, &t.process_file, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert!(trusted_in(&t.process_file, &t), "no CLAUDE_CONFIG_DIR is set for this command, so it reads the app's file");
+        assert!(!t.account_file.exists());
+    }
+
+    #[test]
+    fn row984_a_custom_command_credited_to_claude_trusts_the_account_file() {
+        let t = trust_fixture("row984-path", true);
+        claude_command(&t, r"C:\tools\claude.exe");
+        crate::trust::trust_for_launch(&t.store, &t.process_file, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert!(trusted_in(&t.account_file, &t));
+        assert!(!t.process_file.exists());
+        claude_command(&t, "   ");
+        assert_eq!(pane_config_file(&t.store.lock().unwrap(), t.process_file.clone()), t.account_file, "a blank command is the default claude");
+    }
+
+    // Review L1: the CLI server's per-request context (what worker-start trusts through) follows the
+    // active account; reverting its claude_config to the app's own file fails this.
+    #[test]
+    fn row984_the_cli_request_context_trusts_the_active_accounts_file() {
+        let t = trust_fixture("row984-cli", true);
+        let git = crate::git::Git::detect().unwrap();
+        let terminals = crate::terminal::Terminals::default();
+        let ctx = crate::cli::request_ctx(&t.store, &git, &terminals, &|_| {}, &|| Ok(()));
+        assert_eq!(ctx.claude_config, t.account_file);
+        crate::trust::trust_folders(&ctx.claude_config, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert!(trusted_in(&t.account_file, &t));
     }
 }

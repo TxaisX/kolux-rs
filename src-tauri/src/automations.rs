@@ -1418,7 +1418,7 @@ fn launch_for<R>(app: &tauri::AppHandle, f: impl FnOnce(&Launch) -> R) -> R {
         let _ = app.emit(event, v);
     };
     let installed = |id: &str| crate::agents::agent_list().iter().any(|a| a.id == id && a.installed);
-    f(&Launch { git: &git, store: &store, claude_config: crate::trust::claude_config_file(), installed: &installed, notify: &notify })
+    f(&Launch { git: &git, store: &store, claude_config: crate::claude_accounts::trust_config_file(&store), installed: &installed, notify: &notify })
 }
 
 /// Starts the clock: it looks for due automations about once a minute (every 30 seconds, so a run
