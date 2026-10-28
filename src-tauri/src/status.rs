@@ -560,6 +560,16 @@ impl Session {
     /// Stand-in review of 1e9613e, FIX-BEFORE 1: the card answers the first sub-agent asking with a
     /// pending tool (the one a Change names), which is working again with nothing pending; with no
     /// such sub-agent it answers the lead.
+    /// VIEW-025 b2: the card's answer. A Claude Deny types Esc, which real Claude takes as an interrupt
+    /// and answers with no hook, so the deny is marked as a cancel and settles like STAT-028's.
+    pub fn answer(&mut self, agent: Agent, approve: bool) -> &'static str {
+        let state = self.answer_state();
+        if agent == Agent::Claude && !approve {
+            self.cancel();
+        }
+        state
+    }
+
     pub fn answer_state(&mut self) -> &'static str {
         let before = self.resolved();
         match self.children.iter_mut().find(|c| c.state == "permission" && c.pending.is_some()) {
@@ -606,7 +616,7 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
     }
     terminals.write(terminal, answer_keys(agent, approve).ok_or("not an agent pane")?)?;
     // Council FIX-3 (FS2): the window takes the resolved state, never a blanket "working".
-    Ok(with_sessions(|s| s.get_mut(&pane_key).map(Session::answer_state)).unwrap_or("working").to_string())
+    Ok(with_sessions(|s| s.get_mut(&pane_key).map(|x| x.answer(agent, approve))).unwrap_or("working").to_string())
 }
 
 /// STAT-025: Unicode line and paragraph separators become line breaks, and a run of blank lines
@@ -1656,6 +1666,49 @@ mod tests {
         state(&mut lead, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
         assert_eq!(state(&mut lead, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#), Some("permission"));
         assert_eq!(lead.answer_state(), "working");
+    }
+
+    /// A Claude session asking permission for a Bash tool it started as `t1`.
+    fn asking() -> Session {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#), Some("permission"));
+        s
+    }
+
+    #[test]
+    fn view025b2_a_claude_deny_from_a_card_settles_interrupted_and_nothing_else_does() {
+        let mut s = asking();
+        assert_eq!(s.answer(Agent::Claude, false), "working");
+        assert!(!s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS - 1), "Claude gets its moment first");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS), "Esc fires no hook: the quiet turn was interrupted");
+        assert_eq!(s.resolved(), "interrupted");
+        // Approve (Enter) and Codex's n (its turn goes on and keeps reporting) mark no cancel.
+        let mut s = asking();
+        assert_eq!(s.answer(Agent::Claude, true), "working");
+        assert!(!s.settle_cancel(u64::MAX) && s.resolved() == "working");
+        let mut s = asking();
+        assert_eq!(s.answer(Agent::Codex, false), "working");
+        assert!(!s.settle_cancel(u64::MAX) && s.resolved() == "working");
+    }
+
+    #[test]
+    fn view025b2_a_stop_or_a_fresh_tool_inside_the_grace_after_a_deny_is_never_read_as_interrupted() {
+        let mut s = asking();
+        s.answer(Agent::Claude, false);
+        assert!(s.cancelled, "the deny is marked as a cancel");
+        let at = s.cancelled_at;
+        // The denied tool's own late report proves nothing; a PreToolUse with a new id is the turn going on.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"t2"}"#), Some("working"));
+        assert!(!s.settle_cancel(at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "working");
+        let mut s = asking();
+        s.answer(Agent::Claude, false);
+        let at = s.cancelled_at;
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("done"));
+        assert!(!s.settle_cancel(at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "done");
     }
 
     #[test]
