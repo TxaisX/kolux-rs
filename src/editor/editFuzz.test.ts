@@ -364,7 +364,24 @@ function readsAs(nb: string, out: string): boolean {
   // Row 936 (seeds 119, 95, 108): the app gives the view LF text. The raw CRLF text drops the spaces before a line end in the round trip and keeps a CR on code lines, so both sides are read as LF.
   const rowGap = (t: string | null) => t?.replace(/\n\n(?=\|)/g, "\n");
   const lf = (t: string) => t.replace(/\r\n/g, "\n");
-  return rowGap(roundTrip(lf(nb))) === rowGap(lf(out));
+  return rowGap(trimFenceEdges(roundTrip(lf(nb)))) === rowGap(trimFenceEdges(lf(out)));
+}
+
+/** Row 936 (seeds 114, 117, 51 and more): the fuzz feeds raw CRLF, so a code line ends in a CR; deleting its text leaves a CR-only line that the LF view drops. Blank lines at the very start or end of a ``` body are not compared. */
+function trimFenceEdges(t: string | null): string | null {
+  if (t === null) return t;
+  const rows = t.split(String.fromCharCode(10));
+  const kept: string[] = [];
+  let open = false;
+  for (const r of rows) {
+    if (/^ {0,3}```/.test(r)) {
+      if (open) while (kept.length && kept[kept.length - 1] === "") kept.pop();
+      open = !open;
+      kept.push(r);
+    } else if (open && r === "" && kept[kept.length - 1]?.startsWith("```")) continue;
+    else kept.push(r);
+  }
+  return kept.join(String.fromCharCode(10));
 }
 
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
@@ -518,5 +535,14 @@ describe("oracle: row 936 false positives", () => {
     const crCode = "- a\r\n  ```\r\n  x\r\n  ```\r\n- b\r\n";
     expect(readsAs(crCode, roundTrip(crCode)!)).toBe(true);
     expect(readsAs(crCode.replace("x", "y"), roundTrip(crCode)!)).toBe(false);
+  });
+  // Seeds 114, 117, 122, 138, 145, 173, 51, 63: a code line typed away in a CRLF list item leaves a CR-only line in the view's text; the LF view drops it.
+  it("emptying a CRLF code line is read as the app reads it; a changed code line still fails", () => {
+    const body = "- 3\r\n  ```\r\n  x\r\n  ```\r\n- b\r\n";
+    const out = roundTrip(body)!.replace("x\r", "\r");
+    const nb = "- 3\r\n  ```\r\n\r\n  ```\r\n- b\r\n";
+    expect(readsAs(nb, out)).toBe(true);
+    expect(readsAs(nb.replace("\r\n\r\n  ```", "\r\n  y\r\n  ```"), out)).toBe(false);
+    expect(readsAs(nb.replace("- b", "- c"), out)).toBe(false);
   });
 });
