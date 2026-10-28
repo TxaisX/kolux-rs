@@ -70,7 +70,9 @@ try {
   const exitedMs = gone(pid) ? Date.now() - t0 : null;
   log(`${how}; app pid ${pid} ${exitedMs === null ? `STILL RUNNING after ${WATCH_S} s` : `gone after ${(exitedMs / 1000).toFixed(1)} s`}`);
   log(`holder output: ${hout.map((l) => l.replace(/^\d+ /, (m) => `+${((Number(m) - t0) / 1000).toFixed(1)}s `)).join(" / ")}`);
-  chk.check(`the app exits within the quit deadline (${QUIT_DEADLINE_S} s; final save ${FINAL_SAVE_S} s)`, exitedMs !== null && exitedMs <= (QUIT_DEADLINE_S + 3) * 1000, exitedMs === null ? `no exit in ${WATCH_S} s` : `${(exitedMs / 1000).toFixed(1)} s`);
+  // Strict reading of the box: gone by the hard deadline itself. The watchdog then waits up to 0.5 s for its log write (lifecycle::WATCHDOG_LOG_WAIT).
+  chk.check("the quit is bounded: the app exits within the deadline plus the watchdog's 0.5 s log wait and 1 s of teardown", exitedMs !== null && exitedMs <= (QUIT_DEADLINE_S + 1.5) * 1000, exitedMs === null ? `no exit in ${WATCH_S} s` : `${(exitedMs / 1000).toFixed(1)} s`);
+  chk.check(`the app exits within the quit deadline itself (${QUIT_DEADLINE_S} s; final save ${FINAL_SAVE_S} s)`, exitedMs !== null && exitedMs <= QUIT_DEADLINE_S * 1000, exitedMs === null ? `no exit in ${WATCH_S} s` : `${(exitedMs / 1000).toFixed(1)} s`);
   // Release the stall (this script's own holder), let a hung app finish, then read what the log recorded.
   holder?.kill();
   await sleep(1500);
