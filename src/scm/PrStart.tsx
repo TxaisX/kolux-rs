@@ -10,7 +10,7 @@ import { needsOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
 import { draftOffered, draftPrText, draftRunning, draftSubscribe, draftVersion, readDraftGate, settleDraft, startGatedOneClick } from "./prDraft";
 import { readReview, reviewKey, reviewLines, reviewSettle, reviewShown, type ReviewSlot } from "./prFind";
-import { assess, canStartReview, confirmed, createBlock, dismiss, errorShown, offerOf, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
+import { assess, blockHint, canStartReview, confirmed, createBlock, dismiss, errorShown, offerOf, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
 // `provider`/`host` come with the Checks answer (known before the lookup below), so a non-GitHub remote never shows a create action.
 type Props = { dir: string; provider?: string; host?: string | null; onCreated: (pr: Pr) => void };
@@ -157,7 +157,7 @@ export default function PrStart({ dir, provider, host, onCreated }: Props) {
     <div className="pr-start" data-pr-start>
       {facts ? (
         <div className="pr-start-review" data-pr-review={facts.lookup.kind}>
-          {reviewLines(facts).map((line, i) => (
+          {reviewLines(facts, blockedBy !== null).map((line, i) => (
             <div key={i} className={facts.lookup.kind === "failed" && i === 0 ? "note warn" : "sb-hint"}>
               {line}
             </div>
@@ -176,7 +176,7 @@ export default function PrStart({ dir, provider, host, onCreated }: Props) {
           {failed}
         </div>
       )}
-      {offer.kind === "blocked" && !draft && !linkedPr && <div className="sb-hint">{offer.reason}</div>}
+      {!draft && !linkedPr && blockHint(offer, lookup) !== null && <div className="sb-hint">{blockHint(offer, lookup)}</div>}
       {mine && !draft && canStartReview(blockedBy, !!linkedPr) && offer.kind === "blocked" && going?.state !== "running" && needsOneClick(mine.status) && (
         <button className="btn primary" data-pr-one-click onClick={() => void oneClick()}>
           Commit, push and create pull request

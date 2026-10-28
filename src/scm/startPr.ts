@@ -4,7 +4,8 @@
 // the only thing missing is a push, one combined push-and-create action is offered. A hard error is
 // kept per worktree, shown only while the git state it was raised for is unchanged (fixing the
 // cause clears it), and a check for one worktree never clears another worktree's error.
-import { prReason, type Status } from "./model";
+import { createBlock, prReason, type Status } from "./model";
+import type { ReviewLookup } from "./prFind";
 
 export const READINESS_TTL_MS = 5 * 60_000;
 
@@ -39,9 +40,10 @@ export function offerFor(r: Readiness | null, key: string | null, now: number): 
   return r.push === "none" ? { kind: "create" } : { kind: "push-create", push: r.push };
 }
 
-/** Row 76: why this repository cannot start a pull request from Kolux, or null for GitHub (or an answer not in yet). Creating one goes through gh, which only knows GitHub. */
-export const createBlock = (provider: string | null | undefined, host: string | null | undefined): string | null =>
-  !provider || provider === "github" ? null : `Creating a pull request from Kolux needs a GitHub remote; ${host ? `${host} is not one` : "this repository has no remote"}.`;
+export { createBlock };
+
+/** Row 953: the hint under the review note. Where the lookup is unsupported too, the review note already says it in one line, so the block adds nothing. */
+export const blockHint = (offer: Offer, lookup: ReviewLookup | undefined): string | null => (offer.kind === "blocked" && offer.reason !== "" && lookup?.kind !== "unsupported" ? offer.reason : null);
 
 /** Whether the empty state may offer to start a pull request: not on a non-GitHub remote, not with an open one already linked. */
 export const canStartReview = (blockedBy: string | null, linked: boolean): boolean => blockedBy === null && !linked;

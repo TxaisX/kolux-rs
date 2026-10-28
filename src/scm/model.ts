@@ -217,7 +217,21 @@ export const prMismatch = (pr: Pr | null, branch: string | null): string | null 
 /** GIT-025: the state as the panel shows it. */
 export const prStateWord = (pr: Pr): string => (pr.state === "OPEN" ? (pr.draft ? "Draft" : "Open") : pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.state);
 /** GIT-023: what the panel knows of the branch's pull request while it looks it up. */
-export type PrLook = { loading: boolean; pr: Pr | null; error: string | null };
+export type PrLook = { loading: boolean; pr: Pr | null; error: string | null; provider?: string | null; host?: string | null };
+
+/** Row 953: scm_pr's answer; provider and host come only when the remote is not GitHub, so gh was never asked. */
+export type PrAnswer = { pr: Pr | null; provider?: string; host?: string | null };
+
+/** Row 76 / 953: the one sentence for a remote that is not GitHub (pull requests go through gh, which only knows GitHub); null for GitHub or an answer not in yet. */
+export const needsGitHub = (doing: string, provider: string | null | undefined, host: string | null | undefined): string | null =>
+  !provider || provider === "github" ? null : `${doing} a pull request from Kolux needs a GitHub remote; ${host ? `${host} is not one` : "this repository has no remote"}.`;
+/** Row 76: why this repository cannot start a pull request from Kolux. */
+export const createBlock = (provider: string | null | undefined, host: string | null | undefined): string | null => needsGitHub("Creating", provider, host);
+
+/** Row 953: the PR row's line when no pull request is shown; a remote that is not GitHub was never looked up, so it says that, not "none". */
+export const prRowText = (look: PrLook, published: boolean): string =>
+  needsGitHub("Finding", look.provider, look.host) ??
+  (look.loading ? "Checking for a pull request…" : (look.error ?? (published ? "No pull request for this branch" : "Pull requests are looked up once the branch is published, off the base branch")));
 
 /** GIT-027: how often the shown pull request is looked up again, and how old it may get before
  * the window gaining focus looks it up at once. */
@@ -225,12 +239,17 @@ export const PR_STALE_MS = 60_000;
 /** GIT-027: the wait before the next lookup; each failure in a row doubles it, up to 15 minutes. */
 export const prRefreshDelay = (failures: number): number => Math.min(PR_STALE_MS * 2 ** Math.min(failures, 10), 15 * 60_000);
 /** GIT-027: a lookup's answer; a failure keeps the pull request known last, with the reason. */
-export const prLooked = (prev: PrLook, got: { pr: Pr | null } | { error: string }): PrLook => ("error" in got ? { loading: false, pr: prev.pr, error: got.error } : { loading: false, pr: got.pr, error: null });
+export const prLooked = (prev: PrLook, got: { pr: Pr | null; provider?: string | null; host?: string | null } | { error: string }): PrLook =>
+  // An error means gh was asked, so any provider kept from an earlier look is stale.
+  "error" in got ? { loading: false, pr: prev.pr, error: got.error } : { loading: false, pr: got.pr, error: null, ...(got.provider && got.provider !== "github" ? { provider: got.provider, host: got.host ?? null } : {}) };
 
 /** GIT-023: why Create pull request cannot run yet, null when it can. Untracked files do not
  * block it; tracked changes, a missing push and a missing base do. */
 export const prReason = (s: Status | null, look: PrLook): string | null => {
   if (s === null) return "Loading";
+  // Row 953: a remote that is not GitHub cannot take a pull request at all, so that outranks the steps toward one.
+  const block = createBlock(look.provider, look.host);
+  if (block) return block;
   if (s.conflicts.length > 0) return "Resolve the conflicts first";
   if (s.staged.length + s.changed.length > 0) return "Commit your changes first";
   if (s.branch === null) return "No branch checked out";
