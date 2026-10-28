@@ -2156,22 +2156,24 @@ fn safe_pr_url(url: &str) -> bool {
     plain_host && url.contains("/pull/") && !url.chars().any(|c| c.is_whitespace() || c == '"')
 }
 
+/// Row 953: `scm_pr`'s body with the gh resolver passed in, so a test can prove gh is never resolved off GitHub.
+pub(crate) fn pr_answer(dir: &Path, linked: Option<String>, gh: &dyn Fn() -> Result<std::path::PathBuf, String>) -> Result<crate::pr_review::PrAnswer, String> {
+    // Row 953: gh is asked only for a GitHub remote (a hand link included); any other provider answers which one it is.
+    let provider = crate::pr_review::provider_for(repo_id::primary_host(dir, &ssh_config())?.as_deref());
+    crate::pr_review::pr_for(&provider, || {
+        if let Some(url) = linked {
+            return pr_link(&gh()?, dir, &url).map(Some);
+        }
+        let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
+        pr_find(&gh()?, dir, &branch)
+    })
+}
+
 #[tauri::command]
 pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<crate::pr_review::PrAnswer, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = Path::new(&worktree);
-        // Row 953: gh is asked only for a GitHub remote (a hand link included); any other provider answers which one it is.
-        let provider = crate::pr_review::provider_for(repo_id::primary_host(dir, &ssh_config())?.as_deref());
-        crate::pr_review::pr_for(&provider, || {
-            if let Some(url) = linked {
-                return pr_link(&gh_program()?, dir, &url).map(Some);
-            }
-            let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
-            pr_find(&gh_program()?, dir, &branch)
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || pr_answer(Path::new(&worktree), linked, &gh_program))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// VIEW-073: the Checks panel's lookup, for the worktree's branch or its hand-linked pull request.

@@ -228,6 +228,11 @@ export const needsGitHub = (doing: string, provider: string | null | undefined, 
 /** Row 76: why this repository cannot start a pull request from Kolux. */
 export const createBlock = (provider: string | null | undefined, host: string | null | undefined): string | null => needsGitHub("Creating", provider, host);
 
+/** Row 953: the PR row's line when no pull request is shown; a remote that is not GitHub was never looked up, so it says that, not "none". */
+export const prRowText = (look: PrLook, published: boolean): string =>
+  needsGitHub("Finding", look.provider, look.host) ??
+  (look.loading ? "Checking for a pull request…" : (look.error ?? (published ? "No pull request for this branch" : "Pull requests are looked up once the branch is published, off the base branch")));
+
 /** GIT-027: how often the shown pull request is looked up again, and how old it may get before
  * the window gaining focus looks it up at once. */
 export const PR_STALE_MS = 60_000;
@@ -235,7 +240,8 @@ export const PR_STALE_MS = 60_000;
 export const prRefreshDelay = (failures: number): number => Math.min(PR_STALE_MS * 2 ** Math.min(failures, 10), 15 * 60_000);
 /** GIT-027: a lookup's answer; a failure keeps the pull request known last, with the reason. */
 export const prLooked = (prev: PrLook, got: { pr: Pr | null; provider?: string | null; host?: string | null } | { error: string }): PrLook =>
-  "error" in got ? { ...prev, loading: false, error: got.error } : { loading: false, pr: got.pr, error: null, ...(got.provider && got.provider !== "github" ? { provider: got.provider, host: got.host ?? null } : {}) };
+  // An error means gh was asked, so any provider kept from an earlier look is stale.
+  "error" in got ? { loading: false, pr: prev.pr, error: got.error } : { loading: false, pr: got.pr, error: null, ...(got.provider && got.provider !== "github" ? { provider: got.provider, host: got.host ?? null } : {}) };
 
 /** GIT-023: why Create pull request cannot run yet, null when it can. Untracked files do not
  * block it; tracked changes, a missing push and a missing base do. */
