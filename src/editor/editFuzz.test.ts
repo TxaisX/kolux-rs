@@ -269,8 +269,8 @@ function structureProblem(body: string, saved: string, prev: string, out: string
   const ones = (t: string) => t.replace(/^([ \t]*)\d+([.)])/gm, "$11$2");
   const spelt = (t: string) => ones(t).replace(/^([ \t]*)[*+](?=[ \t])/gm, "$1-").replace(/_/g, "*").trimEnd();
   const view = listEntries(ones(prev));
-  // Row 936 (seed 95): an edit that only renumbers an ordered list changes nothing the numbers-as-1 text shows.
-  const e = changeBetween(ones(prev), ones(out));
+  // Row 936 (seed 95): a renumber-only edit changes nothing the numbers-as-1 text shows; row 981: the other lists are still checked, on the raw change.
+  const e = changeBetween(ones(prev), ones(out)) ?? changeBetween(prev, out);
   if (!e) return null;
   // A lone carriage return (typed inside a CRLF note) is a line end to marked and plain text to the view.
   if (/\r(?!\n)/.test(body)) return null;
@@ -359,35 +359,54 @@ function limitsMisfired(md: string): boolean {
   return reasons.every((r) => guess[r] === true);
 }
 
+/** Row 981: how a save that makes a showable note unshowable is judged. "same": the note already had that line-level misfire, so the save did not cause it.
+ *  "misfire": a misfire the save introduced (counted, and held under a ceiling by the fuzz). "real": a reason that is not a misfire at all. */
+function unshowable(body: string, nb: string): "same" | "misfire" | "real" {
+  if (!limitsMisfired(nb)) return "real";
+  return unsupported(body) === unsupported(nb) ? "same" : "misfire";
+}
+
 /** The saved body `nb`, read by the rich view as the app feeds it (LF text), is the view's text `out` (a table row's gap above it aside). */
 function readsAs(nb: string, out: string): boolean {
   // Row 936 (seeds 119, 95, 108): the app gives the view LF text. The raw CRLF text drops the spaces before a line end in the round trip and keeps a CR on code lines, so both sides are read as LF.
   const rowGap = (t: string | null) => t?.replace(/\n\n(?=\|)/g, "\n");
   const lf = (t: string) => t.replace(/\r\n/g, "\n");
-  return rowGap(trimFenceEdges(roundTrip(lf(nb)))) === rowGap(trimFenceEdges(lf(out)));
+  // Row 981: only a text with a CR has the CR-only code lines to forgive; an LF save keeps every blank line in a fence.
+  const trim = (nb + out).includes("\r") ? trimFenceEdges : (t: string | null) => t;
+  return rowGap(trim(roundTrip(lf(nb)))) === rowGap(trim(lf(out)));
 }
 
-/** Row 936 (seeds 114, 117, 51 and more): the fuzz feeds raw CRLF, so a code line ends in a CR; deleting its text leaves a CR-only line that the LF view drops. Blank lines at the very start or end of a ``` body are not compared. */
+/** Row 936 (seeds 114, 117, 51 and more): the fuzz feeds raw CRLF, so a code line ends in a CR; deleting its text leaves a CR-only line that the LF view drops.
+ *  Blank lines at the very start or end of a fenced body are not compared. Row 981: one indent rule (up to 3 spaces) on both edges, and a fence closes only on its own character, at least as long. */
 function trimFenceEdges(t: string | null): string | null {
   if (t === null) return t;
-  const rows = t.split(String.fromCharCode(10));
   const kept: string[] = [];
-  let open = false;
-  for (const r of rows) {
-    if (/^ {0,3}```/.test(r)) {
-      if (open) while (kept.length && kept[kept.length - 1] === "") kept.pop();
-      open = !open;
-      kept.push(r);
-    } else if (open && r === "" && kept[kept.length - 1]?.startsWith("```")) continue;
-    else kept.push(r);
+  let fence: { ch: string; len: number } | null = null;
+  let opener = -1;
+  for (const r of t.split("\n")) {
+    const m = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(r);
+    if (!fence) {
+      if (m && !(m[1][0] === "`" && m[2].includes("`"))) {
+        fence = { ch: m[1][0], len: m[1].length };
+        opener = kept.length;
+      }
+    } else if (m && m[1][0] === fence.ch && m[1].length >= fence.len && m[2].trim() === "") {
+      while (kept.length - 1 > opener && kept[kept.length - 1] === "") kept.pop();
+      fence = null;
+    } else if (r === "" && kept.length - 1 === opener) continue;
+    kept.push(r);
   }
-  return kept.join(String.fromCharCode(10));
+  return kept.join("\n");
 }
+
+// Row 981: saves per run that turn a showable note unshowable by a line-level misfire (see unshowable). Measured over seeds 1-200: default 1 in total (seed 108, 1 of 400 edits), r12 0. 8 = 2% of a run: eight times the worst run, far from one in every note.
+const UNSHOWABLE_CEILING = 8;
 
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
   it.each(SEEDS)("400 chained edits (seed %i)", (seed) => {
     const r = rng(seed);
-    Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0 });
+    Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0, threw: 0 });
+    let unshowableN = 0;
     const N = R12 ? 120 : 400;
     let edits = 0;
     let refused = 0;
@@ -433,19 +452,26 @@ tail=${JSON.stringify(tail)}`).toBe(true);
         expect(structureProblem(body, nb, prev, out), why).toBeNull();
         // (3) A note the view could show stays one it can show, unless the view's own text cannot be shown.
         // richChange puts the body's last line end back, so that is the text the view's `out` becomes.
-        // Row 936 (seeds 36, 108): a reason that is only a line-level guess gone wrong (see limitsMisfired) is not a note the view lost.
-        if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null && unsupported(nb) !== null) expect(limitsMisfired(nb), why + `\nunsupported=${unsupported(nb)}`).toBe(true);
+        // Row 936 (seeds 36, 108): a reason that is only a line-level guess gone wrong (see limitsMisfired) is not a note the view lost. Row 981: only when the note had it already; a new one is counted below.
+        if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null && unsupported(nb) !== null) {
+          const verdict = unshowable(body, nb);
+          expect(verdict, why + `\nunsupported=${unsupported(nb)}`).not.toBe("real");
+          if (verdict === "misfire") unshowableN++;
+        }
         now = next;
         prev = out;
         if (s) chained++;
       }
     }
     const ms = performance.now() - t0;
+    // Row 981: richChange never throws on these edits (a throw is counted apart from the ordinary refusals).
+    expect(placeStats.threw, "richChange threw").toBe(0);
+    expect(unshowableN, "saves that made a showable note unshowable (a line-level misfire the note did not have)").toBeLessThanOrEqual(UNSHOWABLE_CEILING);
     // Notes the view cannot spell (a fence in an item, a blank line inside a list item) refuse more: random selections tear their fences. Ordinary notes mix several loose and nested lists now: 2% was the round 6 bar, 3% held with the new shapes. Round 12: the invariant reads a 2-space sub-list by lines, so an edit that makes the view re-indent its siblings now refuses (it saved them respelt before): seeds 1-200 refuse 12-23 of 400, 6% bounds that.
     if (!R12) expect(refused, "refused on ordinary notes").toBeLessThanOrEqual(N / 16);
     if (!R12) expect(refusedHard, "refused on notes with a nested fence or a loose nested list").toBeLessThanOrEqual(N / 8);
     // Shown with --silent=false: how often each path holds.
-    console.log(`fuzz seed ${seed}${R12 ? " (round 12 shapes)" : ""}: invariant refusals ${placeStats.invariant}, ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, mismatched 0, ${ms.toFixed(0)} ms`);
+    console.log(`fuzz seed ${seed}${R12 ? " (round 12 shapes)" : ""}: invariant refusals ${placeStats.invariant}, ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, became unshowable ${unshowableN}, threw ${placeStats.threw}, mismatched 0, ${ms.toFixed(0)} ms`);
   }, R12 ? 240_000 : 20_000);
 });
 
@@ -544,5 +570,80 @@ describe("oracle: row 936 false positives", () => {
     expect(readsAs(nb, out)).toBe(true);
     expect(readsAs(nb.replace("\r\n\r\n  ```", "\r\n  y\r\n  ```"), out)).toBe(false);
     expect(readsAs(nb.replace("- b", "- c"), out)).toBe(false);
+  });
+});
+
+// Row 981 (review of row 936): the 936 exemptions were wider than the false positives they fixed. Each check below is pinned with a twin it must still flag.
+describe("oracle: row 981 tightened exemptions", () => {
+  const typed = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    return { prev, out: roundTrip(prev.replace(from, to))! };
+  };
+  const saved = (body: string, prev: string, out: string) => {
+    const c = richChange(body, out, prev);
+    return c ? body.slice(0, c.from) + c.insert + body.slice(c.to) : body;
+  };
+
+  // Seed 95 early return: a renumber-only edit skipped every list check, so a lost blank line above a list item went unseen.
+  it("a renumber-only edit still has its other lists checked: a dropped blank line above item 1 is flagged", () => {
+    const body = "- a\n\n- b\n\nPara\n\n1. x\n2. y\n";
+    const { prev, out } = typed(body, "1. x", "2. x");
+    const real = saved(body, prev, out);
+    expect(real).toBe("- a\n\n- b\n\nPara\n\n2. x\n3. y\n");
+    expect(structureProblem(body, real, prev, out)).toBeNull();
+    expect(structureProblem(body, "- a\n- b\n\nPara\n\n2. x\n3. y\n", prev, out)).toMatch(/blank line above item 1 .* is gone/);
+  });
+  it("the seed 95 shape (a renumber after a nested list) still has no structure problem", () => {
+    const body = "- a\n  - n1\n\n  - n2\n- b\n\n1. x\n2. y\n";
+    expect(structureProblem(body, body.replace("2. y", "3. y"), "1. x\n2. y", "1. x\n3. y")).toBeNull();
+  });
+});
+
+// Row 981: trimFenceEdges ran on every note, so an LF save that added a blank first line to an untouched fence read as the view's text.
+describe("oracle: row 981 fence-edge trimming", () => {
+  const typed = (body: string, from: string, to: string) => {
+    const prev = roundTrip(body)!;
+    return { prev, out: roundTrip(prev.replace(from, to))! };
+  };
+  it("an LF note's save that adds a blank first line to an untouched fence is flagged; the real save passes", () => {
+    const body = "Intro\n\n```\nx\ny\n```\n\nEnd\n";
+    const { out } = typed(body, "Intro", "Intra");
+    expect(readsAs("Intra\n\n```\nx\ny\n```\n\nEnd\n", out)).toBe(true);
+    expect(readsAs("Intra\n\n```\n\nx\ny\n```\n\nEnd\n", out)).toBe(false);
+    // A blank last code line is not told apart here: the view itself drops it (the kept-ends and invariant checks hold that byte).
+  });
+  it("the same inside a <details> note", () => {
+    const body = "<details>\n<summary>S</summary>\n\nInner\n\n</details>\n\nIntro\n\n```\nx\ny\n```\n\nEnd\n";
+    const { out } = typed(body, "Intro", "Intra");
+    const bad = body.replace("Intro", "Intra").replace("```\nx", "```\n\nx");
+    expect(readsAs(body.replace("Intro", "Intra"), out)).toBe(true);
+    expect(readsAs(bad, out)).toBe(false);
+  });
+  it("a CRLF note still reads an emptied code line as the LF view does", () => {
+    const out = roundTrip("- 3\r\n  ```\r\n  x\r\n  ```\r\n- b\r\n")!.replace("x\r", "\r");
+    expect(readsAs("- 3\r\n  ```\r\n\r\n  ```\r\n- b\r\n", out)).toBe(true);
+  });
+  it("both edges use the same indent rule, and a longer fence is not closed by a shorter one inside it", () => {
+    expect(trimFenceEdges("  ```\n\nx\n\n  ```")).toBe("  ```\nx\n  ```");
+    expect(trimFenceEdges("    ```\n\nx\n\n    ```")).toBe("    ```\n\nx\n\n    ```");
+    expect(trimFenceEdges("````\nq\n\n```\n\n````")).toBe("````\nq\n\n```\n````");
+    expect(trimFenceEdges("````\n```\n\nx\n````")).toBe("````\n```\n\nx\n````");
+    expect(trimFenceEdges("```\n\nx\n```\n\nafter\n")).toBe("```\nx\n```\n\nafter\n");
+  });
+});
+
+// Row 981: limitsMisfired passed any save that made a showable note unshowable (seed 108). It is now exempt only when the note already had that reason.
+describe("oracle: row 981 unshowable saves", () => {
+  const seed108 = "1. b\n   wrapped\n    - n1\n    - n2 lazy\n\n    - n3\n";
+  it("a misfire the note already had is the same; one the save introduced is counted; a real reason is real", () => {
+    expect(unsupported(seed108)).toBe("it has code blocks the rich view would reflow");
+    expect(unshowable(seed108, seed108 + "\nmore\n")).toBe("same");
+    const showable = "1. b\n   wrapped\n    - n1\n    - n2 lazy\n    - n3\n";
+    expect(unsupported(showable)).toBeNull();
+    expect(unshowable(showable, seed108)).toBe("misfire");
+    expect(unshowable("para\n", "para\n\n    code\n")).toBe("real");
+  });
+  it("a body whose reason differs from the save's reason is not excused as the same (it is counted)", () => {
+    expect(unshowable("para\n\n[r]: u\n", seed108)).toBe("misfire");
   });
 });
