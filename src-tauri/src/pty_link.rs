@@ -107,8 +107,10 @@ impl Link {
     /// the service's running terminals, each with its recent output (`data`, base64), output count
     /// (`seq`) and the `meta` the window that started it stored.
     pub fn connect(ep: Endpoint, mut events: Client) -> Result<(Arc<Link>, Vec<Value>), String> {
-        events.set_wait(None)?;
+        // The attach answer is read under the hello's connect timeout, so a service that never answers it fails here
+        // instead of hanging the link; only the event reads after it wait without a limit (TERM-106).
         let answer = events.request(json!({ "op": "attach" }), &mut Vec::new())?;
+        events.set_wait(None)?;
         let generation = answer["generation"].as_u64().unwrap_or(ep.generation);
         let rows = answer["terminals"].as_array().cloned().unwrap_or_default();
         let link = Arc::new(Link { ep, generation, table: Mutex::new(Table::default()), alive: AtomicBool::new(true), window: crate::cli::secret() });
@@ -861,5 +863,32 @@ pub(crate) mod tests {
         mine.kill();
         drop(r);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn term106_a_service_that_never_answers_attach_fails_the_connect_instead_of_hanging() {
+        use std::io::BufRead;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(conn.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(conn, "{}", json!({ "ok": true, "result": { "protocol": PROTOCOL } })).unwrap();
+            let _ = held.recv();
+        });
+        let ep = Endpoint { port, token: "t".into(), pid: 1, generation: 1, protocol: PROTOCOL };
+        let client = Client::connect(&ep, Duration::from_millis(500)).unwrap();
+        // On a thread, so the old order (no timeout on the attach read) fails here instead of hanging the run.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let t = Instant::now();
+        std::thread::spawn(move || {
+            let _ = tx.send(Link::connect(ep, client).err());
+        });
+        let failed = rx.recv_timeout(Duration::from_secs(5)).expect("connect hung on an attach nobody answers");
+        assert!(failed.is_some(), "attach was never answered, so connect must fail (took {:?})", t.elapsed());
+        drop(release);
+        server.join().unwrap();
     }
 }

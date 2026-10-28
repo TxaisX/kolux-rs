@@ -437,7 +437,12 @@ fn installer_hook(end_terminals: impl Fn() + Send + Sync + 'static, cleanup: imp
 fn end_for_installer(app: &AppHandle) {
     // AFTER-696: the background terminal service runs from the program the installer replaces, so
     // it and the shells it holds end too, not only the panes this window runs.
-    app.state::<Terminals>().end_for_update();
+    // This hook runs inside the updater plugin and cannot abort the install: it only writes the failure down (row 1031).
+    if !app.state::<Terminals>().end_for_update() {
+        if let Ok(dir) = app.path().app_data_dir() {
+            crate::diag::write(&dir, "installer starting while the terminal service still answered; the installer may not be able to replace the program (row 1031)");
+        }
+    }
     crate::resources::recovery::note_self_end(app, "installer starts (APP-029)");
 }
 
@@ -445,15 +450,32 @@ fn end_for_installer(app: &AppHandle) {
 pub fn install_on_quit(app: &AppHandle) {
     let ready = app.state::<Updates>().ready.lock().ok().and_then(|mut r| r.take());
     if let Some((update, bytes)) = ready {
-        app.state::<Terminals>().end_for_update();
+        if !app.state::<Terminals>().end_for_update() {
+            // Row 1031: the service holds the program the installer would replace; the update is tried again next launch.
+            if let Ok(dir) = app.path().app_data_dir() {
+                crate::diag::write(&dir, &install_skipped_line(&update.version));
+            }
+            return;
+        }
         record_attempt(app, &update);
         let _ = update.restart_after_install(false).install(&bytes);
     }
 }
 
+/// The diag line for an update left uninstalled at quit because the terminal service would not stop (row 1031).
+fn install_skipped_line(version: &str) -> String {
+    format!("update {version} not installed at quit: the terminal service did not stop in time and still holds the program (row 1031)")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row1031_the_skipped_install_line_names_the_version_and_the_reason() {
+        let line = install_skipped_line("1.2.3");
+        assert!(line.contains("1.2.3") && line.contains("terminal service did not stop"), "{line}");
+    }
 
     fn env_with(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let pairs: Vec<(String, String)> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();

@@ -565,30 +565,78 @@ impl Client {
 
 /// AFTER-696: ends the running service (and with it every shell it holds) before an update
 /// replaces the program it runs from. True once nothing answers and its process is gone; a
-/// service too old to know `stop` is ended by its pid.
+/// service too old to know `stop` is ended by its pid. `wait` is ONE deadline for the whole call
+/// (probes, the stop reply, the graceful wait and the check after the kill): the quit watchdog
+/// counts on it (row 1014). A recorded process that is alive but does not answer is never
+/// killed (the record may be stale and the pid reused): it is waited for until the deadline and
+/// then reads as not stopped (row 1031).
 pub fn stop(dir: &Path, wait: Duration) -> bool {
-    let Probe::Ready(ep, mut c) = probe(dir, PROBE_WAIT) else { return true };
-    let _ = c.request(json!({ "op": "stop" }), &mut Vec::new());
-    drop(c);
-    let own = ep.pid == std::process::id();
-    let gone = |until: Instant| loop {
-        if matches!(probe(dir, PROBE_WAIT.min(wait)), Probe::None) && (own || crate::procs::wait_gone(&[ep.pid], POLL).is_empty()) {
+    // A probe or read is never given less than this, so a nearly spent deadline still gets one look.
+    const FLOOR: Duration = Duration::from_millis(50);
+    let start = Instant::now();
+    let until = start + wait;
+    let left = |t: Instant| t.saturating_duration_since(Instant::now());
+    let me = std::process::id();
+    let mut first = probe(dir, PROBE_WAIT.min(wait).max(FLOOR));
+    let (ep, client) = loop {
+        match first {
+            Probe::Ready(ep, c) => break (ep, Some(c)),
+            // Our token was accepted and only the protocol was refused: the recorded pid is that service's own.
+            Probe::Refused(why) if !why.starts_with(TOKEN_REFUSED) => match read_endpoint(dir) {
+                Some(ep) => break (ep, None),
+                None => return true,
+            },
+            // No answer, or a token refusal (the port may belong to another Kolux while the record is stale): the pid is unverified.
+            Probe::None | Probe::Refused(_) => {
+                let Some(ep) = read_endpoint(dir) else { return true };
+                // Nothing to wait for: an in-process service has no pid of its own, and a dead pid is a stopped one.
+                if ep.pid == me || crate::procs::wait_gone(&[ep.pid], Duration::ZERO).is_empty() {
+                    return true;
+                }
+                if Instant::now() >= until {
+                    return false;
+                }
+                std::thread::sleep(POLL.min(left(until)));
+                first = probe(dir, PROBE_WAIT.min(left(until)).max(FLOOR));
+            }
+        }
+    };
+    let own = ep.pid == me;
+    // An in-process service has no pid to kill, so it gets the whole deadline; any other gets half, then the kill.
+    // One that would not take `stop` at all (refused) has nothing to wait for.
+    let graceful_end = if own {
+        until
+    } else if client.is_some() {
+        start + wait / 2
+    } else {
+        Instant::now()
+    };
+    if let Some(mut c) = client {
+        let _ = c.set_wait(Some(left(graceful_end).max(FLOOR)));
+        let _ = c.request(json!({ "op": "stop" }), &mut Vec::new());
+    }
+    let gone = |end: Instant| loop {
+        if matches!(probe(dir, PROBE_WAIT.min(left(end)).max(FLOOR)), Probe::None) && (own || crate::procs::wait_gone(&[ep.pid], POLL).is_empty()) {
             return true;
         }
-        if Instant::now() >= until {
+        if Instant::now() >= end {
             return false;
         }
-        std::thread::sleep(POLL);
+        std::thread::sleep(POLL.min(left(end)));
     };
-    if gone(Instant::now() + wait) {
+    if gone(graceful_end) {
         return true;
     }
     if own {
         return false;
     }
+    // ponytail: taskkill runs synchronously (~150-170 ms measured), so the deadline can overrun by that much; spawn + wait_timeout if it ever does.
     crate::procs::kill_tree(ep.pid);
-    gone(Instant::now() + wait)
+    gone(until)
 }
+
+/// Starts the `Refused` reason of a service that did not accept this Kolux's token: whatever answers there did not write the recorded endpoint, so the record's pid is unverified.
+const TOKEN_REFUSED: &str = "a terminal service answers for this profile but refused this Kolux";
 
 /// What a look at the data folder finds.
 #[derive(Debug)]
@@ -611,7 +659,7 @@ pub fn probe(dir: &Path, wait: Duration) -> Probe {
             Ok(()) => Probe::Ready(ep, c),
             Err(why) => Probe::Refused(why),
         },
-        Err(e) if e.contains("token") => Probe::Refused(format!("a terminal service answers for this profile but refused this Kolux ({e}); Kolux cannot safely open its window on it")),
+        Err(e) if e.contains("token") => Probe::Refused(format!("{TOKEN_REFUSED} ({e}); Kolux cannot safely open its window on it")),
         Err(_) => Probe::None,
     }
 }
@@ -849,6 +897,128 @@ mod tests {
         s.thread.take().unwrap().join().unwrap();
         // No service at all: nothing to stop.
         assert!(stop(&dir, Duration::from_secs(1)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A listener that answers every hello and nothing else, until `done` is set (a service that ignores `stop`).
+    fn deaf_service(dir: &Path, pid: u32, protocol: Option<u32>) -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let ep = Endpoint { port: listener.local_addr().unwrap().port(), token: "t".into(), pid, generation: 1, protocol: protocol.unwrap_or(PROTOCOL) };
+        write_endpoint(dir, &ep).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let flag = done.clone();
+        let thread = std::thread::spawn(move || {
+            let mut conns = Vec::new();
+            while !flag.load(Ordering::SeqCst) {
+                if let Ok((conn, _)) = listener.accept() {
+                    conn.set_nonblocking(false).unwrap();
+                    let mut out = conn.try_clone().unwrap();
+                    let mut line = String::new();
+                    if BufReader::new(conn.try_clone().unwrap()).read_line(&mut line).is_ok() {
+                        // None: the token is refused, as a service that did not write this record would.
+                        let reply = protocol.map_or(json!({ "ok": false, "error": "wrong token" }), |p| json!({ "ok": true, "result": { "protocol": p } }));
+                        writeln!(out, "{reply}").unwrap();
+                    }
+                    conns.push(conn);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        (done, thread)
+    }
+
+    #[test]
+    fn row1014_stop_ends_at_its_one_deadline_when_the_service_ignores_it() {
+        let limit = Duration::from_secs(2);
+        // Another process's service: half the deadline of grace, then the kill, inside one deadline.
+        let dir = scratch("row1014-other");
+        let mut child = sleeper();
+        let (done, thread) = deaf_service(&dir, child.id(), Some(PROTOCOL));
+        let t = Instant::now();
+        // The pid dies at the halfway kill, and a dead pid reads as a stopped service even though the listener still answers.
+        assert!(stop(&dir, limit), "the kill at the halfway point ends it");
+        let took = t.elapsed();
+        eprintln!("row1014: other-pid stop took {took:?}");
+        assert!(took >= Duration::from_millis(900) && took < Duration::from_millis(2500), "{took:?}");
+        let _ = child.kill();
+        let _ = child.wait();
+        done.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        // This process's own service: no kill, the graceful wait takes the whole deadline.
+        let dir = scratch("row1014-own");
+        let (done, thread) = deaf_service(&dir, std::process::id(), Some(PROTOCOL));
+        let t = Instant::now();
+        assert!(!stop(&dir, limit));
+        let took = t.elapsed();
+        eprintln!("row1014: own-pid stop took {took:?}");
+        assert!(took >= Duration::from_millis(1500) && took < Duration::from_millis(3000), "{took:?}");
+        done.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn sleeper() -> std::process::Child {
+        if cfg!(windows) {
+            // One process, no cmd.exe parent: a killed cmd would leave its ping holding any pipe handle it inherited from a parallel PTY test for 30 s.
+            std::process::Command::new("ping.exe").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap()
+        } else {
+            std::process::Command::new("sleep").arg("30").spawn().unwrap()
+        }
+    }
+
+    #[test]
+    fn row1031_a_service_this_build_refuses_is_ended_by_its_pid_and_a_silent_live_pid_is_never_killed() {
+        let limit = Duration::from_secs(2);
+        // A Kolux service answered the hello but this build refuses it (old protocol): its pid is confirmed, so it is killed at once.
+        let dir = scratch("row1031-refused");
+        let mut child = sleeper();
+        let (done, thread) = deaf_service(&dir, child.id(), Some(0));
+        let t = Instant::now();
+        assert!(stop(&dir, limit), "the refused service's process was killed");
+        let took = t.elapsed();
+        eprintln!("row1031: refused-service stop took {took:?}");
+        assert!(took < Duration::from_millis(1500), "{took:?}");
+        let until = Instant::now() + Duration::from_secs(1);
+        while child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < until, "stop returned true but the refused service's process is still running");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        done.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        // A token refusal: whatever answers did not write this record, so its pid is unverified and never killed.
+        let dir = scratch("row1031-token");
+        let mut child = sleeper();
+        let (done, thread) = deaf_service(&dir, child.id(), None);
+        let t = Instant::now();
+        let stopped = stop(&dir, limit);
+        let took = t.elapsed();
+        eprintln!("row1031: token-refused stop took {took:?}");
+        let alive = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        done.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+        assert!(!stopped && alive, "a token refusal is neither a stop nor a licence to kill (stopped {stopped}, alive {alive})");
+        assert!(took >= Duration::from_millis(1800) && took < Duration::from_millis(2500), "{took:?}");
+        let _ = std::fs::remove_dir_all(dir);
+        // A recorded pid that is alive while nothing listens may be a reused pid: never killed, and the stop reads as failed at the deadline.
+        let dir = scratch("row1031-silent");
+        let mut child = sleeper();
+        let closed = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        write_endpoint(&dir, &Endpoint { port: closed, token: "t".into(), pid: child.id(), generation: 1, protocol: PROTOCOL }).unwrap();
+        let t = Instant::now();
+        let stopped = stop(&dir, limit);
+        let took = t.elapsed();
+        eprintln!("row1031: silent live pid stop took {took:?}");
+        let alive = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!stopped, "a live pid nothing answers for is not a stopped service");
+        assert!(took >= Duration::from_millis(1800) && took < Duration::from_millis(2500), "{took:?}");
+        assert!(alive, "the unrelated live process must not be killed");
         let _ = std::fs::remove_dir_all(dir);
     }
 
