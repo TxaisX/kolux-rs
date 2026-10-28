@@ -2162,12 +2162,36 @@ mod tests {
         assert_eq!(args_for_later_window(None), browser_args(None, false), "before the launch string exists the plain string stands in");
     }
 
+    /// Every call that makes a webview, as the scan below knows them.
+    const WEBVIEW_BUILDERS: [&str; 5] = ["WebviewWindowBuilder::new(", "WebviewBuilder::new(", "WebviewWindow::builder(", "Webview::builder(", "WebviewWindowBuilder::from_config("];
+    /// A builder call that sets the browser arguments, the data folder, or takes the opener's engine.
+    const WEBVIEW_ARG_CALLS: [&str; 3] = [".additional_browser_args(", ".data_directory(", ".window_features("];
+    /// What ends a builder chain: the window is built, or the web view is added to its window.
+    const WEBVIEW_CHAIN_ENDS: [&str; 3] = [".build()", ".build(", "add_child("];
+
+    /// The builder calls in `code` (line numbers, 1-based) whose chain, up to the call that ends it,
+    /// sets none of `WEBVIEW_ARG_CALLS`: each one is paired on its own, not once per file.
+    fn builders_without_args(code: &str) -> Vec<(usize, &'static str)> {
+        let mut bad = Vec::new();
+        for ctor in WEBVIEW_BUILDERS {
+            for (at, _) in code.match_indices(ctor) {
+                let rest = &code[at + ctor.len()..];
+                let stop = WEBVIEW_CHAIN_ENDS.iter().filter_map(|e| rest.find(e)).min().unwrap_or(rest.len());
+                if !WEBVIEW_ARG_CALLS.iter().any(|c| rest[..stop].contains(c)) {
+                    bad.push((code[..at].matches('\n').count() + 1, ctor));
+                }
+            }
+        }
+        bad.sort();
+        bad
+    }
+
     // Rows 955 / 959: every webview built on the default data folder takes its string from
     // browser_args_now, so no window can drift from the main one again. Popups reuse the opener's
     // engine (window_features) and the main window is built from the config whose string lib.rs sets.
     #[test]
     fn row955_every_top_level_webview_gets_its_browser_args_from_the_one_source() {
-        let exempt = ["browser_popup.rs", "tools.rs"];
+        let exempt = ["tools.rs"]; // built from a window config; lib.rs puts the string in the config
         let (mut seen, mut stack) = (0, vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")]);
         while let Some(dir) = stack.pop() {
             for e in fs::read_dir(&dir).unwrap().flatten() {
@@ -2183,15 +2207,39 @@ mod tests {
                 let src = fs::read_to_string(&path).unwrap();
                 let end = ["\nmod tests {", "\nmod agent_tests {"].iter().filter_map(|m| src.find(m)).min().unwrap_or(src.len());
                 let code = &src[..end];
-                if !(code.contains("WebviewWindowBuilder::new(") || code.contains("WebviewBuilder::new(")) {
-                    continue;
-                }
-                seen += 1;
+                let found = WEBVIEW_BUILDERS.iter().map(|c| code.matches(c).count()).sum::<usize>();
+                seen += found;
                 if !exempt.contains(&name.as_str()) {
-                    assert!(code.contains(".additional_browser_args(&crate::resources::recovery::browser_args_now())") || code.contains("let launch = crate::resources::recovery::browser_args_now();"), "{name} builds a webview without the one browser_args_now string");
+                    let bad = builders_without_args(code);
+                    assert!(bad.is_empty(), "{name} builds a webview without browser arguments, a data folder or window features: {bad:?}");
+                    if found > 0 {
+                        // Every browser-argument call in these files must be the one source's string.
+                        assert!(code.contains("browser_args_now()") || code.contains(".window_features(") || code.contains(".data_directory("), "{name} does not take its string from browser_args_now");
+                    }
                 }
             }
         }
-        assert!(seen >= 3, "the scan found the window builders: {seen}");
+        assert!(seen >= 4, "the scan found the window builders: {seen}");
+    }
+
+    // Row 955 LOW: the scan pairs each builder with its own browser-argument call, so a second,
+    // argless builder in a file whose first builder is fine is still found.
+    #[test]
+    fn row955_the_scan_pairs_each_builder_not_each_file() {
+        let fixture = r#"
+fn a(app: &App) { WebviewWindowBuilder::new(app, "a", url).additional_browser_args(&x).title("a").build().unwrap(); }
+fn b(app: &App) {
+    WebviewWindowBuilder::new(app, "b", url).title("b").build().unwrap();
+}
+fn c(w: &Window) { let c = WebviewBuilder::new("c", url).zoom_hotkeys_enabled(false); w.add_child(c, pos, size); }
+fn d(app: &App) { let d = WebviewBuilder::new("d", url); d.data_directory(dir); w.add_child(d, pos, size); }
+fn e(app: &App) { WebviewWindow::builder(app, "e", url).build(); Webview::builder("f", url).window_features(f); WebviewWindowBuilder::from_config(app, cfg).unwrap().build(); }
+"#;
+        let bad = builders_without_args(fixture);
+        assert_eq!(
+            bad,
+            vec![(4, "WebviewWindowBuilder::new("), (6, "WebviewBuilder::new("), (8, "WebviewWindow::builder("), (8, "WebviewWindowBuilder::from_config(")],
+            "the argless builders are found one by one, the paired ones are not"
+        );
     }
 }
