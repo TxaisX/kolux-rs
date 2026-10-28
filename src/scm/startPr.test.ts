@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { READINESS_TTL_MS, assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, reviewHint, reviewWhere } from "./startPr";
+import { READINESS_TTL_MS, assess, canStartReview, confirmed, createBlock, dismiss, errorShown, offerFor, offerOf, raise, readinessKey, reviewHint, reviewWhere } from "./startPr";
 import type { Status } from "./model";
 
 const st = (over: Partial<Status> = {}): Status =>
@@ -55,4 +55,24 @@ test("VIEW-074 a modifier-click opens the review in the other browser and the hi
   expect(reviewWhere({ ...plain, metaKey: true }, false)).toBe("kolux");
   expect(reviewHint(true)).toContain("Ctrl-click opens it in the system browser");
   expect(reviewHint(false)).toContain("Ctrl-click opens it in the Kolux browser");
+});
+
+// Row 76: a remote that is not GitHub never gets a create action or the one-click button (the one-click path
+// would commit, push and run the writer before gh failed on the address).
+test("row 76 a non-GitHub provider blocks the create offer and the one-click, in its own words", () => {
+  const ready = assess("/w", st(), 1000);
+  const key = readinessKey("/w", st());
+  expect(createBlock("github", null)).toBeNull();
+  expect(createBlock(undefined, null)).toBeNull();
+  expect(createBlock("gitlab", "gitlab.com")).toBe("Creating a pull request from Kolux needs a GitHub remote; gitlab.com is not one.");
+  expect(createBlock("other", "code.example.org")).toContain("code.example.org is not one");
+  expect(createBlock("none", null)).toBe("Creating a pull request from Kolux needs a GitHub remote; this repository has no remote.");
+  const blocked = createBlock("gitlab", "gitlab.com");
+  expect(offerOf({ linked: false, blockedBy: blocked, ready, key, now: 1000 })).toEqual({ kind: "blocked", reason: blocked });
+  expect(canStartReview(blocked, false)).toBe(false);
+  // GitHub, nothing linked: the same inputs still offer the composer and the one-click.
+  expect(offerOf({ linked: false, blockedBy: null, ready, key, now: 1000 })).toEqual({ kind: "create" });
+  expect(canStartReview(null, false)).toBe(true);
+  expect(canStartReview(null, true)).toBe(false);
+  expect(offerOf({ linked: true, blockedBy: null, ready, key, now: 1000 }).kind).toBe("blocked");
 });

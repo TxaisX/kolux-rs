@@ -362,16 +362,105 @@ fn parts_of(url: &str) -> Result<(String, String, String, u64), String> {
     scm::pr_parts(url).ok_or_else(|| "Paste a pull request link, such as https://github.com/owner/repo/pull/12".to_string())
 }
 
-/// GIT-025: the branch's pull request through the fallbacks.
+/// Row 76: the family of host a repository's remote sits on. Only `GitHub` may reach gh.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Provider {
+    GitHub,
+    GitLab(String),
+    Other(String),
+    NoHost,
+}
+
+/// Row 76: THE provider check. github.com and GitHub's own `.ghe.com` hosts are GitHub; a host named
+/// like GitLab is GitLab; any other host is GitHub Enterprise Server only when gh is signed in there
+/// (`gh_signed_in`, local config, no network), else an unknown provider. Nothing else decides whether gh runs.
+pub fn provider_of(host: Option<&str>, gh_signed_in: impl Fn(&str) -> bool) -> Provider {
+    let Some(host) = host.map(str::trim).filter(|h| !h.is_empty()) else { return Provider::NoHost };
+    let lower = host.to_lowercase();
+    if lower == "github.com" || lower.ends_with(".ghe.com") {
+        Provider::GitHub
+    } else if lower.split('.').next().is_some_and(|label| label.contains("gitlab")) {
+        Provider::GitLab(lower)
+    } else if gh_signed_in(host) {
+        Provider::GitHub
+    } else {
+        Provider::Other(lower)
+    }
+}
+
+impl Provider {
+    /// The provider word and host a non-GitHub answer carries; None for GitHub, the only provider gh is asked about.
+    fn other_label(&self) -> Option<(&'static str, Option<String>)> {
+        match self {
+            Provider::GitHub => None,
+            Provider::GitLab(h) => Some(("gitlab", Some(h.clone()))),
+            Provider::Other(h) => Some(("other", Some(h.clone()))),
+            Provider::NoHost => Some(("none", None)),
+        }
+    }
+}
+
+/// Row 76: `provider_of` for a real repository. A host that is not github.com / `.ghe.com` is GitHub only when the
+/// one host gate in github.rs (`host_allowed`: GH_HOST, a sign-in of its own, never gh's top-level `user`) lets it through.
+pub fn provider_for(host: Option<&str>) -> Provider {
+    provider_of(host, |h| scm::gh_program().is_ok_and(|gh| crate::github::host_allowed(&gh, h).is_ok()))
+}
+
+/// Row 76: the Checks panel's lookup behind the same provider check as `scm_pr_find`: gh (`ask`) runs only for GitHub;
+/// any other provider answers "no pull request" and names itself, so the composer can say the lookup is not available.
+pub fn checks_for(provider: &Provider, ask: impl FnOnce() -> Result<scm::PrChecks, String>) -> Result<scm::PrChecks, String> {
+    match provider.other_label() {
+        None => ask(),
+        Some((name, host)) => Ok(scm::PrChecks { provider: Some(name), host, ..Default::default() }),
+    }
+}
+
+/// Row 76: the create gate. A pull request is made through gh, which only knows GitHub: any other provider is refused
+/// by name before `make` (and so before gh or the writer) runs.
+pub fn create_for<T>(provider: &Provider, make: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    match provider.other_label() {
+        None => make(),
+        Some((_, host)) => Err(format!("Creating a pull request from Kolux needs a GitHub remote; {}.", host.map_or("this repository has no remote".to_string(), |h| format!("{h} is not one")))),
+    }
+}
+
+/// Row 76: what the composer is told. `provider` is github, gitlab, other or none; `pr` only ever comes from a GitHub lookup.
+/// `repo` (GitHub only) is the repository gh searched, which is origin's: with a fork as origin, that is the fork.
+#[derive(Debug, Serialize)]
+pub struct PrLookup {
+    pub provider: &'static str,
+    pub host: Option<String>,
+    pub pr: Option<Pr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
+/// Row 76: runs the lookup plan only for a GitHub remote; any other provider is answered without calling `ask`.
+pub fn lookup_for(provider: &Provider, ask: impl FnMut(&[String]) -> Result<String, String>, plan: &[Vec<String>], branch: &str, default_branch: &str, linked: bool) -> Result<PrLookup, String> {
+    let Some((name, host)) = provider.other_label() else {
+        let pr = find_with(ask, plan)?.filter(|pr| shown_on(pr, branch, default_branch, linked));
+        return Ok(PrLookup { provider: "github", host: None, pr, repo: None });
+    };
+    Ok(PrLookup { provider: name, host, pr: None, repo: None })
+}
+
+/// GIT-025: the branch's pull request through the fallbacks, for a GitHub remote; other providers answer which one they are.
 #[tauri::command]
-pub async fn scm_pr_find(worktree: String, remote_branch: Option<String>, fork_owner: Option<String>, number: Option<u64>, default_branch: Option<String>, linked: bool) -> Result<Option<Pr>, String> {
+pub async fn scm_pr_find(worktree: String, remote_branch: Option<String>, fork_owner: Option<String>, number: Option<u64>, default_branch: Option<String>, linked: bool) -> Result<PrLookup, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
         let branch = scm::status(dir)?.branch.ok_or("No branch is checked out here")?;
-        let gh = scm::gh_program()?;
+        let host = scm::repo_id::primary_host(dir, &scm::ssh_config())?;
+        let provider = provider_for(host.as_deref());
         let plan = lookup_plan(&Hints { branch: branch.clone(), remote_branch, fork_owner, number });
-        let found = find_with(|a| scm::gh_run(&gh, dir, &a.iter().map(String::as_str).collect::<Vec<_>>(), None), &plan)?;
-        Ok(found.filter(|pr| shown_on(pr, &branch, default_branch.as_deref().unwrap_or(""), linked)))
+        // gh is looked for only on a GitHub remote.
+        let gh = if provider == Provider::GitHub { Some(scm::gh_program()?) } else { None };
+        let ask = |a: &[String]| scm::gh_run(gh.as_deref().ok_or("gh is not used for this provider")?, dir, &a.iter().map(String::as_str).collect::<Vec<_>>(), None);
+        let mut got = lookup_for(&provider, ask, &plan, &branch, default_branch.as_deref().unwrap_or(""), linked)?;
+        if provider == Provider::GitHub {
+            got.repo = scm::gh_repo_arg(dir, &scm::ssh_config());
+        }
+        Ok(got)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -409,6 +498,7 @@ pub async fn scm_check_log(worktree: String, link: String) -> Result<String, Str
 pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>, instructions: Option<String>, issue: Option<Issue>, use_template: bool, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<(String, String), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
+        create_for(&provider_for(scm::repo_id::primary_host(dir, &scm::ssh_config())?.as_deref()), || Ok(()))?; // no writer run for a remote that cannot take the pull request
         // A base given with its remote (origin/main) is used as is; a bare name must match one remote.
         let base = base.trim().to_string();
         let against = if base.contains('/') && crate::git::run(&["rev-parse", "--verify", "--quiet", &base], Some(dir)).is_ok() {
@@ -920,5 +1010,121 @@ mod tests {
         assert_eq!(rows[1].title, "B");
         assert!(stack_rows("{}").unwrap().is_empty());
         assert!(stack_rows("nope").unwrap_err().contains("cannot read"));
+    }
+
+    // ---- row 76: the provider check in front of the lookup ----
+
+    #[test]
+    fn row76_hosts_map_to_providers() {
+        let signed = |h: &str| h == "git.corp.example";
+        let table: [(Option<&str>, Provider); 10] = [
+            (Some("github.com"), Provider::GitHub),
+            (Some("GitHub.com"), Provider::GitHub),
+            (Some("acme.ghe.com"), Provider::GitHub),
+            (Some("git.corp.example"), Provider::GitHub), // a host gh is signed in to is GitHub Enterprise Server
+            (Some("gitlab.com"), Provider::GitLab("gitlab.com".into())),
+            (Some("gitlab.example.org"), Provider::GitLab("gitlab.example.org".into())),
+            (Some("code.example.org"), Provider::Other("code.example.org".into())), // unknown host, gh not signed in
+            (Some("bitbucket.org"), Provider::Other("bitbucket.org".into())),
+            (Some("dev.azure.com"), Provider::Other("dev.azure.com".into())),
+            (None, Provider::NoHost),
+        ];
+        for (host, want) in table {
+            assert_eq!(provider_of(host, signed), want, "{host:?}");
+        }
+    }
+
+    #[test]
+    fn row76_only_a_github_host_ever_reaches_gh() {
+        let plan = lookup_plan(&Hints { branch: "feat".into(), ..Default::default() });
+        for p in [Provider::GitLab("gitlab.com".into()), Provider::Other("code.example.org".into()), Provider::NoHost] {
+            let mut asked = 0;
+            let got = lookup_for(&p, |_| { asked += 1; Ok(pr_json(1)) }, &plan, "feat", "main", false).unwrap();
+            assert_eq!(asked, 0, "{p:?} must not call gh");
+            assert!(got.pr.is_none() && got.provider != "github", "{got:?}");
+        }
+        let got = lookup_for(&Provider::GitHub, |_| Ok(pr_json(7)), &plan, "feat", "main", false).unwrap();
+        assert_eq!((got.provider, got.pr.map(|p| p.number)), ("github", Some(7)));
+        let none = lookup_for(&Provider::GitHub, |_| Err("no pull requests found".into()), &plan, "feat", "main", false).unwrap();
+        assert!(none.pr.is_none() && none.provider == "github");
+    }
+
+    #[test]
+    fn row76_provider_names_and_hosts_reach_the_screen() {
+        let plan = lookup_plan(&Hints { branch: "feat".into(), ..Default::default() });
+        let got = lookup_for(&Provider::GitLab("gitlab.com".into()), |_| Ok(String::new()), &plan, "feat", "main", false).unwrap();
+        assert_eq!((got.provider, got.host.as_deref()), ("gitlab", Some("gitlab.com")));
+        let got = lookup_for(&Provider::Other("code.example.org".into()), |_| Ok(String::new()), &plan, "feat", "main", false).unwrap();
+        assert_eq!((got.provider, got.host.as_deref()), ("other", Some("code.example.org")));
+    }
+
+    // ---- row 76 rest: the Checks lookup is gated by the same provider check ----
+
+    #[test]
+    fn row76_checks_for_a_non_github_remote_never_calls_gh() {
+        for (p, name, host) in [(Provider::GitLab("gitlab.com".into()), "gitlab", Some("gitlab.com")), (Provider::Other("code.example.org".into()), "other", Some("code.example.org")), (Provider::NoHost, "none", None)] {
+            let mut asked = 0;
+            let got = checks_for(&p, || {
+                asked += 1;
+                Ok(scm::PrChecks { conflict: true, ..Default::default() })
+            })
+            .unwrap();
+            assert_eq!(asked, 0, "{p:?} must not call gh");
+            assert!(got.pr.is_none() && got.checks.is_empty() && !got.conflict, "{got:?}");
+            assert_eq!((got.provider, got.host.as_deref()), (Some(name), host));
+        }
+        let got = checks_for(&Provider::GitHub, || Ok(scm::PrChecks { conflict: true, ..Default::default() })).unwrap();
+        assert!(got.conflict && got.provider.is_none() && got.host.is_none(), "{got:?}");
+        assert!(checks_for(&Provider::GitHub, || Err("gh is signed out".into())).is_err());
+    }
+
+    #[test]
+    fn row76_pr_create_for_a_non_github_remote_never_calls_gh() {
+        for (p, host) in [(Provider::GitLab("gitlab.com".into()), "gitlab.com"), (Provider::Other("code.example.org".into()), "code.example.org")] {
+            let mut asked = 0;
+            let err = create_for(&p, || {
+                asked += 1;
+                Ok(sample_pr())
+            })
+            .unwrap_err();
+            assert_eq!(asked, 0, "{p:?} must not reach gh");
+            assert!(err.contains(host) && err.contains("needs a GitHub remote"), "{err}");
+        }
+        let err = create_for(&Provider::NoHost, || -> Result<(), String> { unreachable!() }).unwrap_err();
+        assert!(err.contains("no remote"), "{err}");
+        assert_eq!(create_for(&Provider::GitHub, || Ok(sample_pr())).unwrap().number, 7);
+        assert!(create_for(&Provider::GitHub, || Err::<scm::Pr, String>("gh is signed out".into())).is_err());
+    }
+
+    fn sample_pr() -> scm::Pr {
+        serde_json::from_value(serde_json::json!({"number": 7, "url": "https://github.com/a/b/pull/7", "state": "OPEN", "title": "t", "head": "h", "draft": false})).unwrap()
+    }
+
+    #[test]
+    fn row76_the_provider_fields_are_optional_on_the_wire() {
+        let github = serde_json::to_value(scm::PrChecks::default()).unwrap();
+        assert!(github.get("provider").is_none() && github.get("host").is_none(), "{github}");
+        let gitlab = checks_for(&Provider::GitLab("gitlab.com".into()), || unreachable!()).unwrap();
+        let v = serde_json::to_value(gitlab).unwrap();
+        assert_eq!((v["provider"].as_str(), v["host"].as_str(), v["pr"].is_null()), (Some("gitlab"), Some("gitlab.com"), true));
+    }
+
+    // The gate is host_allowed itself; these hand provider_of its decision (a predicate), since provider_for needs a real gh.
+    #[test]
+    fn row76_gh_top_level_user_fallback_is_not_a_github_sign_in() {
+        use crate::github::{host_allowed_reading, ConfigRead};
+        let gh = Path::new("gh");
+        let fallback = |h: &str| host_allowed_reading(gh, h, None, &|_| ConfigRead::Value("ana".into())).is_ok();
+        assert_eq!(provider_of(Some("bitbucket-gate.test"), fallback), Provider::Other("bitbucket-gate.test".into()));
+        let own = |h: &str| host_allowed_reading(gh, h, None, &|a| if a.contains(&"-h") { ConfigRead::Value("ana".into()) } else { ConfigRead::Unset }).is_ok();
+        assert_eq!(provider_of(Some("ghe-own-user.test"), own), Provider::GitHub);
+        let failed = |h: &str| host_allowed_reading(gh, h, None, &|_| ConfigRead::Failed).is_ok();
+        assert_eq!(provider_of(Some("ghe-unread.test"), failed), Provider::Other("ghe-unread.test".into()));
+    }
+
+    #[test]
+    fn row76_a_gh_host_environment_host_is_github() {
+        let env = |h: &str| crate::github::host_allowed_with(Path::new("gh"), h, Some("GHE-Env.corp")).is_ok();
+        assert_eq!(provider_of(Some("ghe-env.corp"), env), Provider::GitHub);
     }
 }
