@@ -20,7 +20,7 @@
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
@@ -522,14 +522,44 @@ pub fn quit_watchdog<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         return;
     }
     let dir = app.path().app_data_dir().ok();
-    std::thread::spawn(move || {
-        std::thread::sleep(quit_deadline());
-        if let Some(dir) = dir {
-            crate::diag::write(&dir, &format!("quit: still running {} s after the window closed; exiting now (APP-006)", quit_deadline().as_secs()));
-        }
-        std::process::exit(0);
+    arm_once(&WATCHDOG_ARMED, move || {
+        std::thread::spawn(move || {
+            let log = move || {
+                if let Some(dir) = dir {
+                    crate::diag::write(&dir, &format!("quit: still running {} s after the window closed; exiting now (APP-006)", quit_deadline().as_secs()));
+                }
+            };
+            watchdog_run(quit_deadline(), log, || std::process::exit(0));
+        });
     });
 }
+
+/// Window close and RunEvent::Exit (lib.rs) both arm the watchdog; the first arming wins so its deadline counts from the window going.
+static WATCHDOG_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Runs `spawn` only the first time `flag` is claimed; true when it ran.
+fn arm_once(flag: &AtomicBool, spawn: impl FnOnce()) -> bool {
+    if flag.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    spawn();
+    true
+}
+
+/// The watchdog body: wait out the deadline, log, exit. The log write may stall on the profile
+/// drive (an oplock held elsewhere), so it runs detached and is waited for only briefly.
+fn watchdog_run(deadline: Duration, log: impl FnOnce() + Send + 'static, exit: impl FnOnce()) {
+    std::thread::sleep(deadline);
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        log();
+        let _ = done.send(());
+    });
+    let _ = wait.recv_timeout(WATCHDOG_LOG_WAIT);
+    exit();
+}
+
+const WATCHDOG_LOG_WAIT: Duration = Duration::from_millis(500);
 
 // ---------------------------------------------------------------- APP-011: the save point
 
@@ -686,6 +716,27 @@ mod tests {
     }
 
     use super::*;
+
+    /// APP-050 b2: the kill-switch fires on time even when the profile log write stalls.
+    #[test]
+    fn app050b2_the_quit_watchdog_exits_on_time_while_the_log_write_is_stalled() {
+        let start = std::time::Instant::now();
+        let mut exited = None;
+        watchdog_run(Duration::from_millis(100), || std::thread::sleep(Duration::from_secs(5)), || exited = Some(start.elapsed()));
+        let at = exited.expect("the watchdog exits");
+        assert!(at < Duration::from_millis(100) + Duration::from_secs(1), "exit came {at:?} after the start; a stalled log write held it");
+    }
+
+    /// APP-050 b2: arming twice (window close, then RunEvent::Exit) starts one watchdog, not two.
+    #[test]
+    fn app050b2_the_quit_watchdog_arms_once_per_process() {
+        let flag = AtomicBool::new(false);
+        let mut spawned = 0;
+        let first = arm_once(&flag, || spawned += 1);
+        let second = arm_once(&flag, || spawned += 1);
+        assert_eq!(spawned, 1, "the watchdog was spawned {spawned} times");
+        assert!(first && !second, "first arming wins, later ones are no-ops");
+    }
 
     /// T-324-b-rest: only a Windows exit nobody asked for, or one the system says is a shutdown, is a session end.
     #[test]
