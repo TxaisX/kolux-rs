@@ -181,6 +181,19 @@ pub fn register(id: u32, rebuild: Rebuild) -> Arc<Engine> {
     e
 }
 
+/// Row 954f: a reopen right after a close can still see the old page's label; poll until `taken` is
+/// false or `budget` runs out (true = free). Never lets the caller reuse a page that is still there.
+pub fn wait_until_free(taken: impl Fn() -> bool, budget: Duration, step: Duration) -> bool {
+    let end = Instant::now() + budget;
+    while taken() {
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(step);
+    }
+    true
+}
+
 /// The tab's current engine record.
 pub fn current(id: u32) -> Option<Arc<Engine>> {
     ENGINES.lock().ok()?.get(&id).cloned()
@@ -421,5 +434,21 @@ mod tests {
         assert_eq!(e.container(), None);
         e.set_container(0x1234);
         assert_eq!(e.container(), Some(0x1234));
+    }
+
+    // Row 954f: a label that frees within the budget lets the open go ahead; one that never does is reported, not reused.
+    #[test]
+    fn wait_until_free_returns_once_the_label_frees_and_gives_up_otherwise() {
+        let polls = std::cell::Cell::new(0);
+        let frees_after_three = || {
+            polls.set(polls.get() + 1);
+            polls.get() <= 3
+        };
+        assert!(wait_until_free(frees_after_three, Duration::from_secs(5), Duration::from_millis(1)));
+        assert_eq!(polls.get(), 4);
+        let started = Instant::now();
+        assert!(!wait_until_free(|| true, Duration::from_millis(30), Duration::from_millis(5)));
+        assert!(started.elapsed() < Duration::from_secs(2), "bounded");
+        assert!(wait_until_free(|| false, Duration::ZERO, Duration::from_millis(1)), "already free: no wait");
     }
 }

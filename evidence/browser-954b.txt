@@ -83,6 +83,15 @@ LIVE PROOF PENDING (prover lane; loopback only, scratch profile; Windows)
  5. Also try the cross-origin case: a tab page at 127.0.0.1:A opens a popup at 127.0.0.1:B whose script runs opener.close().
     Expect the same as step 1.
 
+ROW 954f NOTE FOR THE "LIVE re-proof (MERGE 407) 2026-10-28" SECTION (placed here so the section on main merges cleanly; move it under that heading)
+ Cause of the "a webview with label `browser-N` already exists" alert (items 2 and 3): one destroy reached the pane twice (the dev
+ StrictMode mount leaked its event listeners), so two reopens ran at once; the loser's browser_open failed on the label and had
+ already replaced the tab's engine record, so the live page's next destroy was ignored and the cap was never reached.
+ Fixed: a pane runs one reopen at a time (src/browser/reopen.ts, a repeat auto rebuild is dropped), the cancelled mount unlistens,
+ browser_open waits up to 1.5 s for a closing page's label and records its engine only after the page exists.
+ Prover 11 should now see, at a 5.1 s cadence: rebuilds at 0 / 5.1 / 10.2 s, then the closed notice "This page keeps closing itself;
+ Kolux left it closed" at about 15.3 s; no "already exists" alert and no "stopped responding" overlay on the way; Retry still reopens.
+
 LIVE PROOF PENDING, ROW 954c (prover lane; loopback only, scratch profile; Windows)
  6. Which detector fires (H2). Run step 1 with a log line (or the tracing output) at selfclose::destroyed and
     selfclose::probe_missed. Record: close-request handler, probe IsWindow fallback, or both; and which came first. If only

@@ -1153,6 +1153,19 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         // Row 979: before any step that can fail, so a failed open never leaves an older tab's row for a later restore of this id.
         profiles::clear_stale_row(&dir, id, rebuild);
     }
+    // Row 954f: Tauri may still hold the label of the page this open replaces; wait a bounded time for it, never reuse it.
+    if app.get_webview(&label(id)).is_some() {
+        let probe = app.clone();
+        let name = label(id);
+        let free = tauri::async_runtime::spawn_blocking(move || {
+            selfclose::wait_until_free(|| probe.get_webview(&name).is_some(), Duration::from_millis(1500), Duration::from_millis(20))
+        })
+        .await
+        .unwrap_or(false);
+        if !free {
+            return Err(format!("browser tab {id} is still being closed; try again"));
+        }
+    }
     let url = parse(&url)?;
     notices::opening(id); // after-list 719: its notices wait for the pane's browser_pane_ready
     families().join(id, url.as_str(), Instant::now()); // T-272-c
@@ -1174,8 +1187,6 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let permission_app = app.clone();
     #[cfg(windows)]
     let self_close_app = app.clone();
-    // Row 954 (c): this build's own record of its destroy, shared by both detectors and the failure handler.
-    let engine_rec = selfclose::register(id, rebuild);
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
     let download_app = app.clone();
@@ -1376,6 +1387,9 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         None => builder,
     };
     let page = window.add_child(builder, LogicalPosition::new(spot.x, spot.y), LogicalSize::new(spot.w, spot.h)).map_err(err)?;
+    // Row 954 (c): this build's own record of its destroy, shared by both detectors and the failure handler.
+    // Row 954f: made only once the page exists, so an open that failed never replaces the live page's record.
+    let engine_rec = selfclose::register(id, rebuild);
     // T-272-d: remember the page's container window, so a keyboard chord can be checked against
     // the window that really holds the keyboard.
     #[cfg(windows)]
@@ -3248,6 +3262,35 @@ mod tests {
         let first_try = code.find(")?").expect("browser_open has fallible steps");
         assert!(clear < first_try, "the clear sits before the first `?` in browser_open");
         assert!(code.find("profiles::set_root(").unwrap() < clear, "the clear has its root");
+    }
+
+    /// browser_open's body without its comment lines, for the source-order ratchets below.
+    fn browser_open_code() -> String {
+        let src = include_str!("browser.rs").replace("\r\n", "\n"); // a Windows checkout is CRLF
+        let body = &src[src.find("pub async fn browser_open(").unwrap()..];
+        let body = &body[body.find(") -> Result<(), String> {\n").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        body.lines().filter(|l| !l.trim_start().starts_with("//")).map(|l| format!("{l}\n")).collect()
+    }
+
+    // Row 954f: a failed open (the label was taken) must not leave its engine record as the tab's current one,
+    // or the live page's next destroy is ignored and the loop cap is never reached.
+    #[test]
+    fn row_954f_browser_open_records_its_engine_only_once_the_page_exists() {
+        let code = browser_open_code();
+        let made = code.find("window.add_child(").expect("browser_open adds the page");
+        let record = code.find("selfclose::register(").expect("browser_open records the engine");
+        assert!(made < record, "selfclose::register comes after add_child");
+    }
+
+    // Row 954f: a reopen right after a close sees the label still registered; it waits a bounded time, never reuses the old page.
+    #[test]
+    fn row_954f_browser_open_waits_for_a_closing_pages_label_before_building() {
+        let code = browser_open_code();
+        let wait = code.find("selfclose::wait_until_free(").expect("browser_open waits for the label");
+        assert!(wait < code.find("window.add_child(").unwrap(), "the wait comes before the page is built");
+        assert!(wait < code.find("selfclose::register(").unwrap());
+        assert!(code.find("profiles::clear_stale_row(").unwrap() < wait, "the row-979 clear still comes first");
     }
 
     // Council FIX-3, AFTER 2: one overall time limit, however the fetch goes.
