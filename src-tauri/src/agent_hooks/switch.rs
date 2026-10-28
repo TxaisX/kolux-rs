@@ -81,7 +81,7 @@ pub fn set(dir: &Path, want: bool) -> Result<Value, String> {
     store.patch_settings(&set, &[]).map_err(|e| format!("{}: {e}", dir.display()))?;
     let settings = store.settings();
     drop(store);
-    let outcomes = super::outcomes(if want { sync(&settings, dir) } else { clear(dir) });
+    let outcomes = super::outcomes(if want { sync(&settings, dir) } else { clear(&settings, dir) });
     let mut out = report(&settings);
     out["changed"] = json!(outcomes);
     Ok(out)

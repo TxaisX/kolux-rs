@@ -524,6 +524,7 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
             },
             |dir| auth_status(&program, Some(dir)),
         );
+        let signed_in = result.as_ref().ok().map(|a| a.config_dir.clone());
         let sign_ins = app.state::<SignIns>();
         if let Ok(mut g) = sign_ins.attention.lock() {
             *g = result.err().filter(|e| e.reason != "cancelled");
@@ -533,6 +534,12 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
             *g = None;
         }
         let _ = app.emit(EVENT, ());
+        // Row 989: a pane on this account reads its own settings.json, so it gets Kolux's hooks now; after the card is released, on this worker thread, and nothing after a failed sign-in.
+        if let Some(dir) = signed_in {
+            if let Ok(Err(e)) = store.lock().map(|s| s.settings()).map(|s| crate::hooks::agent_hooks::install_claude_account(&s, &profile, Path::new(&dir))) {
+                eprintln!("kolux-rs: claude account hooks: {e}");
+            }
+        }
     });
     Ok(())
 }
@@ -591,6 +598,11 @@ pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Sto
 /// hands new panes back to the system default when it was the active one. Only a folder inside
 /// Kolux's own accounts folder is ever deleted.
 pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    remove_in(store, profile, id, &crate::hooks::agent_hooks::user_home())
+}
+
+/// `remove` with the home folder whose hooks install lock it takes named, so a test never touches the real one.
+pub(crate) fn remove_in(store: &Store, profile: &Path, id: &str, home: &Path) -> Result<(), String> {
     if !crate::cli_accounts::safe_id(id) {
         return Err("That Claude account id is not valid.".into());
     }
@@ -610,18 +622,29 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     let dir = PathBuf::from(&gone.config_dir);
     // Row 944: only the account's own folder directly under the accounts folder is deleted (a ".." or a nested path is not).
     if dir.parent() == Some(profile.join(FOLDER).as_path()) && dir.file_name().is_some_and(|n| n == id) {
-        crate::codex_accounts::remove_dir_patiently(&dir).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
+        // Row 989: under the hooks install lock, so a sign-in's hook install cannot recreate the folder as it goes.
+        crate::hooks::agent_hooks::with_install_lock(home, || crate::codex_accounts::remove_dir_patiently(&dir)).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
     }
     cleared
 }
 
+/// Off the window's thread: the folder delete can wait up to 5 s for the hooks install lock (row 989).
 #[tauri::command]
-pub fn claude_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
+pub async fn claude_account_remove(app: AppHandle, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
     if sign_ins.running.lock().map_err(|e| e.to_string())?.is_some() {
         return Err("Finish or cancel the sign-in first.".into());
     }
     let profile = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let result = remove(&*store.lock().map_err(|e| e.to_string())?, &profile, &id);
+    let result = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || {
+            let store = app.state::<Mutex<Store>>();
+            let guard = store.lock().map_err(|e| e.to_string())?;
+            remove(&guard, &profile, &id)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let _ = app.emit(EVENT, ());
     result
 }
@@ -728,14 +751,26 @@ pub fn active_dir(store: &Store) -> Option<String> {
 /// Same precedence as the pane's launch (`pane_env`): an active managed account outside key mode
 /// reads its own folder; otherwise the pane inherits the app's `process_file`.
 pub fn pane_config_file(store: &Store, process_file: PathBuf) -> PathBuf {
-    let settings = store.settings();
+    pane_config_dir(&store.settings(), active_dir(store)).map_or(process_file, |d| d.join(".claude.json"))
+}
+
+/// The `CLAUDE_CONFIG_DIR` the user set for Claude's panes (`agentOptions.claude.env`); the last
+/// line naming it wins, as in the pane's environment. Blank or relative counts as unset: Kolux
+/// cannot know what a relative folder is relative to.
+pub fn user_config_dir(settings: &Value) -> Option<PathBuf> {
+    let env = crate::agents::parse_env(crate::agents::option_field(settings, "claude", "env")?);
+    let named = |k: &str| if cfg!(windows) { k.eq_ignore_ascii_case(CONFIG_ENV) } else { k == CONFIG_ENV };
+    env.iter().rev().find(|(k, _)| named(k)).map(|(_, v)| PathBuf::from(v)).filter(|d| d.is_absolute())
+}
+
+/// The folder a new Claude pane runs with as `CLAUDE_CONFIG_DIR`, `None` = the app's own. The pane's
+/// order (terminal.rs applies the user's variables first, then Kolux's account variable): the
+/// active managed account (`pane_env`: not key mode, the program credited to Claude, so a custom
+/// command counts), else the user's own `CLAUDE_CONFIG_DIR`. Trust and the agent hooks both read it.
+pub fn pane_config_dir(settings: &Value, active_dir: Option<String>) -> Option<PathBuf> {
     let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(Value::as_str) == Some(crate::claude_key::KEY_MODE);
-    // The pane runs the user's own command when set, and only a command credited to Claude gets the account.
-    let program = crate::agents::command_override(&settings, "claude").unwrap_or("claude");
-    match pane_env(Some(program), key_mode, active_dir(store)) {
-        Some((_, dir)) => PathBuf::from(dir).join(".claude.json"),
-        None => process_file,
-    }
+    let program = crate::agents::command_override(settings, "claude").unwrap_or("claude");
+    pane_env(Some(program), key_mode, active_dir).map(|(_, d)| PathBuf::from(d)).or_else(|| user_config_dir(settings))
 }
 
 /// `pane_config_file` read from the live store at call time, so an account switch is honoured.
@@ -895,10 +930,10 @@ mod tests {
         store.set(LIST_KEY, &serde_json::to_string(&vec![a]).unwrap()).unwrap();
         let side = crate::orchestration::kept::Unreadable::new(&dir);
         assert!(mark_stale(&store, "a1", true).is_err());
-        assert!(remove(&store, &dir, "a1").is_err());
+        assert!(remove_in(&store, &dir, "a1", &dir.join("home")).is_err());
         side.restore();
         assert_eq!(mark_stale(&store, "a1", true), Ok(true));
-        assert!(remove(&store, &dir, "a1").is_ok());
+        assert!(remove_in(&store, &dir, "a1", &dir.join("home")).is_ok());
         assert!(load(&store).is_empty());
     }
 
@@ -1176,7 +1211,7 @@ mod tests {
         fs::write(&folder, "not a folder").unwrap();
         let vault = dir.join(secrets::VAULT).join("claude-a1.json");
         assert!(vault.is_file());
-        assert!(remove(&store.lock().unwrap(), &dir, "a1").is_err(), "the folder delete still reports its failure");
+        assert!(remove_in(&store.lock().unwrap(), &dir, "a1", &dir.join("home")).is_err(), "the folder delete still reports its failure");
         assert!(!vault.exists(), "the sealed copy is gone");
     }
 
@@ -1189,7 +1224,7 @@ mod tests {
         let s = store.lock().unwrap();
         let odd = Account { id: "..".into(), email: None, organization: None, config_dir: dir.join(FOLDER).join("..").to_string_lossy().into_owned(), last_sign_in: 1, stale: false };
         save(&s, &[odd]).unwrap();
-        assert!(remove(&s, &dir, "..").is_err(), "an unsafe id is refused");
+        assert!(remove_in(&s, &dir, "..", &dir.join("home")).is_err(), "an unsafe id is refused");
         assert!(marker.exists(), "the profile folder is still there");
     }
 
@@ -1204,7 +1239,7 @@ mod tests {
         let s = store.lock().unwrap();
         let odd = Account { id: "a1".into(), email: None, organization: None, config_dir: elsewhere.to_string_lossy().into_owned(), last_sign_in: 1, stale: false };
         save(&s, &[odd]).unwrap();
-        remove(&s, &dir, "a1").unwrap();
+        remove_in(&s, &dir, "a1", &dir.join("home")).unwrap();
         assert!(load(&s).is_empty(), "the account is unlisted");
         assert!(marker.exists(), "the folder outside the accounts folder is untouched");
     }
@@ -1217,7 +1252,7 @@ mod tests {
         let s = store.lock().unwrap();
         activate(&s, Some("a1")).unwrap();
         s.poison(ACTIVE_KEY);
-        assert!(remove(&s, &dir, "a1").is_err(), "the failure to clear the marker is still reported");
+        assert!(remove_in(&s, &dir, "a1", &dir.join("home")).is_err(), "the failure to clear the marker is still reported");
         assert!(load(&s).is_empty(), "the list was saved");
         assert!(!dir.join(secrets::VAULT).join("claude-a1.json").exists(), "the sealed copy is gone");
         assert!(!dir.join(FOLDER).join("a1").exists(), "and so is the folder");
@@ -1330,14 +1365,16 @@ mod tests {
         assert_eq!(active(&s).as_deref(), Some("a2"));
         assert!(activate(&s, Some("gone")).is_err());
         assert_eq!(active(&s).as_deref(), Some("a2"), "a failed change keeps the earlier choice");
-        remove(&s, &dir, "a2").unwrap();
+        let home = dir.join("scratch-home");
+        remove_in(&s, &dir, "a2", &home).unwrap();
+        assert!(home.join(".kolux-rs").join("agent-hooks").is_dir(), "the removal took the hooks install lock under the home it was given, not the real one");
         assert_eq!(active(&s), None, "the system default takes over");
         assert!(!dir.join(FOLDER).join("a2").exists() && !dir.join("vault").join("claude-a2.json").exists());
         assert_eq!(load(&s).len(), 1);
         activate(&s, Some("a1")).unwrap();
         activate(&s, None).unwrap();
         assert_eq!(active(&s), None, "the system default can be picked again");
-        assert!(remove(&s, &dir, "a2").is_err());
+        assert!(remove_in(&s, &dir, "a2", &home).is_err());
         drop(s);
     }
 
@@ -1551,5 +1588,42 @@ mod tests {
         assert_eq!(ctx.claude_config, t.account_file);
         crate::trust::trust_folders(&ctx.claude_config, "claude", std::slice::from_ref(&t.worktree)).unwrap();
         assert!(trusted_in(&t.account_file, &t));
+    }
+
+    // Row 989 ruling: a CLAUDE_CONFIG_DIR the user set in the pane env decides trust too, below the managed account.
+    fn own_config_dir(t: &Trust, line: &str) {
+        let set = serde_json::Map::from_iter([(crate::agents::OPTIONS_FIELD.to_string(), json!({ "claude": { "env": line } }))]);
+        t.store.lock().unwrap().patch_settings(&set, &[]).unwrap();
+    }
+
+    #[test]
+    fn row989_trust_follows_the_users_config_dir_when_no_account_is_active() {
+        let t = trust_fixture("row989-own", false);
+        let own = t.worktree.parent().unwrap().join("own-claude");
+        own_config_dir(&t, &format!("OTHER=1\nCLAUDE_CONFIG_DIR={}", own.display()));
+        assert_eq!(pane_config_file(&t.store.lock().unwrap(), t.process_file.clone()), own.join(".claude.json"));
+        crate::trust::trust_for_launch(&t.store, &t.process_file, "claude", std::slice::from_ref(&t.worktree)).unwrap();
+        assert!(trusted_in(&own.join(".claude.json"), &t), "the user's own folder carries the trust");
+        assert!(!t.process_file.exists());
+    }
+
+    #[test]
+    fn row989_an_active_account_wins_over_the_users_config_dir_and_key_mode_does_not() {
+        let t = trust_fixture("row989-both", true);
+        let own = t.worktree.parent().unwrap().join("own-claude");
+        own_config_dir(&t, &format!("claude_config_dir={}", own.display()));
+        let file = || pane_config_file(&t.store.lock().unwrap(), t.process_file.clone());
+        assert_eq!(file(), t.account_file, "Kolux's account variable is applied after the user's");
+        key_mode(&t);
+        assert_eq!(file(), own.join(".claude.json"), "key mode hands no account, so the user's own folder is what the pane gets");
+    }
+
+    #[test]
+    fn row989_a_blank_or_relative_user_config_dir_is_ignored() {
+        let t = trust_fixture("row989-rel", false);
+        for line in ["CLAUDE_CONFIG_DIR=", "CLAUDE_CONFIG_DIR=relative/dir", "NOT_IT=C:/x"] {
+            own_config_dir(&t, line);
+            assert_eq!(pane_config_file(&t.store.lock().unwrap(), t.process_file.clone()), t.process_file, "{line}");
+        }
     }
 }
