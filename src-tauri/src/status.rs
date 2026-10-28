@@ -147,6 +147,8 @@ pub struct Status {
 pub struct Session {
     /// The terminal the pane's hooks last reported for, so a keystroke can find the session.
     pub terminal: Option<u32>,
+    /// The agent whose hook last reported, so a typed keystroke knows whose prompt it lands on.
+    agent: Option<Agent>,
     /// The lead's own last state; `None` when Kolux holds nothing for it yet.
     own: Option<&'static str>,
     /// The tool the lead is waiting on a permission for; cleared only when that tool resumes.
@@ -233,15 +235,16 @@ impl Session {
     }
 
     fn reset(&mut self) {
-        let terminal = self.terminal;
+        let (terminal, agent) = (self.terminal, self.agent);
         let history = std::mem::take(&mut self.history);
-        *self = Session { terminal, history, ..Session::default() };
+        *self = Session { terminal, agent, history, ..Session::default() };
     }
 
     /// Folds one event in and says what the window should be told, or `None` when nothing changed.
     pub fn apply(&mut self, agent: Agent, event: &Value) -> Option<(Change, Option<String>)> {
         let name = event.get("hook_event_name")?.as_str()?;
         self.signal();
+        self.agent = Some(agent);
         let before = self.resolved();
         let mut announce = None;
         // Council FIX-3 (chat e5412ff, FS1): the tool a sub-agent just started, named on the change.
@@ -460,6 +463,17 @@ impl Session {
             self.cancelled = true;
             self.cancelled_at = now_ms();
             self.killed.clone_from(&self.tools);
+        }
+    }
+
+    /// Ctrl+C or Escape typed into the pane (terminal_write and the CLI's interrupt reach here).
+    /// VIEW-025 b3: at a Claude hook permission prompt a typed Esc (or Ctrl+C, which the caller cannot
+    /// tell apart) is the deny, answered like a card's; Codex keeps its prompt and its own hooks.
+    pub fn typed_cancel(&mut self) {
+        if self.agent == Some(Agent::Claude) && self.own == Some("permission") && self.pending.is_some() {
+            self.answer(Agent::Claude, false);
+        } else {
+            self.cancel();
         }
     }
 
@@ -867,7 +881,7 @@ pub fn limit_stops() -> Vec<(u32, Stop)> {
 pub fn cancel(terminal: u32) {
     with_sessions(|s| {
         for session in s.values_mut().filter(|x| x.terminal == Some(terminal)) {
-            session.cancel();
+            session.typed_cancel();
         }
     });
 }
@@ -1709,6 +1723,34 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("done"));
         assert!(!s.settle_cancel(at + CANCEL_GRACE_MS));
         assert_eq!(s.resolved(), "done");
+    }
+
+    #[test]
+    fn view025b3_esc_typed_at_a_claude_permission_prompt_settles_interrupted_like_a_card_deny() {
+        let mut s = asking();
+        assert!(s.answerable());
+        s.typed_cancel();
+        assert!(s.cancelled, "the typed Esc answered the prompt and marked the cancel");
+        assert_eq!(s.resolved(), "working", "the prompt is gone");
+        assert!(!s.answerable());
+        assert!(!s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS - 1), "Claude gets its moment first");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS), "Claude fires no hook after Esc: the quiet turn was interrupted");
+        assert_eq!(s.resolved(), "interrupted");
+        // Codex keeps its own prompt: its turn goes on and reports, so nothing is marked.
+        let mut c = Session::default();
+        c.apply(Agent::Codex, &ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#));
+        c.apply(Agent::Codex, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#));
+        assert_eq!(c.resolved(), "permission");
+        c.typed_cancel();
+        assert!(!c.cancelled && !c.settle_cancel(u64::MAX));
+        assert_eq!(c.resolved(), "permission");
+        // A working Claude lead keeps STAT-028's rule.
+        let mut w = Session::default();
+        state(&mut w, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        w.typed_cancel();
+        assert!(w.cancelled);
+        assert!(w.settle_cancel(w.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(w.resolved(), "interrupted");
     }
 
     #[test]
