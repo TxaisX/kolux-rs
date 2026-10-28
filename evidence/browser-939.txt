@@ -49,3 +49,12 @@ Further checks with the patch applied:
  (d) A popup from a proxied tab goes through the stub.
  (e) PDF export still works.
  (f) A WebRTC STUN test page, observe-only: evidence for a follow-up row (WebRTC flags are not touched here).
+
+FOLLOW-UP 939b (lane/browser-proxy, Sonnet 5.5, 2026-10-27)
+- Settings load with settings.json missing and settings.json.bak present: state.rs:147-150 try_settings and state.rs:171-172 read_file read it as {} (only a file that exists but is corrupt falls back to the .bak). Direction: follow it, fail closed.
+  - recovery.rs saved_proxy_in: a missing settings.json gives the window no proxy (before, it took the .bak's). test row939b_a_missing_settings_file_gives_the_window_no_proxy_even_with_a_last_good_copy.
+  - browser.rs proxy_in_profile (saved_proxy): settings.json missing and the .bak names a proxy, or is unreadable, is the "can't read its settings" refusal, so the tab, the icon fetch and the HEAD probe all refuse. test row939b_a_missing_settings_file_with_a_proxy_in_the_last_good_copy_refuses_everything. Consequence: until a settings save recreates settings.json, tabs refuse in that state.
+- Port 0 refuses with the shape message: row939b_port_zero_refuses.
+- proxy_of refuses a setting with a control character (the URL parser drops tabs and newlines, so http://[::1<newline>]:8080 passed as http://[::1]:8080). row939b_odd_host_shapes_refuse_instead_of_going_direct also pins [::1]=x, an IPv6 zone id, %0A/%0D in the host and a newline before `=`.
+- Red first: G:/Temp/browser-939b/red.log (4 failed: both missing-file tests, port 0 accepted, the newline-inside-brackets shape accepted).
+LIVE PROOF PENDING (add): 10. Stop Kolux, delete settings.json but keep settings.json.bak naming a proxy, start Kolux: the window has no --proxy-server, a tab refuses with "Kolux can't read its settings...", and the stub and a network capture show nothing direct (no icon fetch either).
