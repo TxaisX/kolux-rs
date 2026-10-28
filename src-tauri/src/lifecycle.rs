@@ -457,11 +457,12 @@ pub fn close_requested<R: tauri::Runtime>(window: &tauri::Window<R>) {
         std::thread::sleep(ASK_LIMIT);
         let main = app.get_webview_window("main");
         if close_verdict(answered(seq), main.is_none()) == Verdict::Destroy {
-            if let Ok(dir) = app.path().app_data_dir() {
-                crate::diag::write(&dir, &format!("close: the page did not answer within {} s; closing the window for it (APP-006)", ASK_LIMIT.as_secs()));
-            }
+            // Destroy first: the log write can stall on an oplocked kolux.log, and the window going is what arms the quit watchdog.
             if let Some(w) = main {
                 let _ = w.destroy();
+            }
+            if let Ok(dir) = app.path().app_data_dir() {
+                crate::diag::write(&dir, &format!("close: the page did not answer within {} s; closing the window for it (APP-006)", ASK_LIMIT.as_secs()));
             }
         }
     });
@@ -526,7 +527,8 @@ pub fn quit_watchdog<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         std::thread::spawn(move || {
             let log = move || {
                 if let Some(dir) = dir {
-                    crate::diag::write(&dir, &format!("quit: still running {} s after the window closed; exiting now (APP-006)", quit_deadline().as_secs()));
+                    let (sleep, deadline) = (watchdog_sleep(quit_deadline()), quit_deadline());
+                    crate::diag::write(&dir, &format!("quit: still running {:.1} s after the window closed; exiting before the {} s deadline (APP-006)", sleep.as_secs_f64(), deadline.as_secs()));
                 }
             };
             watchdog_run(quit_deadline(), log, || std::process::exit(0));
@@ -546,10 +548,11 @@ fn arm_once(flag: &AtomicBool, spawn: impl FnOnce()) -> bool {
     true
 }
 
-/// The watchdog body: wait out the deadline, log, exit. The log write may stall on the profile
-/// drive (an oplock held elsewhere), so it runs detached and is waited for only briefly.
+/// The watchdog body: sleep until `watchdog_sleep(deadline)`, log, exit, so the exit call lands inside the total
+/// `deadline`. The log write may stall on the profile drive (an oplock held elsewhere), so it runs detached
+/// and is waited for only briefly.
 fn watchdog_run(deadline: Duration, log: impl FnOnce() + Send + 'static, exit: impl FnOnce()) {
-    std::thread::sleep(deadline);
+    std::thread::sleep(watchdog_sleep(deadline));
     let (done, wait) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         log();
@@ -560,6 +563,14 @@ fn watchdog_run(deadline: Duration, log: impl FnOnce() + Send + 'static, exit: i
 }
 
 const WATCHDOG_LOG_WAIT: Duration = Duration::from_millis(500);
+
+/// Room for process teardown after the exit call (measured 15.7 s and 15.8 s against the 15 s box).
+const EXIT_MARGIN: Duration = Duration::from_secs(1);
+
+/// How long the watchdog sleeps before it logs, so the exit call lands inside the total `deadline`.
+fn watchdog_sleep(deadline: Duration) -> Duration {
+    deadline.saturating_sub(WATCHDOG_LOG_WAIT).saturating_sub(EXIT_MARGIN)
+}
 
 // ---------------------------------------------------------------- APP-011: the save point
 
@@ -717,15 +728,26 @@ mod tests {
 
     use super::*;
 
-    /// APP-050 b2: the kill-switch fires on time even when the profile log write stalls.
+    /// APP-050 b2 (row 979): given the TOTAL deadline, the exit lands inside it even while the log write stalls.
     #[test]
     fn app050b2_the_quit_watchdog_exits_on_time_while_the_log_write_is_stalled() {
+        let deadline = Duration::from_secs(2);
         let start = std::time::Instant::now();
         let mut exited = None;
-        watchdog_run(Duration::from_millis(100), || std::thread::sleep(Duration::from_secs(5)), || exited = Some(start.elapsed()));
+        watchdog_run(deadline, || std::thread::sleep(Duration::from_secs(5)), || exited = Some(start.elapsed()));
         let at = exited.expect("the watchdog exits");
-        assert!(at >= Duration::from_millis(100), "exit came {at:?} after the start, before the deadline");
-        assert!(at < Duration::from_millis(100) + Duration::from_secs(1), "exit came {at:?} after the start; a stalled log write held it");
+        assert!(at >= deadline - WATCHDOG_LOG_WAIT - EXIT_MARGIN, "exit came {at:?}, before the sleep and log wait had run");
+        // Lands near deadline - EXIT_MARGIN; the bound is the deadline itself so a loaded runner can't flake it.
+        assert!(at < deadline, "exit came {at:?}; past the {deadline:?} deadline");
+    }
+
+    /// APP-050 box 2 (row 979): sleep + log wait + teardown margin fit the quit deadline, and a normal quit (grok hooks, final save, WebView2 wait) finishes first.
+    #[test]
+    fn app050b2_the_watchdog_sleep_leaves_room_for_the_log_wait_and_teardown_inside_the_quit_deadline() {
+        let sleep = watchdog_sleep(quit_deadline());
+        assert!(sleep + WATCHDOG_LOG_WAIT + EXIT_MARGIN <= quit_deadline(), "sleep {sleep:?} + log wait + margin overshoots {:?}", quit_deadline());
+        let normal_quit = crate::hooks::agent_hooks::more::grok::QUIT_LIMIT + final_save::QUIT_DEADLINE + crate::tools::WEBVIEW_EXIT_WAIT;
+        assert!(sleep >= normal_quit, "watchdog sleep {sleep:?} fires before a normal quit ({normal_quit:?}) can finish");
     }
 
     /// APP-050 b2: arming twice (window close, then RunEvent::Exit) starts one watchdog, not two.

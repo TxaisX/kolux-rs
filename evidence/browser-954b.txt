@@ -165,3 +165,12 @@ LIVE re-proof (MERGE 412) 2026-10-28 (scripts/prove/live-browser-977.mjs, hidden
   PASS 17: a background `tab create` leaves the keyboard in the terminal: {"cls":"xterm-helper-textarea","tag":"TEXTAREA","label":"Terminal input"}
   PASS 17: a browser tab the user opens (Ctrl+Shift+B; Ctrl+T opens a shell) takes the keyboard for its address bar: {"cls":"address","tag":"INPUT","label":"Address"}
   NOTE (one-reading): the card says "Ctrl+T"; in this build Ctrl+T opens a shell (tab.newShell) and Ctrl+Shift+B opens a browser tab (tab.newBrowser), so the address-bar-focus half of step 17 was proven with Ctrl+Shift+B. The "Not now" button of the "Let your agents drive Kolux" tip card was clicked after each launch (harness only). The restore notice is the toolbar badge, read while visiting each tab (it shows 10 s).
+
+ROW 954f NOTE FOR THE "LIVE re-proof (MERGE 407) 2026-10-28" SECTION (placed here so the section on main merges cleanly; move it under that heading)
+ Cause of the "a webview with label `browser-N` already exists" alert (items 2 and 3): one destroy reached the pane twice (the dev
+ StrictMode mount leaked its event listeners), so two reopens ran at once; the loser's browser_open failed on the label and had
+ already replaced the tab's engine record, so the live page's next destroy was ignored and the cap was never reached.
+ Fixed: a pane runs one reopen at a time (src/browser/reopen.ts, a repeat auto rebuild is dropped), the cancelled mount unlistens,
+ browser_open waits up to 1.5 s for a closing page's label and records its engine only after the page exists.
+ Prover 11 should now see, at a 5.1 s cadence: rebuilds at 0 / 5.1 / 10.2 s, then the closed notice "This page keeps closing itself;
+ Kolux left it closed" at about 15.3 s; no "already exists" alert and no "stopped responding" overlay on the way; Retry still reopens.

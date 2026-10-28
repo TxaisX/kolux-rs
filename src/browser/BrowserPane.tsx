@@ -394,7 +394,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         }),
       );
       startBridge();
-      if (!alive) return;
+      if (!alive) {
+        unlisteners.forEach((u) => u()); // cleanup ran before these were registered (a dev double mount): they would feed every event twice
+        return;
+      }
       try {
         // T-241 (BROW-039): a tab the app opens on a document's path previews it (the loopback address is never shown).
         const doc = documentPathOf(url);

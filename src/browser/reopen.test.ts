@@ -281,3 +281,95 @@ describe("row 979 (F2): the address bar takes the keyboard only for a focused, n
     expect(src).not.toMatch(/^\s*bar\.current\?\.focus\(\)/m); // never an unconditional focus
   });
 });
+
+// Row 954f: a page that closes itself twice got "a webview with label browser-N already exists" on its second
+// rebuild and its loop cap was never reached. Cause: one destroy reached the pane twice (the dev build's
+// first mount left its listeners behind), so two reopens ran at once and the losing open left a ghost engine record.
+describe("row 954f: a pane never runs two reopens at once", () => {
+  const settle = () => new Promise<void>((r) => setTimeout(r, 5));
+  /** A back end whose browser_open takes a moment, recording how many opens overlap. */
+  const slowOpens = () => {
+    const log: string[] = [];
+    const seen = { inFlight: 0, most: 0 };
+    const call: Call = async (cmd, args) => {
+      log.push(`${cmd}:${args.id}`);
+      if (cmd !== "browser_open") return;
+      seen.inFlight += 1;
+      seen.most = Math.max(seen.most, seen.inFlight);
+      await settle();
+      seen.inFlight -= 1;
+    };
+    return { log, seen, call };
+  };
+  const opens = (log: string[], id: number) => log.filter((l) => l === `browser_open:${id}`).length;
+
+  it("the same destroy heard twice (two automatic requests) rebuilds the page once", async () => {
+    const { log, seen, call } = slowOpens();
+    await Promise.all([reopenPage(call, 7, at), reopenPage(call, 7, at)]);
+    expect(opens(log, 7)).toBe(1);
+    expect(seen.most).toBe(1);
+  });
+
+  it("Retry pressed while a rebuild runs waits for it, then opens once more, never alongside", async () => {
+    const { log, seen, call } = slowOpens();
+    await Promise.all([reopenPage(call, 7, at), reopenPage(call, 7, at, "retry")]);
+    expect(opens(log, 7)).toBe(2);
+    expect(seen.most).toBe(1);
+    expect(log.slice(0, 4)).toEqual(["browser_close:7", "browser_open:7", "browser_pane_ready:7", "browser_close:7"]);
+  });
+
+  it("a profile change while a rebuild runs also waits, and the latest of several waiting asks wins", async () => {
+    const { seen, call } = slowOpens();
+    const profiles: unknown[] = [];
+    const watching: Call = async (cmd, args) => {
+      if (cmd === "browser_open") profiles.push(args.profile);
+      return call(cmd, args);
+    };
+    await Promise.all([reopenPage(watching, 7, at), reopenPage(watching, 7, { ...at, profile: "work" }), reopenPage(watching, 7, { ...at, profile: "alt" })]);
+    expect(seen.most).toBe(1);
+    expect(profiles).toEqual([undefined, "alt"]);
+  });
+
+  it("another pane's rebuild is not held up", async () => {
+    const { log, seen, call } = slowOpens();
+    await Promise.all([reopenPage(call, 7, at), reopenPage(call, 8, at)]);
+    expect(opens(log, 7)).toBe(1);
+    expect(opens(log, 8)).toBe(1);
+    expect(seen.most).toBe(2);
+  });
+
+  it("a second destroy after the first rebuild ended rebuilds again (the cap lives in the back end)", async () => {
+    const { log, call } = slowOpens();
+    await reopenPage(call, 7, at);
+    await reopenPage(call, 7, at);
+    expect(opens(log, 7)).toBe(2);
+  });
+
+  it("a rebuild whose open failed does not block the next one", async () => {
+    let fail = true;
+    const log: string[] = [];
+    const call: Call = async (cmd) => {
+      log.push(cmd);
+      if (cmd === "browser_open" && fail) throw new Error("boom");
+    };
+    await expect(reopenPage(call, 7, at)).rejects.toThrow("boom");
+    fail = false;
+    await reopenPage(call, 7, at, "retry");
+    expect(log.filter((c) => c === "browser_open")).toHaveLength(2);
+  });
+
+  it("a page that unmounted before the queued ask ran is left alone", async () => {
+    const { log, call } = slowOpens();
+    let mounted = true;
+    const live = { alive: () => mounted, sync: () => {} };
+    const first = reopenPage(call, 7, at, "auto", live);
+    const second = reopenPage(call, 7, at, "retry", live);
+    mounted = false;
+    await Promise.all([first, second]);
+    expect(opens(log, 7)).toBe(0);
+  });
+
+  it("BrowserPane lets go of the listeners a cancelled mount registered while it was still starting", () => {
+    expect(src).toMatch(/if \(!alive\) \{\s*unlisteners\.forEach\(\(u\) => u\(\)\);[^\n]*\s*return;\s*\}/);
+  });
+});
