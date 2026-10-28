@@ -263,6 +263,23 @@ function jobs(label) {
     if (j !== "False") voided ??= `terminal service pid ${s.pid} reads IsProcessInJob ${j} at ${label}`;
   }
 }
+// Kills what a quit left of the app's tree, except terminal services and everything under them (their conhost/shell
+// pairs are the live terminals APP-052 keeps; the tree walk puts a reused service inside the launching app's tree).
+async function killStrays(survivors, label) {
+  const keep = new Set(services().map((s) => s.pid));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const s of survivors) if (!keep.has(s.pid) && keep.has(s.ppid)) (keep.add(s.pid), (grew = true));
+  }
+  const kept = survivors.filter((s) => keep.has(s.pid));
+  const kill = survivors.filter((s) => !keep.has(s.pid));
+  log(`${label}: kept ${kept.length} service/service terminal processes (${app.byName(kept)}); killing ${kill.length} (${app.byName(kill)})`);
+  await app.killAll(kill);
+}
+// What each shown terminal pane says after a relaunch, read before any click clears the restored mark. The pane key
+// comes from its sidebar row (data-pane), matched by title; the pane DOM itself carries no key.
+const paneStates = () =>
+  app.evalJs(`[...document.querySelectorAll(${JSON.stringify(TERM)})].filter(e => e.offsetParent !== null).map((p, i) => { const title = (p.getAttribute("aria-label") ?? "").replace(/ pane$/, ""); const row = [...document.querySelectorAll(".sess.pane-row[data-pane]")].find(r => r.title === "Show " + title); return { i, title, key: row?.dataset.pane ?? null, restored: p.querySelector(".status.restored")?.textContent.trim() ?? null }; })`);
 // The Tip card ignores Escape; its own button is "Not now".
 async function dismissTip() {
   if (await app.clickWhere('[role="dialog"] button', "/^\\s*Not now\\s*$/").then(() => true, () => false)) {
@@ -278,7 +295,7 @@ async function back(label) {
   await sleep(4000);
   await dismissTip(); // it can open after the panes
   jobs(label);
-  log(`reattach ${label}: ${takenBackLine()}`);
+  log(`reattach ${label}: ${takenBackLine()}; panes ${JSON.stringify(await paneStates())}`);
 }
 async function closeNoCdp(pid) {
   const r = ps(`$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.CloseMainWindow() } else { 'gone' }`);
@@ -412,7 +429,7 @@ try {
     const closed = await app.closeAndCount(app.pid);
     const left = mine();
     log(`round ${round} quit: ${closed.how}; survivors ${closed.survivors.length} (${app.byName(closed.survivors)}); services still running after the quit: ${JSON.stringify(left.map((s) => s.pid))}`);
-    await app.killAll(closed.survivors.filter((s) => !left.some((m) => m.pid === s.pid)));
+    await killStrays(closed.survivors, `round ${round} quit`);
     await launch(`relaunch ${round}`);
     await back(`relaunch ${round}`);
     const l = await paneLines(-1);
@@ -441,7 +458,7 @@ try {
     await sleep(2000);
     const closed = await app.closeAndCount(app.pid);
     log(`b2 quit: ${closed.how}; survivors ${closed.survivors.length} (${app.byName(closed.survivors)})`);
-    await app.killAll(closed.survivors.filter((s) => !mine().some((m) => m.pid === s.pid)));
+    await killStrays(closed.survivors, "b2 quit");
     await launch("relaunch after the kill");
     await back("relaunch after the kill");
     const l = await paneLines(-1);
@@ -450,7 +467,7 @@ try {
   }
   const closed = await app.closeAndCount(app.pid);
   log(`quit before the Start menu launch: ${closed.how}; survivors ${closed.survivors.length} (${app.byName(closed.survivors)})`);
-  await app.killAll(closed.survivors.filter((s) => !mine().some((m) => m.pid === s.pid)));
+  await killStrays(closed.survivors, "quit before the Start menu launch");
   app.pid = null;
 
   // Item 5: the Start menu shortcut through Explorer, no CDP.
