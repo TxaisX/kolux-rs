@@ -34,7 +34,8 @@ WHAT THE USER SEES
 - A popup kills the tab: the tab blinks and comes back on the same address (a fresh load, so unsaved page state is lost), with the
   line "This page closed itself; Kolux reopened it". No "stopped responding" overlay.
 - A page that does it in a loop (row 954c): the tab is left closed after 2 rebuilds inside 10 s, OR 3 inside 5 minutes (a page
-  closing itself every 5.1 s therefore stops at the third). Once closed it stays closed: only Retry reopens it, and Retry also
+  closing itself every 5.1 s is reopened at 0, 5.1 and 10.2 s, then left closed at 15.3 s: three rebuilds, closed on the fourth
+  request). Once closed it stays closed: only Retry reopens it, and Retry also
   clears the record. The destroyed page is closed for real (browser_close), so it stops running and its popup goes.
   Other tabs and the rest of the app are unaffected.
 - A rebuild keeps the tab's profile (the saved one, so cookies survive), never takes keyboard focus, and re-applies where the
@@ -88,12 +89,15 @@ LIVE PROOF PENDING, ROW 954c (prover lane; loopback only, scratch profile; Windo
     the probe fallback ever fires, the tab shows the loading state until the next probe (a few seconds): note the delay.
  7. Profile (H1). Give the tab the profile "work" (kolux tab profile), set a cookie on the loopback page, run step 1. Expect: the
     rebuilt page still sends the cookie and "kolux tab list" still says "work". Then open a NEW tab that reuses the closed tab's
-    id and check it runs in the default profile, not "work".
+    id and check it runs in the default profile, not "work". (Row 954d, N1.) For that reused-id default tab, open a loopback page
+    that closes itself (step 1) and let it rebuild: it must stay in the default profile (no "work" cookie sent, "kolux tab list"
+    says default). Then crash it (kill its renderer) and press Retry: it must still be default. Finally repeat both on a real
+    "work" tab: it must keep "work" through the rebuild and the Retry.
  8. Hidden pane (H4). Switch to another tab so the first tab's pane is hidden, run step 1 in the hidden tab (open it via a script
     timer). Expect: the rebuilt tab stays hidden, and the keyboard stays where it was (type in the visible tab). If the hidden
     rebuilt page holds the keyboard anyway (skipping set_focus can leave it on the new page), report it.
- 9. Cadence (H3/H4). A page that calls the popup trick every 5.1 s for 60 s. Expect: rebuilt twice, then closed at the third
-    (3 inside 5 min); it stays closed with no further rebuild; Retry reopens it and starts the count again.
+ 9. Cadence (H3/H4). A page that calls the popup trick every 5.1 s for 60 s. Expect: reopened at 0 / 5.1 / 10.2 s (three rebuilds),
+    left closed at 15.3 s (the fourth request); it stays closed with no further rebuild; Retry reopens it and starts the count again.
 10. Network after LeaveClosed (H3). With the page from step 9 closed, watch the loopback server's request log for 30 s. Expect no
     further requests from the destroyed page (browser_close ended it). Also check the process list: its WebView2 renderer is gone.
 11. ProcessFailed after the destroy. Watch the crash folder and the overlay across steps 1 and 9. Expect no crash report and no
@@ -102,3 +106,8 @@ LIVE PROOF PENDING, ROW 954c (prover lane; loopback only, scratch profile; Windo
     steal focus from where the user last clicked or typed.
 13. Pane unmount (H5). Start step 1 and close the tab's pane within a moment (close the tab while it rebuilds). Expect no orphan
     window left shown or focused; "kolux tab list" lists no ghost.
+14. Hidden tab destroyed with no close event (row 954d, H2). Put the page of tab A in the background (switch to tab B), then end tab
+    A's container window without a close request (script popup trick with the close event suppressed, or close the engine window
+    from outside). No event reaches the app while A is hidden. Show tab A again. Expect: the first probe after it is shown gets no
+    answer, selfclose::probe_missed finds the container gone (also when the probe's query could not be sent at all), and the tab
+    is rebuilt at its URL with the notice "This page closed itself; Kolux reopened it" (once, not a crash overlay).
