@@ -40,8 +40,8 @@ Rules: Kolux adds its own entries to each agent's per-user hook settings so stat
   is folded onto one line and long orchestration preambles are shortened, while question and plan
   text keeps its line breaks.
 Acceptance:
-  - [ ] Start Claude Code and send a prompt → the pane shows working within about a second, and done
-        once the reply ends.
+  - [x] Start Claude Code and send a prompt → the pane shows working within about a second, and done
+        once the reply ends. (cards live; evidence/cards-STAT-001.txt)
   - [x] Make the agent ask for permission to use a tool → the pane changes to needs you. (cards; evidence/cards-STAT-001.txt)
   - [ ] Repeat with Codex and Gemini CLI on a fresh machine → the same changes, with no manual setup.
 Compat: the listener runs on this computer only; each terminal Kolux opens is handed the address,
