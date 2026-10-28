@@ -33,7 +33,7 @@ import { afterRefresh, commitBox, mainStep, statusGuard } from "./rules";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
 import { HistoryLoads, acceptHistory, historyFor, type LoadedHistory } from "./history";
-import { LINES_SKIPPED_NOTE, canCommit, changeCount, cutBanner, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, filterRows, fullPath } from "./model";
+import { LINES_SKIPPED_NOTE, canCommit, changeCount, cutBanner, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, prRowText, withPr, needsGitHub, type Pr, type PrAnswer, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, filterRows, fullPath } from "./model";
 
 type Props = {
   /** Row 838: a status to show before the first read (tests render without a back end). */
@@ -386,9 +386,9 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
   const lookUp = useCallback(() => {
     if (dir === null) return;
     setLook((l) => ({ ...l, loading: true }));
-    invoke<Pr | null>("scm_pr", { worktree: dir, linked: linkedPr })
-      .then((pr) => {
-        setLook((l) => prLooked(l, { pr }));
+    invoke<PrAnswer>("scm_pr", { worktree: dir, linked: linkedPr })
+      .then((answer) => {
+        setLook((l) => prLooked(l, answer));
         setLooked({ at: Date.now(), fails: 0 });
       })
       .catch((err) => {
@@ -402,10 +402,13 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
   const linkPr = async () => {
     if (!linking || dir === null) return;
     try {
-      const pr = await invoke<Pr | null>("scm_pr", { worktree: dir, linked: linking.url.trim() });
+      const answer = await invoke<PrAnswer>("scm_pr", { worktree: dir, linked: linking.url.trim() });
+      // A remote that is not GitHub was not asked, so nothing was checked: keep no link.
+      const block = needsGitHub("Linking", answer.provider, answer.host);
+      if (block) return setLinking({ ...linking, error: block });
       onLinkPr(linking.url.trim());
       setLinking(null);
-      setLook({ loading: false, pr, error: null });
+      setLook({ loading: false, pr: answer.pr, error: null });
     } catch (err) {
       setLinking({ ...linking, error: String(err) });
     }
@@ -930,7 +933,7 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
                     </span>
                   </>
                 ) : (
-                  <span className="scm-prtitle muted">{look.loading ? "Checking for a pull request\u2026" : (look.error ?? (lookKey ? "No pull request for this branch" : "Pull requests are looked up once the branch is published, off the base branch"))}</span>
+                  <span className="scm-prtitle muted">{prRowText(look, !!lookKey)}</span>
                 )}
                 {lookKey && (
                   <button className="btn" data-pr-refresh title="Look up the pull request again now" disabled={look.loading} onClick={lookUp}>
@@ -942,7 +945,7 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
                     Merge{"…"}
                   </button>
                 )}
-                <button className="btn" title="Link another pull request by its link" onClick={() => setLinking({ url: "", error: null })}>
+                <button className="btn" title={needsGitHub("Linking", look.provider, look.host) ?? "Link another pull request by its link"} disabled={needsGitHub("Linking", look.provider, look.host) !== null} onClick={() => setLinking({ url: "", error: null })}>
                   Link{"\u2026"}
                 </button>
                 {linkedPr && (

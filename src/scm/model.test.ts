@@ -1,7 +1,7 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { describe, expect, it, test } from "vitest";
 import { cutBanner, changeCount as countOf } from "./model";
-import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, pushTarget, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
+import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, pushTarget, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, prRowText, withPr, createBlock, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -60,6 +60,42 @@ test("GIT-027: the pull request refreshes itself, backs off after failures and k
   // An answer replaces it, a branch with none included.
   expect(prLooked(known, { pr: { ...pr, state: "MERGED" } })).toEqual({ loading: false, pr: { ...pr, state: "MERGED" }, error: null });
   expect(prLooked(known, { pr: null })).toEqual({ loading: false, pr: null, error: null });
+});
+
+test("row 953: a provider answer is kept by the look and a GitHub answer clears it", () => {
+  const known: PrLook = { loading: true, pr: null, error: null };
+  const gitlab = prLooked(known, { pr: null, provider: "gitlab", host: "gitlab.com" });
+  expect(gitlab).toEqual({ loading: false, pr: null, error: null, provider: "gitlab", host: "gitlab.com" });
+  expect(prLooked(gitlab, { pr: null })).toEqual({ loading: false, pr: null, error: null });
+  // An error means gh was asked, so the remote resolved as GitHub: the old provider is stale.
+  expect(prLooked(gitlab, { error: "x" })).toEqual({ loading: false, pr: null, error: "x" });
+});
+
+test("row 953: the PR row says it was not looked up on a remote that is not GitHub, never 'No pull request'", () => {
+  const none = "No pull request for this branch";
+  const gitlab: PrLook = { loading: false, pr: null, error: null, provider: "gitlab", host: "gitlab.com" };
+  const text = "Finding a pull request from Kolux needs a GitHub remote; gitlab.com is not one.";
+  expect(prRowText(gitlab, true)).toBe(text);
+  expect(prRowText(gitlab, true)).not.toBe(none);
+  expect(prRowText({ ...gitlab, provider: "none", host: null }, true)).toBe("Finding a pull request from Kolux needs a GitHub remote; this repository has no remote.");
+  expect(prRowText({ ...gitlab, loading: true }, true)).toBe(text);
+  const github: PrLook = { loading: false, pr: null, error: null };
+  expect(prRowText(github, true)).toBe(none);
+  expect(prRowText(github, false)).toBe("Pull requests are looked up once the branch is published, off the base branch");
+  expect(prRowText({ ...github, error: "boom" }, true)).toBe("boom");
+  expect(prRowText({ ...github, loading: true }, true)).toBe("Checking for a pull request…");
+});
+
+test("row 953: on a remote that is not GitHub the create reason is the neutral line, never gh's error", () => {
+  const ready: Status = { ...emptyStatus, branch: "feat", upstream: "origin/feat", base: "origin/main" };
+  const gitlab: PrLook = { loading: false, pr: null, error: null, provider: "gitlab", host: "gitlab.com" };
+  const text = "Creating a pull request from Kolux needs a GitHub remote; gitlab.com is not one.";
+  expect(prReason(ready, gitlab)).toBe(text);
+  expect(prReason(ready, gitlab)).toBe(createBlock("gitlab", "gitlab.com"));
+  expect(prReason(ready, { ...gitlab, error: "To authenticate, run gh auth login" })).toBe(text);
+  expect(prReason(ready, { ...gitlab, provider: "none", host: null })).toBe("Creating a pull request from Kolux needs a GitHub remote; this repository has no remote.");
+  expect(prReason(ready, { ...gitlab, provider: "github", host: null })).toBeNull();
+  expect(withPr(nextStep(ready, ""), ready, gitlab)).toEqual({ label: "Create pull request", action: "pr", reason: text });
 });
 
 test("GIT-025: a hand-linked pull request is kept per workspace and flagged when its branch differs", () => {

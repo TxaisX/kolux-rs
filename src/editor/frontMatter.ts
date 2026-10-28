@@ -4,6 +4,7 @@
 // byte as it was. The text here is the buffer's (CodeMirror joins lines with \n; the file's own
 // line ends are put back when it is written).
 import { diff } from "@codemirror/merge";
+import { keepFileLines } from "./fileLineKeeping";
 import { saveBreaksInvariant } from "./richSaveInvariant";
 import { changeBetween, htmlTagsOf, limitsOf, RICH_LIMIT, roundTrip, unsupported, WORD, wordSpans, type Span } from "./markdown";
 
@@ -490,6 +491,12 @@ function placeIn(body: string, out: string, prev: string, e: Edit, bw: Span[], p
     const ctx = cand.slice(w.b.s - lead, w.b.e + cand.length - body.length);
     return (!fine || shape(ctx) === shape(bodyCtx)) && limitsOf(wide(cand, w.b.s - lead, w.b.e + cand.length - body.length)).every((x) => allowed.has(x)) && htmlTagsOf(ctx).every((x) => tags.has(x)) && same(ctx, outCtx);
   };
+  // Round 13: a line added or removed in a nested list keeps the file's bytes on every line the edit left alone.
+  const lined = keepFileLines(body.slice(r.b.s, r.b.e), prev.slice(r.p.s, r.p.e), outPart);
+  if (lined !== null) {
+    const cand = body.slice(0, r.b.s) + lined + body.slice(r.b.e);
+    if (reads(cand)) return [cand, "block", !fine];
+  }
   if (fast !== null) {
     const end = fast.length - (body.length - r.b.e);
     const kept = end >= r.b.s && fast.startsWith(body.slice(0, r.b.s)) && fast.endsWith(body.slice(r.b.e));

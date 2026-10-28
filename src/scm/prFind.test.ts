@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import type { Status } from "./model";
 import { readReview, reviewKey, reviewLines, reviewSettle, reviewShown, type ReviewFacts } from "./prFind";
+import { blockHint, createBlock, offerOf } from "./startPr";
 
 const status = { branch: "feat", base: "origin/main", upstream: "origin/feat", upstreamRemote: "origin" } as unknown as Status;
 const pr = { number: 12, url: "https://github.com/acme/app/pull/12", state: "OPEN", title: "Add login", head: "feat", draft: false };
@@ -81,6 +82,35 @@ describe("row 76 linked pull request lookup in the composer", () => {
     expect(reviewLines(await readReview("C:/w", status)).join("\n")).toContain("not available for code.example.org");
     reply = (cmd) => (cmd === "scm_pr_find" ? { provider: "none", host: null, pr: null } : null);
     expect(reviewLines(await readReview("C:/w", status)).join("\n")).toContain("not available for this repository");
+  });
+
+  it("row 953: where the lookup and the create block both apply the composer says it once", async () => {
+    for (const [answer, tail] of [
+      [{ provider: "gitlab", host: "gitlab.com", pr: null }, "gitlab.com is not one."],
+      [{ provider: "other", host: "code.example.org", pr: null }, "code.example.org is not one."],
+      [{ provider: "none", host: null, pr: null }, "this repository has no remote."],
+    ] as const) {
+      reply = (cmd) => (cmd === "scm_pr_find" ? answer : null);
+      const f = await readReview("C:/w", status);
+      if (f.lookup.kind !== "unsupported") throw new Error("expected an unsupported lookup");
+      const blockedBy = createBlock(f.lookup.provider, f.lookup.host);
+      const offer = offerOf({ linked: false, blockedBy, ready: null, key: null, now: 0 });
+      const shown = [...reviewLines(f, blockedBy !== null), blockHint(offer, f.lookup)].filter(Boolean);
+      expect(shown).toEqual([`Finding or creating a pull request from Kolux needs a GitHub remote; ${tail}`]);
+    }
+  });
+
+  it("row 953: the separate lines stay where only one applies", async () => {
+    reply = (cmd) => (cmd === "scm_pr_find" ? { provider: "gitlab", host: "gitlab.com", pr: null } : null);
+    const f = await readReview("C:/w", status);
+    // The lookup alone (nothing blocks creating): its own line.
+    expect(reviewLines(f)).toEqual(["Finding a linked pull request or merge request is not available for gitlab.com."]);
+    // The create block alone (the lookup failed or is not in yet): its own line.
+    const offer = offerOf({ linked: false, blockedBy: createBlock("gitlab", "gitlab.com"), ready: null, key: null, now: 0 });
+    expect(blockHint(offer, undefined)).toBe("Creating a pull request from Kolux needs a GitHub remote; gitlab.com is not one.");
+    expect(blockHint(offer, { kind: "failed", message: "x" })).toBe("Creating a pull request from Kolux needs a GitHub remote; gitlab.com is not one.");
+    // Nothing blocked: no hint.
+    expect(blockHint({ kind: "create" }, undefined)).toBeNull();
   });
 
   it("a lookup error becomes a note, not a throw, so starting a pull request stays possible", async () => {
