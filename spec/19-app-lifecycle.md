@@ -259,7 +259,7 @@ Rules: the final save works as a single barrier: any save in flight finishes fir
   if the profile drive rejects writes, quitting carries on instead of failing.
 Acceptance:
   - [x] Change the layout and quit at once → the change is back on relaunch. (cards; evidence/cards-APP-050.txt)
-  - [ ] Simulate a stalled profile drive → the app still exits within the quit deadline.
+  - [x] Simulate a stalled profile drive → the app still exits within the quit deadline. (cards live; evidence/cards-APP-050.txt)
 Compat: —
 Source: D-19-050
 

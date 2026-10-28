@@ -1,4 +1,4 @@
-// Shared scaffolding for the REAL-Claude live proofs (live-v11, test account A only): one scenario() per script runs a hidden dev app,
+// Shared scaffolding for the REAL-Claude live proofs (live-v12, test account A only): one scenario() per script runs a hidden dev app,
 // a real signed-in Claude Code pane (startProve in live-common.mjs), the assertions of the script, then writes the evidence section.
 // Nothing here opens a credential file; account A is only named as CLAUDE_CONFIG_DIR for the pane's claude.
 import { execFileSync } from "node:child_process";
@@ -8,8 +8,8 @@ import { checker, pickScreen } from "./live-views-dom.mjs";
 
 export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A, BASE } from "./live-common.mjs";
 export const CLAUDE_EXE = "C:/Users/XiongT/.local/bin/claude.exe"; // what the registry PATH resolves (TERM-120, batch 8)
-export const DATE = "2026-10-27";
-const MARK = (id) => `<<live-v11:${id}>>`;
+export const DATE = "2026-10-28";
+const MARK = (id) => `<<live-v12:${id}>>`;
 const redact = (s) => String(s).replace(/[\w.+-]+@[\w.-]+\.\w+/g, "<account-a>").replace(/C:[\\/]+Users[\\/]+XiongT/gi, "<home>").replace(/Users[\\/]+txais/gi, "<home>");
 
 export const claudeVersion = () => {
@@ -35,6 +35,26 @@ export const goScreen = (app, label) => pickScreen(app, label);
 export async function agentExes(app) {
   const tree = await app.treeOf(app.pid);
   return tree.filter((p) => /^(claude|codex|gemini|grok|cursor-agent|agent|copilot|openclaude)(\.exe)?$/i.test(p.name)).map((p) => `${p.name}:${p.pid}`);
+}
+
+/** One raw key press over CDP (rawKeyDown/keyUp with a virtual-key code); startProve's ctx has no rawKey. mods: Alt 1, Ctrl 2, Shift 8. */
+export async function rawKey({ key, code, vk, mods = 0, text }) {
+  const targets = await (await fetch("http://127.0.0.1:9290/json")).json();
+  const t = targets.find((x) => x.type === "page" && /localhost:1470|tauri\.localhost/.test(x.url));
+  const ws = new WebSocket(t.webSocketDebuggerUrl);
+  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+  let id = 0;
+  const send = (method, params) =>
+    new Promise((resolve) => {
+      const mine = ++id;
+      const on = (ev) => { const m = JSON.parse(ev.data); if (m.id === mine) { ws.removeEventListener("message", on); resolve(m); } };
+      ws.addEventListener("message", on);
+      ws.send(JSON.stringify({ id: mine, method, params }));
+    });
+  const k = { key, code, windowsVirtualKeyCode: vk, modifiers: mods };
+  await send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...k, ...(text ? { text } : {}) });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
+  ws.close();
 }
 
 export async function shot(name) {
@@ -78,7 +98,9 @@ export async function scenario(id, opts, body) {
   let closed = null;
   log(`LIVE ${DATE} ${id}: claude.exe ${CLAUDE_EXE}, version ${claudeVersion()}; account <account-a>; scratch repo under ${LOGS.replace("-logs", "")}/work`);
   try {
-    ctx = await startProve(id, { report: rep, files: { "README.md": "scratch repo for a live proof\n" }, claudeArgs: "--model haiku --permission-mode manual --settings ${SETTINGS}", ...opts });
+    // opts.noSettingsFlag: the pane gets NO `--settings <scratch>` override, so Claude reads only its account's own settings.json.
+    const defaultArgs = `--model haiku --permission-mode manual${opts.noSettingsFlag ? "" : " --settings ${SETTINGS}"}`;
+    ctx = await startProve(id, { report: rep, files: { "README.md": "scratch repo for a live proof\n" }, claudeArgs: defaultArgs, ...opts });
     if (!opts.noOpen) {
       await ctx.openClaude();
       if (opts.ready !== false) log(`claude ready: ${excerpt(await ctx.ready(), 3)}`);

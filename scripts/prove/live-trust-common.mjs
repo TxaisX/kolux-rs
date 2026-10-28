@@ -31,7 +31,7 @@ export async function watchPanes(app, want, ms, log) {
 }
 
 /** Lines of Kolux's own log that mention trust (paths only; redacted by the evidence writer). */
-export function trustLogLines(root, max = 8) {
+export function trustLogLines(root, max = 8, re = /trust/i) {
   const files = [];
   const walk = (d, depth) => {
     if (depth > 6) return;
@@ -48,7 +48,7 @@ export function trustLogLines(root, max = 8) {
   for (const f of files) {
     let t = "";
     try { t = readFileSync(f, "utf8"); } catch { continue; }
-    for (const l of t.split(/\r?\n/)) if (/trust/i.test(l)) out.push(l.replace(/\\/g, "/").slice(0, 260));
+    for (const l of t.split(/\r?\n/)) if (re.test(l)) out.push(l.replace(/\\/g, "/").slice(0, 260));
   }
   return out.slice(-max);
 }
