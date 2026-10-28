@@ -33,18 +33,29 @@ WHAT WAS BUILT
 WHAT THE USER SEES
 - A popup kills the tab: the tab blinks and comes back on the same address (a fresh load, so unsaved page state is lost), with the
   line "This page closed itself; Kolux reopened it". No "stopped responding" overlay.
-- A page that does it in a loop: the first two are rebuilt, the third inside 10 s leaves the tab closed with the overlay above and
-  the notice; other tabs and the rest of the app are unaffected; Retry reopens it.
+- A page that does it in a loop (row 954c): the tab is left closed after 2 rebuilds inside 10 s, OR 3 inside 5 minutes (a page
+  closing itself every 5.1 s therefore stops at the third). Once closed it stays closed: only Retry reopens it, and Retry also
+  clears the record. The destroyed page is closed for real (browser_close), so it stops running and its popup goes.
+  Other tabs and the rest of the app are unaffected.
+- A rebuild keeps the tab's profile (the saved one, so cookies survive), never takes keyboard focus, and re-applies where the
+  pane is NOW. If the reopen itself fails, the tab shows "This page could not be reopened" with Retry.
 - A popup closing itself (sign-in flows): unchanged, it just closes (popups have no hook).
 
 STOPPED-RESPONDING OVERLAY AND THE PROCESSFAILED DOUBLE REPORT
 - The overlay: the selfclosed event moves the machine to "loading" (or "closed") before the probe-miss path can reach "crashed";
   the "closed" phase ignores late probe results. Tested in loadState.test.ts (describe "row 954b: a tab that closed itself").
-- ProcessFailed: the destroy can make WebView2 raise ProcessFailed for the same tab. watch_failures (browser_engine.rs) now treats a
-  Source::Page failure as "not a crash" while selfclose::aftermath(id) is true, i.e. within SETTLE = 2 s of that tab's close
-  request, so crash::classify does not file a crash report or show the crash overlay for it. NOT verified live: it depends on
-  whether WebView2 raises ProcessFailed at all after DestroyWindow. Edge case: a genuine crash of the rebuilt tab inside the same
-  2 s would be dropped as well (the probe path would still catch it).
+- ProcessFailed (row 954c replaces the 2 s by-id window): each browser_open makes an Engine record (selfclose::register). The
+  close-request handler, the probe's IsWindow fallback and browser_close mark THAT engine destroyed, and only that engine's
+  failure handler ignores a later Source::Page failure (it also ignores one when its own container HWND is gone, which covers
+  the order where the failure arrives before the close request). A failure in the rebuilt tab is a different engine and is
+  always reported. NOT verified live: whether WebView2 raises ProcessFailed at all after DestroyWindow.
+- H2 (order-independent detector): wry destroys the window in its own close-request handler, and WebView2 documents no handler
+  order, so our WindowCloseRequested handler may never run. browser_probe (browser.rs:1637) calls selfclose::probe_missed when the
+  tab gives no answer: IsWindow(recorded container) false means a self-close through the same on_self_close seam and event;
+  true is the existing crash path. Both detectors call Engine::mark_destroyed (browser_selfclose.rs:138), which is true only
+  for the first caller, so one destroy gives one decision. No new command, no lib.rs change, no FLAG patch.
+- Focus: selfclose::focuses_after_open (browser_selfclose.rs:107) is the seam; a rebuild (auto or retry) never focuses, a user
+  open does. The set_focus call site itself in browser_open is reachable only live (step 12).
 
 OFF WINDOWS
 - The hook and the pane-side wiring that needs it are #[cfg(windows)]; browser_selfclose.rs carries
@@ -70,3 +81,24 @@ LIVE PROOF PENDING (prover lane; loopback only, scratch profile; Windows)
  4. Open a popup (window.open) whose own script calls window.close(). Expect it just closes, no notice, the tab untouched.
  5. Also try the cross-origin case: a tab page at 127.0.0.1:A opens a popup at 127.0.0.1:B whose script runs opener.close().
     Expect the same as step 1.
+
+LIVE PROOF PENDING, ROW 954c (prover lane; loopback only, scratch profile; Windows)
+ 6. Which detector fires (H2). Run step 1 with a log line (or the tracing output) at selfclose::destroyed and
+    selfclose::probe_missed. Record: close-request handler, probe IsWindow fallback, or both; and which came first. If only
+    the probe fallback ever fires, the tab shows the loading state until the next probe (a few seconds): note the delay.
+ 7. Profile (H1). Give the tab the profile "work" (kolux tab profile), set a cookie on the loopback page, run step 1. Expect: the
+    rebuilt page still sends the cookie and "kolux tab list" still says "work". Then open a NEW tab that reuses the closed tab's
+    id and check it runs in the default profile, not "work".
+ 8. Hidden pane (H4). Switch to another tab so the first tab's pane is hidden, run step 1 in the hidden tab (open it via a script
+    timer). Expect: the rebuilt tab stays hidden, and the keyboard stays where it was (type in the visible tab). If the hidden
+    rebuilt page holds the keyboard anyway (skipping set_focus can leave it on the new page), report it.
+ 9. Cadence (H3/H4). A page that calls the popup trick every 5.1 s for 60 s. Expect: rebuilt twice, then closed at the third
+    (3 inside 5 min); it stays closed with no further rebuild; Retry reopens it and starts the count again.
+10. Network after LeaveClosed (H3). With the page from step 9 closed, watch the loopback server's request log for 30 s. Expect no
+    further requests from the destroyed page (browser_close ended it). Also check the process list: its WebView2 renderer is gone.
+11. ProcessFailed after the destroy. Watch the crash folder and the overlay across steps 1 and 9. Expect no crash report and no
+    "stopped responding" overlay; if a report appears, note whether it names the destroyed engine or the rebuilt one.
+12. Focus (user vs rebuild). Click a tab (user open): it takes the keyboard. Run step 1 in a shown tab: the rebuilt tab does not
+    steal focus from where the user last clicked or typed.
+13. Pane unmount (H5). Start step 1 and close the tab's pane within a moment (close the tab while it rebuilds). Expect no orphan
+    window left shown or focused; "kolux tab list" lists no ghost.
