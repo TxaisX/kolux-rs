@@ -735,10 +735,7 @@ fn launch_string(current: Option<&str>, safe: bool, proxy: Option<&tauri::Url>) 
 /// takes it; none when unset, unreadable or unusable (the tab then refuses by itself).
 fn saved_proxy_in(dir: &Path) -> Option<tauri::Url> {
     let read = |name: &str| fs::read(dir.join(name)).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
-    // A missing file is "no settings" to the settings load (state.rs read_file): the copy only stands in for a corrupt one.
-    if matches!(fs::metadata(dir.join("settings.json")), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
-        return None;
-    }
+    // Same rule as the settings load (state.rs read_file): the copy stands in for a missing or corrupt file.
     let settings = read("settings.json").or_else(|| read("settings.json.bak"))?;
     let plain = crate::secrets::unseal(settings.get("httpProxy")?.as_str()?).ok()?;
     crate::browser::proxy_of(Some(&plain)).ok().flatten()
@@ -2125,14 +2122,13 @@ mod tests {
         let _ = fs::remove_dir_all(d);
     }
 
-    // Row 939b: the main settings load reads a missing settings.json as empty even with a .bak (state.rs
-    // read_file), so the window takes no proxy from the .bak; the browser refuses tabs there instead.
+    // Row 944: the main settings load now reads a missing settings.json from the .bak (state.rs read_file), so the window does too.
     #[test]
-    fn row939b_a_missing_settings_file_gives_the_window_no_proxy_even_with_a_last_good_copy() {
+    fn row944_a_missing_settings_file_gives_the_window_the_proxy_of_the_last_good_copy() {
         let d = profile_with("missing", "{}");
         fs::remove_file(d.join("settings.json")).unwrap();
         fs::write(d.join("settings.json.bak"), r#"{"httpProxy":"http://127.0.0.1:3128"}"#).unwrap();
-        assert!(saved_proxy_in(&d).is_none(), "the window runs on what the settings load says: no file, no proxy");
+        assert_eq!(saved_proxy_in(&d).map(|u| u.to_string()), Some("http://127.0.0.1:3128/".to_string()), "the window runs on what the settings load says");
         let _ = fs::remove_dir_all(d);
     }
 
