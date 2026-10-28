@@ -128,3 +128,65 @@ BATCH 12 SUMMARY (2026-10-28, after MERGE 413 row 992, main b32d7981 for the las
 
 TASK 4 NOTE (sub-agent prompt, after MERGE 418 = 7012edc5, observe + pass/fail; run SUBAGENT-418 above, case A)
   A fixed prompt made Claude start one Task sub-agent that ran one Bash command (touch s1.txt). Kolux's hook event arrived as state permission, tool Bash, with children [{kind general-purpose, state permission}], and the Board card read "Needs you / Bash" with Approve and Deny. Deny from the card: the card word went Working at 0.29 s and stayed Working until it read Done at 6.5 s (the main agent kept talking after the refusal: its reply began "The sub-agent is still running. I'll reply ..."), s1.txt was never created; the pane left Permission at once but, read strictly (not Working at 6 s), it missed the 6 s limit by about 0.5 s, so case A is recorded FAIL on the strict reading (a refusal does not stop the turn, unlike the Esc interrupt of case (a) above, where the pane read Stopped at ~4 s). Esc at the sub-agent's prompt and the count of hook lines in kolux.log after it were NOT measured: the script's pty lookup was wrong (terminal_host_sessions is empty in the dev app; the terminal id is on the hook event, now fixed in the script) and the session cap was used up. No box was ticked.
+
+<<live-v13:SUBAGENT-418-run1>>
+LIVE 2026-10-28 (real Claude, test account) SUBAGENT-418: FAIL
+  LIVE 2026-10-28 SUBAGENT-418: claude.exe <home>/.local/bin/claude.exe, version 2.1.312 (matched by file size, not run); account <account-a>; scratch repo under G:/Temp/live-v13/work
+  launching: pnpm tauri dev (identifier com.txaisxiong.kolux-rs.prove, vite 1470, CDP 9290; log G:\Temp\live-v13\run-SUBAGENT-418\tauri-dev.log)
+  app pid 11528 (G:\Dev\kolux-rs-lanes\prove\src-tauri\target\debug\kolux-rs.exe); window: moved off-screen
+    (first-run screen "Yes, I trust": chose Yes, I trust this folder for the scratch repo)
+  claude ready: ❯ Try "how do I log an error?" | ────────────────────────────────────────────────────────────────────────────────────────────────────────────── | ⏸ manual mode on · ← for agents                                                         ◐ medium · /effort
+  ask s2.txt: first permission event {"t":1793179186006,"paneKey":3,"terminal":2,"state":"permission","tool":"Bash","boundary":false,"children":[{"id":"ad9354b17d8970763","kind":"general-purpose","state":"permission","started":1793179183775}],"reply":"The sub-agent is running the `touch s2.txt` c
+  terminal_write target: id 2 generation 1793179172784528
+  (B) sub-agent prompt, Esc byte, pane word: 449ms Needs you > 2625ms Working > 5153ms Done
+  PASS (B) sub-agent prompt, Esc byte, pane word: at 6000 ms out of Permission and not Working: at 6 s: Done
+  PASS (B) sub-agent prompt, Esc byte, pane word: still not Permission/Working at 12 s: at 12 s: Done
+  (B) hook/permission lines in kolux.log: before 0, after 0
+  (B) screenshot: G:/Temp/live-v13-logs/SUBAGENT-418-b-after.png
+  PASS (B) the command did not run (s2.txt missing): 
+  ask c.txt: permission event {"t":1793179205363,"paneKey":3,"terminal":2,"state":"permission","tool":"Bash","detail":"touch c.txt","boundary":false,"session":"034c7d48-ea18-4674-84a8-4670bbde0421","children":[],"interrupted":false,"monitoring":false}
+  terminal_write target: id 2 generation 1793179172784528
+  (C) plain prompt, Esc byte, pane word: 421ms Needs you > 5110ms Interrupted
+  PASS (C) plain prompt, Esc byte, pane word: at 6000 ms out of Permission and not Working: at 6 s: Interrupted
+  PASS (C) plain prompt, Esc byte, pane word: still not Permission/Working at 12 s: at 12 s: Interrupted
+  (C) hook/permission lines in kolux.log: before 0, after 0
+  PASS (C) the command did not run (c.txt missing): 
+  ask d.txt: permission event {"t":1793179224345,"paneKey":3,"terminal":2,"state":"permission","tool":"Bash","detail":"touch d.txt","boundary":false,"session":"034c7d48-ea18-4674-84a8-4670bbde0421","children":[],"interrupted":false,"monitoring":false}
+  (D) chat permission card shown: false
+  FAIL (D) the chat shows the permission card with Deny: 
+  events: done > working > working/Agent > working > working > working > working/Bash > permission/Bash > working > working > done > working > working/Bash > permission/Bash > interrupted > working > working/Bash > permission/Bash
+  screenshot: G:/Temp/live-v13-logs/SUBAGENT-418-end.png
+  agent programs under the app: claude.exe:45968; non-claude agent exe: none
+  close: [true,"window close over CDP, exited in 3.2 s; pre-close tree 10 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, claude.exe x1); survivors 0 (none)"]
+  RESULT: FAIL
+
+<<live-v13:SUBAGENT-418>>
+LIVE 2026-10-28 (real Claude, test account) SUBAGENT-418: PASS
+  LIVE 2026-10-28 SUBAGENT-418: claude.exe <home>/.local/bin/claude.exe, version 2.1.312 (matched by file size, not run); account <account-a>; scratch repo under G:/Temp/live-v13/work
+  launching: pnpm tauri dev (identifier com.txaisxiong.kolux-rs.prove, vite 1470, CDP 9290; log G:\Temp\live-v13\run-SUBAGENT-418\tauri-dev.log)
+  app pid 12124 (G:\Dev\kolux-rs-lanes\prove\src-tauri\target\debug\kolux-rs.exe); window: moved off-screen
+  claude ready: ❯ Try "fix lint errors" | ────────────────────────────────────────────────────────────────────────────────────────────────────────────── | ⏸ manual mode on · ← for agents                                                         ◐ medium · /effort
+  (D) guide closed: true
+  ask d.txt: permission event {"t":1793179368329,"paneKey":3,"terminal":2,"state":"permission","tool":"Bash","detail":"touch d.txt","boundary":false,"session":"ab93c01d-24b8-4d86-8b9e-32f81a668989","children":[],"interrupted":false,"monitoring":false}
+  (D) guide closed again: false
+  (D) chat permission card shown: true
+  PASS (D) the chat shows the permission card with Deny: 
+  (D) chat card gone after 216 ms
+  (D) chat Deny, pane word: 477ms Needs you > 3749ms Interrupted
+  PASS (D) chat Deny, pane word: at 6000 ms out of Permission and not Working: at 6 s: Interrupted
+  PASS (D) chat Deny, pane word: still not Permission/Working at 12 s: at 12 s: Interrupted
+  PASS (D) the command did not run (d.txt missing): 
+  events: done > working > working/Bash > permission/Bash > interrupted
+  screenshot: G:/Temp/live-v13-logs/SUBAGENT-418-end.png
+  agent programs under the app: claude.exe:3316; non-claude agent exe: none
+  close: [true,"window close over CDP, exited in 3.2 s; pre-close tree 10 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, claude.exe x1); survivors 0 (none)"]
+  RESULT: PASS
+
+LIVE batch 13 (2026-10-28, main 9acd3c86): SUBAGENT-418 cases B, C, D (scripts/prove/live-SUBAGENT-418.mjs, case A skipped, already read in batch 12). Real Claude 2.1.312, account <account-a>, 2 sessions (run 1: B, C, D; run 2: D only). No non-Claude agent exe. No box tick (VIEW-025 stays as ticked).
+  Pass test per case: at 6 s and again at 12 s the pane word is out of Permission and is not Working.
+  B sub-agent Bash prompt, Esc byte via terminal_write: Needs you at 0.45 s > Working at 2.6 s > Done at 5.2 s. PASS (Done at 6 s). The command did not run.
+  C plain Bash prompt, Esc byte via terminal_write: Needs you > Interrupted at 5.1 s. PASS, but 0.9 s inside the 6 s limit (Board Deny and chat Deny read 3.7-4.3 s). The command did not run.
+  D plain Bash prompt, chat card Deny: run 1 FAIL (the chat showed only "The agent is asking something in its terminal. Answer there.", no card in 25 s; the Agents screen had not been opened since launch). Run 2 PASS (Agents screen opened once first): card shown, Deny removed it in 216 ms, pane Needs you > Interrupted at 3.7 s, still Interrupted at 12 s. The command did not run.
+  D run 1 is an after.md row (SOON): hearAsks listens only once a chat has mounted (ChatView.tsx:69 -> ask.ts:75), so a prompt that arrives before the first Agents visit has no card.
+  kolux.log hook lines: 0 before and 0 after each Esc (the log carries no hook lines, so "no hook event after the Esc" cannot be read from it; the status words are the reading).
+  Screenshots G:/Temp/live-v13-logs/SUBAGENT-418-b-after.png, SUBAGENT-418-end.png; logs SUBAGENT-418.run1.out.txt, SUBAGENT-418.run2.out in the same folder.
