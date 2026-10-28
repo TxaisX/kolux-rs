@@ -712,7 +712,7 @@ pub fn launch_detached(exe: &Path, identifier: &str, dir: &Path) -> Result<(), S
     {
         use std::os::windows::process::CommandExt;
         // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB, then without the
-        // breakaway when the window's own job does not allow it.
+        // breakaway when an enclosing job does not allow it (the app-wide job does: procs::Job::app).
         if cmd.creation_flags(0x0000_0008 | 0x0000_0200 | 0x0100_0000).spawn().is_ok() {
             return Ok(());
         }
