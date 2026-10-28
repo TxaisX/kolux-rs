@@ -1,6 +1,6 @@
 // TERM-106: a reopened pane shows what it printed before the restart above a fresh shell.
 import { describe, expect, it } from "vitest";
-import { encodeHistory, NOTE, placeNote, replay, replayGate, RESET, restoreTail, viewTop } from "./history";
+import { afterReplay, encodeHistory, NOTE, placeNote, replay, replayGate, RESET, restoreTail, viewTop } from "./history";
 
 const buf = (lines: string[], baseY = 0) => ({ length: lines.length, baseY, getLine: (y: number) => (y < lines.length ? { translateToString: () => lines[y] } : undefined) });
 
@@ -44,6 +44,17 @@ describe("restoreTail (TERM-106)", () => {
 
   it("goes into the transcript as the terminal took it", () => {
     expect(replay(encodeHistory(NOTE))).toBe(NOTE);
+  });
+});
+
+describe("afterReplay (APP-052 b1)", () => {
+  it("leaves the replayed screen of a terminal the service kept running as drawn: nothing pushed up, no 'new shell' note", () => {
+    expect(afterReplay(buf(["PS> echo APP052-A", "APP052-A", "PS>"]), 3, true)).toBe("");
+  });
+
+  it("gives a new shell the restore tail", () => {
+    const b = buf(["PS>", "", ""]);
+    expect(afterReplay(b, 3, false)).toBe(restoreTail(b, 3));
   });
 });
 
