@@ -52,11 +52,18 @@ pub struct Job(imp::Job);
 impl Job {
     /// A new job with "kill on close" set. Nothing is in it yet.
     pub fn new() -> Result<Job, String> {
-        imp::Job::new().map(Job)
+        imp::Job::new(false).map(Job)
+    }
+
+    /// The app-wide job: "kill on close" plus "breakaway OK", so a program started with
+    /// CREATE_BREAKAWAY_FROM_JOB (only the terminal service, APP-052) can leave it; every other
+    /// child stays a member and still goes down with the app (APP-053).
+    fn app() -> Result<Job, String> {
+        imp::Job::new(true).map(Job)
     }
 
     /// Puts the process with id `pid` in the job; from then on every process it starts is in it
-    /// too (children never break away: nothing here uses a breakaway flag).
+    /// too, unless started with the breakaway flag in a job that allows it (only the app-wide job).
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn assign_pid(&self, pid: u32) -> Result<(), String> {
         self.0.assign_pid(pid)
@@ -94,7 +101,7 @@ static APP: OnceLock<Option<AppJob>> = OnceLock::new();
 /// refuses nesting), the job still exists and each pane program is put in it explicitly instead.
 pub fn app_job_start() -> bool {
     APP.get_or_init(|| {
-        Job::new().ok().map(|job| {
+        Job::app().ok().map(|job| {
             let holds_app = job.assign_self().is_ok();
             AppJob { job, holds_app }
         })
@@ -121,7 +128,7 @@ pub fn pane_job(child: &dyn portable_pty::Child) -> Option<Job> {
 mod imp {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
-    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
+    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
     // ponytail: parent ids only; Windows keeps a dead parent's id on its orphans, so a reused pid
@@ -197,7 +204,7 @@ mod imp {
     }
 
     impl Job {
-        pub fn new() -> Result<Job, String> {
+        pub fn new(breakaway_ok: bool) -> Result<Job, String> {
             // SAFETY: the handle is checked before use; the limit struct is zeroed, sized and
             // passed with its own length, as SetInformationJobObject requires; on a failure the
             // handle is closed here and never returned.
@@ -207,7 +214,7 @@ mod imp {
                     return Err(last_error("CreateJobObject"));
                 }
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | if breakaway_ok { JOB_OBJECT_LIMIT_BREAKAWAY_OK } else { 0 };
                 let ok = SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info as *const _ as *const std::ffi::c_void, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32);
                 if ok == 0 {
                     let e = last_error("SetInformationJobObject");
@@ -254,6 +261,21 @@ mod imp {
                 Ok(inside != 0)
             })
         }
+
+        /// The job's limit flags, read back from the kernel.
+        #[cfg(test)]
+        pub fn limit_flags(&self) -> Result<u32, String> {
+            use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+            // SAFETY: the handle is open; the struct is zeroed and passed with its own length.
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                let ok = QueryInformationJobObject(self.0, JobObjectExtendedLimitInformation, &mut info as *mut _ as *mut std::ffi::c_void, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32, std::ptr::null_mut());
+                if ok == 0 {
+                    return Err(last_error("QueryInformationJobObject"));
+                }
+                Ok(info.BasicLimitInformation.LimitFlags)
+            }
+        }
     }
 
     impl Drop for Job {
@@ -298,7 +320,7 @@ mod imp {
     pub struct Job;
 
     impl Job {
-        pub fn new() -> Result<Job, String> {
+        pub fn new(_breakaway_ok: bool) -> Result<Job, String> {
             Ok(Job)
         }
 
@@ -492,5 +514,19 @@ mod tests {
         assert_eq!(app.job.holds_pid(child.id()), Ok(true), "a program started afterwards is in the app job by inheritance");
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    /// APP-052 / APP-053: only the app-wide job lets the terminal service break away (BREAKAWAY_OK,
+    /// without SILENT_BREAKAWAY_OK, so nothing leaves unless it asks); both kinds keep kill-on-close.
+    /// Read from fresh jobs, so no process is spawned or assigned under the harness job.
+    #[cfg(windows)]
+    #[test]
+    fn app052_only_the_app_job_allows_breakaway_and_both_kill_on_close() {
+        use windows_sys::Win32::System::JobObjects::{JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK};
+        let app = Job::app().expect("the app job is created").0.limit_flags().expect("its flags read back");
+        let pane = Job::new().expect("a pane job is created").0.limit_flags().expect("its flags read back");
+        assert_eq!(app, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK, "app job: kill on close + breakaway OK");
+        assert_eq!(app & JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, 0, "children without the flag stay members");
+        assert_eq!(pane, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, "pane job: kill on close only, no breakaway");
     }
 }
