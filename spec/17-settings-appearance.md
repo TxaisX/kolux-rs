@@ -102,7 +102,7 @@ Acceptance:
   - [x] Fresh profile → Classic is selected; click Teal → sidebar, top bar and accent colours turn
         teal within one frame. (cards; evidence/cards-SET-001.txt)
   - [x] Save an unknown theme name in the settings and start → Classic is shown and selected. (cards; evidence/cards-SET-001.txt)
-  - [ ] With Rose chosen, open a pop-out window → it is Rose as well.
+  - [x] With Rose chosen, open a pop-out window → it is Rose as well. (cards live; evidence/cards-SET-001.txt)
 Compat: a saved theme imports by its name; anything other than Classic or one of the 16 hues imports
   as Classic.
 Source: D-17-001

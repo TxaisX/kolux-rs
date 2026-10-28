@@ -1,6 +1,6 @@
 // LIVE proof, SET-027 boxes 1 and 2 (spec/17): the default agent, switching it off, and a saved default that no search finds.
 // Every agent's start command is overridden to a stand-in script (agentOptions.<id>.command), so no real agent ever starts.
-// node live-SET-027.mjs   -> G:/Temp/live-v7-logs/SET-027.out.txt, evidence/cards-SET-027.txt
+// node live-SET-027.mjs   -> G:/Temp/live-v8-logs/SET-027.out.txt, evidence/cards-SET-027.txt
 import { pathToFileURL } from "node:url";
 import { mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync } from "node:fs";
 import { join } from "node:path";

@@ -17,3 +17,15 @@ box 1: PASS
   PASS the page came back on its own within the 25 s watched (a fresh page with a new token, same address): {"at":7132,"token":0.8031056280372536}
   PASS with no error overlay and the server asked for the page again: {"sawAlert":null,"finalAlert":null,"hits":2}
   screenshot: G:/Temp/live-v7-logs/BROW-009-b1.png
+
+
+LIVE 2026-10-27 (scripts/prove/live-BROW.mjs, hidden dev app, scratch loopback pages)
+box 1: PASS
+  page token 0.5894612457141947; /die hits 1; renderer children of the app: [6876,41476,36656]
+  CPU used in 1.5 s by each renderer while the tab page spun: [{"pid":36656,"ppid":41124,"ms":3484},{"pid":6876,"ppid":41124,"ms":171},{"pid":41476,"ppid":41124,"ms":0}]
+  PASS exactly one renderer of the app is busy while the tab page spins (the tab's): [{"pid":36656,"ppid":41124,"ms":3484},{"pid":6876,"ppid":41124,"ms":171},{"pid":41476,"ppid":41124,"ms":0}]
+  killed renderer pid 36656 (child of the app's WebView2 tree) at t=0
+  recovery: {"at":6587,"token":0.5163016716153073}; alert seen during recovery: null; alert at the end: null; /die hits 1 -> 2
+  PASS the page came back on its own within the 25 s watched (a fresh page with a new token, same address): {"at":6587,"token":0.5163016716153073}
+  PASS with no error overlay and the server asked for the page again: {"sawAlert":null,"finalAlert":null,"hits":2}
+  screenshot: G:/Temp/live-v8-logs/BROW-009-b1.png
