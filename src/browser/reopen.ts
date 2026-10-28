@@ -20,10 +20,40 @@ export type Why = "auto" | "retry";
  *  page where the pane is NOW (the size, and shown or hidden, may have changed during the rebuild). */
 export type Live = { alive: () => boolean; sync: () => void };
 
+/** A rebuild under way for a pane, and the one ask waiting behind it (row 954f). */
+type Waiting = { run: () => Promise<void>; resolve: () => void; reject: (e: unknown) => void };
+const flights = new Map<number, { waiting: Waiting | null }>();
+
+/** Runs `run` as the pane's rebuild; when it ends, the ask waiting behind it runs next, so two never overlap. */
+async function fly(id: number, run: () => Promise<void>): Promise<void> {
+  const flight: { waiting: Waiting | null } = { waiting: null };
+  flights.set(id, flight);
+  try {
+    await run();
+  } finally {
+    flights.delete(id);
+    const next = flight.waiting;
+    if (next) fly(id, next.run).then(next.resolve, next.reject);
+  }
+}
+
 /** Closes the tab's page, then opens it again where the pane is. A close that fails (the page is
  *  already gone) does not stop the reopen; an open that fails rejects so the pane can say so. A pane
- *  that unmounted meanwhile gets no page, or the one just built is closed again. */
-export async function reopenPage(call: Call, id: number, at: Opening, why: Why = "auto", live?: Live): Promise<void> {
+ *  that unmounted meanwhile gets no page, or the one just built is closed again.
+ *  Row 954f: a pane runs one reopen at a time. An automatic request while one runs is the same destroy
+ *  heard twice, so it is dropped; Retry and a profile change wait their turn, the latest alone. */
+export function reopenPage(call: Call, id: number, at: Opening, why: Why = "auto", live?: Live): Promise<void> {
+  const run = () => rebuildPage(call, id, at, why, live);
+  if (!flights.has(id)) return fly(id, run);
+  if (why === "auto" && at.profile === undefined) return Promise.resolve();
+  const flight = flights.get(id)!;
+  flight.waiting?.resolve(); // superseded
+  return new Promise<void>((resolve, reject) => {
+    flight.waiting = { run, resolve, reject };
+  });
+}
+
+async function rebuildPage(call: Call, id: number, at: Opening, why: Why, live?: Live): Promise<void> {
   await call("browser_close", { id }).catch(() => {});
   if (live && !live.alive()) return;
   await openPage(call, id, { url: at.url, spot: at.spot, background: at.background, shown: at.shown, rebuild: why, ...(at.profile === undefined ? {} : { profile: at.profile }) });
