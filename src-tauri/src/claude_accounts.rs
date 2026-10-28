@@ -1170,6 +1170,22 @@ mod tests {
         assert!(marker.exists(), "the profile folder is still there");
     }
 
+    // Row 947: the guard's false side: a listed safe id whose stored folder is outside the accounts folder is unlisted but that folder is never deleted.
+    #[test]
+    fn row947_removing_a_listed_id_whose_folder_is_elsewhere_deletes_that_folder_never() {
+        let (dir, store) = profile("row947-elsewhere");
+        let elsewhere = dir.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let marker = elsewhere.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let s = store.lock().unwrap();
+        let odd = Account { id: "a1".into(), email: None, organization: None, config_dir: elsewhere.to_string_lossy().into_owned(), last_sign_in: 1, stale: false };
+        save(&s, &[odd]).unwrap();
+        remove(&s, &dir, "a1").unwrap();
+        assert!(load(&s).is_empty(), "the account is unlisted");
+        assert!(marker.exists(), "the folder outside the accounts folder is untouched");
+    }
+
     // Row 947: an active marker that will not clear is reported at the end, after the list is saved and the sealed copy and folder are gone.
     #[test]
     fn row947_a_marker_that_will_not_clear_still_removes_the_vault_and_folder() {

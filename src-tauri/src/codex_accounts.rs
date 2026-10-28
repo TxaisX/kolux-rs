@@ -1388,6 +1388,37 @@ mod tests {
         assert!(!vault.exists(), "the sealed copy is gone");
     }
 
+    // Row 947: the guard's false side: a listed safe id whose stored home is outside the accounts folder is unlisted but that home is never deleted.
+    #[test]
+    fn row947_removing_a_listed_id_whose_home_is_elsewhere_deletes_that_home_never() {
+        let profile = temp("row947-elsewhere");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let elsewhere = profile.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let marker = elsewhere.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let s = store.lock().unwrap();
+        let odd = Account { id: "c1".into(), email: None, home: elsewhere.to_string_lossy().into_owned(), last_sign_in: 0, sign_in_error: false, label: None };
+        s.set(LIST_KEY, &serde_json::to_string(&[odd]).unwrap()).unwrap();
+        remove(&s, &profile, "c1").unwrap();
+        assert!(crate::orchestration::kept::load::<Vec<Account>>(&s, LIST_KEY).unwrap().is_empty(), "the account is unlisted");
+        assert!(marker.exists(), "the home outside the accounts folder is untouched");
+    }
+
+    // Row 947: removing an account whose listed id is ".." must not delete the profile folder (the same guard as the Claude side).
+    #[test]
+    fn row947_removing_a_path_id_deletes_nothing() {
+        let profile = temp("row947-dotdot");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let marker = profile.join("marker.txt");
+        fs::write(&marker, "keep").unwrap();
+        let s = store.lock().unwrap();
+        let odd = Account { id: "..".into(), email: None, home: profile.join(FOLDER).join("..").to_string_lossy().into_owned(), last_sign_in: 0, sign_in_error: false, label: None };
+        s.set(LIST_KEY, &serde_json::to_string(&[odd]).unwrap()).unwrap();
+        assert!(remove(&s, &profile, "..").is_err(), "an unsafe id is refused");
+        assert!(marker.exists(), "the profile folder is still there");
+    }
+
     // Row 947: an active marker that will not clear is reported at the end, after the list is saved and the sealed copy and home are gone.
     #[test]
     fn row947_a_marker_that_will_not_clear_still_removes_the_vault_and_home() {
