@@ -146,6 +146,15 @@ pub fn open_tab(root: &Path, page: u32, given: Option<String>, kind: Rebuild) ->
     out
 }
 
+/// Row 979 (F1): a Fresh open drops that tab id's saved row before anything that can fail runs, so
+/// a failed open never leaves an older tab's profile for a later Restore of a reused id. Every other
+/// kind keeps its row (a rebuild uses it, a restore reads it).
+pub fn clear_stale_row(root: &Path, page: u32, kind: Rebuild) {
+    if kind == Rebuild::Fresh {
+        let _ = edit(root, |s| s.tabs.remove(&page.to_string()));
+    }
+}
+
 /// A copy of a profile (label "<label> copy"); with a page, that tab moves to the copy.
 pub fn clone_profile(store: &mut Store, id: &str, page: Option<u32>) -> Result<Profile, String> {
     let from = get(store, id).ok_or_else(|| format!("no profile is called {id}"))?;
@@ -533,6 +542,26 @@ mod tests {
         assert_eq!(open_tab(&dir, 5, None, Rebuild::Restore), (None, true, true));
         assert!(!load(&dir).tabs.contains_key("5"), "the cleared row is saved");
         assert_eq!(load(&dir).tabs.get("6").map(String::as_str), Some("other"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_979_a_fresh_open_clears_a_stale_row_and_no_other_kind_does() {
+        let dir = scratch("clear979");
+        let mut s = Store::default();
+        create(&mut s, "Work", None, false).unwrap();
+        set_tab(&mut s, 7, "work").unwrap();
+        set_tab(&mut s, 8, "work").unwrap();
+        save(&dir, &s).unwrap();
+        for kind in [Rebuild::Auto, Rebuild::Retry, Rebuild::Restore] {
+            clear_stale_row(&dir, 7, kind);
+            assert_eq!(load(&dir).tabs.get("7").map(String::as_str), Some("work"), "{kind:?} keeps its row");
+        }
+        clear_stale_row(&dir, 7, Rebuild::Fresh);
+        assert!(!load(&dir).tabs.contains_key("7"), "a Fresh open clears the tab's stale row");
+        assert_eq!(load(&dir).tabs.get("8").map(String::as_str), Some("work"), "another tab's row is untouched");
+        // A Fresh open that then fails leaves the id at the default, so a later Restore finds no row.
+        assert_eq!(open_tab(&dir, 7, None, Rebuild::Restore), (None, true, false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

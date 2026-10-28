@@ -1144,18 +1144,20 @@ fn err(e: tauri::Error) -> String {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>, rebuild: Option<String>) -> Result<(), String> {
-    let url = parse(&url)?;
     // Row 954 (c): "auto" / "retry" mark a rebuild of a tab that had a page: it keeps its saved profile and never takes focus.
     // Row 977: "restore" marks a pane that came back from the saved layout: it reads its own saved profile row.
     let rebuild = selfclose::Rebuild::from_arg(rebuild.as_deref());
+    if let Ok(dir) = app.path().app_data_dir() {
+        helpers::sweep_at_start(&dir); // T-283 (BROW-043); the app's start-up normally ran it already
+        profiles::set_root(dir.clone()); // T-241
+        // Row 979: before any step that can fail, so a failed open never leaves an older tab's row for a later restore of this id.
+        profiles::clear_stale_row(&dir, id, rebuild);
+    }
+    let url = parse(&url)?;
     notices::opening(id); // after-list 719: its notices wait for the pane's browser_pane_ready
     families().join(id, url.as_str(), Instant::now()); // T-272-c
     let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
     wake::watch(&app); // T-283 (BROW-010)
-    if let Ok(dir) = app.path().app_data_dir() {
-        helpers::sweep_at_start(&dir); // T-283 (BROW-043); the app's start-up normally ran it already
-        profiles::set_root(dir); // T-241
-    }
     // T-179 (BROW-020): a tab that was open at the last quit comes back on its trail; one that is
     // not on screen stays blank until it is shown. Its saved title names the tab meanwhile.
     let opening = session::opening(id, url.as_str(), shown.unwrap_or(true));
@@ -3231,6 +3233,21 @@ mod tests {
         let src = include_str!("browser.rs").replace("\r\n", "\n"); // a Windows checkout is CRLF
         let body = &src[src.find("pub async fn head(app").unwrap()..];
         assert!(body[..body.find("\n}\n").unwrap()].contains("head_unless_proxied(&saved_proxy(app)"));
+    }
+
+    // Row 979 (F1): a Fresh open clears its tab's saved row before any step that can fail.
+    #[test]
+    fn row_979_browser_open_clears_the_stale_row_before_its_first_fallible_step() {
+        let src = include_str!("browser.rs").replace("\r\n", "\n"); // a Windows checkout is CRLF
+        let from = src.find("pub async fn browser_open(").unwrap();
+        let body = &src[from..];
+        let body = &body[body.find(") -> Result<(), String> {\n").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let code: String = body.lines().filter(|l| !l.trim_start().starts_with("//")).map(|l| format!("{l}\n")).collect();
+        let clear = code.find("profiles::clear_stale_row(").expect("browser_open clears the stale row");
+        let first_try = code.find(")?").expect("browser_open has fallible steps");
+        assert!(clear < first_try, "the clear sits before the first `?` in browser_open");
+        assert!(code.find("profiles::set_root(").unwrap() < clear, "the clear has its root");
     }
 
     // Council FIX-3, AFTER 2: one overall time limit, however the fetch goes.
