@@ -137,7 +137,7 @@ impl Store {
         Ok(KeepAside::Done)
     }
 
-    /// User settings as JSON. No file yet reads as an empty object; a file that cannot be read or
+    /// User settings as JSON. No file and no .bak yet reads as an empty object; a file that is missing beside a .bak, cannot be read or
     /// is not a JSON object is an error, never an empty set (T-441), unless the last good copy
     /// (settings.json.bak) still reads: then that copy is what the user gets (T-075, APP-048).
     pub fn try_settings(&self) -> std::io::Result<serde_json::Value> {
@@ -167,19 +167,22 @@ impl Store {
     /// What a settings read found: no file yet, the file itself (its bytes kept for the backup), or
     /// the last good copy because the file itself is corrupt or half-written (T-075, APP-048).
     fn read_file(&self) -> std::io::Result<Read> {
-        match Self::read_json(&self.settings_path) {
-            Ok(None) => Ok(Read::None),
-            Ok(Some((bytes, v))) => Ok(Read::File(bytes, v)),
-            Err(e) => match Self::read_json(&self.bak_path()) {
-                Ok(Some((_, v))) => {
-                    eprintln!("kolux: {} could not be read ({e}); using the last good copy {}", self.settings_path.display(), self.bak_path().display());
-                    if !self.fallback_told.swap(true, Ordering::SeqCst) {
-                        *self.fallback_notice.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!("Kolux could not read your settings file ({e}), so it is using the last good copy, {}. A change made since that copy may be missing.", self.bak_path().display()));
-                    }
-                    Ok(Read::Backup(v))
+        // Row 944: a missing file beside a .bak is a lost file, not a first run: it takes the corrupt path.
+        let e = match Self::read_json(&self.settings_path) {
+            Ok(Some((bytes, v))) => return Ok(Read::File(bytes, v)),
+            Ok(None) if !self.bak_path().exists() => return Ok(Read::None),
+            Ok(None) => std::io::Error::new(std::io::ErrorKind::NotFound, "it is missing"),
+            Err(e) => e,
+        };
+        match Self::read_json(&self.bak_path()) {
+            Ok(Some((_, v))) => {
+                eprintln!("kolux: {} could not be read ({e}); using the last good copy {}", self.settings_path.display(), self.bak_path().display());
+                if !self.fallback_told.swap(true, Ordering::SeqCst) {
+                    *self.fallback_notice.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!("Kolux could not read your settings file ({e}), so it is using the last good copy, {}. A change made since that copy may be missing.", self.bak_path().display()));
                 }
-                _ => Err(e),
-            },
+                Ok(Read::Backup(v))
+            }
+            _ => Err(e),
         }
     }
 
@@ -630,6 +633,63 @@ mod tests {
         s.stamp_look();
         assert!(!dir.join("settings.json").exists(), "the only copy of someone's settings is not buried under a new file");
         assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), br#"{"theme":"mine"}"#);
+        done(dir, s);
+    }
+
+    fn bak_only(name: &str, bak: &[u8]) -> (PathBuf, Store) {
+        let dir = temp_dir(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("settings.json.bak"), bak).unwrap();
+        let s = Store::open(&dir).unwrap();
+        (dir, s)
+    }
+
+    // Row 944 R1: a missing settings.json beside a .bak is read like a corrupt one, so the next write cannot drop the proxy.
+    #[test]
+    fn row944_a_write_after_the_settings_file_went_missing_keeps_the_proxy_from_the_last_good_copy() {
+        let bak = br#"{"httpProxy":"http://127.0.0.1:8080","theme":"mine"}"#;
+        let (dir, s) = bak_only("r944-patch", bak);
+        let mut set = serde_json::Map::new();
+        set.insert("other".into(), 1.into());
+        s.patch_settings(&set, &[]).unwrap();
+        let on_disk: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(on_disk["httpProxy"], "http://127.0.0.1:8080", "the proxy is not lost");
+        assert_eq!((on_disk["theme"].as_str(), on_disk["other"].as_i64()), (Some("mine"), Some(1)));
+        assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), bak, "the last good copy stays as it was");
+        done(dir, s);
+    }
+
+    #[test]
+    fn row944_a_missing_settings_file_reads_the_last_good_copy_and_says_so() {
+        let (dir, s) = bak_only("r944-read", br#"{"httpProxy":"http://127.0.0.1:8080"}"#);
+        assert_eq!(s.settings()["httpProxy"], "http://127.0.0.1:8080");
+        assert!(s.take_fallback_notice().is_some_and(|n| n.contains("settings.json.bak")), "the window is told");
+        assert!(!dir.join("settings.json").exists(), "a read writes nothing");
+        done(dir, s);
+    }
+
+    #[test]
+    fn row944_a_missing_settings_file_beside_an_unreadable_last_good_copy_saves_nothing() {
+        let (dir, s) = bak_only("r944-corrupt-bak", b"{ not json");
+        let mut set = serde_json::Map::new();
+        set.insert("other".into(), 1.into());
+        assert!(s.patch_settings(&set, &[]).is_err());
+        assert!(s.save_settings(&serde_json::json!({ "other": 1 })).is_err());
+        assert!(!dir.join("settings.json").exists());
+        assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), b"{ not json");
+        done(dir, s);
+    }
+
+    #[test]
+    fn row944_a_missing_settings_file_with_no_last_good_copy_is_still_a_normal_first_run() {
+        let dir = temp_dir("r944-first-run");
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.settings(), serde_json::json!({}));
+        assert!(s.take_fallback_notice().is_none());
+        let mut set = serde_json::Map::new();
+        set.insert("other".into(), 1.into());
+        s.patch_settings(&set, &[]).unwrap();
+        assert_eq!(s.settings()["other"], 1);
         done(dir, s);
     }
 

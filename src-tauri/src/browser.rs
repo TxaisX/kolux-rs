@@ -937,7 +937,10 @@ fn set_system_proxy_for_test(on: bool) {
 /// The sealed proxy setting as saved (None without a store or a value).
 fn saved_proxy(app: &AppHandle) -> Result<Option<String>, String> {
     match app.try_state::<Mutex<crate::state::Store>>() {
-        Some(store) => proxy_in_settings(store.lock().map_err(|e| e.to_string())?.try_settings()),
+        Some(store) => {
+            let store = store.lock().map_err(|e| e.to_string())?;
+            proxy_in_profile(store.try_settings(), &store.dir())
+        },
         None => Ok(None),
     }
 }
@@ -950,6 +953,23 @@ fn proxy_in_settings(read: std::io::Result<serde_json::Value>) -> Result<Option<
     match read.map_err(|_| SETTINGS_UNREADABLE.to_string())?.get("httpProxy") {
         Some(serde_json::Value::String(s)) if !s.is_empty() => crate::secrets::unseal(s).map(Some),
         _ => Ok(None),
+    }
+}
+
+/// `proxy_in_settings` plus a second look at the last good copy for a missing settings.json (the
+/// load itself reads that copy since row 944; this is the belt for a copy too damaged to say). That is "can't read", never "no proxy".
+fn proxy_in_profile(read: std::io::Result<serde_json::Value>, dir: &std::path::Path) -> Result<Option<String>, String> {
+    let saved = proxy_in_settings(read)?;
+    if saved.is_some() || !matches!(std::fs::metadata(dir.join("settings.json")), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+        return Ok(saved);
+    }
+    match std::fs::read(dir.join("settings.json.bak")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(SETTINGS_UNREADABLE.to_string()),
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(v) if v.is_object() && v.get("httpProxy").is_none_or(|p| p.as_str() == Some("")) => Ok(None),
+            _ => Err(SETTINGS_UNREADABLE.to_string()),
+        },
     }
 }
 
@@ -1509,8 +1529,9 @@ pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
     let Some(v) = setting.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
     };
+    // The URL parser drops tabs and newlines inside the text, so a setting holding one would pass as another address.
     match Url::parse(v) {
-        Ok(u) if matches!(u.scheme(), "http" | "socks5") && u.host_str().is_some() => Ok(Some(u)),
+        Ok(u) if matches!(u.scheme(), "http" | "socks5") && u.host_str().is_some() && !v.chars().any(char::is_control) => Ok(Some(u)),
         _ => Err("the HTTP proxy setting is not an http:// or socks5:// address with a host; the tab stays closed until the setting is fixed or cleared".into()),
     }
 }
@@ -2934,6 +2955,37 @@ mod tests {
         assert!(!icon_fetch_allowed(&proxy_in_settings(store.try_settings())), "and no icon goes direct either");
         std::fs::write(dir.join("settings.json"), r#"{"httpProxy":"http://127.0.0.1:3128"}"#).unwrap();
         assert_eq!(proxy_in_settings(store.try_settings()), Ok(Some("http://127.0.0.1:3128".to_string())));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Row 939b, changed by row 944: a missing settings.json beside a .bak reads the .bak (state.rs read_file),
+    // so a proxy in it is honoured and a copy that cannot be read refuses the tab, the icon and the HEAD.
+    #[test]
+    fn row939b_a_missing_settings_file_with_a_proxy_in_the_last_good_copy_refuses_everything() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-row939b-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        let read = |s: &crate::state::Store| proxy_in_profile(s.try_settings(), &s.dir());
+        let bak = dir.join("settings.json.bak");
+        assert_eq!(read(&store), Ok(None), "neither file: first run");
+        // Row 944: the load now reads the copy for a missing file, so a proxy in it is the saved proxy.
+        for (what, bytes, want) in [
+            ("a proxy", r#"{"httpProxy":"http://127.0.0.1:3128"}"#, Ok(Some("http://127.0.0.1:3128".to_string()))),
+            ("an empty proxy", r#"{"httpProxy":""}"#, Ok(None)),
+            ("no proxy", r#"{"theme":"dark"}"#, Ok(None)),
+            ("a copy that cannot be read", "{ half written", Err(SETTINGS_UNREADABLE.to_string())),
+        ] {
+            std::fs::write(&bak, bytes).unwrap();
+            let got = read(&store);
+            assert_eq!(got, want, "{what}");
+            if got.is_err() {
+                assert!(!icon_fetch_allowed(&got), "{what}: no icon or HEAD goes direct");
+            }
+        }
+        std::fs::write(dir.join("settings.json"), r#"{"theme":"dark"}"#).unwrap();
+        std::fs::write(&bak, r#"{"httpProxy":"http://127.0.0.1:3128"}"#).unwrap();
+        assert_eq!(read(&store), Ok(None), "a settings file that is there is the truth; the copy is only for a corrupt one");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

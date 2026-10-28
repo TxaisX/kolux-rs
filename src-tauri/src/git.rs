@@ -8,6 +8,43 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Counts every finished worktree add/remove/move/prune/repair that goes through this runner (the
+/// `git worktree` commands and `Git::worktree_remove`, which mostly runs no git), so a reader that
+/// cached the worktree list (the file fence) knows its copy is stale. A plain `git` in a shell is
+/// not counted.
+static WORKTREE_CHANGES: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    /// Tests only: this thread's own share of the count, exact while other tests run.
+    static THIS_THREAD_CHANGES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub fn worktree_changes() -> u64 {
+    WORKTREE_CHANGES.load(Ordering::SeqCst)
+}
+
+/// Bumps [`WORKTREE_CHANGES`] when dropped, i.e. after the work ended, pass or fail (a failed add can still leave a folder).
+struct WorktreeChange(bool);
+
+impl WorktreeChange {
+    fn watch(args: &[&str]) -> Self {
+        let rest = after_options(args);
+        WorktreeChange(rest.first() == Some(&"worktree") && rest.get(1).is_some_and(|s| ["add", "remove", "move", "prune", "repair"].contains(s)))
+    }
+}
+
+impl Drop for WorktreeChange {
+    fn drop(&mut self) {
+        if self.0 {
+            WORKTREE_CHANGES.fetch_add(1, Ordering::SeqCst);
+            #[cfg(test)]
+            THIS_THREAD_CHANGES.with(|c| c.set(c.get() + 1));
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Git {
@@ -119,15 +156,23 @@ const SHORT_READS: [&str; 18] = ["status", "diff", "log", "show", "rev-parse", "
 /// GIT-070: whether `args` is a short read (see `SHORT_READS`); `worktree` counts only as
 /// `worktree list`. Leading `-c key=value` / `-C dir` and other options are skipped.
 pub(crate) fn short_read(args: &[&str]) -> bool {
-    let mut words = args.iter().copied();
-    while let Some(w) = words.next() {
-        if w == "-c" || w == "-C" {
-            words.next();
-        } else if !w.starts_with('-') {
-            return SHORT_READS.contains(&w) || (w == "worktree" && words.next() == Some("list"));
+    let rest = after_options(args);
+    rest.first().is_some_and(|w| SHORT_READS.contains(w) || (*w == "worktree" && rest.get(1) == Some(&"list")))
+}
+
+/// `args` from the git command word on: leading `-c key=value` / `-C dir` and other options skipped.
+fn after_options<'a, 'b>(args: &'a [&'b str]) -> &'a [&'b str] {
+    let mut i = 0;
+    while let Some(w) = args.get(i) {
+        if *w == "-c" || *w == "-C" {
+            i += 2;
+        } else if w.starts_with('-') {
+            i += 1;
+        } else {
+            return &args[i..];
         }
     }
-    false
+    &[]
 }
 
 /// GIT-070: turns for short reads, counted per worktree. Foreground work (the panel on screen) that
@@ -216,6 +261,7 @@ fn gated(args: &[&str], cwd: Option<&Path>, limiter: &Limiter, limit: std::time:
 
 /// git with no turn and no time limit: the long-running and writing commands.
 fn plain_output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
+    let _changed = WorktreeChange::watch(args);
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(out.stdout)
@@ -453,6 +499,7 @@ fn run_within_raw(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration)
 fn bytes_within(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration) -> Result<Vec<u8>, String> {
     use std::io::Read;
     use std::process::Stdio;
+    let _changed = WorktreeChange::watch(args);
     let mut child = command(args, cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
     let drain = |mut r: Box<dyn Read + Send>| {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -633,6 +680,8 @@ impl Git {
     /// its record dropped; a folder left behind after Git let go of it is deleted too. A
     /// registration Git still reports afterwards is an error, never forced out from under it.
     pub fn worktree_remove(&self, repo: &Path, dest: &Path, branch: Option<&str>) -> Result<Option<String>, String> {
+        // The normal path runs no `git worktree` command, so every finish (done, held, restored) counts here.
+        let _changed = WorktreeChange(true);
         let dest_s = dest.to_string_lossy();
         // PROJ-074: the folder is moved into a hidden trash beside it first and Git's record for
         // it dropped, so the workspace is gone at once; the slow delete happens in the background.
@@ -1133,6 +1182,32 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn cli018_only_commands_that_change_the_worktree_list_count_as_a_change() {
+        let counts = |args: &[&str]| WorktreeChange::watch(args).0;
+        for args in [&["worktree", "add", "-b", "x", "d", "main"][..], &["-c", "gc.auto=0", "worktree", "remove", "d"], &["worktree", "move", "a", "b"], &["worktree", "prune"], &["worktree", "repair"], &["-C", "worktree", "worktree", "add", "d"]] {
+            assert!(counts(args), "{args:?}");
+        }
+        for args in [&["worktree", "list", "--porcelain"][..], &["status"], &["branch", "-D", "worktree"], &["worktree"], &[], &["commit", "-m", "worktree", "add"], &["-C", "worktree", "status"]] {
+            assert!(!counts(args), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn cli018_adding_then_removing_a_worktree_counts_as_two_changes() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("wt-count");
+        let dest = std::env::temp_dir().join(format!("kolux-rs-git-wt-count-ws-{}", std::process::id())).join("c");
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
+        let mine = || THIS_THREAD_CHANGES.with(|c| c.get());
+        let before = mine();
+        git.worktree_add(&repo, &dest, "c", "HEAD").unwrap();
+        assert_eq!(mine() - before, 1, "add");
+        git.worktree_remove(&repo, &dest, Some("c")).unwrap();
+        assert_eq!(mine() - before, 2, "remove, whose normal path runs no git worktree command");
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
     }
 
     #[test]
