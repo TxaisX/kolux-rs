@@ -710,12 +710,34 @@ pub fn browser_args(current: Option<&str>, safe: bool) -> String {
 static LAUNCH_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// In `run`, once per window config before the builder starts: the window's arguments, remembered
-/// for later webviews.
-pub fn launch_browser_args(current: Option<&str>, safe: bool) -> String {
-    // T-324-b (APP-022): the interface's memory ceiling rides in the same string.
-    let s = super::renderer_heap::apply_here(&browser_args(current, safe));
+/// for later webviews. Row 939: they carry the proxy saved in this profile, so the window and the
+/// tabs on its data folder agree on `--proxy-server` (the engine refuses two sets on one folder).
+/// Read from the profile folder because the store is not open yet when the windows are built.
+pub fn launch_browser_args_for(current: Option<&str>, safe: bool, identifier: &str) -> String {
+    launch_with_proxy(current, safe, profile_dir(identifier).and_then(|d| saved_proxy_in(&d)).as_ref())
+}
+
+fn launch_with_proxy(current: Option<&str>, safe: bool, proxy: Option<&tauri::Url>) -> String {
+    let s = launch_string(current, safe, proxy);
     let _ = LAUNCH_ARGS.set(s.clone());
     s
+}
+
+fn launch_string(current: Option<&str>, safe: bool, proxy: Option<&tauri::Url>) -> String {
+    // T-324-b (APP-022): the interface's memory ceiling rides in the same string.
+    let s = super::renderer_heap::apply_here(&browser_args(current, safe));
+    // A proxy the switch cannot carry (credentials, a bad shape) is left out here: the main window then
+    // runs without it, and every tab refuses it.
+    crate::browser::proxy::tab_browser_args(&s, proxy).unwrap_or(s)
+}
+
+/// The usable `httpProxy` in a profile's settings file (or its last good copy), as `proxy_of`
+/// takes it; none when unset, unreadable or unusable (the tab then refuses by itself).
+fn saved_proxy_in(dir: &Path) -> Option<tauri::Url> {
+    let read = |name: &str| fs::read(dir.join(name)).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let settings = read("settings.json").or_else(|| read("settings.json.bak"))?;
+    let plain = crate::secrets::unseal(settings.get("httpProxy")?.as_str()?).ok()?;
+    crate::browser::proxy_of(Some(&plain)).ok().flatten()
 }
 
 /// What a webview opened later (a browser tab on the default profile) passes.
@@ -2056,5 +2078,58 @@ mod tests {
         assert_eq!(browser_args(Some("--x"), false), format!("--x {} --disable-features=FedCm", UNTHROTTLED.join(" ")));
         assert!(a.split_whitespace().any(|x| x == "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,FedCm"), "BROW-026 FedCM off in the one list: {a}");
         assert_eq!(browser_args_now(), LAUNCH_ARGS.get().cloned().unwrap_or_else(|| browser_args(None, false)));
+    }
+
+    fn profile_with(name: &str, settings: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("kolux-rs-row939-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("settings.json"), settings).unwrap();
+        d
+    }
+
+    #[test]
+    fn row939_the_window_carries_the_proxy_saved_in_its_profile() {
+        let sealed = crate::secrets::seal("socks5://proxy.test:1080").unwrap();
+        for (name, settings, flag) in [
+            ("clear", r#"{"httpProxy":"http://127.0.0.1:8080"}"#.to_string(), Some("--proxy-server=http://127.0.0.1:8080")),
+            ("sealed", format!(r#"{{"httpProxy":"{sealed}"}}"#), Some("--proxy-server=socks5://proxy.test:1080")),
+            ("empty", r#"{"httpProxy":""}"#.to_string(), None),
+            ("unset", r#"{"theme":"dark"}"#.to_string(), None),
+            ("credentialed", r#"{"httpProxy":"http://me:pw@127.0.0.1:8080"}"#.to_string(), None),
+            ("equals-host", r#"{"httpProxy":"http://http=proxy.corp:3128"}"#.to_string(), None),
+            ("unusable", r#"{"httpProxy":"ftp://p:1"}"#.to_string(), None),
+        ] {
+            let d = profile_with(name, &settings);
+            let proxy = saved_proxy_in(&d);
+            let args = launch_string(None, false, proxy.as_ref());
+            let base = browser_args(None, false);
+            match flag {
+                Some(f) => assert_eq!(args, format!("{} {f}", super::super::renderer_heap::apply_here(&base)), "{name}"),
+                None => assert!(!args.contains("--proxy-server"), "{name}: {args}"),
+            }
+            let _ = fs::remove_dir_all(d);
+        }
+        assert!(saved_proxy_in(&std::env::temp_dir().join("kolux-rs-row939-missing")).is_none());
+    }
+
+    #[test]
+    fn row939_the_last_good_copy_of_the_settings_names_the_proxy_when_the_file_is_corrupt() {
+        let d = profile_with("bak", "{ half written");
+        fs::write(d.join("settings.json.bak"), r#"{"httpProxy":"http://127.0.0.1:3128"}"#).unwrap();
+        assert_eq!(saved_proxy_in(&d).map(|u| u.to_string()), Some("http://127.0.0.1:3128/".to_string()));
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn row939_a_tab_on_the_windows_folder_matches_its_string_exactly_when_the_proxy_is_unchanged() {
+        use crate::browser::proxy;
+        let url = tauri::Url::parse("http://127.0.0.1:8080").unwrap();
+        let launch = launch_string(Some("--x"), false, Some(&url));
+        let tab = proxy::tab_browser_args(&proxy::without_proxy(&launch), Some(&url)).unwrap();
+        assert!(proxy::same_args(&launch, &tab), "{launch} vs {tab}");
+        assert_eq!(launch.split_whitespace().filter(|a| a.starts_with("--proxy-server=")).count(), 1);
+        let cleared = proxy::tab_browser_args(&proxy::without_proxy(&launch), None).unwrap();
+        assert!(!proxy::same_args(&launch, &cleared), "a cleared setting is a different string from the window's, so the tab is refused");
     }
 }
