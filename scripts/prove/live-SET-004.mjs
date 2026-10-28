@@ -147,15 +147,17 @@ export async function run004(ctx, { check, log }) {
     const isDarkBg = (c) => { const m = c.match(/\d+/g)?.map(Number); return !!m && (m.length < 4 || m[3] !== 0) && luma(m) < 90; };
     check("the first recorded frame already has the saved Cobalt background variable (same as the loaded app)", !!first.appBg && first.appBg === final.appBg, `${first.appBg} vs ${final.appBg}`);
     check("the first recorded frame's page background is dark", isDarkBg(first.bg) || (first.appBg && first.bg.includes("0, 0, 0, 0") && luma(first.appBg.match(/[0-9a-f]{2}/gi)?.slice(0, 3).map((h) => parseInt(h, 16)) ?? [255, 255, 255]) < 90), `${first.bg} / ${first.appBg}`);
-    check(`the first frame already uses the app font (${FONT}) once the body exists`, rows.filter((r) => r.ff).every((r) => /georgia/i.test(r.ff)) && rows.some((r) => r.ff), JSON.stringify(rows.filter((r) => r.ff).slice(0, 2)));
+    const withContent = rows.filter((r) => r.kids > 0);
+    log(`rows before any interface content (nothing drawn but the background): ${rows.length - withContent.length}; first row with content: ${JSON.stringify(withContent[0] ?? null)}`);
+    check(`from the first frame that draws any content, the app font (${FONT}) is already in force`, withContent.length > 0 && withContent.every((r) => /georgia/i.test(r.ff)), JSON.stringify(withContent.slice(0, 2)));
     check("every recorded frame has the same background and variable (no change once loading finishes)", new Set(rows.map((r) => `${r.appBg}`)).size === 1, JSON.stringify([...new Set(rows.map((r) => r.appBg))]));
   }
   if (meas.length) {
     const ys = meas.map((f) => (f.m ? luma(f.m.rgb) : null)).filter((y) => y !== null);
     const light = ys.filter((y) => y > 128);
     check("no recorded screencast frame is light (mean luma above 128)", ys.length > 0 && light.length === 0, `${ys.length} frames, ${light.length} light, max luma ${Math.max(...ys)}`);
-    const a = meas[0].m?.rgb, z = meas[meas.length - 1].m?.rgb;
-    check("the first screencast frame's mean colour is within 12 of the last one's (same look, nothing changed)", !!a && !!z && a.every((v, i) => Math.abs(v - z[i]) <= 12), `${JSON.stringify(a)} vs ${JSON.stringify(z)}`);
+    const a = meas[0].m?.rgb, want = final.appBg.match(/[0-9a-f]{2}/gi).slice(0, 3).map((h) => parseInt(h, 16));
+    check("the first screencast frame's mean colour is the Cobalt background (within 12 on each channel)", !!a && a.every((v, i) => Math.abs(v - want[i]) <= 12), `${JSON.stringify(a)} vs ${JSON.stringify(want)}`);
   } else {
     log("no screencast frames arrived (the hidden window painted none the recorder could see)");
     check("the screencast delivered frames", false, "0 frames");
