@@ -359,6 +359,13 @@ function limitsMisfired(md: string): boolean {
   return reasons.every((r) => guess[r] === true);
 }
 
+/** Row 981: how a save that makes a showable note unshowable is judged. "same": the note already had that line-level misfire, so the save did not cause it.
+ *  "misfire": a misfire the save introduced (counted, and held under a ceiling by the fuzz). "real": a reason that is not a misfire at all. */
+function unshowable(body: string, nb: string): "same" | "misfire" | "real" {
+  if (!limitsMisfired(nb)) return "real";
+  return unsupported(body) === unsupported(nb) ? "same" : "misfire";
+}
+
 /** The saved body `nb`, read by the rich view as the app feeds it (LF text), is the view's text `out` (a table row's gap above it aside). */
 function readsAs(nb: string, out: string): boolean {
   // Row 936 (seeds 119, 95, 108): the app gives the view LF text. The raw CRLF text drops the spaces before a line end in the round trip and keeps a CR on code lines, so both sides are read as LF.
@@ -392,10 +399,14 @@ function trimFenceEdges(t: string | null): string | null {
   return kept.join("\n");
 }
 
+// Row 981: saves per run that turn a showable note unshowable by a line-level misfire (see unshowable). Measured over seeds 1-200: default 1 in total (seed 108, 1 of 400 edits), r12 0. 8 = 2% of a run: eight times the worst run, far from one in every note.
+const UNSHOWABLE_CEILING = 8;
+
 describe("fuzz: chained everyday rich-view edits save a note that reads back as the view's text, or refuse", () => {
   it.each(SEEDS)("400 chained edits (seed %i)", (seed) => {
     const r = rng(seed);
-    Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0 });
+    Object.assign(placeStats, { fast: 0, block: 0, refused: 0, whole: 0, invariant: 0, threw: 0 });
+    let unshowableN = 0;
     const N = R12 ? 120 : 400;
     let edits = 0;
     let refused = 0;
@@ -441,19 +452,26 @@ tail=${JSON.stringify(tail)}`).toBe(true);
         expect(structureProblem(body, nb, prev, out), why).toBeNull();
         // (3) A note the view could show stays one it can show, unless the view's own text cannot be shown.
         // richChange puts the body's last line end back, so that is the text the view's `out` becomes.
-        // Row 936 (seeds 36, 108): a reason that is only a line-level guess gone wrong (see limitsMisfired) is not a note the view lost.
-        if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null && unsupported(nb) !== null) expect(limitsMisfired(nb), why + `\nunsupported=${unsupported(nb)}`).toBe(true);
+        // Row 936 (seeds 36, 108): a reason that is only a line-level guess gone wrong (see limitsMisfired) is not a note the view lost. Row 981: only when the note had it already; a new one is counted below.
+        if (unsupported(body.endsWith("\n") ? out + "\n" : out) === null && unsupported(nb) !== null) {
+          const verdict = unshowable(body, nb);
+          expect(verdict, why + `\nunsupported=${unsupported(nb)}`).not.toBe("real");
+          if (verdict === "misfire") unshowableN++;
+        }
         now = next;
         prev = out;
         if (s) chained++;
       }
     }
     const ms = performance.now() - t0;
+    // Row 981: richChange never throws on these edits (a throw is counted apart from the ordinary refusals).
+    expect(placeStats.threw, "richChange threw").toBe(0);
+    expect(unshowableN, "saves that made a showable note unshowable (a line-level misfire the note did not have)").toBeLessThanOrEqual(UNSHOWABLE_CEILING);
     // Notes the view cannot spell (a fence in an item, a blank line inside a list item) refuse more: random selections tear their fences. Ordinary notes mix several loose and nested lists now: 2% was the round 6 bar, 3% held with the new shapes. Round 12: the invariant reads a 2-space sub-list by lines, so an edit that makes the view re-indent its siblings now refuses (it saved them respelt before): seeds 1-200 refuse 12-23 of 400, 6% bounds that.
     if (!R12) expect(refused, "refused on ordinary notes").toBeLessThanOrEqual(N / 16);
     if (!R12) expect(refusedHard, "refused on notes with a nested fence or a loose nested list").toBeLessThanOrEqual(N / 8);
     // Shown with --silent=false: how often each path holds.
-    console.log(`fuzz seed ${seed}${R12 ? " (round 12 shapes)" : ""}: invariant refusals ${placeStats.invariant}, ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, mismatched 0, ${ms.toFixed(0)} ms`);
+    console.log(`fuzz seed ${seed}${R12 ? " (round 12 shapes)" : ""}: invariant refusals ${placeStats.invariant}, ${edits} edits (${chained} chained), fast ${placeStats.fast}, fallback ${placeStats.block}, on a whole list or section ${placeStats.whole}, refused ${refused}, became unshowable ${unshowableN}, threw ${placeStats.threw}, mismatched 0, ${ms.toFixed(0)} ms`);
   }, R12 ? 240_000 : 20_000);
 });
 
@@ -611,5 +629,21 @@ describe("oracle: row 981 fence-edge trimming", () => {
     expect(trimFenceEdges("````\nq\n\n```\n\n````")).toBe("````\nq\n\n```\n````");
     expect(trimFenceEdges("````\n```\n\nx\n````")).toBe("````\n```\n\nx\n````");
     expect(trimFenceEdges("```\n\nx\n```\n\nafter\n")).toBe("```\nx\n```\n\nafter\n");
+  });
+});
+
+// Row 981: limitsMisfired passed any save that made a showable note unshowable (seed 108). It is now exempt only when the note already had that reason.
+describe("oracle: row 981 unshowable saves", () => {
+  const seed108 = "1. b\n   wrapped\n    - n1\n    - n2 lazy\n\n    - n3\n";
+  it("a misfire the note already had is the same; one the save introduced is counted; a real reason is real", () => {
+    expect(unsupported(seed108)).toBe("it has code blocks the rich view would reflow");
+    expect(unshowable(seed108, seed108 + "\nmore\n")).toBe("same");
+    const showable = "1. b\n   wrapped\n    - n1\n    - n2 lazy\n    - n3\n";
+    expect(unsupported(showable)).toBeNull();
+    expect(unshowable(showable, seed108)).toBe("misfire");
+    expect(unshowable("para\n", "para\n\n    code\n")).toBe("real");
+  });
+  it("a body whose reason differs from the save's reason is not excused as the same (it is counted)", () => {
+    expect(unshowable("para\n\n[r]: u\n", seed108)).toBe("misfire");
   });
 });
