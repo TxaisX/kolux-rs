@@ -1123,6 +1123,7 @@ mod tests {
         write_bytes(&f, &bytes).unwrap();
         assert_eq!(fs::read(&f).unwrap(), bytes);
         assert_eq!(entries(&d), vec!["creds.json".to_string()]);
+        let _ = fs::remove_dir_all(&d);
     }
 
     // The two mode tests run on unix only; this Windows host cannot run them (nor see them fail first).
@@ -1134,6 +1135,7 @@ mod tests {
         let f = d.join("creds.json");
         write_bytes(&f, b"secret").unwrap();
         assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[cfg(unix)]
@@ -1148,6 +1150,7 @@ mod tests {
         assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o644);
         write_bytes(&f, b"newer").unwrap();
         assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o644, "an existing file keeps its mode even for write_bytes");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

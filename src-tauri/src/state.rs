@@ -51,7 +51,7 @@ impl Store {
     pub fn stamp_look(&self) {
         let now = match self.read_file() {
             Ok(Read::File(_, now)) => now,
-            Ok(Read::None) if !self.bak_path().exists() => serde_json::json!({}),
+            Ok(Read::None) => serde_json::json!({}), // read_file only says None when there is no .bak either
             _ => return,
         };
         let Some(obj) = now.as_object() else { return };
@@ -182,6 +182,8 @@ impl Store {
                 }
                 Ok(Read::Backup(v))
             }
+            // read_json never errs with NotFound, so that kind is the missing-file case above.
+            _ if e.kind() == std::io::ErrorKind::NotFound => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "it is missing, and its last good copy could not be read")),
             _ => Err(e),
         }
     }
@@ -673,7 +675,8 @@ mod tests {
         let (dir, s) = bak_only("r944-corrupt-bak", b"{ not json");
         let mut set = serde_json::Map::new();
         set.insert("other".into(), 1.into());
-        assert!(s.patch_settings(&set, &[]).is_err());
+        let msg = s.patch_settings(&set, &[]).unwrap_err().to_string();
+        assert!(msg.contains("it is missing, and its last good copy could not be read"), "{msg}");
         assert!(s.save_settings(&serde_json::json!({ "other": 1 })).is_err());
         assert!(!dir.join("settings.json").exists());
         assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), b"{ not json");
