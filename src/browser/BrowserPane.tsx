@@ -23,7 +23,7 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
-import { namesPane, openPage, type ProfileEvent, reopenPage, type Why } from "./reopen";
+import { namesPane, openFirstPage, type ProfileEvent, reopenPage, type Why } from "./reopen";
 import { SELF_CLOSE_EVENT, type SelfClosed, selfCloseNotice } from "./selfClose";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
@@ -43,7 +43,7 @@ import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./pop
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 /** `cwd`: the worktree this tab belongs to (BROW-042: agents there drive it); `targets` / `onSend`: the agent panes
  * a page note can go to and how it is pasted (BROW-037; App.tsx passes the review-notes send path). */
-type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; cwd?: string | null; targets?: () => SendTarget[]; onSend?: (key: number, text: string) => Promise<void> | void };
+type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; cwd?: string | null; targets?: () => SendTarget[]; onSend?: (key: number, text: string) => Promise<void> | void; /** Came back from the saved layout: its first page opens in its own saved profile (row 977). */ restored?: boolean };
 
 /** The pane body's place in the window, in CSS pixels, as the back end places the page. */
 /** GIT-036: asks the window for a new browser tab at `url` in the focused split. */
@@ -118,7 +118,7 @@ function spot(el: HTMLElement) {
   return { x: r.left * z, y: r.top * z, w: r.width * z, h: r.height * z };
 }
 
-export default function BrowserPane({ id, url, title, hidden = false, focused = false, onFocus, onClose, cwd = null, targets, onSend }: Props) {
+export default function BrowserPane({ id, url, title, hidden = false, focused = false, onFocus, onClose, cwd = null, targets, onSend, restored = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
@@ -204,6 +204,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   // so a rebuild that outlives the pane closes what it built, and the rebuilt page is put where the
   // pane is NOW (shown or hidden, size) instead of where it was when the rebuild began.
   const mountedFor = useRef<number | null>(null);
+  const restoreSpent = useRef(false); // row 977: only the first open of a restored pane is a restore
   const sendBounds = useRef<(() => void) | null>(null);
   const reopen = (to: string, profile?: string, why: Why = "auto") => {
     const body = host.current;
@@ -402,7 +403,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         // open tabs or send chords until it is shown (council FIX-2).
         const body = host.current!;
         const shown = body.clientWidth > 0 && body.clientHeight > 0;
-        await openPage(invoke, id, { url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
+        await openFirstPage(invoke, id, { url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown }, restored, restoreSpent);
         opened.current = true;
         if (alive) {
           setOpen(true);

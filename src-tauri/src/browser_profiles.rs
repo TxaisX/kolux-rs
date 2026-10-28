@@ -3,6 +3,7 @@
 //! The store is one JSON file under the app's data folder, read and written whole (ponytail: a
 //! handful of rows; a database when profiles carry more than a label).
 use serde::{Deserialize, Serialize};
+use super::selfclose::Rebuild;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -118,13 +119,29 @@ pub fn resolve_open(store: &mut Store, page: u32, given: Option<String>, rebuild
     want
 }
 
+/// Shown in the pane when a restored tab's saved profile no longer exists.
+pub const RESTORE_GONE_NOTICE: &str = "This tab's saved profile is gone; it opened in the default profile";
+
+/// Row 977: the profile a RESTORED tab opens in. Only its own row counts: a live profile is kept, no row is
+/// the default, and a row naming a profile that is gone is cleared and opens in the default with the
+/// notice flag set. Never another tab's row, never a handed-over profile.
+pub fn resolve_restore(store: &mut Store, page: u32) -> (Option<String>, bool) {
+    let Some(saved) = store.tabs.get(&page.to_string()).cloned().filter(|p| p != DEFAULT) else { return (None, false) };
+    if get(store, &saved).is_some() {
+        return (Some(saved), false);
+    }
+    store.tabs.remove(&page.to_string());
+    (None, true)
+}
+
 /// What a pane's open does to the saved store, under the store lock: resolves the profile (see
-/// `resolve_open`), saves the row change and answers the profile plus whether it spoofs the identity.
-pub fn open_tab(root: &Path, page: u32, given: Option<String>, rebuild: bool) -> (Option<String>, bool) {
+/// `resolve_open`, `resolve_restore`), saves the row change and answers the profile, whether it
+/// spoofs the identity, and whether a restored tab lost its profile (show `RESTORE_GONE_NOTICE`).
+pub fn open_tab(root: &Path, page: u32, given: Option<String>, kind: Rebuild) -> (Option<String>, bool, bool) {
     let (out, _) = edit(root, |s| {
-        let profile = resolve_open(s, page, given, rebuild);
+        let (profile, gone) = if kind.restores() { resolve_restore(s, page) } else { (resolve_open(s, page, given, kind.keeps_profile()), false) };
         let spoof = profile.as_deref().is_none_or(|p| spoofs(s, p));
-        (profile, spoof)
+        (profile, spoof, gone)
     });
     out
 }
@@ -453,16 +470,69 @@ mod tests {
                     let (dir, gate, t) = (dir.clone(), gate.clone(), *t);
                     std::thread::spawn(move || {
                         gate.wait();
-                        open_tab(&dir, t, None, false)
+                        open_tab(&dir, t, None, Rebuild::Fresh)
                     })
                 })
                 .collect();
             for j in joins {
-                assert_eq!(j.join().unwrap(), (None, true));
+                assert_eq!(j.join().unwrap(), (None, true, false));
             }
             let left = load(&dir).tabs;
             assert!(left.is_empty(), "stale rows survived the parallel opens: {left:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn row_977_a_restored_tab_comes_back_in_its_saved_live_profile() {
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        set_tab(&mut s, 5, "work").unwrap();
+        assert_eq!(resolve_restore(&mut s, 5), (Some("work".into()), false));
+        assert_eq!(tab_profile(&s, 5), "work", "a restore leaves the row alone");
+    }
+
+    #[test]
+    fn row_977_a_restore_never_reads_another_tabs_row() {
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        set_tab(&mut s, 6, "work").unwrap();
+        assert_eq!(resolve_restore(&mut s, 5), (None, false), "tab 5 has no row: default, and no notice");
+        assert_eq!(tab_profile(&s, 6), "work", "tab 6's row is untouched");
+    }
+
+    #[test]
+    fn row_977_a_restored_tab_whose_profile_is_gone_opens_in_the_default_with_a_notice() {
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        set_tab(&mut s, 5, "work").unwrap();
+        set_tab(&mut s, 6, "work").unwrap();
+        s.profiles.clear(); // the profile goes, its rows survive (a lost update, a hand edit)
+        assert_eq!(resolve_restore(&mut s, 5), (None, true));
+        assert_eq!(tab_profile(&s, 5), DEFAULT, "the dead row is cleared");
+        assert!(!s.tabs.contains_key("5"));
+        assert!(RESTORE_GONE_NOTICE.contains("saved profile is gone") && RESTORE_GONE_NOTICE.contains("default profile"));
+    }
+
+    #[test]
+    fn row_977_open_tab_restore_ignores_a_handed_over_profile_and_reports_the_notice() {
+        let dir = scratch("restore");
+        let mut s = Store::default();
+        create(&mut s, "Work", None, true).unwrap();
+        create(&mut s, "Other", None, false).unwrap();
+        set_tab(&mut s, 5, "work").unwrap();
+        set_tab(&mut s, 6, "other").unwrap();
+        save(&dir, &s).unwrap();
+        let got = open_tab(&dir, 5, Some("other".into()), Rebuild::Restore);
+        assert_eq!(got, (Some("work".into()), true, false), "the saved row wins over a handed-over name");
+        let got = open_tab(&dir, 9, Some("other".into()), Rebuild::Restore);
+        assert_eq!(got, (None, true, false), "no row: default, whatever was handed over");
+        let mut s = load(&dir);
+        s.profiles.retain(|p| p.id != "work");
+        save(&dir, &s).unwrap();
+        assert_eq!(open_tab(&dir, 5, None, Rebuild::Restore), (None, true, true));
+        assert!(!load(&dir).tabs.contains_key("5"), "the cleared row is saved");
+        assert_eq!(load(&dir).tabs.get("6").map(String::as_str), Some("other"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

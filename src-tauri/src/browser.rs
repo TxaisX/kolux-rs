@@ -1146,6 +1146,7 @@ fn err(e: tauri::Error) -> String {
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>, rebuild: Option<String>) -> Result<(), String> {
     let url = parse(&url)?;
     // Row 954 (c): "auto" / "retry" mark a rebuild of a tab that had a page: it keeps its saved profile and never takes focus.
+    // Row 977: "restore" marks a pane that came back from the saved layout: it reads its own saved profile row.
     let rebuild = selfclose::Rebuild::from_arg(rebuild.as_deref());
     notices::opening(id); // after-list 719: its notices wait for the pane's browser_pane_ready
     families().join(id, url.as_str(), Instant::now()); // T-272-c
@@ -1183,7 +1184,11 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let crash_dir = app.path().app_data_dir().ok();
     // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
     let key = url.to_string();
-    let (builder, spoof, folder) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, rebuild.keeps_profile(), &key);
+    let (builder, spoof, folder, profile_gone) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, rebuild, &key);
+    if profile_gone {
+        // Row 977: held with the other open notices until the pane says it is up.
+        notices::send(&app, id, PERMISSION_EVENT, serde_json::json!({ "id": id, "text": profiles::RESTORE_GONE_NOTICE }), Some(profiles::RESTORE_GONE_NOTICE.to_string()));
+    }
     // Row 939: on Windows wry drops `.proxy_url()` whenever browser arguments are passed, so the proxy
     // rides in them; elsewhere `.proxy_url()` is the only road and stays. Tabs already open keep the
     // proxy they opened with until Kolux restarts.
@@ -1404,8 +1409,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     // A new page is laid over its pane; a tab opened behind starts hidden (council FIX-2, AFTER 3),
     // and the pane's bounds keep this true from here on.
     set_shown(id, shown.unwrap_or(true));
-    // Row 954 (c): a rebuild never takes the keyboard, shown or hidden.
-    if selfclose::focuses_after_open(rebuild) {
+    // Row 954 (c), row 978: a rebuild, a restore and a tab opened behind never take the keyboard.
+    if selfclose::focuses_after_open(rebuild, shown) {
         webview.set_focus().map_err(err)
     } else {
         Ok(())
@@ -1949,28 +1954,29 @@ pub fn take_profile(url: &str) -> Option<String> {
     Some(n.remove(at).1)
 }
 
-/// The profile the command line handed over for a NEW tab at `url`. A rebuild never takes one: it
-/// would steal the entry meant for a new tab at the same address (row 954 d, N2).
-fn given_profile(rebuild: bool, url: &str) -> Option<String> {
-    if rebuild { None } else { take_profile(url) }
+/// The profile the command line handed over for a NEW tab at `url`. A rebuild or a restore never takes
+/// one: it would steal the entry meant for a new tab at the same address (row 954 d, N2).
+fn given_profile(kind: selfclose::Rebuild, url: &str) -> Option<String> {
+    if kind == selfclose::Rebuild::Fresh { take_profile(url) } else { None }
 }
 
 /// A tab in a profile other than the default runs in that profile's own engine data folder; the
-/// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
-fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, rebuild: bool, url: &str) -> (WebviewBuilder<tauri::Wry>, bool, String) {
+/// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025), and whether a
+/// restored tab lost its saved profile (row 977: the pane shows `profiles::RESTORE_GONE_NOTICE`).
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, kind: selfclose::Rebuild, url: &str) -> (WebviewBuilder<tauri::Wry>, bool, String, bool) {
     let shared = || proxy::DEFAULT_FOLDER.to_string();
-    let profile = profile.or_else(|| given_profile(rebuild, url));
-    let Ok(root) = profiles::root() else { return (b, true, shared()) };
-    // Row 954 (c): a rebuild (crash, self-close) passes no profile but keeps the tab's saved one; any other open rewrites the row.
-    let (profile, spoof) = profiles::open_tab(&root, id, profile, rebuild);
-    let Some(p) = profile else { return (b, true, shared()) };
+    let profile = profile.or_else(|| given_profile(kind, url));
+    let Ok(root) = profiles::root() else { return (b, true, shared(), false) };
+    // Row 954 (c): a rebuild (crash, self-close) passes no profile but keeps the tab's saved one; a restore reads its own row; any other open rewrites the row.
+    let (profile, spoof, gone) = profiles::open_tab(&root, id, profile, kind);
+    let Some(p) = profile else { return (b, true, shared(), gone) };
     match profiles::data_dir(&root, &p) {
         Some(dir) => {
             profiles::page_opened(id, &p); // after-list 153: a deleted profile's folder waits for its last page
             let folder = dir.to_string_lossy().into_owned();
-            (b.data_directory(dir), spoof, folder)
+            (b.data_directory(dir), spoof, folder, gone)
         }
-        None => (b, spoof, shared()),
+        None => (b, spoof, shared(), gone),
     }
 }
 
@@ -2289,15 +2295,23 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
 
 #[cfg(test)]
 mod tests {
+    use super::selfclose::Rebuild;
     use super::*;
 
     #[test]
     fn row_954d_a_rebuild_leaves_the_pending_cli_profile_for_the_new_tab() {
         hand_profile("https://n2.example/", "work".into());
-        assert_eq!(given_profile(true, "https://n2.example/"), None, "a rebuild takes nothing");
-        assert_eq!(given_profile(true, "https://n2.example/"), None);
-        assert_eq!(given_profile(false, "https://n2.example/"), Some("work".into()), "the new tab still gets it");
-        assert_eq!(given_profile(false, "https://n2.example/"), None);
+        assert_eq!(given_profile(Rebuild::Auto, "https://n2.example/"), None, "a rebuild takes nothing");
+        assert_eq!(given_profile(Rebuild::Retry, "https://n2.example/"), None);
+        assert_eq!(given_profile(Rebuild::Fresh, "https://n2.example/"), Some("work".into()), "the new tab still gets it");
+        assert_eq!(given_profile(Rebuild::Fresh, "https://n2.example/"), None);
+    }
+
+    #[test]
+    fn row_977_a_restore_leaves_the_pending_cli_profile_for_the_new_tab() {
+        hand_profile("https://n3.example/", "work".into());
+        assert_eq!(given_profile(Rebuild::Restore, "https://n3.example/"), None, "a restore takes nothing");
+        assert_eq!(given_profile(Rebuild::Fresh, "https://n3.example/"), Some("work".into()), "the entry waited for the new tab");
     }
 
     #[test]
