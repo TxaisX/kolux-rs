@@ -36,14 +36,9 @@ export async function run001b3(ctx, { check, log }) {
   check("Rose is the chosen swatch and the main window changed from Classic", chosen === "Rose" && rose.css !== classic.css && rose.theme === "rose", JSON.stringify({ chosen, theme: rose.theme, changed: rose.css !== classic.css }));
   log(`screenshot (main, Rose): ${await ctx.shot("SET-001-main-rose")}`);
 
-  // The pop-out: the Tower window, made hidden and off-screen so nothing shows on the desktop.
-  const attempt = (opts) => app.evalJs(`window.__TAURI_INTERNALS__.invoke("plugin:webview|create_webview_window", { options: ${JSON.stringify(opts)} }).then(() => "created", (e) => "error: " + String(e))`).catch((e) => `eval error ${e.message}`);
-  let made = await attempt({ label: "tower", url: "index.html#tower-window", title: "Kolux Tower", visible: false, focus: false, x: -32000, y: -32000, width: 900, height: 600 });
-  log(`create tower window (hidden, off-screen): ${JSON.stringify(made)}`);
-  if (/error/.test(made)) {
-    made = await attempt({ label: "tower", url: "index.html#tower-window", title: "Kolux Tower", visible: false, focus: false });
-    log(`create tower window (hidden, no placement): ${JSON.stringify(made)}`);
-  }
+  // The pop-out: the app's own Rust command (the one the Own window button ends in), placed off-screen so nothing shows on the desktop.
+  const made = await app.evalJs(`window.__TAURI_INTERNALS__.invoke("tower_window_open", { place: { x: -32000, y: -32000, width: 900, height: 600, center: false, maximized: false } }).then(() => "created", (e) => "error: " + String(e))`).catch((e) => `eval error ${e.message}`);
+  log(`tower_window_open (off-screen placement): ${JSON.stringify(made)}`);
   const tower = await poll(async () => (await targets()).find((t) => t.type === "page" && /tower-window/.test(t.url)), 30000, 500);
   log(`tower target: ${tower ? tower.url : "none"}`);
   check("the pop-out window opened (a second page target for #tower-window exists)", !!tower, tower?.url ?? String(made));
@@ -64,7 +59,7 @@ export async function run001b3(ctx, { check, log }) {
     return f;
   })();
   log(`screenshot (pop-out, Rose): ${shot}`);
-  await app.evalJs(`window.__TAURI_INTERNALS__.invoke("plugin:webview|webview_close", { label: "tower" }).then(() => "closed", (e) => "err " + e)`).then((r) => log(`close pop-out: ${r}`)).catch(() => {});
+  await app.evalJs(`window.__TAURI_INTERNALS__.invoke("plugin:window|close", { label: "tower" }).then(() => "closed", (e) => "err " + e)`).then((r) => log(`close pop-out: ${r}`)).catch(() => {});
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

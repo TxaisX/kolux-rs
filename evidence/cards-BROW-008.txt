@@ -20,3 +20,18 @@ box 1: FAIL
   supplementary free port 55726: overlay {"kind":"failed","text":"This page could not load Nothing is listening on localhost:55726. If this is your own server, start it, then press Retry. Retry"}
   supplementary: after the server started on 55726 and Retry the page target reads "http://localhost:55726/ | Free page"
   PASS (supplementary, not the box) the same steps on free port 55726: advice overlay, then Retry loads the page: {"overF":{"kind":"failed","text":"This page could not load Nothing is listening on localhost:55726. If this is your own server, start it, then press Retry. Retry"},"loadedF":"http://localhost:55726/ | Free page"}
+
+
+LIVE 2026-10-27 (scripts/prove/live-BROW.mjs, hidden dev app, scratch loopback pages)
+box 1: FAIL
+  overlay: {"kind":"failed","text":"This page could not load Nothing is listening on localhost:9. If this is your own server, start it, then press Retry. Retry"}; Retry button=true
+  PASS overlay says nothing is listening on localhost:9 and gives local-server advice: {"kind":"failed","text":"This page could not load Nothing is listening on localhost:9. If this is your own server, start it, then press Retry. Retry"}
+  PASS a Retry button is on the overlay: true
+  screenshot: G:/Temp/live-v8-logs/BROW-008-b1-overlay.png
+  after the server started and Retry: overlay gone=true (15312 ms), page target reads "chrome-error://chromewebdata/ | localhost"
+  FAIL pressing Retry loads the page (overlay gone, page shows the server's content): "chrome-error://chromewebdata/ | localhost"
+  screenshot: G:/Temp/live-v8-logs/BROW-008-b1-loaded.png
+  engine error page after Retry: "unreadable no page target for /^chrome-error:/"
+  supplementary free port 49790: overlay {"kind":"failed","text":"This page could not load Nothing is listening on localhost:49790. If this is your own server, start it, then press Retry. Retry"}
+  supplementary: after the server started on 49790 and Retry the page target reads "http://localhost:49790/ | Free page"
+  PASS (supplementary, not the box) the same steps on free port 49790: advice overlay, then Retry loads the page: {"overF":{"kind":"failed","text":"This page could not load Nothing is listening on localhost:49790. If this is your own server, start it, then press Retry. Retry"},"loadedF":"http://localhost:49790/ | Free page"}
