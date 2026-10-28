@@ -117,12 +117,32 @@ export const tauriWindows: WindowApi = {
     return { all: all.map(screenOf), current: current ? screenOf(current) : null };
   },
   create: async (label, opts) => {
-    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-    const w = new WebviewWindow(label, opts);
-    return new Promise<boolean>((done) => {
-      void w.once("tauri://created", () => done(true));
-      void w.once("tauri://error", () => done(false));
-      setTimeout(() => done(false), 5000);
-    });
+    const { invoke } = await import("@tauri-apps/api/core");
+    return createViaRust(invoke, opts, () => createInPage(label, opts));
   },
 };
+
+type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+
+/** Rows 955/959: Rust builds the Tower window, so it carries the main window's browser arguments (the
+ * engine refuses a second set on the same data folder, 0x8007139F). Only a build that lacks the command
+ * falls back to the page making the window itself, as before. */
+export async function createViaRust(invoke: Invoke, opts: Record<string, unknown>, inPage: () => Promise<boolean>): Promise<boolean> {
+  const { x, y, width, height, center, maximized } = opts;
+  try {
+    await invoke("tower_window_open", { place: { x, y, width, height, center: center === true, maximized: maximized === true } });
+    return true;
+  } catch (e) {
+    return /\bnot found\b/i.test(String(e)) ? inPage() : false;
+  }
+}
+
+async function createInPage(label: string, opts: Record<string, unknown>): Promise<boolean> {
+  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+  const w = new WebviewWindow(label, opts);
+  return new Promise<boolean>((done) => {
+    void w.once("tauri://created", () => done(true));
+    void w.once("tauri://error", () => done(false));
+    setTimeout(() => done(false), 5000);
+  });
+}

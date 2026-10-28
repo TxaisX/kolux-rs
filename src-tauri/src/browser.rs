@@ -83,6 +83,11 @@ pub mod drag;
 // T-316-b (EDIT-018): a markdown note printed to a PDF by a hidden page.
 #[path = "browser_pdf.rs"]
 pub mod pdf;
+// Rows 955 / 959: the Tower's own window, built here so its browser arguments are the main window's.
+// Dead until lib.rs registers tower_window_open (evidence/browser-955-lib.rs.patch).
+#[allow(dead_code)]
+#[path = "browser_tower.rs"]
+pub mod tower;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";

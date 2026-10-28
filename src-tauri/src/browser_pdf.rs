@@ -159,6 +159,8 @@ impl Host for AppHost {
         let (tx, done) = std::sync::mpsc::channel();
         let only = url.clone();
         let win = WebviewWindowBuilder::new(&self.0, format!("note-pdf-{}", WINDOWS.fetch_add(1, Ordering::Relaxed)), WebviewUrl::External(url))
+            // Rows 955 / 959: the default data folder takes one set of browser arguments, the main window's.
+            .additional_browser_args(&crate::resources::recovery::browser_args_now())
             .visible(false)
             .focused(false)
             .skip_taskbar(true)
