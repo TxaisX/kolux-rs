@@ -14,9 +14,12 @@ const lineCount = (t: string) => t.replace(/\s+$/, "").split("\n").length;
 /** `bodyPart` (the file's bytes of a touched block) with the edit `prevPart` -> `outPart` (the view's spelling of the same block) made
  *  in it line by line; null when the lines cannot be matched for sure (the caller then retypes the block in the view's spelling). */
 export function keepFileLines(bodyPart: string, prevPart: string, outPart: string): string | null {
-  // Only an edit that adds or removes a line inside a nested list: anything else is placed word by word, which keeps every byte.
+  // Only an edit that adds or removes a line in a block with an indented list marker on some line: anything else is placed word by word, which keeps every byte.
   if (lineCount(prevPart) === lineCount(outPart) || !/^[ \t]+([-*+]|\d+[.)])[ \t]/m.test(bodyPart) || /^[ \t]*(`{3,}|~{3,})|<\/?details>/im.test(bodyPart + outPart)) return null;
-  const tail = /\s*$/.exec(bodyPart)![0];
+  // Only the whitespace run that starts at a line end is the block's tail: the spaces after the last item's text are that line's own bytes.
+  const ws = /\s*$/.exec(bodyPart)![0];
+  const nl = ws.search(/\r?\n|\r$/);
+  const tail = nl < 0 ? "" : ws.slice(nl);
   const B = bodyPart.slice(0, bodyPart.length - tail.length).split("\n");
   const P = prevPart.replace(/\s+$/, "").split("\n");
   const O = outPart.replace(/\s+$/, "").split("\n");

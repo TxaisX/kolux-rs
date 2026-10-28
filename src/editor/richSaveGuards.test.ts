@@ -713,3 +713,62 @@ describe("round 13: structural edits in a 2-space sub-list", () => {
     expect(roundTrip(next)).toBe(out);
   });
 });
+
+// Row 94 round 13: the spaces on a sub-list's last line are that line's own bytes; they stay with it, they do not follow whichever line ends up last.
+describe("round 13: trailing whitespace on a sub-list's last line", () => {
+  const LINE = /^(\s*(?:[-*+]|\d+[.)])\s+)/;
+  const lineOf = (p: string, x: string) => {
+    const L = p.split("\n");
+    const i = L.findIndex((l) => l.includes(x));
+    expect(i).toBeGreaterThanOrEqual(0);
+    return [L, i] as const;
+  };
+  const addAfter = (x: string) => (p: string) => {
+    const [L, i] = lineOf(p, x);
+    L.splice(i + 1, 0, LINE.exec(L[i])![1] + "new");
+    return L.join("\n");
+  };
+  const delLine = (x: string) => (p: string) => {
+    const [L, i] = lineOf(p, x);
+    L.splice(i, 1);
+    return L.join("\n");
+  };
+  const FM = /^---\r?\n[^]*?\r?\n---\r?\n/;
+  const run = (now: string, edit: (p: string) => string) => {
+    const prev = roundTrip(now.replace(FM, "").replace(/\r\n/g, "\n"))!;
+    const out = roundTrip(edit(prev))!;
+    let refused = 0;
+    const next = apply(now, richChange(now, out, prev, () => refused++));
+    return { next, refused, out };
+  };
+  // A refusal is safe; a save must be the exact bytes (a2 keeps its spaces, which the view reads mid-line, so no round-trip check).
+  const exactOrRefused = (now: string, edit: (p: string) => string, want: string) => {
+    const { next, refused } = run(now, edit);
+    if (refused) return expect(next).toBe(now);
+    expect(next).toBe(want);
+  };
+
+  it("T4: deleting the last sub-item drops its spaces with it", () => {
+    const { next, refused } = run("- A\n  - a1\n  - a2   \n", delLine("a2"));
+    expect(refused).toBe(0);
+    expect(next).toBe("- A\n  - a1\n");
+  });
+  it("T2: a new last sub-item leaves a2 its spaces and takes none", () => {
+    const { next, refused } = run("- A\n  - a1\n  - a2   \n", addAfter("a2"));
+    expect(refused).toBe(0);
+    expect(next).toBe("- A\n  - a1\n  - a2   \n  - new\n");
+  });
+  it("T1: no final newline, a2 keeps its spaces or the save is refused", () => {
+    exactOrRefused("- A\n  - a1\n  - a2   ", addAfter("a2"), "- A\n  - a1\n  - a2   \n  - new");
+  });
+  it("T7: the same with front matter", () => {
+    const now = "---\nt: x\n---\n- A\n  - a1\n  - a2   ";
+    exactOrRefused(now, addAfter("a2"), "---\nt: x\n---\n- A\n  - a1\n  - a2   \n  - new");
+  });
+  it("T9: the same with CRLF", () => {
+    exactOrRefused("- A\r\n  - a1\r\n  - a2   ", addAfter("a2"), "- A\r\n  - a1\r\n  - a2   \r\n  - new");
+  });
+  it("T13: the same one level deeper", () => {
+    exactOrRefused("- A\n  - a1\n    - deep  ", addAfter("deep"), "- A\n  - a1\n    - deep  \n    - new");
+  });
+});
