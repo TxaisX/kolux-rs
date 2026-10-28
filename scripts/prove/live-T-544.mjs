@@ -59,7 +59,7 @@ const inJob = (pid) => {
   }
 };
 const appsRunning = () =>
-  ps(`Get-CimInstance Win32_Process -Filter "Name='kolux-rs.exe'" | Where-Object { $_.ExecutablePath -like '${q(INSTALL)}\\*' } | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)" }`)
+  ps(`Get-CimInstance Win32_Process -Filter "Name='kolux-rs.exe'" | Where-Object { $_.ExecutablePath -like '${q(INSTALL)}\\*' -and $_.CommandLine -notlike '*--terminal-service*' } | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)" }`)
     .split(/\r?\n/).filter(Boolean).map((l) => ({ pid: Number(l.split("|")[0]), ppid: Number(l.split("|")[1]) }));
 const services = () =>
   ps(`Get-CimInstance Win32_Process -Filter "CommandLine like '%--terminal-service%'" | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)" }`)
@@ -426,6 +426,6 @@ const text = ev.join("\n");
 writeFileSync(`${LIVE_LOGS}/T-544${DRY ? "-dry" : ""}.out.txt`, `${text}\n`);
 if (!DRY) {
   mkdirSync(join(ROOT, "evidence"), { recursive: true });
-  writeFileSync(join(ROOT, "evidence", "T-544.txt"), `T-544 live proof of the installed build (items 2-5, APP-052 b1/b2)\nprover: node scripts/prove/live-T-544.mjs (lane head ${head}), slot t544 held; app started through WMI Win32_Process.Create with the Explorer environment; CDP ${CDP}\nscreenshots: ${LIVE_LOGS}\n\n${text}\n`);
+  writeFileSync(join(ROOT, "evidence", "T-544.txt"), `T-544 live proof of the installed build (items 2-5, APP-052 b1/b2)\ninstalled build: ${process.env.T544_INSTALLER_SHA ?? "(installer sha not given)"} (per-user NSIS install at %LOCALAPPDATA%\\Kolux RS)\nprover: node scripts/prove/live-T-544.mjs (lane head ${head}), slot t544 held; app started through WMI Win32_Process.Create with the Explorer environment; CDP ${CDP}\nscreenshots: ${LIVE_LOGS}\n\n${text}\n`);
 }
 process.exit(code);

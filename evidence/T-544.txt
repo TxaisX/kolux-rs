@@ -1,0 +1,32 @@
+T-544 live proof of the installed build (items 2-5, APP-052 b1/b2)
+installed build: 12076ae1 (per-user NSIS install at %LOCALAPPDATA%\Kolux RS)
+prover: node scripts/prove/live-T-544.mjs (lane head 5780fcff), slot t544 held; app started through WMI Win32_Process.Create with the Explorer environment; CDP 9291
+screenshots: G:/Temp/live-v15-logs
+
+T-544 live proof 2026-10-28T18:05:31.103Z; install %USERPROFILE%\AppData\Local\Kolux RS; CDP 9291
+PASS item3: both data folders are absent before the first launch: %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs absent; %USERPROFILE%\AppData\Local\com.txaisxiong.kolux-rs absent
+environment: 47 variables from the registry and the user's folders; removed: CLAUDE_CONFIG_DIR; added WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+Start menu shortcut: %USERPROFILE%\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Kolux RS.lnk
+IsProcessInJob probe: PING.EXE pid 27996 started through WMI False; this script (pid 32456) True
+launch 1: started through WMI Win32_Process.Create, pid 2968, parent WmiPrvSE; window: moved off-screen
+launch 1: window after the page: moved off-screen
+item 3: after the first launch: %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs created; %USERPROFILE%\AppData\Local\com.txaisxiong.kolux-rs created
+launch 1 1793210744 kolux-rs: config: CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude CODEX_HOME=%USERPROFILE%\.codex
+agent status hooks: off (nothing is installed in the real Claude or Codex settings)
+closed a first-run dialog: Get started with Kolux (Close); still open: true
+closed a first-run dialog: Get started with Kolux (Skip); still open: true
+closed a first-run dialog: Floating workspace tour (Close); still open: false
+IsProcessInJob launch 1: app pid 2968 True (its own APP-053 job by design; no APP-053 job failure in kolux.log)
+IsProcessInJob launch 1: terminal service pid 5804 (parent 2968) True
+ERROR Error: timed out after 30000 ms waiting for output of where.exe kolux ((r ?? []).map is not a function)
+    at waitFor (file:///G:/Dev/kolux-rs-lanes/t544-trial/scripts/evidence/app-launch.mjs:32:33)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///G:/Dev/kolux-rs-lanes/t544-trial/scripts/prove/live-T-544.mjs:281:13
+cleanup: app pid 2968: CloseMainWindow (WM_CLOSE) returned True; exited true
+cleanup: app pid 5804: CloseMainWindow (WM_CLOSE) returned gone; exited true
+cleanup: ended 0 terminal service(s) tied to the install: []; still running: 0
+cleanup: renamed %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs -> %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.t544-prove-20261028-1105
+cleanup: renamed %USERPROFILE%\AppData\Local\com.txaisxiong.kolux-rs -> %USERPROFILE%\AppData\Local\com.txaisxiong.kolux-rs.t544-prove-20261028-1105
+VOID: terminal service pid 5804 reads IsProcessInJob True at launch 1
+ITEM-RESULT item3 PASS
+RESULT: VOID
