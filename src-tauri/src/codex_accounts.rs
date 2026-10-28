@@ -1351,7 +1351,7 @@ mod tests {
 
     // Row 938: with nothing listed at all an existing re-sign-in keeps its own id and home.
     #[test]
-    fn row938_an_existing_codex_sign_in_with_an_empty_list_keeps_its_own_id() {
+    fn row938_an_existing_codex_sign_in_with_an_empty_list_and_its_home_keeps_its_own_id() {
         let profile = temp("row938-empty");
         let store = Mutex::new(Store::open(&profile).unwrap());
         let ok = |email: &'static str| move |home: &Path| {

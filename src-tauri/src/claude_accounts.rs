@@ -245,7 +245,6 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     let id = id.as_str();
     let creds = dir.join(CREDENTIALS);
     let vault = profile.join(secrets::VAULT).join(format!("claude-{id}.json"));
-    let before = read(&creds);
     // Row 940: the live file as the login found it, as raw bytes, so a rollback restores even a file that is not UTF-8.
     let live_before = match fs::read(&creds) {
         Ok(bytes) => LiveBefore::Bytes(bytes),
@@ -255,21 +254,26 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
             LiveBefore::Unreadable
         }
     };
+    let before = match &live_before {
+        LiveBefore::Bytes(bytes) => String::from_utf8(bytes.clone()).ok(),
+        _ => None,
+    };
     let undo = || {
         if !existing {
             let _ = fs::remove_dir_all(&dir);
             return;
         }
         match &live_before {
+            // Row 944: put back through a temp file and a rename, so a crash never leaves a truncated live file. The token-refresh race (a pane refreshing during the login) is accepted.
             LiveBefore::Bytes(bytes) => {
-                let _ = fs::write(&creds, bytes);
+                restore_sealed_copy(&creds, bytes);
             }
             // Row 938: a file that exists but cannot be read (a lock) may be the only copy of the earlier login, so it is left as it is.
             LiveBefore::Unreadable => {}
             // Row 932: no live file before, so the sealed copy is the earlier login; with none, the live file can only hold the refused login.
             LiveBefore::Absent => match secrets::read_file(&vault, profile).ok().flatten() {
                 Some(earlier) => {
-                    let _ = fs::write(&creds, earlier);
+                    restore_sealed_copy(&creds, earlier.as_bytes());
                 }
                 None => remove_refused_login(&creds),
             },
@@ -358,7 +362,7 @@ enum LiveBefore {
 fn write_live_from_sealed(creds: &Path, sealed: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(sealed) else { return false };
     match secrets::unseal(text.trim_end()) {
-        Ok(plain) => fs::write(creds, plain).is_ok(),
+        Ok(plain) => restore_sealed_copy(creds, plain.as_bytes()),
         Err(_) => false,
     }
 }
@@ -399,7 +403,7 @@ pub(crate) fn claim_new_folder(profile: &Path, folder: &str, agent: &str, listed
 
 const CLAIM_TRIES: u32 = 8;
 
-/// Row 923: puts earlier sealed bytes back through a temp file and a rename, so a crash never leaves a truncated copy; a failure is logged by path and kind only. True when the bytes are back.
+/// Row 923: puts earlier bytes (a sealed copy or the live sign-in file) back through a temp file and a rename, so a crash never leaves a truncated copy; a failure is logged by path and kind only. True when the bytes are back.
 fn restore_sealed_copy(path: &Path, bytes: &[u8]) -> bool {
     let tmp = path.with_extension("tmp");
     match fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, path)) {
@@ -1058,7 +1062,7 @@ mod tests {
 
     // Row 940 (2): with nothing listed, an existing sign-in whose account folder is there (a list set aside as corrupt) keeps its own id and folder.
     #[test]
-    fn row938_an_existing_sign_in_with_an_empty_list_keeps_its_own_id() {
+    fn row938_an_existing_sign_in_with_an_empty_list_and_its_folder_keeps_its_own_id() {
         let (dir, store) = profile("row938-empty");
         let a = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
         store.lock().unwrap().set(LIST_KEY, "[]").unwrap();
