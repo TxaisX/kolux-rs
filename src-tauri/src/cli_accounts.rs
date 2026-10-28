@@ -58,7 +58,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let id = req.args["id"].as_str().unwrap_or_default();
             let program = crate::agents::find_program("claude");
             let status = |dir: &Path| program.as_deref().and_then(|p| claude_accounts::auth_status(p, Some(dir)));
-            let out = finish(ctx.store, &profile, agent, id, crate::claude_key::now_ms(), status, codex_accounts::remove_dir_patiently);
+            let out = finish(ctx.store, &profile, agent, id, crate::claude_key::now_ms(), status, codex_accounts::remove_dir_patiently, &crate::hooks::agent_hooks::user_home());
             (ctx.notify)(json!({ "kind": "accounts" }));
             out
         }
@@ -99,9 +99,10 @@ pub fn begin(profile: &Path, agent: &str, id: &str) -> Result<Value, Fail> {
 
 /// Takes in what the login left in the throwaway folder as a managed account (the same checks as
 /// Settings: a real new sign-in, not one already listed), then deletes the folder. A sign-in that
-/// worked is still a failure when the folder cannot be deleted, and the account is not kept.
+/// worked is still a failure when the folder cannot be deleted, and the account is not kept. `home` is
+/// the home whose hooks install lock the rollback takes (a test passes a scratch one).
 #[allow(clippy::too_many_arguments)]
-pub fn finish(store: &Mutex<Store>, profile: &Path, agent: &str, id: &str, now: i64, status: impl FnOnce(&Path) -> Option<String>, cleanup: impl Fn(&Path) -> std::io::Result<()>) -> Result<Value, Fail> {
+pub fn finish(store: &Mutex<Store>, profile: &Path, agent: &str, id: &str, now: i64, status: impl FnOnce(&Path) -> Option<String>, cleanup: impl Fn(&Path) -> std::io::Result<()>, home: &Path) -> Result<Value, Fail> {
     let temp = temp_of(profile, agent, id).filter(|t| t.is_dir()).ok_or_else(|| Fail::new("failed", "that sign-in is not waiting in Kolux; run kolux account add again"))?;
     let adopt = |dir: &Path| -> Result<(), String> {
         for entry in fs::read_dir(&temp).map_err(|e| e.to_string())? {
@@ -123,7 +124,7 @@ pub fn finish(store: &Mutex<Store>, profile: &Path, agent: &str, id: &str, now: 
             let s = store.lock().map_err(|e| Fail::new("failed", e.to_string()))?;
             // Row 921: a taken id was moved on, so remove the account that was made, not the one asked for.
             let made = v["id"].as_str().unwrap_or(id);
-            let _ = if agent == "codex" { codex_accounts::remove(&s, profile, made) } else { claude_accounts::remove(&s, profile, made) };
+            let _ = if agent == "codex" { codex_accounts::remove(&s, profile, made) } else { claude_accounts::remove_in(&s, profile, made, home) };
             Err(Fail::new("sign_in_failed", format!("The sign-in worked, but its temporary copy at {} could not be removed ({e}), so the account was not kept. Delete that folder and try again.", temp.display())))
         }
         (Ok(v), Ok(())) => Ok(v),
@@ -326,7 +327,7 @@ mod tests {
         let temp = PathBuf::from(begun["temp"].as_str().unwrap());
         assert!(temp.starts_with(dir.join(TEMP_FOLDER)));
         fs::write(temp.join(claude_accounts::CREDENTIALS), CREDS).unwrap();
-        let added = finish(&store, &dir, "claude", "a1", 5, |_| Some(SIGNED_IN.into()), codex_accounts::remove_dir_patiently).unwrap();
+        let added = finish(&store, &dir, "claude", "a1", 5, |_| Some(SIGNED_IN.into()), codex_accounts::remove_dir_patiently, &dir.join("home")).unwrap();
         assert_eq!(added["email"], "sam@example.com");
         assert!(!temp.exists(), "the throwaway folder is deleted");
         assert_eq!(fs::read_to_string(dir.join(claude_accounts::FOLDER).join("a1").join(claude_accounts::CREDENTIALS)).unwrap(), CREDS);
@@ -338,7 +339,7 @@ mod tests {
         // The same account again: refused, nothing kept.
         let again = begin(&dir, "claude", "a2").unwrap();
         fs::write(PathBuf::from(again["temp"].as_str().unwrap()).join(claude_accounts::CREDENTIALS), CREDS.replace("fake-access", "other")).unwrap();
-        let twin = finish(&store, &dir, "claude", "a2", 6, |_| Some(SIGNED_IN.into()), codex_accounts::remove_dir_patiently).unwrap_err();
+        let twin = finish(&store, &dir, "claude", "a2", 6, |_| Some(SIGNED_IN.into()), codex_accounts::remove_dir_patiently, &dir.join("home")).unwrap_err();
         assert!(twin.message.contains("already in the list"), "{}", twin.message);
         assert_eq!(claude_accounts::load(&store.lock().unwrap()).len(), 1);
         assert!(!dir.join(TEMP_FOLDER).join("claude-a2").exists() && !dir.join(claude_accounts::FOLDER).join("a2").exists());
@@ -350,13 +351,13 @@ mod tests {
         let begun = begin(&dir, "codex", "c1").unwrap();
         let temp = PathBuf::from(begun["temp"].as_str().unwrap());
         assert!(fs::read_to_string(temp.join("config.toml")).unwrap().contains("cli_auth_credentials_store"));
-        let empty = finish(&store, &dir, "codex", "c1", 5, |_| None, codex_accounts::remove_dir_patiently).unwrap_err();
+        let empty = finish(&store, &dir, "codex", "c1", 5, |_| None, codex_accounts::remove_dir_patiently, &dir.join("home")).unwrap_err();
         assert_eq!(empty.code, "sign_in_failed");
         assert!(codex_accounts::load(&store.lock().unwrap()).is_empty() && !temp.exists() && !dir.join(codex_accounts::FOLDER).join("c1").exists());
         let begun = begin(&dir, "codex", "c2").unwrap();
         let temp = PathBuf::from(begun["temp"].as_str().unwrap());
         fs::write(temp.join("auth.json"), r#"{"tokens":{"id_token":"x","access_token":"y","refresh_token":"z"}}"#).unwrap();
-        let added = finish(&store, &dir, "codex", "c2", 6, |_| None, codex_accounts::remove_dir_patiently).unwrap();
+        let added = finish(&store, &dir, "codex", "c2", 6, |_| None, codex_accounts::remove_dir_patiently, &dir.join("home")).unwrap();
         assert_eq!(added["active"], true);
         let listed = list(&store.lock().unwrap());
         assert_eq!((listed["accounts"][0]["agent"].as_str(), listed["systemDefault"]["codex"].as_bool()), (Some("codex"), Some(false)));
@@ -368,9 +369,11 @@ mod tests {
         let (dir, store) = profile("stuck");
         let temp = PathBuf::from(begin(&dir, "claude", "s1").unwrap()["temp"].as_str().unwrap());
         fs::write(temp.join(claude_accounts::CREDENTIALS), CREDS).unwrap();
-        let stuck = finish(&store, &dir, "claude", "s1", 5, |_| Some(SIGNED_IN.into()), |_| Err(std::io::Error::other("in use"))).unwrap_err();
+        let stuck = finish(&store, &dir, "claude", "s1", 5, |_| Some(SIGNED_IN.into()), |_| Err(std::io::Error::other("in use")), &dir.join("home")).unwrap_err();
         assert!(stuck.message.contains("was not kept"), "{}", stuck.message);
         assert!(claude_accounts::load(&store.lock().unwrap()).is_empty());
+        // Row 989 R1: the rollback took its hooks install lock under the scratch home, never the real one.
+        assert!(dir.join("home").join(".kolux-rs").join("agent-hooks").is_dir(), "the lock ran in the scratch home");
     }
 
     #[test]
@@ -381,7 +384,7 @@ mod tests {
             asked.lock().unwrap().push(command.to_string());
             match command {
                 BEGIN => begin(&dir, args["agent"].as_str().unwrap(), "i1"),
-                _ => finish(&store, &dir, "claude", "i1", 5, |_| Some(SIGNED_IN.into()), codex_accounts::remove_dir_patiently),
+                _ => finish(&store, &dir, "claude", "i1", 5, |_| Some(SIGNED_IN.into()), codex_accounts::remove_dir_patiently, &dir.join("home")),
             }
         };
         let out = add("claude", ask, |temp| {

@@ -569,7 +569,7 @@ pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prom
 }
 
 /// One of the user's own per-agent options (`args`, `command`, `env`), trimmed; blank counts as unset.
-fn option_field<'a>(settings: &'a serde_json::Value, id: &str, key: &str) -> Option<&'a str> {
+pub(crate) fn option_field<'a>(settings: &'a serde_json::Value, id: &str, key: &str) -> Option<&'a str> {
     settings.get(OPTIONS_FIELD)?.get(id)?.get(key)?.as_str().map(str::trim).filter(|v| !v.is_empty())
 }
 

@@ -8,3 +8,13 @@ box 2: NOT TICKED (BUG, after.md NOW). The stall is a real blocked write: script
   control run (no holder, same script with --control): app gone 0.7 s after the close request; kolux.log ends "final save: 5 finished in 24 ms", "app exit".
   deadlines: final_save::QUIT_DEADLINE 5 s (barrier steps are capped, the unit test t075_b stays valid), lifecycle::quit_deadline() = max(15 s, 5 + 3 + 2 s) = 15 s. Result: exit time under the stall > 75 s (unbounded while the file is held), against 15 s. The watchdog's diag::write (lifecycle.rs:520-531) runs before process::exit(0), so it cannot fire while the log write is blocked.
   screenshot: none (nothing visible to capture; the window is off-screen and the page is gone when the app hangs).
+
+LIVE 2026-10-27 re-proof after MERGE 409 (lane/prove on main b55c5656; scripts/prove/live-APP-050.mjs, hidden dev app, scratch profile)
+  stall: scripts/prove/oplock-hold holds a batch oplock on <profile>/logs/kolux.log and never acknowledges the break; a second open of that file blocks (probe still waiting after 2517 ms in run 1)
+  file stalled: <profile>/logs/kolux.log (the file the quit watchdog's diag::write needs). The final-save files were not stalled.
+  box limit read: "the quit deadline" = lifecycle::quit_deadline() = 15 s (QUIT_HARD_LIMIT; final save 5 s + webview wait + 2 s is smaller)
+  run 1 (--probe): window close over CDP -> app pid gone after 15.7 s
+  run 2: window close over CDP -> app pid gone after 15.8 s
+  batch 9 (before MERGE 409): app still running after 75 s, exited 1.5 s after the holder was released (78 s)
+  reading: the stall no longer holds the quit (bounded, 15 s deadline + the watchdog's 0.5 s WATCHDOG_LOG_WAIT + teardown), but the exit lands 0.7 to 0.8 s AFTER the 15 s deadline, so the strict box limit is not met. Box stays unticked.
+  log: G:/Temp/live-v11-logs/APP-050.run.txt, APP-050.run2.txt
