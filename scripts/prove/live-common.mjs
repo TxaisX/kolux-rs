@@ -148,6 +148,19 @@ export async function startProve(id, opts) {
       for (;;) {
         const t = await ctx.screenText();
         if (/login method|please run \/login|not logged in|log in to claude|Paste code here|Invalid API key|Anthropic Console|Sign in/i.test(t)) throw new NeedsLogin(`claude asks for a login: ${t.split("\n").filter(Boolean).slice(0, 4).join(" | ").slice(0, 200)}`);
+        // Only with opts.allowSkip (a scratch repo + scratch bare remote): Claude's own "Bypass Permissions mode" warning; the pre-selected answer is "No, exit".
+        if (/Bypass Permissions mode/i.test(t) && /Yes, I accept/i.test(t)) {
+          if (Date.now() - last > 4000) {
+            last = Date.now();
+            log('  (bypass-permissions warning: chose "Yes, I accept" for the scratch repo)');
+            await ctx.focus();
+            await cdp("key", "ArrowDown");
+            await sleep(300);
+            await ctx.enter();
+          }
+          await sleep(1000);
+          continue;
+        }
         // First-run questions of the test account (the sign-in is already there): accept the pre-selected answer, one Enter each.
         const first = /Choose the text style|Press Enter to continue|trust this folder|Do you trust|Yes, I trust|Use recommended settings/i.exec(t);
         if (first) {
@@ -198,6 +211,13 @@ export async function startProve(id, opts) {
       return (await ctx.events())[0]?.paneKey ?? null;
     },
     history: (paneKey) => app.invoke("agent_history", { paneKey }),
+    /** Types a line into the n-th shown pane matching sel (default: a shell pane) through the input pipeline, then Enter. */
+    async typeInto(index, line, sel = 'section.pane[data-agent="shell"]') {
+      await focusPane(sel, index, ".xterm-helper-textarea");
+      await cdp("insert", line, "enter");
+    },
+    /** A CDP page screenshot (PNG) written to LOGS/<name>.png. */
+    shot: async (name) => (await import("./live-claude-common.mjs")).shot(name),
     stop: () => app.closeApp(),
   };
   return ctx;

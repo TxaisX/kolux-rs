@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { ACCOUNT_A, CLAUDE, LOGS, NeedsLogin, ROOT, excerpt, reporter, sleep, startProve, waitFor } from "./live-common.mjs";
 import { checker, pickScreen } from "./live-views-dom.mjs";
 
-export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A } from "./live-common.mjs";
+export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A, BASE } from "./live-common.mjs";
 export const CLAUDE_EXE = "C:/Users/XiongT/.local/bin/claude.exe"; // what the registry PATH resolves (TERM-120, batch 8)
 export const DATE = "2026-10-27";
 const MARK = (id) => `<<live-v10:${id}>>`;
