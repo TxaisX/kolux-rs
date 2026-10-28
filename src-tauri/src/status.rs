@@ -258,6 +258,10 @@ impl Session {
         let name = event.get("hook_event_name")?.as_str()?;
         self.signal();
         self.agent = Some(agent);
+        // A sub-agent starting or starting a tool inside a cancel's grace proves the turn went on.
+        if self.cancelled && self.child_alive(agent, name, event) {
+            self.cancelled = false;
+        }
         let before = self.resolved();
         let mut announce = None;
         // Council FIX-3 (chat e5412ff, FS1): the tool a sub-agent just started, named on the change.
@@ -473,7 +477,12 @@ impl Session {
     /// Ctrl+C or Escape while the lead itself works: the coming Stop is an interruption. Nothing is
     /// concluded while a child or background work is still going (STAT-028).
     pub fn cancel(&mut self) {
-        if self.own == Some("working") && !self.background && !self.children.iter().any(|c| c.state == "working") {
+        self.mark_cancel(false);
+    }
+
+    /// `deny`: a Claude Deny's Esc interrupts the whole turn, so it is marked while children work too.
+    fn mark_cancel(&mut self, deny: bool) {
+        if self.own == Some("working") && !self.background && (deny || !self.children.iter().any(|c| c.state == "working")) {
             self.cancelled = true;
             self.cancelled_at = now_ms();
             self.killed.clone_from(&self.tools);
@@ -485,7 +494,7 @@ impl Session {
     /// VIEW-025 b3: at a Claude hook permission prompt a typed Esc (or Ctrl+C, which the caller cannot
     /// tell apart) is the deny, answered like a card's; Codex keeps its prompt and its own hooks.
     pub fn typed_cancel(&mut self) {
-        if self.agent == Some(Agent::Claude) && self.own == Some("permission") && self.pending.is_some() {
+        if self.agent == Some(Agent::Claude) && self.answerable() {
             self.answer(Agent::Claude, false);
         } else {
             self.cancel();
@@ -506,6 +515,17 @@ impl Session {
             Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || (self.denied.as_deref() != Some(id) && (self.past_grace() || !self.killed.iter().any(|k| k == id))))),
             Agent::Codex | Agent::Vendor => self.fresh_tool(name, event),
         }
+    }
+
+    /// A Claude sub-agent's sign of life: a SubagentStart, or a known child's PreToolUse that is not
+    /// the denied tool. A child's Post* never counts (it may be the killed tool's own report).
+    fn child_alive(&self, agent: Agent, name: &str, event: &Value) -> bool {
+        agent == Agent::Claude
+            && match (name, str_of(event, "agent_id")) {
+                ("SubagentStart", _) => true,
+                ("PreToolUse", Some(a)) => self.children.iter().any(|c| c.id == a) && str_of(event, "tool_use_id").is_none_or(|id| self.denied.as_deref() != Some(id)),
+                _ => false,
+            }
     }
 
     /// T-123-c-c: the cancel has settled, or its grace is over.
@@ -572,6 +592,8 @@ impl Session {
         self.interrupted = true;
         self.pending = None;
         self.own = Some("interrupted");
+        // The interrupt took every child with it; the window knows no "interrupted" child state.
+        self.children.retain(|c| !matches!(c.state, "working" | "permission"));
         self.remember("interrupted");
         true
     }
@@ -598,7 +620,7 @@ impl Session {
         let asked = if self.own == Some("permission") && self.pending.is_some() { self.tools.last().cloned() } else { None };
         let state = self.answer_state();
         if agent == Agent::Claude && !approve {
-            self.cancel();
+            self.mark_cancel(true);
             if self.cancelled {
                 self.denied = asked;
             }
@@ -1839,6 +1861,82 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), Some("working"));
         assert_eq!((s.resolved(), s.interrupted, s.cancelled), ("working", false, false));
         assert_eq!(s.history.back().map(|e| e.state), Some("working"));
+    }
+
+    #[test]
+    fn p80_a_deny_of_a_sub_agents_prompt_or_of_the_leads_while_a_child_works_settles_the_pane_interrupted() {
+        // (a) a card Deny of child A's prompt: the whole turn was interrupted, the roster empties.
+        let mut s = child_asking();
+        assert_eq!(s.answer(Agent::Claude, false), "working");
+        assert!(s.cancelled, "the deny is marked even though the answered child is working");
+        assert!(!s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS - 1), "Claude gets its moment first");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "interrupted");
+        assert!(s.children.is_empty(), "the children still working or asking are dropped");
+        // A dropped child's late event is ignored.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","agent_id":"a","tool_name":"Bash","tool_use_id":"c1"}"#), None);
+        assert_eq!(s.resolved(), "interrupted");
+        // (c) a typed Esc at A's prompt is the same deny.
+        let mut s = child_asking();
+        s.typed_cancel();
+        assert!(s.cancelled);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!((s.resolved(), s.children.len()), ("interrupted", 0));
+        // (d) a deny at the lead's prompt while child B works.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"b","agent_type":"w"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#), Some("permission"));
+        s.answer(Agent::Claude, false);
+        assert!(s.cancelled);
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!((s.resolved(), s.children.len()), ("interrupted", 0));
+    }
+
+    #[test]
+    fn p80_a_sub_agents_sign_of_life_inside_the_grace_drops_the_deny_cancel() {
+        // (b) a fresh PreToolUse from A, or a new SubagentStart, after the deny.
+        let mut s = child_asking();
+        s.answer(Agent::Claude, false);
+        let at = s.cancelled_at;
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a","tool_name":"Read","tool_use_id":"c2"}"#), Some("working"));
+        assert!(!s.cancelled, "the cancel is dropped");
+        assert!(!s.settle_cancel(at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "working");
+        let mut s = child_asking();
+        s.answer(Agent::Claude, false);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"z","agent_type":"w"}"#);
+        assert!(!s.cancelled && !s.settle_cancel(u64::MAX));
+        assert_eq!(s.resolved(), "working");
+        // A child's Post never counts.
+        let mut s = child_asking();
+        s.answer(Agent::Claude, false);
+        state(&mut s, r#"{"hook_event_name":"PostToolUse","agent_id":"a","tool_name":"Bash","tool_use_id":"c1"}"#);
+        assert!(s.cancelled, "a child's Post proves nothing");
+    }
+
+    #[test]
+    fn p80_a_plain_esc_while_a_child_works_is_still_refused() {
+        // (e) STAT-028: nothing is concluded while a child works.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"b","agent_type":"w"}"#);
+        s.cancel();
+        assert!(!s.cancelled && !s.settle_cancel(u64::MAX));
+        s.typed_cancel();
+        assert!(!s.cancelled, "no prompt stands, so a typed Esc is a plain cancel");
+        assert_eq!(s.resolved(), "working");
+    }
+
+    /// A Claude lead working with sub-agent `a`, which asks permission for a Bash tool it started as `c1`.
+    fn child_asking() -> Session {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a","agent_type":"w"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a","tool_name":"Bash","tool_use_id":"c1"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a","tool_name":"Bash"}"#), Some("permission"));
+        s
     }
 
     #[test]
