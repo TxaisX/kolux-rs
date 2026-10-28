@@ -15,6 +15,7 @@ const rep = reporter();
 const { log, lines: ev } = rep;
 let ctx;
 let ok = false;
+let tRelaunch = 0;
 const asserts = [];
 const check = (box, name, pass, detail) => {
   asserts.push(pass);
@@ -98,6 +99,7 @@ try {
     const closed = await app.closeAndCount(app.pid);
     log(`quit: ${closed.how}; survivors ${closed.survivors.length} (${app.byName(closed.survivors)}); services tied to this root after quit: ${JSON.stringify(mine().map((s) => s.pid))}`);
     await app.relaunch();
+    tRelaunch = Date.now();
     // Diagnostic poller: when does the pane first show the ended line, and what is the log/service doing at that moment?
     const t1 = Date.now();
     let seenEnd = false;
@@ -140,6 +142,32 @@ try {
     wd2 = l2 ? l2.slice(4) : "";
   }
   check("c", "the new shell's cwd equals the old one", !!wd2 && norm(wd2) === norm(wd0), `${wd2 || "(no answer: the pane did not take input)"} vs ${wd0}`);
+  // Batch 15: hold the restored pane to 65 s after the relaunch, tracking service pids and kolux.log terminal lines.
+  if (tRelaunch) {
+    const track = [];
+    let lastKey = "";
+    while (Date.now() < tRelaunch + 65000) {
+      const key = JSON.stringify(mine().map((s) => s.pid));
+      if (key !== lastKey) track.push(`+${((Date.now() - tRelaunch) / 1000).toFixed(0)}s services ${key}`);
+      lastKey = key;
+      await sleep(4000);
+    }
+    log(`hold: service pid changes after the relaunch: ${track.join(" ; ")}`);
+    const rowsHold = await rowsOf();
+    const ended = rowsHold.some((l) => /process ended/.test(l));
+    log(`hold: 65 s after the relaunch the pane shows an ended line: ${ended}; buffer tail ${JSON.stringify(rowsHold.filter((l) => l.trim()).slice(-4))}`);
+    const relEpoch = Math.floor(tRelaunch / 1000);
+    const termLines = readFileSync(join(profile, "logs", "kolux.log"), "utf8").split(/\r?\n/).filter((l) => /terminal (service|\d+)|taken back/.test(l));
+    for (const l of termLines) {
+      const m = l.match(/^(\d{9,})\s/);
+      log(`  kolux.log ${m ? `${Number(m[1]) - relEpoch >= 0 ? "+" : ""}${Number(m[1]) - relEpoch}s vs relaunch` : "(no time)"}: ${l.replace(/^\d+\s*/, "").slice(0, 120)}`);
+    }
+    const exitedAfter = termLines.filter((l) => /terminal \d+ exited/.test(l) && Number((l.match(/^(\d{9,})/) ?? [])[1]) >= relEpoch);
+    check("hold", "no 'terminal N exited' line after the relaunch and no ended line at 65 s", !ended && exitedAfter.length === 0, `ended ${ended}; exited lines after relaunch ${exitedAfter.length}`);
+    await ctx.typeInto(0, `echo M3-${stamp}`);
+    const out3 = await waitFor("the late echo", async () => (await rowsOf()).some((l) => l.trim() === `M3-${stamp}`), 10000, 500).then(() => true, () => false);
+    check("hold", "a late echo M3-<stamp> after 65 s still answers", out3, `output row seen ${out3}`);
+  }
   if (!out2) {
     // Task 2 diagnostics: what the pane's session maps to, and whether keystrokes reach any pty.
     const show = async (cmd) => log(`diag ${cmd}: ${String(await app.invoke(cmd, {}).then((v) => JSON.stringify(v), (e) => "ERR " + e)).replace(/[A-Za-z]:[\\/][^"]*/g, "<path>").slice(0, 700)}`);
