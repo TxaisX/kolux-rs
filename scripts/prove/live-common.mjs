@@ -205,8 +205,8 @@ export function hookEventsInstalled(settingsFile) {
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
 
 // ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
-export const LIVE_BASE = "G:/Temp/live-v5";
-export const LIVE_LOGS = "G:/Temp/live-v5-logs";
+export const LIVE_BASE = "G:/Temp/live-v6";
+export const LIVE_LOGS = "G:/Temp/live-v6-logs";
 export const TERM = "section.pane[data-agent]";
 export const SHELL = 'section.pane[data-agent="shell"]';
 
@@ -268,7 +268,13 @@ export async function startPlain(id, opts) {
   if (opts.prepare) await opts.prepare(repo);
   // uiLook is written down: a profile with any setting reads as Classic, and the clean (New) look is what a new install shows.
   const seeded = { confirmCloseRunning: false, agentStatusHooks: true, uiLook: "new", ...(opts.settings ?? {}) };
-  if (opts.standin) seeded.agentOptions = { claude: { command: writeStandinClaude(join(TEMP, "standin"), opts.standin) } };
+  if (opts.standin) {
+    seeded.agentOptions = { claude: { command: writeStandinClaude(join(TEMP, "standin"), opts.standin) } };
+    // The stand-in is on the app's PATH before it starts, so the catalogue never finds (or starts) a real claude.
+    process.env.PATH = `${join(TEMP, "standin").replace(/\//g, "\\")};${process.env.PATH}`;
+  }
+  // opts.pathDirs: folders put at the front of the app process's own PATH (a scratch one; the real system and user PATH are never touched).
+  for (const d of opts.pathDirs ?? []) process.env.PATH = `${d.replace(/\//g, "\\")};${process.env.PATH}`;
   // opts.trace: a folder GIT_TRACE2 points at for the app, so each git process the app starts leaves one trace file there.
   if (opts.trace) {
     rmSync(opts.trace, { recursive: true, force: true });
@@ -330,7 +336,7 @@ export async function startPlain(id, opts) {
       return data ? file : null;
     },
     /** One key press with an explicit key, code and virtual-key code (cdp.mjs knows only a few names, e.g. not F7). mods: Alt 1, Ctrl 2, Shift 8. */
-    async rawKey({ key, code, vk, mods = 0 }) {
+    async rawKey({ key, code, vk, mods = 0, text }) {
       const targets = await (await fetch("http://127.0.0.1:9290/json")).json();
       const t = targets.find((x) => x.type === "page" && /localhost:1470|tauri\.localhost/.test(x.url));
       const ws = new WebSocket(t.webSocketDebuggerUrl);
@@ -344,10 +350,13 @@ export async function startPlain(id, opts) {
           ws.send(JSON.stringify({ id: mine, method, params }));
         });
       const k = { key, code, windowsVirtualKeyCode: vk, modifiers: mods };
-      await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...k });
+      // text makes it a character key press (Space, Enter on a button), not a bare raw key.
+      await send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...k, ...(text ? { text } : {}) });
       await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
       ws.close();
     },
+    /** Real agent programs (claude/codex/grok) anywhere under the app now; a stand-in runs as cmd.exe, never these. */
+    realAgents: async () => (await app.treeOf(app.pid)).filter((p) => /^(claude|codex|grok)(\.exe)?$/i.test(p.name)).map((p) => `${p.name}:${p.pid}`),
     /** Pids of the shells (powershell/pwsh) under the app: a session restarted or started shows as a changed pid set. */
     shellPids: async () => (await app.treeOf(app.pid)).filter((p) => /^(powershell|pwsh).exe$/i.test(p.name)).map((p) => p.pid).sort((x, y) => x - y),
     stop: () => app.closeApp(),

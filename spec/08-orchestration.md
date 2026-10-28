@@ -45,11 +45,11 @@ Rules: exactly one of an existing task or a new task text is given, and the text
   (worker, setup, or a tab the user configured), naming the actual setup terminal rather than
   guessing from tab titles.
 Acceptance:
-  - [ ] `kolux orchestration worker-start --spec "add a test" --agent claude` → exit 0, a ready
-      status in JSON, and a new worktree plus a background tab exist.
+  - [x] `kolux orchestration worker-start --spec "add a test" --agent claude` → exit 0, a ready
+      status in JSON, and a new worktree plus a background tab exist. (cards live; evidence/cards-ORCH-016.txt)
   - [x] `kolux orchestration worker-start --worktree current --base-branch main` → turned away
       before anything is created. (cards; evidence/cards-ORCH-016.txt)
-  - [ ] Leave the workspace and come back → still exactly one worker tab.
+  - [x] Leave the workspace and come back → still exactly one worker tab. (cards live; evidence/cards-ORCH-016.txt)
 Compat: `kolux orchestration worker-start (--task <id>|--spec <text>) [--worktree current|<selector>|new-child|new-top-level] (--agent <agent>|--terminal <handle>|--tier major|deep|build|light) [--model <m>] [--effort <e>] [--name <n>] [--repo <r>] [--base-branch <b>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit] [--retry-of <dispatch>] [--timeout-ms <ms>] [--json]`.
 Source: D-08-016
 

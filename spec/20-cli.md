@@ -39,10 +39,10 @@ Rules: when `--repo` is left out, the repo comes from the worktree the command w
   `--issue` attaches a GitHub issue number; when the call comes from a terminal that belongs to a
   plain folder workspace, that folder is recorded as the new worktree's parent.
 Acceptance:
-  - [ ] Inside worktree A, `kolux worktree create --name b --agent claude --prompt hi` → b exists
+  - [x] Inside worktree A, `kolux worktree create --name b --agent claude --prompt hi` → b exists
         with A as its parent, Claude starts in b's first terminal with the prompt, and focus stays
-        where it was.
-  - [ ] The same command with `--activate` → b is brought into view.
+        where it was. (cards live; evidence/cards-CLI-018.txt)
+  - [x] The same command with `--activate` → b is brought into view. (cards live; evidence/cards-CLI-018.txt)
   - [x] `kolux worktree create --name b --prompt hi` → accepted, not refused: b is made and the
         default agent is picked to receive the prompt (DT-CLI-018). (cards; evidence/cards-CLI-018.txt)
 Compat: worktree create with `--repo`, `--name`, `--agent`, `--prompt`, `--base-branch`, `--issue`,
@@ -76,8 +76,8 @@ Rules: Kolux puts its own bundled CLI folder at the front of the program search 
   receive two environment values, the terminal's handle and its pane key, so orchestration commands
   can tell who is calling.
 Acceptance:
-  - [ ] On a machine where kolux was never registered system-wide, open a new pane → `kolux status`
-        works.
+  - [x] On a machine where kolux was never registered system-wide, open a new pane → `kolux status`
+        works. (cards live; evidence/cards-CLI-007.txt)
   - [ ] With an older kolux registered system-wide, `kolux --version` inside a Kolux pane prints the
         app's own version.
 Compat: agents and the owner's skills read the terminal-handle and pane-key environment values by

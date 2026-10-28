@@ -166,9 +166,9 @@ Rules: a new worktree made for a run is prepared and launched without switching 
   once, and only to a tab that the run itself opened; runs still going when Kolux restarts reconnect
   to their terminal.
 Acceptance:
-  - [ ] A timed run starts while the user types in another worktree → focus and keystrokes are
-        untouched.
-  - [ ] Open the run's worktree → all the startup output is there.
+  - [x] A timed run starts while the user types in another worktree → focus and keystrokes are
+        untouched. (cards live; evidence/cards-AUTO-011.txt)
+  - [x] Open the run's worktree → all the startup output is there. (cards live; evidence/cards-AUTO-011.txt)
   - [x] Type in the run's tab, then let the agent exit → the tab stays open. (cards; evidence/cards-AUTO-011.txt)
 Compat: —
 Source: D-09-011

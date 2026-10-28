@@ -173,7 +173,7 @@ Acceptance:
         after the reset the continue prompt appears once and Claude resumes. (T-041-b: typed into a real Claude Code pane whose input held a `/`, so no request went out)
   - [x] Type a draft into the stopped pane → nothing is sent at the reset. (T-041-b)
   - [x] Exit Claude so that only a shell is left → nothing is typed and the waiting resume expires. (T-041-b: in Kolux RS the pane's terminal ends with the program, so the wait drops)
-  - [ ] Leave the switch off → nothing is ever typed.
+  - [x] Leave the switch off → nothing is ever typed. (cards live; evidence/cards-USAGE-007.txt)
 Compat: A saved on/off choice that stays off unless the user turns it on.
 Source: D-06-007
 

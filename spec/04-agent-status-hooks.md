@@ -209,7 +209,7 @@ Rules: the row behaves as a real button, so Enter and Space toggle it; in the ne
 Acceptance:
   - [x] Open a session that contains reasoning → its Thought rows start collapsed; press expand-all
         → all open. (cards; evidence/cards-STAT-053.txt)
-  - [ ] Move keyboard focus to a Thought row and press Space → it opens; press Enter → it closes.
+  - [x] Move keyboard focus to a Thought row and press Space → it opens; press Enter → it closes. (cards live; evidence/cards-STAT-053.txt)
 Compat: —
   (Kolux RS, T-027 deferred to T-326: the rows need the transcript reader and the Agents screen.)
 Source: D-04-053
