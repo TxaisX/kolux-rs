@@ -122,8 +122,8 @@ Rules: Approve stays clickable for as long as the plan is still pending, with or
 Acceptance:
   - [x] Open the sheet and click Approve → Claude leaves plan mode and starts the work, and the
         review button is gone. (cards live; evidence/cards-SAFE-003.txt)
-  - [ ] Write a comment, then click Approve → Approve was clickable, Claude proceeds, and the
-        comment is not kept.
+  - [x] Write a comment, then click Approve → Approve was clickable, Claude proceeds, and the
+        comment is not kept. (cards live; evidence/cards-SAFE-003.txt)
 Compat: —
 Source: D-10-003
 

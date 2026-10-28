@@ -16,8 +16,8 @@ import { createApp, sleep, waitFor } from "../evidence/app-launch.mjs";
 export { sleep, waitFor };
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
 export const ACCOUNT_A = "G:/Dev/kolux-scratch/live-signin/account-a";
-export const BASE = "G:/Temp/live-v9";
-export const LOGS = "G:/Temp/live-v9-logs";
+export const BASE = "G:/Temp/live-v10";
+export const LOGS = "G:/Temp/live-v10-logs";
 export const CLAUDE = 'section.pane[data-agent*="claude"]';
 
 // Nothing of the old app, no token variable and no API key may reach the app, its panes or Claude.
@@ -56,10 +56,13 @@ export const git = (cwd, args) =>
  * settings.json; a permissions-skipping flag is refused). opts.files: {name: text} committed on main.
  * opts.branch: a branch checked out after the first commit. opts.trace: a folder GIT_TRACE2 points at for the app.
  * opts.dirty: {name: text} written (uncommitted) after the first commit.
+ * opts.prepare(repo): more repo setup before the app starts (e.g. a scratch bare remote). opts.allowSkip: true lets claudeArgs skip
+ * permission checks, but only when the repo has no remote outside BASE (every remote URL is a scratch bare repo under BASE).
  */
 export async function startProve(id, opts) {
   const { log } = opts.report;
-  if (/dangerously|bypassPermissions|yolo/i.test(opts.claudeArgs)) throw new Error("refused: a permissions-skipping flag is not allowed in this lane");
+  const skipping = /dangerously|bypassPermissions|yolo/i.test(opts.claudeArgs);
+  if (skipping && !opts.allowSkip) throw new Error("refused: a permissions-skipping flag is not allowed in this lane");
   const TEMP = `${BASE}/run-${id}`;
   const repo = `${BASE}/work/${id}`;
   const settingsFile = `${TEMP}/tmp/claude-config/settings.json`;
@@ -85,6 +88,12 @@ export async function startProve(id, opts) {
     await git(repo, ["commit", "-q", "-m", "branch work"]);
   }
   for (const [name, text] of Object.entries(opts.dirty ?? {})) writeFileSync(join(repo, name), text);
+  if (opts.prepare) await opts.prepare(repo);
+  if (skipping) {
+    const urls = (await git(repo, ["remote", "-v"])).split(/\r?\n/).filter(Boolean).map((l) => l.split(/\s+/)[1]);
+    log(`git remote -v in ${repo}: ${urls.join(", ") || "(no remote)"}`);
+    if (urls.length === 0 || urls.some((u) => !u.replace(/\\/g, "/").startsWith(`${BASE}/`))) throw new Error(`refused: skipping permission checks needs every remote to be a scratch bare repo under ${BASE}`);
+  }
   if (opts.trace) {
     rmSync(opts.trace, { recursive: true, force: true });
     mkdirSync(opts.trace, { recursive: true });
@@ -206,8 +215,8 @@ export function hookEventsInstalled(settingsFile) {
 export const excerpt = (text, n = 6) => text.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ").slice(0, 400);
 
 // ---------- live-v1 (2026-10-26): terminal/pane boxes with plain shells and a stand-in agent, no sign-in ----------
-export const LIVE_BASE = "G:/Temp/live-v9";
-export const LIVE_LOGS = "G:/Temp/live-v9-logs";
+export const LIVE_BASE = "G:/Temp/live-v10";
+export const LIVE_LOGS = "G:/Temp/live-v10-logs";
 export const TERM = "section.pane[data-agent]";
 export const SHELL = 'section.pane[data-agent="shell"]';
 
