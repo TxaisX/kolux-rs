@@ -1949,11 +1949,7 @@ pub fn rename_on_first_prompt(git: &Git, store: &Mutex<Store>, path: &str, task:
     if !rename_wanted(store, &project, plain, path)? {
         return Ok(left_alone("This workspace has a name of its own, so its branch keeps it."));
     }
-    let reply = writer
-        .and_then(|w| crate::scm::writers::ask(w, &crate::scm::writers::name_prompt(&task), Path::new(path), &format!("name:{path}"), std::time::Duration::from_secs(60)).ok())
-        .map(|r| r.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string())
-        .filter(|r| !r.is_empty())
-        .unwrap_or_else(|| task.clone());
+    let reply = writer_reply(writer, &task, &|w, prompt| crate::scm::writers::ask(w, prompt, Path::new(path), &format!("name:{path}"), std::time::Duration::from_secs(60)));
     if plain {
         // STAT-039: a plain folder without Git has no branch and keeps its folder: it only gets a title.
         let Some(slug) = branch_slug(&reply, "") else {
@@ -1966,6 +1962,17 @@ pub fn rename_on_first_prompt(git: &Git, store: &Mutex<Store>, path: &str, task:
         return Ok(RenameAnswer { renamed: true, name: Some(shown), ..Default::default() });
     }
     rename_after_work(git, store, &project, path, &reply)
+}
+
+/// The name the writer proposes for `task`, else the task's own words. A writer that names no agent
+/// and no command counts as none (row 931): `ask` would otherwise start Claude Code with AI off.
+fn writer_reply(writer: Option<&crate::scm::writers::WriterArg>, task: &str, asker: &dyn Fn(&crate::scm::writers::WriterArg, &str) -> Result<String, String>) -> String {
+    writer
+        .filter(|w| crate::scm::writers::writer_chosen(w))
+        .and_then(|w| asker(w, &crate::scm::writers::name_prompt(task)).ok())
+        .map(|r| r.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string())
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| task.to_string())
 }
 
 /// STAT-039: the task's words without stray work-item markers (`#123`, `KOL-12`, `[KOL-12]`,
@@ -2908,6 +2915,24 @@ pub async fn project_auto_icon(store: StoreState<'_>, project_id: String) -> Res
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn row931_b_a_writer_naming_no_agent_and_no_command_never_asks_and_the_task_names_the_branch() {
+        use crate::scm::writers::WriterArg;
+        let calls = std::cell::Cell::new(0);
+        let asker = |_: &WriterArg, _: &str| -> Result<String, String> {
+            calls.set(calls.get() + 1);
+            Ok("never-used".into())
+        };
+        assert_eq!(writer_reply(Some(&WriterArg::default()), "Fix the login bug", &asker), "Fix the login bug");
+        let blank = WriterArg { command: Some("  ".into()), ..Default::default() };
+        assert_eq!(writer_reply(Some(&blank), "Fix the login bug", &asker), "Fix the login bug");
+        assert_eq!(writer_reply(None, "Fix the login bug", &asker), "Fix the login bug");
+        assert_eq!(calls.get(), 0, "no agent or command named: nothing may be asked");
+        let agent = WriterArg { agent: Some("claude".into()), ..Default::default() };
+        assert_eq!(writer_reply(Some(&agent), "task", &asker), "never-used");
+        assert_eq!(calls.get(), 1);
+    }
     use super::*;
     use std::fs;
 

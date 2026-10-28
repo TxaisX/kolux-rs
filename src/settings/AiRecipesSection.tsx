@@ -2,6 +2,7 @@
 // each action (with variable chips and the reason a recipe cannot be saved), and a mode per repository.
 import { useEffect, useState } from "react";
 import { RECIPE_ACTIONS, RECIPES_KEY, REPO_AI_KEY, migrateRecipes, recipeProblem, recipeVariables, recipesOf, repoAiMode, withRepoAi, type Recipe, type RecipeAction, type RepoAiMode } from "../scm/recipes";
+import { typedRepoId } from "../scm/repoId";
 import { SCM_AI_HIDDEN_KEY, aiControlsShown } from "../scm/rules";
 
 type Props = { settings: Record<string, unknown>; save: (patch: Record<string, unknown>) => unknown };
@@ -33,6 +34,7 @@ function RecipeEditor({ action, label, saved, onSave }: { action: RecipeAction; 
 export default function AiRecipesSection({ settings, save }: Props) {
   const recipes = recipesOf(settings[RECIPES_KEY]);
   const [repo, setRepo] = useState("");
+  const [repoError, setRepoError] = useState(false);
   // First launch after recipes exist: the earlier single agent choice becomes recipes.
   useEffect(() => {
     const m = migrateRecipes(settings);
@@ -68,10 +70,22 @@ export default function AiRecipesSection({ settings, save }: Props) {
           </li>
         ))}
       </ul>
-      <input className="field" aria-label="Repository to override" placeholder="owner/name" value={repo} onChange={(e) => setRepo(e.target.value)} />
-      <button type="button" className="btn" disabled={!/^[^/\s]+\/[^/\s]+$/.test(repo.trim())} onClick={() => (void save({ [REPO_AI_KEY]: withRepoAi(settings, repo.trim(), "off") }), setRepo(""))}>
+      <input className="field" aria-label="Repository to override" title="Paste a remote URL or type host/owner/name, or a folder path when there is no remote; it is saved under the id the app resolves. Source Control also has a switch for the repository you are in." placeholder="https://github.com/owner/name, or a folder path" value={repo} onChange={(e) => (setRepo(e.target.value), setRepoError(false))} />
+      <button
+        type="button"
+        className="btn"
+        disabled={repo.trim() === ""}
+        onClick={() =>
+          void typedRepoId(repo).then((id) => {
+            if (id === null) return setRepoError(true);
+            void save({ [REPO_AI_KEY]: withRepoAi(settings, id, "off") });
+            setRepo("");
+          })
+        }
+      >
         Turn AI actions off for it
       </button>
+      {repoError && <div className="note warn" role="status">That repository could not be read.</div>}
     </section>
   );
 }

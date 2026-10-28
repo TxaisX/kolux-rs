@@ -709,16 +709,10 @@ pub fn browser_args(current: Option<&str>, safe: bool) -> String {
 /// folder must pass the same string, or the engine refuses to create it.
 static LAUNCH_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-// Until lib.rs calls `launch_browser_args_for` (evidence/browser-939-lib.rs.patch, which drops this).
-pub fn launch_browser_args(current: Option<&str>, safe: bool) -> String {
-    launch_with_proxy(current, safe, None)
-}
-
 /// In `run`, once per window config before the builder starts: the window's arguments, remembered
 /// for later webviews. Row 939: they carry the proxy saved in this profile, so the window and the
 /// tabs on its data folder agree on `--proxy-server` (the engine refuses two sets on one folder).
 /// Read from the profile folder because the store is not open yet when the windows are built.
-#[allow(dead_code)] // lib.rs calls it once evidence/browser-939-lib.rs.patch is applied
 pub fn launch_browser_args_for(current: Option<&str>, safe: bool, identifier: &str) -> String {
     launch_with_proxy(current, safe, profile_dir(identifier).and_then(|d| saved_proxy_in(&d)).as_ref())
 }

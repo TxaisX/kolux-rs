@@ -221,9 +221,11 @@ pub fn run() {
     // T-286-b (APP-017): every window is excused from background throttling (WebView2 browser
     // arguments; later webviews on the same data folder reuse the same string).
     let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
+    // Row 939: the window's browser arguments carry the proxy saved in the profile, like its tabs'.
+    let identifier = context.config().identifier.clone();
     for w in &mut context.config_mut().app.windows {
         w.create = false;
-        w.additional_browser_args = Some(resources::recovery::launch_browser_args(w.additional_browser_args.as_deref(), safe));
+        w.additional_browser_args = Some(resources::recovery::launch_browser_args_for(w.additional_browser_args.as_deref(), safe, &identifier));
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -736,7 +738,7 @@ pub fn run() {
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
             pr_review::scm_review_read, pr_review::scm_review_act, pr_review::scm_review_send, pr_review::scm_pr_conflicts,
-            scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
+            scm::scm_history, scm::scm_commit_files, scm::scm_github_repo, scm::repo_id::scm_repo_id, scm::repo_id::scm_repo_id_of,
             bulk::workspace_remove_many, bulk::workspace_forget, bulk::workspace_forget_check,
             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
             bulk::space_scan, bulk::space_saved,

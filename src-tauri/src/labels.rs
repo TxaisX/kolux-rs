@@ -61,7 +61,7 @@ pub fn loopback(addr: &str) -> String {
 }
 
 /// The `host:port` to connect to for a target (`3000`, `0.0.0.0:3000`, `http://[::]:3000/`); None
-/// when the target is not plain http.
+/// when the target is not plain http or not on this PC (loopback IP or `localhost` only).
 pub fn target_of(target: &str) -> Option<String> {
     let t = target.trim();
     if t.starts_with("https://") { return None }
@@ -72,7 +72,12 @@ pub fn target_of(target: &str) -> Option<String> {
         _ => ("0.0.0.0", t),
     };
     let port: u16 = port.parse().ok()?;
-    let host = loopback(host);
+    // The one guard every connect passes: only this PC, decided from the text (no DNS lookup).
+    let host = match loopback(host).as_str() {
+        "localhost" => "127.0.0.1".to_string(),
+        h if h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) => h.to_string(),
+        _ => return None,
+    };
     Some(if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") })
 }
 
@@ -125,6 +130,12 @@ fn workspace_paths(store: &crate::state::Store) -> Vec<String> {
         .collect()
 }
 
+/// The first non-external listener row that passes `target_of`: a row bound to this PC's network
+/// address is skipped when a loopback one follows.
+fn first_target(rows: Vec<crate::ports::PortRow>) -> Option<String> {
+    rows.into_iter().filter(|r| !r.external).find_map(|r| target_of(&format!("{}:{}", loopback(&r.addr), r.port)))
+}
+
 /// The target for a label: the first dev server listening inside the workspace whose folder has
 /// that label (its own process tree, not an outside service).
 pub fn resolve_in(app: &tauri::AppHandle, label: &str) -> Option<String> {
@@ -132,7 +143,7 @@ pub fn resolve_in(app: &tauri::AppHandle, label: &str) -> Option<String> {
     let path = paths.into_iter().find(|p| label_of(p) == label)?;
     // The Ports back end's own command (VIEW-078), so this module needs nothing private from it.
     let rows = tauri::async_runtime::block_on(crate::ports::ports_list(app.state::<crate::terminal::Terminals>(), vec![path.clone()], path)).ok()?;
-    rows.into_iter().find(|r| !r.external).map(|r| format!("{}:{}", loopback(&r.addr), r.port))
+    first_target(rows)
 }
 
 #[tauri::command]
@@ -218,6 +229,28 @@ mod tests {
         assert_eq!(loopback("[::]"), "::1");
     }
 
+    #[test]
+    fn proj088_a_target_off_this_pc_is_refused_and_loopback_ones_are_kept() {
+        for off in ["192.168.1.5:3000", "http://example.com:80/", "10.0.0.1:8080", "devbox:3000", "[2001:db8::1]:80", "127.0.0.1.evil.com:80"] {
+            assert_eq!(target_of(off), None, "{off} is not on this PC");
+        }
+        assert_eq!(target_of("3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("0.0.0.0:3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("127.0.0.1:3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("localhost:3000"), Some("127.0.0.1:3000".into()));
+        assert_eq!(target_of("[::]:3000"), Some("[::1]:3000".into()));
+        assert_eq!(target_of("[::1]:3000"), Some("[::1]:3000".into()));
+    }
+
+    #[test]
+    fn proj088_resolves_to_the_first_loopback_listener_not_the_first_row() {
+        let row = |addr: &str, port: u16, external: bool| crate::ports::PortRow { port, addr: addr.into(), pid: 1, external };
+        let rows = vec![row("192.168.1.5", 3000, false), row("127.0.0.1", 3000, false)];
+        assert_eq!(first_target(rows), Some("127.0.0.1:3000".into()));
+        assert_eq!(first_target(vec![row("192.168.1.5", 3000, false)]), None, "no loopback listener at all");
+        assert_eq!(first_target(vec![row("127.0.0.1", 1, true), row("0.0.0.0", 3000, false)]), Some("127.0.0.1:3000".into()), "external rows stay skipped");
+    }
+
     fn fake_server(body: &'static str) -> (u16, std::thread::JoinHandle<Vec<u8>>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
@@ -244,7 +277,7 @@ mod tests {
     #[test]
     fn proj088_a_label_address_serves_the_workspaces_dev_server_unchanged_and_others_are_refused() {
         let (port, server) = fake_server("hi from a");
-        let table = std::sync::Mutex::new(vec![("a".to_string(), format!("0.0.0.0:{port}")), ("tls".to_string(), "https://0.0.0.0:1".to_string())]);
+        let table = std::sync::Mutex::new(vec![("a".to_string(), format!("0.0.0.0:{port}")), ("tls".to_string(), "https://0.0.0.0:1".to_string()), ("lan".to_string(), "192.168.1.5:3000".to_string())]);
         let resolve: Resolve = Arc::new(move |label| table.lock().unwrap().iter().find(|(l, _)| l == label).map(|(_, t)| t.clone()));
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let proxy = l.local_addr().unwrap().port();
@@ -262,6 +295,9 @@ mod tests {
 
         assert!(ask(proxy, &format!("nobody.localhost:{proxy}")).starts_with("HTTP/1.1 502"), "an unknown label is refused");
         assert!(ask(proxy, &format!("tls.localhost:{proxy}")).starts_with("HTTP/1.1 502"), "an https target is not served");
+        let t = std::time::Instant::now();
+        assert!(ask(proxy, &format!("lan.localhost:{proxy}")).starts_with("HTTP/1.1 502"), "a target off this PC is refused");
+        assert!(t.elapsed() < Duration::from_secs(2), "refused before any connect attempt");
         assert!(ask(proxy, "localhost").starts_with("HTTP/1.1 400"), "a bare host is not a label");
     }
 }
