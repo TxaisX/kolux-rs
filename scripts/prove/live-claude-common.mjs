@@ -37,6 +37,26 @@ export async function agentExes(app) {
   return tree.filter((p) => /^(claude|codex|gemini|grok|cursor-agent|agent|copilot|openclaude)(\.exe)?$/i.test(p.name)).map((p) => `${p.name}:${p.pid}`);
 }
 
+/** One raw key press over CDP (rawKeyDown/keyUp with a virtual-key code); startProve's ctx has no rawKey. mods: Alt 1, Ctrl 2, Shift 8. */
+export async function rawKey({ key, code, vk, mods = 0, text }) {
+  const targets = await (await fetch("http://127.0.0.1:9290/json")).json();
+  const t = targets.find((x) => x.type === "page" && /localhost:1470|tauri\.localhost/.test(x.url));
+  const ws = new WebSocket(t.webSocketDebuggerUrl);
+  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+  let id = 0;
+  const send = (method, params) =>
+    new Promise((resolve) => {
+      const mine = ++id;
+      const on = (ev) => { const m = JSON.parse(ev.data); if (m.id === mine) { ws.removeEventListener("message", on); resolve(m); } };
+      ws.addEventListener("message", on);
+      ws.send(JSON.stringify({ id: mine, method, params }));
+    });
+  const k = { key, code, windowsVirtualKeyCode: vk, modifiers: mods };
+  await send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...k, ...(text ? { text } : {}) });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
+  ws.close();
+}
+
 export async function shot(name) {
   const targets = await (await fetch("http://127.0.0.1:9290/json")).json();
   const t = targets.find((x) => x.type === "page" && /localhost:1470|tauri\.localhost/.test(x.url));

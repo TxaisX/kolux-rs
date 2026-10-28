@@ -28,3 +28,67 @@ LIVE 2026-10-27 (real Claude, test account) VIEW-025: PASS
   agent programs under the app: claude.exe:20076; non-claude agent exe: none
   close: [true,"window close over CDP, exited in 3.6 s; pre-close tree 10 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, claude.exe x1); survivors 0 (none)"]
   RESULT: PASS
+
+<<live-v12:VIEW-025-12>>
+LIVE 2026-10-28 (real Claude, test account) VIEW-025-12: FAIL
+  LIVE 2026-10-28 VIEW-025-12: claude.exe <home>/.local/bin/claude.exe, version 2.1.312 (Claude Code); account <account-a>; scratch repo under G:/Temp/live-v12/work
+  launching: pnpm tauri dev (identifier com.txaisxiong.kolux-rs.prove, vite 1470, CDP 9290; log G:\Temp\live-v12\run-VIEW-025-12\tauri-dev.log)
+  app pid 44220 (G:\Dev\kolux-rs-lanes\prove\src-tauri\target\debug\kolux-rs.exe); window: moved off-screen
+    (first-run screen "Yes, I trust": chose Yes, I trust this folder for the scratch repo)
+  claude ready: ❯ Try "write a test for <filepath>" | ────────────────────────────────────────────────────────────────────────────────────────────────────────────── | ⏸ manual mode on · ← for agents                                                         ◐ medium · /effort
+  ask a.txt: permission event tool=Bash 2736 ms after the prompt
+  (a) Board card before: {"word":"Needs you","line":"Bash: touch a.txt","buttons":["Approve","Deny"]}
+  PASS (a) the card says Needs you with Approve and Deny: {"word":"Needs you","line":"Bash: touch a.txt","buttons":["Approve","Deny"]}
+  PASS (a) Deny clicked on the card: button found
+  (a) Board Deny, card word: 254ms Working > 3684ms Stopped
+  PASS (a) Board Deny, card word: at 6000 ms the pane is out of Permission and not Working: at 6000 ms: Stopped
+  PASS (a) Board Deny, card word: still not Permission/Working at 12 s: at 12 s: Stopped
+  (a) screenshot: G:/Temp/live-v12-logs/VIEW-025-12-a-board.png
+  PASS (a) the command did not run (a.txt missing): 
+  ask b.txt: permission event tool=Bash 2543 ms after the prompt
+  (b) typed Esc, pane word: 341ms Needs you
+  FAIL (b) typed Esc, pane word: at 6000 ms the pane is out of Permission and not Working: at 6000 ms: Needs you
+  FAIL (b) typed Esc, pane word: still not Permission/Working at 12 s: at 12 s: Needs you
+  (b) screen after: ❯ 1. Yes | 2. Yes, and always allow access to G:\Temp\live-v12\work\VIEW-025-12 from this project | 3. Yes, and switch to auto mode · auto mode handles these prompts for you | 4. No | Esc to cancel · Tab to amend
+  PASS (b) the command did not run (b.txt missing): 
+  ERROR Error: timed out after 90000 ms waiting for a permission event for c.txt
+    at waitFor (file:///G:/Dev/kolux-rs-lanes/prove/scripts/evidence/app-launch.mjs:32:33)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async ask (file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-025-reproof.mjs:15:15)
+    at async file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-025-reproof.mjs:72:3
+    at async scenario (file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-claude-common.mjs:88:5)
+    at async file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-025-reproof.mjs:10:1
+  close: [true,"window close over CDP, exited in 5.3 s; pre-close tree 10 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, claude.exe x1); survivors 0 (none)"]
+  RESULT: FAIL
+
+<<live-v12:VIEW-025-12b>>
+LIVE 2026-10-28 (real Claude, test account) VIEW-025-12b: FAIL
+  LIVE 2026-10-28 VIEW-025-12b: claude.exe <home>/.local/bin/claude.exe, version 2.1.312 (Claude Code); account <account-a>; scratch repo under G:/Temp/live-v12/work
+  launching: pnpm tauri dev (identifier com.txaisxiong.kolux-rs.prove, vite 1470, CDP 9290; log G:\Temp\live-v12\run-VIEW-025-12b\tauri-dev.log)
+  app pid 28496 (G:\Dev\kolux-rs-lanes\prove\src-tauri\target\debug\kolux-rs.exe); window: moved off-screen
+    (first-run screen "Yes, I trust": chose Yes, I trust this folder for the scratch repo)
+  claude ready: ❯ Try "fix lint errors" | ────────────────────────────────────────────────────────────────────────────────────────────────────────────── | ⏸ manual mode on · ← for agents                                                         ◐ medium · /effort
+  ask a.txt: permission event tool=Bash 2598 ms after the prompt
+  (a) Board card before: {"word":"Needs you","line":"Bash: touch a.txt","buttons":["Approve","Deny"]}
+  PASS (a) the card says Needs you with Approve and Deny: {"word":"Needs you","line":"Bash: touch a.txt","buttons":["Approve","Deny"]}
+  PASS (a) Deny clicked on the card: button found
+  (a) Board Deny, card word: 237ms Working > 4309ms Stopped
+  PASS (a) Board Deny, card word: at 6000 ms the pane is out of Permission and not Working: at 6000 ms: Stopped
+  PASS (a) Board Deny, card word: still not Permission/Working at 12 s: at 12 s: Stopped
+  (a) screenshot: G:/Temp/live-v12-logs/VIEW-025-12b-a-board.png
+  PASS (a) the command did not run (a.txt missing): 
+  ask b.txt: permission event tool=Bash 2311 ms after the prompt
+  (b) typed Esc, pane word: 251ms Needs you
+  FAIL (b) typed Esc, pane word: at 6000 ms the pane is out of Permission and not Working: at 6000 ms: Needs you
+  FAIL (b) typed Esc, pane word: still not Permission/Working at 12 s: at 12 s: Needs you
+  (b) screen after: ❯ 1. Yes | 2. Yes, and always allow access to G:\Temp\live-v12\work\VIEW-025-12b from this project | 3. Yes, and switch to auto mode · auto mode handles these prompts for you | 4. No | Esc to cancel · Tab to amend
+  PASS (b) the command did not run (b.txt missing): 
+  ERROR Error: timed out after 90000 ms waiting for a permission event for c.txt
+    at waitFor (file:///G:/Dev/kolux-rs-lanes/prove/scripts/evidence/app-launch.mjs:32:33)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async ask (file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-025-reproof.mjs:15:15)
+    at async file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-025-reproof.mjs:74:3
+    at async scenario (file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-claude-common.mjs:108:5)
+    at async file:///G:/Dev/kolux-rs-lanes/prove/scripts/prove/live-VIEW-025-reproof.mjs:10:1
+  close: [true,"window close over CDP, exited in 3.5 s; pre-close tree 10 (msedgewebview2.exe x6, conhost.exe x2, powershell.exe x1, claude.exe x1); survivors 0 (none)"]
+  RESULT: FAIL
