@@ -1,5 +1,5 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 97b710c..3da4890 100644
+index b5f2071..dfbba8e 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
 @@ -3145,6 +3145,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
