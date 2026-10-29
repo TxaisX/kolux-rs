@@ -18,10 +18,10 @@ import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
 import { canLaunch, type AgentPass } from "./agents";
+import { seatStart, type SeatDefault } from "./defaultSeat";
 import { canInstall, installTip, optionLabel, pickList, runInstall } from "./agentInstall";
 import { useKeymap } from "../keys/KeymapContext";
-import { savedSeat } from "../chat/controls";
-import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup, LISTED, setDiscovered } from "./seats";
+import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, lineupAgents, type Lineup, LISTED, setDiscovered } from "./seats";
 
 /** SESS-017: a link to the agent's own documentation, when Kolux knows it (agents.rs `install_page`). */
 function DocsLink({ agent }: { agent: AgentInfo }) {
@@ -87,6 +87,8 @@ type Props = {
   /** SESS-002: where the agent search stands; Start waits for a pass that succeeded. */
   pass?: AgentPass;
   onRefresh?: () => void;
+  /** T-571: the model and effort a newly picked agent starts on (settings defaultModel, defaultEffort). */
+  seatDefault?: SeatDefault;
   /** SESS-021: this project's last lineup, when it has one worth offering; applied only on the click. */
   lastLineup?: Lineup | null;
   onUseLineup?: () => void;
@@ -94,7 +96,7 @@ type Props = {
   sheet?: { project: string; path: string } | null;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, detecting = false, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup, sheet = null }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, detecting = false, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, seatDefault: seatDefault_ = { model: "", effort: "" }, lastLineup, onUseLineup, sheet = null }: Props) {
   const mac = useKeymap().platform === "darwin";
   // SESS-018: a Ctrl+Enter that cannot launch points at the footer's unfinished seat.
   const [nudged, setNudged] = useState(false);
@@ -117,10 +119,8 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
   // A program with no model list has nothing to pick: its seat uses the program's own default.
   const pickAgent = (i: number, id: string) => {
     setShown(({ [i]: _gone, ...rest }) => rest);
-    const only = modelsFor(id).length === 1;
-    // Row 389: a choice saved for this agent (CHAT-024) is the starting pick; the user can still change it.
-    const saved = id === TERMINAL ? null : savedSeat(id);
-    setSeat(i, { agent: id, model: id !== TERMINAL && only ? DEFAULT_MODEL : null, effort: undefined, fast: undefined, ...(saved?.model ? saved : {}) });
+    // T-571: the default model and effort start the seat (else the agent's saved pick, Row 389); the person can still change both.
+    setSeat(i, seatStart(id, seatDefault_));
   };
   // SESS-029: Grok and Cursor are asked for their models once per app run.
   const [, setLive] = useState(0);
@@ -210,7 +210,6 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
       </header>
       )}
       <div className="chooser-body">
-        <p className="caption">Every seat starts blank. Kolux never picks an AI or a model for you.</p>
         {pass?.error ? (
           <p className="caption warn" role="alert">
             Kolux could not look for agents ({pass.error}). Nothing can start until a search succeeds.

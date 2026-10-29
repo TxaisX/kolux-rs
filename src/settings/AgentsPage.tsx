@@ -4,6 +4,7 @@ import { SearchFolds } from "./search";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { AgentInfo } from "../launch/PlusMenu";
+import { defaultChoices, DEFAULT_EFFORT_KEY, DEFAULT_MODEL_KEY, seatDefault } from "../launch/defaultSeat";
 import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
 import { Segmented } from "./GeneralPage";
 import { useSettings } from "./useSettings";
@@ -133,6 +134,8 @@ export default function AgentsPage() {
     return save({ [OPTIONS_FIELD]: all });
   };
   const yolo = settings[PERMISSIONS_FIELD] !== "manual";
+  const seatNow = seatDefault(settings);
+  const seatChoices = defaultChoices();
 
   return (
     <>
@@ -149,6 +152,27 @@ export default function AgentsPage() {
           ))}
         </select>
         <p className="conn-detail">A new agent tab opens with this agent and its options below. Switching the default agent off leaves no default.</p>
+      </section>
+
+      <section className="conn-card" data-section="seat-default">
+        <h2 className="conn-name">Default model and effort</h2>
+        <select aria-label="default model" className="field" value={seatNow.model} onChange={(e) => save({ [DEFAULT_MODEL_KEY]: e.target.value })}>
+          <option value="">No default: pick a model for each seat</option>
+          {seatChoices.models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        <select aria-label="default effort" className="field" value={seatNow.effort} onChange={(e) => save({ [DEFAULT_EFFORT_KEY]: e.target.value })} disabled={seatNow.model === ""}>
+          <option value="">Model default effort</option>
+          {seatChoices.efforts.map((l) => (
+            <option key={l} value={l}>
+              {l}
+            </option>
+          ))}
+        </select>
+        <p className="conn-detail">Every new seat starts on this model and effort, and you can change either on the seat. An agent that does not offer the model starts on its own default.</p>
       </section>
 
       <section className="conn-card" data-section="permissions">

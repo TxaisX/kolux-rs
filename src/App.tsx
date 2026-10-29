@@ -149,6 +149,7 @@ import SourceControlPanel from "./scm/SourceControlPanel";
 import { aiControlsShown } from "./scm/rules";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
+import { seatDefault, seatStart } from "./launch/defaultSeat";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, needsYouCount, nextNeedsYou } from "./terminal/status";
@@ -2174,7 +2175,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   const addPreset = (id: string) => {
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", agentId: id, program: null, args: [], seats: [{ agent: id, model: null }] }]);
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", agentId: id, program: null, args: [], seats: [seatStart(id, seatDefault(settings))] }]);
     setAgentSel(key);
     setFocused(key);
   };
@@ -2366,6 +2367,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       seats={p.seats}
       pass={agentPass}
       onRefresh={refreshAgents}
+      seatDefault={seatDefault(settings)}
       lastLineup={offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds)}
       onUseLineup={() => {
         const l = offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds);

@@ -10,6 +10,8 @@
     { "name": "sessionListScope", "shape": "word" },
     { "name": "scmView", "shape": "word" },
     { "name": "defaultAgent", "shape": "word" },
+    { "name": "defaultModel", "shape": "word" },
+    { "name": "defaultEffort", "shape": "word" },
     { "name": "notificationSound", "shape": "word" },
     { "name": "disabledAgents", "shape": "words" },
     { "name": "leftSidebarWidth", "shape": "number" },

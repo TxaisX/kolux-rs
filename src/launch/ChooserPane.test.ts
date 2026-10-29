@@ -34,10 +34,11 @@ test("SESS-051: an AI seat offers an opening prompt field; a Terminal seat has n
   expect(render([{ agent: null, model: null }])).not.toContain("Opening prompt");
 });
 
-test("SESS-015: three blank seats keep Start disabled and show the no-guessing caption; Same for all waits for a finished seat", () => {
+test("SESS-015: three blank seats keep Start disabled and the old no-guessing caption is gone (T-571); Same for all waits for a finished seat", () => {
   const blank = render([{ agent: null, model: null }, { agent: null, model: null }, { agent: null, model: null }]);
   expect(startButton(blank)).toContain("disabled");
-  expect(blank).toContain("Kolux never picks an AI or a model for you");
+  expect(blank).not.toContain("Kolux never picks an AI or a model for you");
+  expect(blank).not.toContain("Every seat starts blank");
   expect(blank.split("<button").find((b) => b.includes("Same for all"))?.split("</button>")[0]).toContain("disabled");
   const one = render([{ agent: "claude", model: "opus" }, { agent: null, model: null }, { agent: null, model: null }]);
   expect(one.split("<button").find((b) => b.includes("Same for all"))?.split("</button>")[0]).not.toContain("disabled");
