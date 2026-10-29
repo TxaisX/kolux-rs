@@ -4,19 +4,23 @@
 //! day it was checked. No official Windows route means no row route: the agent reads as not installable
 //! and the reason is in the comment. Never a third-party mirror (the tests hold the host and package set).
 //!
-//! `agents_install(id)` is the window's command; `--install-agents` is the installer's (`cli_main`).
+//! `agents_install(id)` is the window's command for one agent; `agents_install_many(ids)` for a pick of them (T-578);
+//! `--install-agents [--interactive] [id,id,...]` is the command line's (`cli_main`). All three are one batch engine:
+//! the runtimes first, then npm (one call), the vendors' scripts (4 at once), winget and uv at the same time.
 //! A missing runtime (Node.js for npm, uv, Git) is installed first with the frozen winget line.
 //! T-576: the audit list that holds each route to its official source is `agent_install_official.rs`
 //! (test only); installs run one at a time across the app; the install-all pass has a 45-minute cap, a
 //! runtime install its own 10-minute deadline, and a silent or update install never raises a Windows
 //! admin prompt (Node.js is a machine-wide installer; uv and Git install for this user only, T-577).
 
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::{catalogue, find_in, search_dirs, AgentInfo, CATALOGUE};
+use super::{find_in, search_dirs, AgentInfo, CATALOGUE};
 
 // T-576: the reviewed allow-list the tests hold the table to (test only; not part of the program).
 #[cfg(test)]
@@ -213,11 +217,15 @@ fn runtime_winget_args(runtime: Runtime) -> Vec<String> {
 const LIMIT: Duration = Duration::from_secs(10 * 60);
 /// A runtime install (Node.js, uv, Git) has its own deadline, apart from the agent that needed it.
 const RUNTIME_LIMIT: Duration = Duration::from_secs(10 * 60);
-/// The whole install-all pass.
+/// The whole batch.
 pub const TOTAL_LIMIT: Duration = Duration::from_secs(45 * 60);
+/// T-578: the one npm call that installs several packages gets this much more time for each package after the first.
+const NPM_EXTRA_PER_PACKAGE: Duration = Duration::from_secs(60);
+/// T-578: how many of the vendors' own install scripts run at the same moment.
+const SCRIPTS_AT_ONCE: usize = 4;
 
-/// One install at a time across the app (T-576): a window click and an install-all pass never run two npm
-/// installs together. A caller that finds it held waits.
+/// One batch at a time across the app (T-576, T-578): a window click and an install-all run never install
+/// together. A caller that finds it held waits. It is held for the whole batch.
 static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A child's search path: the registry's machine and user Path first (so a program a winget install just
@@ -295,33 +303,29 @@ fn kill_tree(pid: u32) {
     let _ = c.status();
 }
 
-fn program_path(name: &str) -> PathBuf {
-    find_in(&search_dirs(), name).unwrap_or_else(|| PathBuf::from(name))
-}
-
-/// What one install-all pass (or one window click) carries between agents.
+/// What a batch carries from step to step. Copy: every group's thread gets its own.
+#[derive(Clone, Copy)]
 struct Ctx {
     mode: Mode,
     /// One agent's time limit.
     limit: Duration,
-    /// When the whole pass must be over (`None` for a single window click).
+    /// When the whole batch must be over (`None` for a single window click).
     total_end: Option<Instant>,
-    /// Runtimes that already failed in this run, so a missing Node.js is tried once, not once per agent.
-    failed: Vec<(Runtime, String)>,
-    /// The last output line of the last program run.
-    tail: String,
 }
 
 impl Ctx {
     fn new(mode: Mode, limit: Duration, total_end: Option<Instant>) -> Self {
-        Ctx { mode, limit, total_end, failed: Vec::new(), tail: String::new() }
+        Ctx { mode, limit, total_end }
     }
-    /// A deadline never later than the whole pass's.
+    /// A deadline never later than the whole batch's.
     fn clamp(&self, deadline: Instant) -> Instant {
         match self.total_end {
             Some(end) if end < deadline => end,
             _ => deadline,
         }
+    }
+    fn out_of_time(&self) -> bool {
+        self.total_end.is_some_and(|end| Instant::now() >= end)
     }
 }
 
@@ -330,91 +334,398 @@ fn silent_refusal(runtime: Runtime, mode: Mode) -> Option<String> {
     (mode == Mode::Silent && runtime.machine_scope()).then(|| format!("needs {} (install it, then use Install in Kolux)", runtime.facts().2))
 }
 
+/// T-578: where an agent is in a batch (the `agent-install-progress` event).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum State {
+    Queued,
+    Installing,
+    Ok,
+    Failed,
+}
+
+/// T-578: the `agent-install-progress` event's payload.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    pub id: String,
+    pub state: State,
+    pub error: Option<String>,
+}
+
+/// T-578: one agent's end of a batch (`agents_install_many`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallResult {
+    pub id: String,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub agent: Option<AgentInfo>,
+}
+
+/// What a batch needs from the PC. The real one runs programs, detects agents and sends the event; the
+/// tests use a fake, so the batch's order and counts are proven without installing anything.
+trait Host: Sync {
+    fn info(&self, id: &str) -> Option<AgentInfo>;
+    /// Where a program is on this PC, when it is.
+    fn program(&self, name: &str) -> Option<PathBuf>;
+    fn run(&self, program: &Path, args: &[String], deadline: Instant, tail: &mut String, done_early: Option<&dyn Fn() -> bool>) -> Result<Option<i32>, String>;
+    fn progress(&self, p: Progress);
+    /// The log line(s) for one agent's end.
+    fn report(&self, id: &str, result: &Result<(), String>, tail: &str);
+}
+
+/// The event's name.
+pub const PROGRESS_EVENT: &str = "agent-install-progress";
+
+struct RealHost {
+    /// `None` for the installer's run and the single-agent command: no window listens.
+    app: Option<tauri::AppHandle>,
+}
+
+impl Host for RealHost {
+    fn info(&self, id: &str) -> Option<AgentInfo> {
+        info_of(id)
+    }
+    fn program(&self, name: &str) -> Option<PathBuf> {
+        find_in(&search_dirs(), name)
+    }
+    fn run(&self, program: &Path, args: &[String], deadline: Instant, tail: &mut String, done_early: Option<&dyn Fn() -> bool>) -> Result<Option<i32>, String> {
+        run(program, args, deadline, tail, done_early)
+    }
+    fn progress(&self, p: Progress) {
+        if let Some(app) = &self.app {
+            let _ = tauri::Emitter::emit(app, PROGRESS_EVENT, p);
+        }
+    }
+    fn report(&self, id: &str, result: &Result<(), String>, tail: &str) {
+        log_result(id, result, tail);
+    }
+}
+
 /// Installs `runtime` with winget unless it is there. It has its own deadline (`RUNTIME_LIMIT`), apart from
-/// the agent that needed it. A silent install never starts a machine-wide one.
-fn ensure_runtime(runtime: Runtime, ctx: &mut Ctx) -> Result<(), String> {
+/// the agents that need it. A silent install never starts a machine-wide one.
+fn ensure_runtime(host: &dyn Host, runtime: Runtime, ctx: &Ctx, tail: &mut String) -> Result<(), String> {
     let (_, program, name) = runtime.facts();
-    if find_in(&search_dirs(), program).is_some() {
+    if host.program(program).is_some() {
         return Ok(());
     }
-    if let Some((_, why)) = ctx.failed.iter().find(|(r, _)| *r == runtime) {
-        return Err(why.clone());
-    }
-    let remember = |ctx: &mut Ctx, text: String| {
-        ctx.failed.push((runtime, text.clone()));
-        text
-    };
     if let Some(text) = silent_refusal(runtime, ctx.mode) {
-        return Err(remember(ctx, text));
+        return Err(text);
     }
     let deadline = ctx.clamp(Instant::now() + RUNTIME_LIMIT);
-    let outcome = match find_in(&search_dirs(), "winget") {
+    let outcome = match host.program("winget") {
         None => Err("winget is not available on this PC.".to_string()),
-        Some(w) => run(&w, &runtime_winget_args(runtime), deadline, &mut ctx.tail, None).and_then(|code| {
+        Some(w) => host.run(&w, &runtime_winget_args(runtime), deadline, tail, None).and_then(|code| {
             // winget may exit nonzero for "already installed, nothing to do"; the program being there is the test.
-            if find_in(&search_dirs(), program).is_some() {
+            if host.program(program).is_some() {
                 Ok(())
             } else {
                 Err(format!("winget ended with code {}.", code.map(|c| c.to_string()).unwrap_or_else(|| "none".into())))
             }
         }),
     };
-    outcome.map_err(|why| {
-        let text = format!("{name} is needed first and could not be installed: {why}");
-        remember(ctx, text)
+    outcome.map_err(|why| format!("{name} is needed first and could not be installed: {why}"))
+}
+
+/// One agent's detected state: `catalogue()`'s entry for it, without scanning the PC for the other 34.
+fn info_of(id: &str) -> Option<AgentInfo> {
+    let (id, name, programs, args) = CATALOGUE.iter().find(|e| e.0 == id)?;
+    let found = programs.iter().find_map(|p| find_in(&search_dirs(), p).map(|f| (*p, f)));
+    Some(AgentInfo {
+        id: id.to_string(),
+        name: name.to_string(),
+        program: found.as_ref().map(|(p, _)| *p).unwrap_or(programs[0]).to_string(),
+        args: args.iter().map(|a| a.to_string()).collect(),
+        installed: found.is_some(),
+        path: found.map(|(_, f)| f.display().to_string()),
+        docs: super::install_page(id).is_some(),
+        installable: install_text(id).is_some(),
+        install: install_text(id),
     })
 }
 
-fn info_of(id: &str) -> Option<AgentInfo> {
-    catalogue().into_iter().find(|a| a.id == id)
+/// An agent that has a route and still has to be installed.
+struct Item {
+    id: String,
+    name: String,
+    route: Route,
+    needs: Option<Runtime>,
 }
 
-/// Installs one agent, alone: it waits for any other install in this app first.
-/// Ok(refreshed info) when it is found afterwards (or already was); Err(one sentence).
-fn install_one(id: &str, ctx: &mut Ctx) -> Result<AgentInfo, String> {
-    let _one_at_a_time = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let info = info_of(id).ok_or_else(|| format!("Kolux does not know an agent called {id}."))?;
-    if info.installed {
-        return Ok(info);
-    }
-    let (route, needs) = row_of(id)
-        .and_then(|r| r.route.map(|route| (route, r.needs)))
-        .ok_or_else(|| format!("Kolux has no official Windows install for {}; its own page tells how.", info.name))?;
-    if let Some(rt) = needs {
-        ensure_runtime(rt, ctx)?;
-    }
-    let deadline = ctx.clamp(Instant::now() + ctx.limit);
-    let (program, args): (PathBuf, Vec<String>) = match route {
-        Route::Npm(a) => (program_path("npm"), ["install", "-g"].iter().chain(a.iter()).map(|s| s.to_string()).collect()),
-        Route::Winget(w) => (find_in(&search_dirs(), "winget").ok_or("winget is not available on this PC.")?, winget_args(w)),
-        Route::Uv(p) => (program_path("uv"), ["tool", "install", p].iter().map(|s| s.to_string()).collect()),
+fn program_for(host: &dyn Host, name: &str) -> PathBuf {
+    host.program(name).unwrap_or_else(|| PathBuf::from(name))
+}
+
+fn npm_call(host: &dyn Host, packages: &[String]) -> (PathBuf, Vec<String>) {
+    (program_for(host, "npm"), ["install", "-g"].iter().map(|s| s.to_string()).chain(packages.iter().cloned()).collect())
+}
+
+/// The program and arguments that install one agent alone.
+fn call_for(host: &dyn Host, route: Route) -> Result<(PathBuf, Vec<String>), String> {
+    Ok(match route {
+        Route::Npm(a) => npm_call(host, &a.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+        Route::Winget(w) => (host.program("winget").ok_or("winget is not available on this PC.")?, winget_args(w)),
+        Route::Uv(p) => (program_for(host, "uv"), ["tool", "install", p].iter().map(|s| s.to_string()).collect()),
         Route::Script(s) => (
-            program_path("powershell"),
+            program_for(host, "powershell"),
             ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]
                 .iter()
                 .map(|a| a.to_string())
                 .chain(std::iter::once(format!("$ProgressPreference='SilentlyContinue'; {s}")))
                 .collect(),
         ),
-    };
-    let found = || info_of(id).is_some_and(|a| a.installed);
+    })
+}
+
+fn not_finished(name: &str, code: Option<i32>) -> String {
+    format!("{name} did not finish installing (the installer ended with code {}).", code.map(|c| c.to_string()).unwrap_or_else(|| "none".into()))
+}
+
+/// Installs one agent alone with its own call. Ok when it is found afterwards.
+fn install_single(host: &dyn Host, item: &Item, ctx: &Ctx, tail: &mut String) -> Result<(), String> {
+    let (program, args) = call_for(host, item.route)?;
+    let deadline = ctx.clamp(Instant::now() + ctx.limit);
+    let id = item.id.as_str();
+    let found = || host.info(id).is_some_and(|a| a.installed);
     let ends_early = row_of(id).is_some_and(|r| r.ends_when_found);
-    let code = run(&program, &args, deadline, &mut ctx.tail, if ends_early { Some(&found) } else { None })?;
-    match info_of(id) {
-        Some(a) if a.installed => Ok(a),
-        _ => Err(format!("{} did not finish installing (the installer ended with code {}).", info.name, code.map(|c| c.to_string()).unwrap_or_else(|| "none".into()))),
+    let code = host.run(&program, &args, deadline, tail, if ends_early { Some(&found) } else { None })?;
+    if found() {
+        Ok(())
+    } else {
+        Err(not_finished(&item.name, code))
     }
 }
 
-/// The window's command: install one agent and return its refreshed state.
+/// The line for an agent the batch did not reach before the total time ran out.
+const OUT_OF_TIME: &str = "skipped, the 45-minute install time ran out";
+
+/// One batch in progress: the host, the limits and every agent's end so far.
+struct Batch<'a> {
+    host: &'a dyn Host,
+    ctx: Ctx,
+    results: Mutex<HashMap<String, Result<(), String>>>,
+}
+
+impl Batch<'_> {
+    fn start(&self, id: &str) {
+        self.host.progress(Progress { id: id.to_string(), state: State::Installing, error: None });
+    }
+    fn finish(&self, id: &str, result: Result<(), String>, tail: &str) {
+        self.host.report(id, &result, tail);
+        let (state, error) = match &result {
+            Ok(()) => (State::Ok, None),
+            Err(why) => (State::Failed, Some(why.clone())),
+        };
+        self.host.progress(Progress { id: id.to_string(), state, error });
+        self.results.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), result);
+    }
+    /// Installs one agent alone, unless the total time is already over.
+    fn one(&self, item: &Item) {
+        if self.ctx.out_of_time() {
+            self.finish(&item.id, Err(OUT_OF_TIME.to_string()), "");
+            return;
+        }
+        self.start(&item.id);
+        let mut tail = String::new();
+        let result = install_single(self.host, item, &self.ctx, &mut tail);
+        self.finish(&item.id, result, &tail);
+    }
+    /// Agents one after another (winget allows one MSI at a time; uv tools share one folder).
+    fn in_turn(&self, items: &[&Item]) {
+        for item in items {
+            self.one(item);
+        }
+    }
+    /// At most `SCRIPTS_AT_ONCE` of the vendors' own scripts at the same moment.
+    fn scripts(&self, items: &[&Item]) {
+        let queue = Mutex::new(items.iter().copied().collect::<VecDeque<&Item>>());
+        std::thread::scope(|s| {
+            for _ in 0..SCRIPTS_AT_ONCE.min(items.len()) {
+                s.spawn(|| loop {
+                    let next = queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+                    match next {
+                        Some(item) => self.one(item),
+                        None => break,
+                    }
+                });
+            }
+        });
+    }
+    /// ONE `npm install -g` for every plain package; a package with extra arguments (pi: `--ignore-scripts`)
+    /// gets its own call after it. A failed batch call is retried package by package, so every agent has its
+    /// own ok or failed.
+    fn npm(&self, items: &[&Item]) {
+        let plain = |i: &&Item| matches!(i.route, Route::Npm(a) if !a.iter().any(|x| x.starts_with('-')));
+        let (batch, own): (Vec<&Item>, Vec<&Item>) = items.iter().copied().partition(plain);
+        if !batch.is_empty() {
+            self.npm_batch(&batch);
+        }
+        self.in_turn(&own);
+    }
+    fn npm_batch(&self, items: &[&Item]) {
+        if self.ctx.out_of_time() {
+            for item in items {
+                self.finish(&item.id, Err(OUT_OF_TIME.to_string()), "");
+            }
+            return;
+        }
+        for item in items {
+            self.start(&item.id);
+        }
+        let packages: Vec<String> = items.iter().flat_map(|i| if let Route::Npm(a) = i.route { a.iter().map(|s| s.to_string()).collect() } else { Vec::new() }).collect();
+        let (program, args) = npm_call(self.host, &packages);
+        // The agent's 10 minutes, plus a minute for each package after the first.
+        let deadline = self.ctx.clamp(Instant::now() + self.ctx.limit + NPM_EXTRA_PER_PACKAGE * (items.len() as u32 - 1));
+        let mut tail = String::new();
+        let code = self.host.run(&program, &args, deadline, &mut tail, None);
+        let mut left: Vec<&Item> = Vec::new();
+        for item in items {
+            if self.host.info(&item.id).is_some_and(|a| a.installed) {
+                self.finish(&item.id, Ok(()), "");
+            } else {
+                left.push(item);
+            }
+        }
+        if let [only] = left[..] {
+            // One package: its own call would be the same call again.
+            let why = match code {
+                Err(why) => why,
+                Ok(code) => not_finished(&only.name, code),
+            };
+            self.finish(&only.id, Err(why), &tail);
+        } else {
+            for item in left {
+                if self.ctx.out_of_time() {
+                    self.finish(&item.id, Err(OUT_OF_TIME.to_string()), "");
+                    continue;
+                }
+                let mut tail = String::new();
+                let result = install_single(self.host, item, &self.ctx, &mut tail);
+                self.finish(&item.id, result, &tail);
+            }
+        }
+    }
+}
+
+/// `ids` once each, in the order given.
+fn unique(ids: &[String]) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for id in ids {
+        if !seen.contains(id) {
+            seen.push(id.clone());
+        }
+    }
+    seen
+}
+
+/// The engine (T-578): runs the whole batch and returns one result per id, in the order given. The caller holds
+/// `INSTALL_LOCK`.
+///  1. every id is queued; an unknown, installed or not installable one ends at once;
+///  2. the runtimes the rest needs (Node, uv, Git) are installed one after another;
+///  3. four groups run at the same time: npm (one batch call), the vendors' scripts (4 at once), winget (one at
+///     a time) and uv (one at a time);
+///  4. every agent is detected again.
+fn run_batch(host: &dyn Host, ids: &[String], ctx: Ctx) -> Vec<InstallResult> {
+    let ids = unique(ids);
+    let batch = Batch { host, ctx, results: Mutex::new(HashMap::new()) };
+    for id in &ids {
+        host.progress(Progress { id: id.clone(), state: State::Queued, error: None });
+    }
+    let mut todo: Vec<Item> = Vec::new();
+    for id in &ids {
+        let Some(info) = host.info(id) else {
+            batch.finish(id, Err(format!("Kolux does not know an agent called {id}.")), "");
+            continue;
+        };
+        if info.installed {
+            batch.finish(id, Ok(()), "");
+            continue;
+        }
+        match row_of(id).and_then(|r| r.route.map(|route| (route, r.needs))) {
+            None => batch.finish(id, Err(format!("Kolux has no official Windows install for {}; its own page tells how.", info.name)), ""),
+            Some((route, needs)) => todo.push(Item { id: id.clone(), name: info.name, route, needs }),
+        }
+    }
+    // The runtimes first, one after another; an agent whose runtime could not be installed ends here.
+    let mut blocked: HashMap<Runtime, (String, String)> = HashMap::new();
+    for runtime in [Runtime::Node, Runtime::Uv, Runtime::Git] {
+        if !todo.iter().any(|i| i.needs == Some(runtime)) {
+            continue;
+        }
+        let mut tail = String::new();
+        let result = if ctx.out_of_time() { Err(OUT_OF_TIME.to_string()) } else { ensure_runtime(host, runtime, &ctx, &mut tail) };
+        if let Err(why) = result {
+            blocked.insert(runtime, (why, tail));
+        }
+    }
+    let (ready, stuck): (Vec<&Item>, Vec<&Item>) = todo.iter().partition(|i| !i.needs.is_some_and(|r| blocked.contains_key(&r)));
+    for item in stuck {
+        if let Some((why, tail)) = item.needs.and_then(|r| blocked.get(&r)) {
+            batch.finish(&item.id, Err(why.clone()), tail);
+        }
+    }
+    let group = |f: fn(&Route) -> bool| ready.iter().copied().filter(|i| f(&i.route)).collect::<Vec<&Item>>();
+    let npm = group(|r| matches!(r, Route::Npm(_)));
+    let scripts = group(|r| matches!(r, Route::Script(_)));
+    let winget = group(|r| matches!(r, Route::Winget(_)));
+    let uv = group(|r| matches!(r, Route::Uv(_)));
+    std::thread::scope(|s| {
+        if !npm.is_empty() {
+            s.spawn(|| batch.npm(&npm));
+        }
+        if !scripts.is_empty() {
+            s.spawn(|| batch.scripts(&scripts));
+        }
+        if !winget.is_empty() {
+            s.spawn(|| batch.in_turn(&winget));
+        }
+        if !uv.is_empty() {
+            s.spawn(|| batch.in_turn(&uv));
+        }
+    });
+    let results = batch.results.into_inner().unwrap_or_else(|e| e.into_inner());
+    ids.iter()
+        .map(|id| {
+            let agent = host.info(id);
+            match results.get(id) {
+                Some(Ok(())) => InstallResult { id: id.clone(), ok: true, error: None, agent },
+                Some(Err(why)) => InstallResult { id: id.clone(), ok: false, error: Some(why.clone()), agent },
+                None => InstallResult { id: id.clone(), ok: false, error: Some("The install did not run.".to_string()), agent },
+            }
+        })
+        .collect()
+}
+
+/// The batch under the process-wide lock: a window click and an install-all run never install together. A
+/// caller that finds it held waits. `total` is counted from when the batch starts.
+fn locked_batch(host: &dyn Host, ids: &[String], mode: Mode, limit: Duration, total: Option<Duration>) -> Vec<InstallResult> {
+    let _one_batch_at_a_time = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    run_batch(host, ids, Ctx::new(mode, limit, total.map(|t| Instant::now() + t)))
+}
+
+/// The window's command, many agents: install them as one batch and return each one's end.
+/// Progress goes out as the `agent-install-progress` event.
+#[tauri::command]
+pub async fn agents_install_many(app: tauri::AppHandle, ids: Vec<String>) -> Result<Vec<InstallResult>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // A click: the person is at the screen, so a runtime install may raise Windows' admin prompt.
+        locked_batch(&RealHost { app: Some(app) }, &ids, Mode::Interactive, LIMIT, Some(TOTAL_LIMIT))
+    })
+    .await
+    .map_err(|e| format!("The install stopped unexpectedly ({e})."))
+}
+
+/// The window's command, one agent (a batch of one): install it and return its refreshed state.
 #[tauri::command]
 pub async fn agents_install(id: String) -> Result<AgentInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        // A click: the person is at the screen, so a runtime install may raise Windows' admin prompt.
-        let mut ctx = Ctx::new(Mode::Interactive, LIMIT, None);
-        let result = install_one(&id, &mut ctx);
-        log_result(&id, &result.as_ref().map(|_| ()).map_err(String::clone), &ctx.tail);
-        result
+        let end = locked_batch(&RealHost { app: None }, std::slice::from_ref(&id), Mode::Interactive, LIMIT, None).pop();
+        match end {
+            Some(InstallResult { ok: true, agent: Some(agent), .. }) => Ok(agent),
+            Some(InstallResult { error: Some(why), .. }) => Err(why),
+            _ => Err("The install did not run.".to_string()),
+        }
     })
     .await
     .map_err(|e| format!("The install stopped unexpectedly ({e})."))?
@@ -444,39 +755,21 @@ fn log_result(id: &str, result: &Result<(), String>, tail: &str) {
     }
 }
 
-/// The line for an agent the pass did not reach before the total time ran out.
-const OUT_OF_TIME: &str = "skipped, the 45-minute install time ran out";
-
-/// Walks `ids` one after another; once `total_end` has passed, the rest are reported as skipped, not tried.
-/// `step` returns the result and the last output line; `report` gets both.
-fn pass(ids: &[&str], total_end: Instant, mut step: impl FnMut(&str) -> (Result<(), String>, String), mut report: impl FnMut(&str, &Result<(), String>, &str)) {
-    for id in ids {
-        let (result, tail) = if Instant::now() >= total_end { (Err(OUT_OF_TIME.to_string()), String::new()) } else { step(id) };
-        report(id, &result, &tail);
-    }
-}
-
-/// `--install-agents`: every installable agent not yet installed, one after another, within `total`.
-/// `KOLUX_INSTALL_AGENTS_ONLY=<id>` (test only) narrows it to one agent.
-pub fn install_all(only: Option<&str>, mode: Mode, limit: Duration, total: Duration) {
-    let ids: Vec<&str> = CATALOGUE
-        .iter()
-        .map(|e| e.0)
-        .filter(|id| only.is_none_or(|o| o == *id))
-        .filter(|id| info_of(id).is_some_and(|a| !a.installed && a.installable))
-        .collect();
-    let total_end = Instant::now() + total;
-    let mut ctx = Ctx::new(mode, limit, Some(total_end));
-    pass(
-        &ids,
-        total_end,
-        |id| {
-            ctx.tail.clear();
-            let result = install_one(id, &mut ctx).map(|_| ());
-            (result, ctx.tail.clone())
-        },
-        log_result,
-    );
+/// `--install-agents`: `ids` (or, with none, every installable agent not yet installed) as one batch, within
+/// `total`. `KOLUX_INSTALL_AGENTS_ONLY=<id>` (test only) narrows a run with no ids to one agent.
+pub fn install_all(ids: &[String], only: Option<&str>, mode: Mode, limit: Duration, total: Duration) {
+    let ids: Vec<String> = if !ids.is_empty() {
+        ids.to_vec()
+    } else {
+        CATALOGUE
+            .iter()
+            .map(|e| e.0)
+            .filter(|id| only.is_none_or(|o| o == *id))
+            .filter(|id| info_of(id).is_some_and(|a| !a.installed && a.installable))
+            .map(String::from)
+            .collect()
+    };
+    locked_batch(&RealHost { app: None }, &ids, mode, limit, Some(total));
 }
 
 /// True when the command line asks for the installer's run.
@@ -484,8 +777,8 @@ pub fn wants_install(args: &[String]) -> bool {
     args.iter().any(|a| a == "--install-agents")
 }
 
-/// `--interactive` (the installer passes it when the person is at the screen): a runtime install may raise
-/// Windows' admin prompt. Without it the run is silent.
+/// `--interactive` (a person at the screen): a runtime install may raise Windows' admin prompt. Without it
+/// the run is silent.
 pub fn mode_of(args: &[String]) -> Mode {
     if args.iter().any(|a| a == "--interactive") {
         Mode::Interactive
@@ -494,19 +787,26 @@ pub fn mode_of(args: &[String]) -> Mode {
     }
 }
 
+/// The agent ids on the command line: every word that is not a flag, split at commas (`gemini,cline`).
+pub fn ids_of(args: &[String]) -> Vec<String> {
+    args.iter().filter(|a| !a.starts_with("--")).flat_map(|a| a.split(',')).map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
+}
+
 /// The binary's hook: `Some(exit code)` when the flag is there (never opens the window, always 0).
 pub fn cli_main(args: &[String]) -> Option<i32> {
     if !wants_install(args) {
         return None;
     }
     let only = std::env::var("KOLUX_INSTALL_AGENTS_ONLY").ok().filter(|v| !v.is_empty());
-    install_all(only.as_deref(), mode_of(args), LIMIT, TOTAL_LIMIT);
+    install_all(&ids_of(args), only.as_deref(), mode_of(args), LIMIT, TOTAL_LIMIT);
     Some(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::catalogue;
+    use std::collections::HashSet;
 
     #[test]
     fn every_catalogue_agent_has_a_row_in_catalogue_order() {
@@ -546,6 +846,15 @@ mod tests {
     }
 
     #[test]
+    fn one_agents_detection_is_the_catalogues_entry_for_it() {
+        let all = catalogue();
+        for a in &all {
+            assert_eq!(info_of(&a.id).as_ref(), Some(a), "{}", a.id);
+        }
+        assert_eq!(info_of("nope"), None);
+    }
+
+    #[test]
     fn the_catalogue_reports_installable_and_the_command() {
         let all = catalogue();
         assert_eq!(all.len(), 35);
@@ -555,9 +864,13 @@ mod tests {
         assert_eq!(all.iter().filter(|a| !a.installable).map(|a| a.id.as_str()).collect::<Vec<_>>(), ["ante", "trae", "rovo"]);
     }
 
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn the_flag_is_found_anywhere_and_nothing_else_matches() {
-        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let a = strings;
         assert!(wants_install(&a(&["--install-agents"])));
         assert!(wants_install(&a(&["--x", "--install-agents"])));
         assert!(!wants_install(&a(&[])));
@@ -565,20 +878,17 @@ mod tests {
         assert_eq!(cli_main(&a(&["--terminal-service"])), None);
     }
 
-    fn ctx(mode: Mode) -> Ctx {
-        Ctx::new(mode, LIMIT, None)
+    #[test]
+    fn the_installer_flag_picks_the_mode() {
+        assert_eq!(mode_of(&strings(&["--install-agents"])), Mode::Silent);
+        assert_eq!(mode_of(&strings(&["--install-agents", "--interactive"])), Mode::Interactive);
     }
 
     #[test]
-    fn an_unknown_or_uninstallable_agent_gets_one_plain_sentence() {
-        let mut c = ctx(Mode::Interactive);
-        let e = install_one("nope", &mut c).unwrap_err();
-        assert_eq!(e, "Kolux does not know an agent called nope.");
-        // ante is never on this PC's PATH in a test run unless someone installed it; skip the check then.
-        if !info_of("ante").unwrap().installed {
-            let e = install_one("ante", &mut c).unwrap_err();
-            assert!(e.starts_with("Kolux has no official Windows install for Ante"), "{e}");
-        }
+    fn the_command_line_ids_are_the_words_that_are_not_flags() {
+        assert_eq!(ids_of(&strings(&["--install-agents"])), Vec::<String>::new());
+        assert_eq!(ids_of(&strings(&["--install-agents", "--interactive", "gemini,cline, codebuff"])), ["gemini", "cline", "codebuff"]);
+        assert_eq!(ids_of(&strings(&["gemini", "--install-agents", "aug,,qwen-code"])), ["gemini", "aug", "qwen-code"]);
     }
 
     #[test]
@@ -600,25 +910,6 @@ mod tests {
     }
 
     #[test]
-    fn the_installer_flag_picks_the_mode() {
-        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(mode_of(&a(&["--install-agents"])), Mode::Silent);
-        assert_eq!(mode_of(&a(&["--install-agents", "--interactive"])), Mode::Interactive);
-    }
-
-    #[test]
-    fn a_pass_skips_the_rest_once_the_total_time_ran_out() {
-        let mut tried = Vec::new();
-        let mut lines = Vec::new();
-        pass(&["a", "b"], Instant::now() - Duration::from_secs(1), |id| { tried.push(id.to_string()); (Ok(()), String::new()) }, |id, r, _| lines.push(format!("{id}: {r:?}")));
-        assert!(tried.is_empty());
-        assert_eq!(lines, ["a: Err(\"skipped, the 45-minute install time ran out\")", "b: Err(\"skipped, the 45-minute install time ran out\")"]);
-        let mut tried = Vec::new();
-        pass(&["a", "b"], Instant::now() + Duration::from_secs(60), |id| { tried.push(id.to_string()); (Ok(()), String::new()) }, |_, _, _| {});
-        assert_eq!(tried, ["a", "b"]);
-    }
-
-    #[test]
     fn the_total_time_also_cuts_one_agents_deadline() {
         let end = Instant::now() + Duration::from_secs(5);
         let c = Ctx::new(Mode::Silent, LIMIT, Some(end));
@@ -627,6 +918,7 @@ mod tests {
         assert_eq!(Ctx::new(Mode::Silent, LIMIT, None).clamp(far), far);
         assert_eq!(TOTAL_LIMIT, Duration::from_secs(45 * 60));
         assert_eq!(RUNTIME_LIMIT, Duration::from_secs(10 * 60));
+        assert_eq!(LIMIT, Duration::from_secs(10 * 60));
     }
 
     #[test]
@@ -643,6 +935,10 @@ mod tests {
         t.join().unwrap();
     }
 
+    fn powershell() -> PathBuf {
+        find_in(&search_dirs(), "powershell").unwrap_or_else(|| PathBuf::from("powershell"))
+    }
+
     #[test]
     fn a_program_that_waits_for_a_person_is_ended_once_the_agent_is_found() {
         let mut tail = String::new();
@@ -652,7 +948,7 @@ mod tests {
             asked.set(asked.get() + 1);
             asked.get() >= 2
         };
-        let r = run(&program_path("powershell"), &["-NoProfile".into(), "-Command".into(), "Start-Sleep 60".into()], Instant::now() + Duration::from_secs(50), &mut tail, Some(&found));
+        let r = run(&powershell(), &["-NoProfile".into(), "-Command".into(), "Start-Sleep 60".into()], Instant::now() + Duration::from_secs(50), &mut tail, Some(&found));
         assert_eq!(r, Ok(None));
         assert_eq!(asked.get(), 2);
         assert!(started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
@@ -664,8 +960,336 @@ mod tests {
     fn a_runaway_program_is_stopped_at_the_deadline() {
         let mut tail = String::new();
         let started = Instant::now();
-        let r = run(&program_path("powershell"), &["-NoProfile".into(), "-Command".into(), "Start-Sleep 30".into()], Instant::now() + Duration::from_millis(500), &mut tail, None);
+        let r = run(&powershell(), &["-NoProfile".into(), "-Command".into(), "Start-Sleep 30".into()], Instant::now() + Duration::from_millis(500), &mut tail, None);
         assert_eq!(r, Err("The install took longer than its time limit, so Kolux stopped it.".to_string()));
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    // ---- T-578: the batch engine, proven on a fake PC (no program is started) ----
+
+    /// A PC that records every program the engine would run and installs what that program names.
+    struct Fake {
+        installed: Mutex<HashSet<String>>,
+        /// Programs present on the PC (the runtimes, winget, powershell).
+        have: Mutex<HashSet<String>>,
+        /// (kind, arguments) of every run, in start order.
+        calls: Mutex<Vec<(String, Vec<String>)>>,
+        events: Mutex<Vec<Progress>>,
+        reports: Mutex<Vec<(String, bool)>>,
+        /// kind -> (running now, most running at once)
+        busy: Mutex<HashMap<String, (usize, usize)>>,
+        delay: Duration,
+        /// An npm call with more than one package ends without installing anything.
+        fail_batch: bool,
+        /// This agent id never installs.
+        never: Option<String>,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Fake {
+                installed: Mutex::new(HashSet::new()),
+                have: Mutex::new(["npm", "uv", "git", "winget", "powershell"].iter().map(|s| s.to_string()).collect()),
+                calls: Mutex::new(Vec::new()),
+                events: Mutex::new(Vec::new()),
+                reports: Mutex::new(Vec::new()),
+                busy: Mutex::new(HashMap::new()),
+                delay: Duration::from_millis(0),
+                fail_batch: false,
+                never: None,
+            }
+        }
+        fn kind_calls(&self, kind: &str) -> Vec<Vec<String>> {
+            self.calls.lock().unwrap().iter().filter(|c| c.0 == kind).map(|c| c.1.clone()).collect()
+        }
+        fn most_at_once(&self, kind: &str) -> usize {
+            self.busy.lock().unwrap().get(kind).map(|b| b.1).unwrap_or(0)
+        }
+        fn states_of(&self, id: &str) -> Vec<State> {
+            self.events.lock().unwrap().iter().filter(|p| p.id == id).map(|p| p.state).collect()
+        }
+        fn install(&self, id: &str) {
+            if self.never.as_deref() != Some(id) {
+                self.installed.lock().unwrap().insert(id.to_string());
+            }
+        }
+    }
+
+    impl Host for Fake {
+        fn info(&self, id: &str) -> Option<AgentInfo> {
+            // no disk scan: the fake PC has only what its sets say
+            let (id, name, programs, args) = CATALOGUE.iter().find(|e| e.0 == id)?;
+            Some(AgentInfo {
+                id: id.to_string(),
+                name: name.to_string(),
+                program: programs[0].to_string(),
+                args: args.iter().map(|a| a.to_string()).collect(),
+                installed: self.installed.lock().unwrap().contains(*id),
+                path: None,
+                docs: false,
+                installable: install_text(id).is_some(),
+                install: install_text(id),
+            })
+        }
+        fn program(&self, name: &str) -> Option<PathBuf> {
+            self.have.lock().unwrap().contains(name).then(|| PathBuf::from(name))
+        }
+        fn run(&self, program: &Path, args: &[String], _deadline: Instant, _tail: &mut String, _early: Option<&dyn Fn() -> bool>) -> Result<Option<i32>, String> {
+            let kind = program.file_name().unwrap().to_string_lossy().to_string();
+            self.calls.lock().unwrap().push((kind.clone(), args.to_vec()));
+            {
+                let mut busy = self.busy.lock().unwrap();
+                let b = busy.entry(kind.clone()).or_insert((0, 0));
+                b.0 += 1;
+                b.1 = b.1.max(b.0);
+            }
+            std::thread::sleep(self.delay);
+            match kind.as_str() {
+                "npm" => {
+                    let packages = &args[2..];
+                    if !(self.fail_batch && packages.len() > 1) {
+                        for p in packages {
+                            for r in &TABLE {
+                                if matches!(r.route, Some(Route::Npm(a)) if a.contains(&p.as_str())) {
+                                    self.install(r.id);
+                                }
+                            }
+                        }
+                    }
+                }
+                "winget" => {
+                    let id = &args[args.iter().position(|a| a == "--id").unwrap() + 1];
+                    match [Runtime::Node, Runtime::Uv, Runtime::Git].iter().find(|r| r.facts().0 == id) {
+                        Some(rt) => {
+                            self.have.lock().unwrap().insert(rt.facts().1.to_string());
+                        }
+                        None => TABLE.iter().filter(|r| matches!(r.route, Some(Route::Winget(w)) if w == id.as_str())).for_each(|r| self.install(r.id)),
+                    }
+                }
+                "uv" => TABLE.iter().filter(|r| matches!(r.route, Some(Route::Uv(p)) if args.contains(&p.to_string()))).for_each(|r| self.install(r.id)),
+                _ => TABLE.iter().filter(|r| matches!(r.route, Some(Route::Script(s)) if args.last().is_some_and(|l| l.ends_with(s)))).for_each(|r| self.install(r.id)),
+            }
+            self.busy.lock().unwrap().get_mut(&kind).unwrap().0 -= 1;
+            Ok(Some(0))
+        }
+        fn progress(&self, p: Progress) {
+            self.events.lock().unwrap().push(p);
+        }
+        fn report(&self, id: &str, result: &Result<(), String>, _tail: &str) {
+            self.reports.lock().unwrap().push((id.to_string(), result.is_ok()));
+        }
+    }
+
+    fn ctx() -> Ctx {
+        Ctx::new(Mode::Interactive, LIMIT, None)
+    }
+
+    /// Ids whose route is plain npm (no extra arguments), in catalogue order.
+    fn plain_npm() -> Vec<&'static str> {
+        TABLE.iter().filter(|r| matches!(r.route, Some(Route::Npm(a)) if !a.iter().any(|x| x.starts_with('-')))).map(|r| r.id).collect()
+    }
+    fn ids_with(f: fn(&Route) -> bool) -> Vec<&'static str> {
+        TABLE.iter().filter(|r| r.route.is_some_and(|route| f(&route))).map(|r| r.id).collect()
+    }
+    fn owned(v: &[&str]) -> Vec<String> {
+        strings(v)
+    }
+
+    #[test]
+    fn plain_npm_packages_go_in_one_call_and_a_package_with_extra_arguments_gets_its_own() {
+        let f = Fake::new();
+        let plain = plain_npm();
+        assert!(plain.len() >= 3);
+        let mut ids: Vec<&str> = plain[..3].to_vec();
+        ids.push("pi");
+        let out = run_batch(&f, &owned(&ids), ctx());
+        let npm = f.kind_calls("npm");
+        assert_eq!(npm.len(), 2, "{npm:?}");
+        assert_eq!(&npm[0][..2], ["install", "-g"]);
+        assert_eq!(npm[0].len(), 2 + 3, "one call with the three plain packages: {:?}", npm[0]);
+        assert_eq!(npm[1], ["install", "-g", "--ignore-scripts", "@earendil-works/pi-coding-agent"], "pi after the batch, alone");
+        assert!(out.iter().all(|r| r.ok && r.agent.as_ref().is_some_and(|a| a.installed)), "{out:?}");
+        assert_eq!(out.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ids, "results come back in the order asked");
+    }
+
+    #[test]
+    fn a_failed_npm_batch_is_retried_package_by_package_and_each_agent_has_its_own_end() {
+        let mut f = Fake::new();
+        f.fail_batch = true;
+        let plain = plain_npm();
+        f.never = Some(plain[1].to_string());
+        let ids: Vec<&str> = plain[..3].to_vec();
+        let out = run_batch(&f, &owned(&ids), ctx());
+        let npm = f.kind_calls("npm");
+        assert_eq!(npm.len(), 1 + 3, "the batch, then one call each: {npm:?}");
+        assert_eq!(npm[0].len(), 2 + 3);
+        assert!(npm[1..].iter().all(|c| c.len() == 3), "{npm:?}");
+        assert_eq!(out.iter().map(|r| r.ok).collect::<Vec<_>>(), [true, false, true]);
+        assert!(out[1].error.as_deref().unwrap().contains("did not finish installing"), "{:?}", out[1].error);
+        assert_eq!(f.states_of(plain[1]), [State::Queued, State::Installing, State::Failed]);
+    }
+
+    #[test]
+    fn a_batch_that_installed_everything_is_not_retried() {
+        let f = Fake::new();
+        let plain = plain_npm();
+        run_batch(&f, &owned(&plain[..2]), ctx());
+        assert_eq!(f.kind_calls("npm").len(), 1);
+    }
+
+    #[test]
+    fn at_most_four_scripts_run_at_once() {
+        let mut f = Fake::new();
+        f.delay = Duration::from_millis(80);
+        let scripts = ids_with(|r| matches!(r, Route::Script(_)));
+        assert!(scripts.len() >= 9, "{scripts:?}");
+        let out = run_batch(&f, &owned(&scripts), ctx());
+        assert_eq!(f.kind_calls("powershell").len(), scripts.len());
+        assert_eq!(f.most_at_once("powershell"), 4);
+        assert!(out.iter().all(|r| r.ok), "{out:?}");
+    }
+
+    #[test]
+    fn winget_installs_run_one_at_a_time_and_uv_too() {
+        let mut f = Fake::new();
+        f.delay = Duration::from_millis(60);
+        let winget = ids_with(|r| matches!(r, Route::Winget(_)));
+        let uv = ids_with(|r| matches!(r, Route::Uv(_)));
+        assert!(winget.len() >= 2 && !uv.is_empty(), "{winget:?} {uv:?}");
+        let all: Vec<&str> = winget.iter().chain(uv.iter()).copied().collect();
+        let out = run_batch(&f, &owned(&all), ctx());
+        assert_eq!(f.kind_calls("winget").len(), winget.len());
+        assert_eq!(f.kind_calls("uv").len(), uv.len());
+        assert_eq!(f.most_at_once("winget"), 1);
+        assert_eq!(f.most_at_once("uv"), 1);
+        assert!(out.iter().all(|r| r.ok), "{out:?}");
+    }
+
+    #[test]
+    fn the_four_groups_run_at_the_same_time() {
+        let mut f = Fake::new();
+        f.delay = Duration::from_millis(300);
+        let plain = plain_npm();
+        let one = |kind: fn(&Route) -> bool| ids_with(kind)[0];
+        let ids = [plain[0], one(|r| matches!(r, Route::Script(_))), one(|r| matches!(r, Route::Winget(_))), one(|r| matches!(r, Route::Uv(_)))];
+        let started = Instant::now();
+        let out = run_batch(&f, &owned(&ids), ctx());
+        assert!(out.iter().all(|r| r.ok), "{out:?}");
+        assert!(started.elapsed() < Duration::from_millis(900), "four 300 ms installs overlapped: {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn progress_goes_queued_then_installing_then_ok_or_failed_for_every_id() {
+        let mut f = Fake::new();
+        f.never = Some("pi".to_string());
+        let plain = plain_npm();
+        let script = ids_with(|r| matches!(r, Route::Script(_)))[0];
+        let winget = ids_with(|r| matches!(r, Route::Winget(_)))[0];
+        let uv = ids_with(|r| matches!(r, Route::Uv(_)))[0];
+        let ids = [plain[0], plain[1], "pi", script, winget, uv];
+        run_batch(&f, &owned(&ids), ctx());
+        for id in ids {
+            let want = if id == "pi" { State::Failed } else { State::Ok };
+            assert_eq!(f.states_of(id), [State::Queued, State::Installing, want], "{id}");
+        }
+        let events = f.events.lock().unwrap();
+        assert!(events.iter().filter(|p| p.state == State::Failed).all(|p| p.error.is_some()));
+        assert!(events.iter().filter(|p| p.state != State::Failed).all(|p| p.error.is_none()));
+        // every id also gets its log line
+        assert_eq!(f.reports.lock().unwrap().len(), ids.len());
+    }
+
+    #[test]
+    fn installed_unknown_and_not_installable_ids_come_back_at_once() {
+        let f = Fake::new();
+        f.install("gemini");
+        let out = run_batch(&f, &owned(&["gemini", "ante", "nope"]), ctx());
+        assert!(f.calls.lock().unwrap().is_empty(), "nothing was run");
+        assert!(out[0].ok && out[0].error.is_none() && out[0].agent.as_ref().is_some_and(|a| a.installed));
+        assert!(!out[1].ok && out[1].error.as_deref().unwrap().starts_with("Kolux has no official Windows install for Ante"), "{:?}", out[1]);
+        assert!(!out[2].ok && out[2].error.as_deref() == Some("Kolux does not know an agent called nope.") && out[2].agent.is_none());
+        assert_eq!(f.states_of("gemini"), [State::Queued, State::Ok]);
+        assert_eq!(f.states_of("ante"), [State::Queued, State::Failed]);
+        assert_eq!(f.states_of("nope"), [State::Queued, State::Failed]);
+    }
+
+    #[test]
+    fn a_repeated_id_is_installed_once() {
+        let f = Fake::new();
+        let out = run_batch(&f, &owned(&["cline", "cline"]), ctx());
+        assert_eq!(out.len(), 1);
+        assert_eq!(f.kind_calls("npm").len(), 1);
+    }
+
+    #[test]
+    fn a_missing_runtime_is_installed_first_then_the_groups_run() {
+        let f = Fake::new();
+        f.have.lock().unwrap().remove("npm");
+        f.have.lock().unwrap().remove("uv");
+        let uv = ids_with(|r| matches!(r, Route::Uv(_)))[0];
+        let out = run_batch(&f, &owned(&["cline", uv]), ctx());
+        assert!(out.iter().all(|r| r.ok), "{out:?}");
+        let calls = f.calls.lock().unwrap();
+        let kinds: Vec<(&str, &str)> = calls.iter().map(|c| (c.0.as_str(), c.1.iter().find(|a| a.contains('.') || a.as_str() == "-g").map(String::as_str).unwrap_or(""))).collect();
+        assert_eq!(kinds[0], ("winget", "OpenJS.NodeJS.LTS"), "Node first: {kinds:?}");
+        assert_eq!(kinds[1], ("winget", "astral-sh.uv"), "then uv, one after another: {kinds:?}");
+        assert!(kinds[2..].iter().all(|k| k.0 != "winget"), "{kinds:?}");
+    }
+
+    #[test]
+    fn a_silent_batch_ends_the_npm_agents_when_node_is_missing_and_runs_nothing() {
+        let f = Fake::new();
+        f.have.lock().unwrap().remove("npm");
+        let out = run_batch(&f, &owned(&["cline", "gemini"]), Ctx::new(Mode::Silent, LIMIT, None));
+        assert!(f.calls.lock().unwrap().is_empty());
+        assert!(out.iter().all(|r| !r.ok && r.error.as_deref() == Some("needs Node.js (install it, then use Install in Kolux)")), "{out:?}");
+    }
+
+    #[test]
+    fn once_the_total_time_ran_out_nothing_more_is_tried() {
+        let f = Fake::new();
+        let plain = plain_npm();
+        let script = ids_with(|r| matches!(r, Route::Script(_)))[0];
+        let winget = ids_with(|r| matches!(r, Route::Winget(_)))[0];
+        let out = run_batch(&f, &owned(&[plain[0], plain[1], script, winget]), Ctx::new(Mode::Interactive, LIMIT, Some(Instant::now() - Duration::from_secs(1))));
+        assert!(f.calls.lock().unwrap().is_empty());
+        assert!(out.iter().all(|r| !r.ok && r.error.as_deref() == Some(OUT_OF_TIME)), "{out:?}");
+        assert_eq!(f.states_of(plain[0]), [State::Queued, State::Failed]);
+    }
+
+    #[test]
+    fn the_npm_batch_gets_a_minute_per_extra_package_and_never_more_than_the_total() {
+        let c = Ctx::new(Mode::Interactive, LIMIT, Some(Instant::now() + Duration::from_secs(5)));
+        let wanted = Instant::now() + c.limit + NPM_EXTRA_PER_PACKAGE * 3;
+        assert!(wanted > Instant::now() + Duration::from_secs(12 * 60), "10 minutes + 3 extra minutes");
+        assert_eq!(NPM_EXTRA_PER_PACKAGE, Duration::from_secs(60));
+        assert!(c.clamp(wanted) <= Instant::now() + Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_batch_holds_the_install_lock_for_its_whole_run() {
+        let held = INSTALL_LOCK.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let t = std::thread::spawn(move || {
+            let f = Fake::new();
+            let out = locked_batch(&f, &owned(&["nope"]), Mode::Interactive, LIMIT, None);
+            tx.send(out.len()).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "a batch waits while another install runs");
+        drop(held);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(1));
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn the_event_and_result_are_camel_case_json() {
+        let p = Progress { id: "gemini".into(), state: State::Installing, error: None };
+        assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"id":"gemini","state":"installing","error":null}"#);
+        let p = Progress { id: "x".into(), state: State::Failed, error: Some("no".into()) };
+        assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"id":"x","state":"failed","error":"no"}"#);
+        let r = InstallResult { id: "x".into(), ok: false, error: Some("no".into()), agent: None };
+        assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"id":"x","ok":false,"error":"no","agent":null}"#);
+        assert_eq!(serde_json::to_string(&State::Queued).unwrap(), "\"queued\"");
+        assert_eq!(serde_json::to_string(&State::Ok).unwrap(), "\"ok\"");
     }
 }
