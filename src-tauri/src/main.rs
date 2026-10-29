@@ -7,5 +7,9 @@ fn main() {
     if args.first().map(String::as_str) == Some("--terminal-service") {
         std::process::exit(kolux_rs_lib::terminal_service_main(&args));
     }
+    // T-573: the installer's run installs the agents and never opens the window.
+    if let Some(code) = kolux_rs_lib::agents::agent_install::cli_main(&args) {
+        std::process::exit(code);
+    }
     kolux_rs_lib::run()
 }

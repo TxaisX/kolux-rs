@@ -21,6 +21,9 @@ pub mod inventory;
 // ux card 11: the window's `agent_list` command runs off the UI thread; Rust callers keep the plain `agent_list` below.
 #[path = "agent_list_command.rs"]
 pub mod list_command;
+// T-573: the install table, the `agents_install` command and the installer's `--install-agents` run.
+#[path = "agent_install.rs"]
+pub mod agent_install;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +42,10 @@ pub struct AgentInfo {
     pub path: Option<String>,
     /// SESS-017: Kolux knows the agent's own documentation page (`install_page`).
     pub docs: bool,
+    /// T-573: Kolux knows an official install route for this agent on this OS (`install` is the command).
+    pub installable: bool,
+    /// T-573: the human-readable install command, the Install button's tooltip; `None` when not installable.
+    pub install: Option<String>,
 }
 
 /// id, name, program names (the first is the main one, the rest also count), fixed arguments.
@@ -113,6 +120,8 @@ pub fn catalogue() -> Vec<AgentInfo> {
                 installed: found.is_some(),
                 path: found.map(|(_, f)| f.display().to_string()),
                 docs: install_page(id).is_some(),
+                installable: agent_install::install_text(id).is_some(),
+                install: agent_install::install_text(id),
             }
         })
         .collect()
@@ -247,6 +256,8 @@ fn usual_dirs() -> Vec<PathBuf> {
     if cfg!(windows) {
         if let Some(app) = env_dir("APPDATA") {
             out.push(app.join("npm"));
+            // A custom npm prefix (npm_config_prefix) puts the global shims there; a scratch install proof uses it.
+            out.extend(env_dir("npm_config_prefix"));
             // nvm-windows: the version in use is a link folder (NVM_SYMLINK); else its newest version.
             out.extend(env_dir("NVM_SYMLINK"));
             out.extend(env_dir("NVM_HOME").or_else(|| Some(app.join("nvm"))).and_then(|n| newest_version_dir(&n)));
