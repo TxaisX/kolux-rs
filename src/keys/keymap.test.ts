@@ -14,7 +14,7 @@ test("the table registers the 138 carried commands (TERM-053 added tab.search, V
   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
   expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(56);
   expect(actions.filter((a) => a.win32.length === 0 && a.darwin).map((a) => a.id).sort()).toEqual(["floatingWorkspace.maximize", "sidebar.ports.toggle", "tab.newAgent", "tab.rename", "workspace.rename"].sort());
-  expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
+  expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(36);
 });
 
 test("chords parse, normalise their spelling and refuse Mod mixed with Ctrl", () => {
