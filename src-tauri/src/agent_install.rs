@@ -9,7 +9,7 @@
 //! T-576: the audit list that holds each route to its official source is `agent_install_official.rs`
 //! (test only); installs run one at a time across the app; the install-all pass has a 45-minute cap, a
 //! runtime install its own 10-minute deadline, and a silent or update install never raises a Windows
-//! admin prompt (Node.js and Git are machine-wide installers).
+//! admin prompt (Node.js is a machine-wide installer; uv and Git install for this user only, T-577).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -43,9 +43,10 @@ impl Runtime {
 
     /// True when the installer is machine-wide and Windows asks for admin permission (T-576, checked with
     /// `winget show --scope user` on 2026-10-28: Node.js has no per-user installer; uv is a portable zip that
-    /// takes `--scope user`; Git is kept on the default route).
+    /// takes `--scope user`; T-577: Git.Git lists an applicable per-user Inno installer under `--scope user`,
+    /// so Git installs for this user too, with no admin prompt, and a silent install may start it like uv).
     fn machine_scope(self) -> bool {
-        !matches!(self, Runtime::Uv)
+        matches!(self, Runtime::Node)
     }
 }
 
@@ -198,7 +199,8 @@ fn winget_args(id: &str) -> Vec<String> {
     ["install", "--exact", "--id", id, "--silent", "--accept-package-agreements", "--accept-source-agreements"].iter().map(|s| s.to_string()).collect()
 }
 
-/// The frozen line for a runtime: uv is a portable zip, so it is installed for this user only (no admin prompt).
+/// The frozen line for a runtime: uv (a portable zip) and Git (a per-user Inno installer) are installed for this
+/// user only (no admin prompt); Node.js keeps the machine-wide line.
 fn runtime_winget_args(runtime: Runtime) -> Vec<String> {
     let mut args = winget_args(runtime.facts().0);
     if !runtime.machine_scope() {
@@ -582,9 +584,9 @@ mod tests {
     #[test]
     fn a_silent_install_never_starts_a_machine_wide_runtime() {
         assert_eq!(silent_refusal(Runtime::Node, Mode::Silent).as_deref(), Some("needs Node.js (install it, then use Install in Kolux)"));
-        assert_eq!(silent_refusal(Runtime::Git, Mode::Silent).as_deref(), Some("needs Git (install it, then use Install in Kolux)"));
-        // uv is per-user, so a silent install may install it; an interactive one may install any
+        // uv and Git (T-577) are per-user, so a silent install may install them; an interactive one may install any
         assert_eq!(silent_refusal(Runtime::Uv, Mode::Silent), None);
+        assert_eq!(silent_refusal(Runtime::Git, Mode::Silent), None);
         for rt in [Runtime::Node, Runtime::Uv, Runtime::Git] {
             assert_eq!(silent_refusal(rt, Mode::Interactive), None);
         }
@@ -594,7 +596,7 @@ mod tests {
     fn uv_is_installed_for_this_user_and_the_others_on_the_frozen_line() {
         assert_eq!(runtime_winget_args(Runtime::Uv).join(" "), "install --exact --id astral-sh.uv --silent --accept-package-agreements --accept-source-agreements --scope user");
         assert_eq!(runtime_winget_args(Runtime::Node), winget_args("OpenJS.NodeJS.LTS"));
-        assert_eq!(runtime_winget_args(Runtime::Git), winget_args("Git.Git"));
+        assert_eq!(runtime_winget_args(Runtime::Git).join(" "), "install --exact --id Git.Git --silent --accept-package-agreements --accept-source-agreements --scope user");
     }
 
     #[test]
