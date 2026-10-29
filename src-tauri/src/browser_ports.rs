@@ -61,7 +61,14 @@ pub fn parse_lsof(text: &str) -> Vec<Listening> {
 
 /// The ports listening on this machine now.
 pub fn listening() -> Vec<Listening> {
-    let out = if cfg!(windows) { std::process::Command::new("netstat").args(["-ano", "-p", "tcp"]).output() } else { std::process::Command::new("lsof").args(["-nP", "-iTCP", "-sTCP:LISTEN"]).output() };
+    #[cfg(windows)]
+    let out = {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: the Preview button asks every 3 s, so a console would flash up each time.
+        std::process::Command::new("netstat").args(["-ano", "-p", "tcp"]).creation_flags(0x0800_0000).output()
+    };
+    #[cfg(not(windows))]
+    let out = std::process::Command::new("lsof").args(["-nP", "-iTCP", "-sTCP:LISTEN"]).output();
     let text = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
     if cfg!(windows) { parse_netstat(&text) } else { parse_lsof(&text) }
 }
