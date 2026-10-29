@@ -48,9 +48,10 @@ type Entry = (&'static str, &'static str, &'static [&'static str], &'static [&'s
 /// inside the project folder. Never the flag that turns the sandbox off.
 const CODEX_YOLO: &[&str] = &["--sandbox", "workspace-write", "--ask-for-approval", "never"];
 
-/// The 34 visible agents in SESS-001 order. Claude Agent Teams (SESS-042) is skipped
-/// (DECISIONS.md), and OpenCode is retired (SESS-043).
-pub const CATALOGUE: [Entry; 34] = [
+/// The 35 visible agents: the 34 of SESS-001 in its order, then OpenCode, which Txais brought back on
+/// 2026-10-28 (reverses SESS-043; appended so the SESS-001 numbering of the others does not move).
+/// Claude Agent Teams (SESS-042) is skipped (DECISIONS.md).
+pub const CATALOGUE: [Entry; 35] = [
     ("claude", "Claude Code", &["claude"], &["--permission-mode", "auto"]),
     ("openclaude", "OpenClaude", &["openclaude"], &[]),
     ("codex", "Codex", &["codex"], CODEX_YOLO),
@@ -93,6 +94,8 @@ pub const CATALOGUE: [Entry; 34] = [
     ("copilot", "GitHub Copilot", &["copilot"], &[]),
     ("grok", "Grok", &["grok"], &[]),
     ("devin", "Devin", &["devin"], &[]),
+    // T-572: back by Txais's call of 2026-10-28. Plain `opencode` opens its terminal UI in the folder.
+    ("opencode", "OpenCode", &["opencode"], &[]),
 ];
 
 /// The catalogue with each agent's installed state, in menu order.
@@ -332,7 +335,8 @@ fn route(id: &str) -> Route {
     match id {
         "claude" | "openclaude" | "codex" | "pi" | "omp" | "command-code" | "cursor" | "droid" => Route::Trailing,
         "trae" | "prime-agent" | "grok" => Route::DashDash,
-        "mimo-code" => Route::Flag("--prompt"),
+        // OpenCode's terminal UI takes the opening prompt behind `--prompt` (opencode.ai/docs/cli, 2026-10-28).
+        "mimo-code" | "opencode" => Route::Flag("--prompt"),
         "gemini" | "antigravity" => Route::Flag("--prompt-interactive"),
         // The one-letter interactive switch: plain `--prompt` quits once the task is done.
         "copilot" => Route::Flag("-i"),
@@ -396,7 +400,8 @@ pub fn resume_args(id: &str, session: Option<&str>) -> Vec<String> {
         ("copilot" | "cursor", Some(sid)) => vec![format!("--resume={sid}")],
         ("gemini" | "devin" | "droid" | "mistral-vibe" | "qwen-code" | "hermes" | "grok", Some(sid)) => s(&["--resume", sid]),
         ("antigravity", Some(sid)) => s(&["--conversation", sid]),
-        ("kimi" | "pi", Some(sid)) => s(&["--session", sid]),
+        // OpenCode: `--session <id>` continues that session (opencode.ai/docs/cli, 2026-10-28).
+        ("kimi" | "pi" | "opencode", Some(sid)) => s(&["--session", sid]),
         ("goose", Some(sid)) => s(&["session", "--resume", "--session-id", sid]),
         ("amp", Some(sid)) => s(&["threads", "continue", sid]),
         ("openclaw", Some(sid)) => s(&["resume", sid]),
@@ -838,6 +843,7 @@ pub fn install_page(agent: &str) -> Option<&'static str> {
         "openclaw" => Some("https://docs.openclaw.ai/"),
         "copilot" => Some("https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"),
         "devin" => Some("https://docs.devin.ai/cli"),
+        "opencode" => Some("https://opencode.ai/docs/"),
         _ => None,
     }
 }
@@ -1045,6 +1051,8 @@ X=1" } } });
         assert_eq!(start_args("gemini", &[], "Tidy up").unwrap().args, s(&["--yolo", "--prompt-interactive", "Tidy up"]));
         assert_eq!(start_args("antigravity", &[], "Tidy up").unwrap().args, s(&["--prompt-interactive", "Tidy up"]));
         assert_eq!(start_args("mimo-code", &[], "Tidy up").unwrap().args, s(&["--prompt", "Tidy up"]));
+        assert_eq!(start_args("opencode", &[], "Tidy up").unwrap().args, s(&["--prompt", "Tidy up"]));
+        assert_eq!(start_args("opencode", &[], "").unwrap().args, Vec::<String>::new(), "bare OpenCode opens its own screen");
     }
 
     #[test]
@@ -1166,7 +1174,7 @@ X=1" } } });
 
     /// SESS-030 (T-066-b): every agent with a documented resume form, the arguments a restore with a
     /// known id adds after its standing start line; the fixed arguments stay in front.
-    const RESUMED: [(&str, &[&str]); 19] = [
+    const RESUMED: [(&str, &[&str]); 20] = [
         ("claude", &["--resume", "sid"]),
         ("codex", &["resume", "sid"]),
         ("copilot", &["--resume=sid"]),
@@ -1181,6 +1189,7 @@ X=1" } } });
         ("antigravity", &["--conversation", "sid"]),
         ("kimi", &["--session", "sid"]),
         ("pi", &["--session", "sid"]),
+        ("opencode", &["--session", "sid"]),
         ("goose", &["session", "--resume", "--session-id", "sid"]),
         ("amp", &["threads", "continue", "sid"]),
         ("openclaw", &["resume", "sid"]),
@@ -1330,13 +1339,14 @@ X=1" } } });
     }
 
     #[test]
-    fn the_catalogue_has_the_34_agents_in_sess_001_order_with_their_start_lines() {
+    fn the_catalogue_has_the_34_agents_in_sess_001_order_with_their_start_lines_then_opencode() {
         let list = catalogue();
-        assert_eq!(list.len(), 34);
+        assert_eq!(list.len(), 35);
         let ids: Vec<&str> = list.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(&ids[..3], &["claude", "openclaude", "codex"]);
         assert_eq!(ids[33], "devin");
-        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 34, "every id once");
+        assert_eq!(ids[34], "opencode", "T-572: OpenCode is back, appended after the SESS-001 list");
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 35, "every id once");
         let by = |id: &str| list.iter().find(|a| a.id == id).unwrap();
         assert_eq!(by("claude").args, vec!["--permission-mode", "auto"]);
         assert_eq!(by("codex").args, vec!["--sandbox", "workspace-write", "--ask-for-approval", "never"]);
