@@ -59,7 +59,8 @@ pub const OFFICIAL: [(&str, Official); 35] = [
     ("hermes", Url("https://hermes-agent.nousresearch.com/install.ps1")),
     ("openclaw", Url("https://openclaw.ai/install.ps1")),
     ("copilot", Winget("GitHub.Copilot")),
-    ("grok", NotInstallable),
+    // xAI's own host; the script starts "# Grok CLI installer for PowerShell ... Usage: irm https://x.ai/cli/install.ps1 | iex" (T-577).
+    ("grok", Url("https://x.ai/cli/install.ps1")),
     ("devin", Url("https://static.devin.ai/cli/setup.ps1")),
     ("opencode", Npm("opencode-ai")),
 ];

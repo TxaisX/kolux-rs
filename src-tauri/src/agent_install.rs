@@ -165,11 +165,11 @@ pub const TABLE: [Row; 35] = [
     row("openclaw", Route::Script("& ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard"), None),
     // https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli (WinGet)
     row("copilot", Route::Winget("GitHub.Copilot"), None),
-    // Grok CLI: xAI documents only a macOS/Linux install script, so not installable (T-576 review). No x.ai docs page
-    // shows install.ps1 (x.ai/cli answers 403 to a script; checked 2026-10-28). The file does exist on x.ai itself and
-    // starts "# Grok CLI installer for PowerShell - https://x.ai/cli/install.ps1 ... Usage: irm https://x.ai/cli/install.ps1 | iex",
-    // so the coordinator may turn this row back on if a docs page is found.
-    none("grok"),
+    // Grok CLI: https://x.ai/cli/install.ps1, served by xAI from its own host. The file starts
+    // "# Grok CLI installer for PowerShell - https://x.ai/cli/install.ps1 ... Usage: irm https://x.ai/cli/install.ps1 | iex"
+    // (checked 2026-10-28). xAI's docs pages show only the macOS/Linux script; the coordinator ruled the vendor's own
+    // host an official source (T-577), so grok is installable again.
+    row("grok", Route::Script("irm https://x.ai/cli/install.ps1 | iex"), None),
     // https://docs.devin.ai/cli (Windows PowerShell). The script ends in `devin setup`, a full-screen menu
     // ("select / confirm / esc") that waits for a person; a live run on 2026-10-28 sat there until the 10-minute
     // deadline and opened no browser. So the run is ended as soon as devin.exe is found (the script has put it
@@ -513,7 +513,7 @@ mod tests {
             assert_eq!(row.id, entry.0);
         }
         let none: Vec<&str> = TABLE.iter().filter(|r| r.route.is_none()).map(|r| r.id).collect();
-        assert_eq!(none, ["ante", "trae", "rovo", "grok"], "the agents with no official Windows route");
+        assert_eq!(none, ["ante", "trae", "rovo"], "the agents with no official Windows route");
     }
 
     #[test]
@@ -550,7 +550,7 @@ mod tests {
         for a in &all {
             assert_eq!(a.installable, a.install.is_some(), "{}", a.id);
         }
-        assert_eq!(all.iter().filter(|a| !a.installable).map(|a| a.id.as_str()).collect::<Vec<_>>(), ["ante", "trae", "rovo", "grok"]);
+        assert_eq!(all.iter().filter(|a| !a.installable).map(|a| a.id.as_str()).collect::<Vec<_>>(), ["ante", "trae", "rovo"]);
     }
 
     #[test]
