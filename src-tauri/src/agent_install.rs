@@ -20,7 +20,7 @@ use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::{catalogue, find_in, search_dirs, AgentInfo, CATALOGUE};
+use super::{find_in, search_dirs, AgentInfo, CATALOGUE};
 
 // T-576: the reviewed allow-list the tests hold the table to (test only; not part of the program).
 #[cfg(test)]
@@ -805,6 +805,7 @@ pub fn cli_main(args: &[String]) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::catalogue;
     use std::collections::HashSet;
 
     #[test]
