@@ -11,7 +11,7 @@ import { EMPTY_HISTORY } from "./nav";
 import { cellsOf, DEFAULT_PANES_FIELD, groupOf, MAX_PANES, seedCount } from "../terminal/grid";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "../workspaces";
 import { readLook } from "../settings/general";
-import { emptySeat } from "../launch/seats";
+import { startPanes } from "./workspaceStart";
 
 export function useWorkspaces(activeDir: string | null) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -36,7 +36,6 @@ type ActionDeps = {
   setActiveDir: Dispatch<SetStateAction<string | null>>;
   setStacked: Dispatch<SetStateAction<Record<string, boolean>>>;
   nextKey: MutableRefObject<number>;
-  addShell: (dir: string | null, branch: string | null) => void;
   settings: Record<string, unknown>;
   screen: Screen;
   setScreen: Dispatch<SetStateAction<Screen>>;
@@ -46,7 +45,7 @@ type ActionDeps = {
   activeRef: MutableRefObject<string | null>;
 };
 
-export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef }: ActionDeps) {
+export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, settings, screen, setScreen, setPage, owner, recentDirs, activeRef }: ActionDeps) {
   // PROJ-033 / SESS-037: the setup script runs in a Setup terminal of the new workspace: a tab
   // beside its first pane, or a cell of its own to the right or below. `then` runs once it ends
   // (the agent waiting for setup), whatever its exit code, and lands as a tab beside it.
@@ -72,9 +71,9 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
   };
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
-  // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
+  // kept while hidden, so they come back as they were; a workspace with no pane yet gets the launch chooser (T-569), not a terminal.
   // TERM-005: `fresh` says the workspace was just made: its grid starts with the default pane
-  // count, the shell counting as one and the rest empty. Only then, so nothing re-seeds later.
+  // count. Only then, so nothing re-seeds later.
   const select = (dir: string, branch: string | null, fresh = false) => {
     setPage(null);
     recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
@@ -82,9 +81,9 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
     if (screen === "artifacts" || screen === "skills") setScreen("terminals");
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else {
-      addShell(dir, branch);
-      const more = fresh ? seedCount(settings[DEFAULT_PANES_FIELD], readLook(settings) === "classic") - 1 : 0;
-      if (more > 0) setPanes((ps) => [...ps, ...Array.from({ length: more }, (): Pane => ({ key: nextKey.current++, cwd: dir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }))]);
+      const made = startPanes(dir, branch, fresh ? seedCount(settings[DEFAULT_PANES_FIELD], readLook(settings) === "classic") : 1, () => nextKey.current++);
+      setPanes((ps) => [...ps, ...made]);
+      setFocused(made[0].key);
     }
   };
 

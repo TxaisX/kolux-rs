@@ -1428,7 +1428,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     if (pane.cwd !== null) setActiveDir(pane.cwd);
     setFocused(pane.key);
   };
-  const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
+  const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-034: kolux.yaml's default tabs open beside the new workspace's first pane (its setup first, when it has one).
   const openTabs = (dir: string, branch: string | null) => {
     const root = projects.find((p) => p.id === projectOf(dir))?.path;
