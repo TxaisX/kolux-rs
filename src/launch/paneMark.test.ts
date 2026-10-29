@@ -207,6 +207,6 @@ test("FIX-4: creditedAgent is exact outside ASCII the way Rust is: its whitespac
 test("FIX-3: the program-name table matches the catalogue in agents.rs, in order", () => {
   const body = rust.slice(rust.indexOf("pub const CATALOGUE"), rust.indexOf("/// The catalogue with each agent"));
   const rows = [...body.matchAll(/^\s*\("([a-z-]+)", "[^"]*", &\[([^\]]*)\]/gm)].map((m) => [m[1], [...m[2].matchAll(/"([^"]+)"/g)].map((n) => n[1])]);
-  expect(rows.length).toBe(34);
+  expect(rows.length).toBe(35); // T-572: OpenCode is back in the catalogue
   expect(CREDIT_NAMES.map(([id, names]) => [id, [...names]])).toEqual(rows);
 });
