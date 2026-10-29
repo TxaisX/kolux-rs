@@ -30,13 +30,13 @@ export function AgentPickerView({ agents, ticks, progress, busy, error, level = 
   return (
     <section className="conn-card agent-picker" aria-label="Install coding agents" data-section="install-agents">
       {createElement(`h${level}`, { className: "conn-name" }, "Install coding agents")}
-      <ul className="picker-list">
+      <ul className="agent-pick-list">
         {agents.map((a) => {
           const words = rowWords(a, progress);
           const failed = progress[a.id]?.state === "failed";
           const ticked = isTicked(a, ticks, progress);
           return (
-            <li key={a.id} className="picker-row" data-agent={a.id}>
+            <li key={a.id} className="agent-pick-row" data-agent={a.id}>
               <label className="conn-switch" title={a.install ?? undefined}>
                 <input type="checkbox" checked={ticked} disabled={a.installed || busy || websiteOnly(a)} onChange={(e) => onToggle(a.id, e.target.checked)} />
                 <span>{a.name}</span>
@@ -47,7 +47,7 @@ export function AgentPickerView({ agents, ticks, progress, busy, error, level = 
                 </button>
               ) : (
                 words && (
-                  <span className={`picker-state${failed ? " warn" : words === "Installed" ? " ok" : ""}`} role="status" data-state={progress[a.id]?.state ?? "installed"}>
+                  <span className={`agent-pick-state${failed ? " warn" : words === "Installed" ? " ok" : ""}`} role="status" data-state={progress[a.id]?.state ?? "installed"}>
                     {words}
                   </span>
                 )
