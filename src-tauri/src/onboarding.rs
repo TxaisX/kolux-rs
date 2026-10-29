@@ -161,8 +161,9 @@ fn reopened(rec: Option<Onboarding>) -> Onboarding {
     rec
 }
 
-/// ONB-011: the three first-success milestones, kept in the record under "milestones".
-const MILESTONES: [&str; 3] = ["aiConnected", "kitLaunched", "resultsOpened"];
+/// ONB-011: the first-success milestones, kept in the record under "milestones". T-568 (Txais
+/// 2026-10-28): starter kits are gone, so connecting an AI is the only one left.
+const MILESTONES: [&str; 1] = ["aiConnected"];
 
 /// ONB-011: a milestone's time is written at its first occurrence and never again. A profile with
 /// no record (one from before the wizard, ONB-008) has had its firsts already, so nothing is kept.
@@ -252,7 +253,7 @@ pub struct Use {
 /// ONB-042: the fixed list of features whose use the profile keeps.
 pub const FEATURES: &[&str] = &[
     "board", "palette", "browser", "browser-page", "tasks", "automations", "split", "workspace-create", "workspace-switch", "skill-setup",
-    "kits", "kit-results", "editor", "diff", "notes", "pr", "ship", "commit", "push", "usage",
+    "editor", "diff", "notes", "pr", "ship", "commit", "push", "usage",
     "inbox", "artifacts", "settings", "shortcuts", "search", "file-find", "markdown", "floating", "layout", "zoom",
     "rename", "orchestration", "cli", "notifications", "default-agent", "setup-script", "second-repo", "explore", "setup-guide", "parallel",
 ];
@@ -829,7 +830,7 @@ mod tests {
         assert_eq!(first_run(None), None, "a profile from before the wizard gets no checklist");
         let open = Onboarding { version: VERSION, step: 1, closed_at: None, outcome: None, rest: Default::default() };
         assert_eq!(first_run(Some(open)), Some(FirstRun { closed: false, outcome: None, checklist_dismissed: false, milestones: Default::default() }));
-        let rest = serde_json::from_str(r#"{"checklistDismissed":true,"milestones":{"aiConnected":5,"kitLaunched":"soon","lunch":7}}"#).unwrap();
+        let rest = serde_json::from_str(r#"{"checklistDismissed":true,"milestones":{"aiConnected":5,"resultsOpened":"soon","lunch":7}}"#).unwrap();
         let done = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: Some("dismissed".into()), rest };
         let v = first_run(Some(done)).unwrap();
         assert!(v.closed && v.checklist_dismissed && v.outcome.as_deref() == Some("dismissed"));
@@ -873,11 +874,13 @@ mod tests {
         first_start(&s, 1).unwrap();
         mark(&s, "aiConnected", 10).unwrap();
         mark(&s, "aiConnected", 20).unwrap();
-        mark(&s, "kitLaunched", 30).unwrap();
-        save(&s, &closed(load(&s).unwrap(), "completed", 40).unwrap()).unwrap();
-        mark(&s, "resultsOpened", 50).unwrap();
+        assert!(mark(&s, "kitLaunched", 30).unwrap_err().contains("kitLaunched"), "T-568: the kit milestones are gone");
+        assert!(mark(&s, "resultsOpened", 30).unwrap_err().contains("resultsOpened"));
         let rec = load(&s).unwrap();
-        assert_eq!(rec.rest["milestones"], serde_json::json!({"aiConnected":10,"kitLaunched":30,"resultsOpened":50}), "the first time stays, a closed wizard still records");
+        assert_eq!(rec.rest["milestones"], serde_json::json!({"aiConnected":10}), "the first time stays");
+        save(&s, &closed(rec, "completed", 40).unwrap()).unwrap();
+        let rec = load(&s).unwrap();
+        assert_eq!(rec.rest["milestones"], serde_json::json!({"aiConnected":10}), "closing the wizard keeps the record");
         assert!(mark(&s, "lunch", 60).unwrap_err().contains("lunch"));
     }
 
