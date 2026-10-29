@@ -176,6 +176,7 @@ import { readoutOf } from "./terminal/headerUsage";
 import { usePlan } from "./usage/plan";
 import { useCodexPaneFigures } from "./usage/paneFigures";
 import ChooserPane from "./launch/ChooserPane";
+import { chooserTabName } from "./launch/chooserTab";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
@@ -229,6 +230,8 @@ function tabName(p: Pane, titles: Record<number, string>, label?: string, live: 
   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
   // ORCH-066 / T-129-d: a worker's task label names the tab first; then the user's own name; then the program's title (TERM-058).
   if (label) return label;
+  const chooser = chooserTabName(p); // T-577: "New session" until something starts in it
+  if (chooser) return chooser;
   return followedTitle(p.title?.trim() ? p.title : sessionNameFor(p.key), live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : launchedName(p) ?? `Terminal ${p.key}`);
 }
 /** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
