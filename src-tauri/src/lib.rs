@@ -657,6 +657,7 @@ pub fn run() {
             agents::agent_start_line,
             agents::agent_prompt_send,
             agents::agent_install::agents_install,
+            agents::agent_install::agents_install_many,
             agents::open_install_page,
             agents::inventory::session_tabs,
             orchestration::task_reset,
