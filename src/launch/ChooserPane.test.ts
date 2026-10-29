@@ -217,7 +217,6 @@ test("SESS-018: the New session page shows the project and its path, the add-age
   expect(html).toContain("G:\Temp\demo");
   expect(html).not.toContain("Session 7");
   expect(html).toContain("Add more agents");
-  expect(html).not.toMatch(/OpenCode/i);
   expect(html).toContain(">Cancel<");
   expect(startButton(html)).toContain("disabled");
   expect(html).toContain("Ctrl");

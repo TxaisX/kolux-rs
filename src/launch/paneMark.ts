@@ -45,6 +45,7 @@ export const CREDIT_NAMES: readonly (readonly [string, readonly string[]])[] = [
   ["copilot", ["copilot"]],
   ["grok", ["grok"]],
   ["devin", ["devin"]],
+  ["opencode", ["opencode"]],
 ];
 
 const INTERPRETERS = ["node", "bun", "deno", "python", "python3", "pwsh"];
