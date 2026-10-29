@@ -8,6 +8,7 @@ import { useSettings } from "../settings/useSettings";
 import { playTone, readNotifications, SOUND_FIELD, testPlan, VOLUME_FIELD, type Sound } from "../settings/notifications";
 import { DEFAULT_AGENT_KEY } from "../launch/agents";
 import type { AgentInfo } from "../launch/PlusMenu";
+import AgentPicker from "../launch/AgentPicker";
 import {
   agentPanel, CARD_WORDS, composeTarget, composerRequests, foldLabel, permissionCard, platformOf, soundPanel,
   type Hands, type Proj,
@@ -156,23 +157,27 @@ export function AgentPanel() {
   const { settings, save } = useSettings();
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [open, setOpen] = useState(false);
+  const offered = useRef(false); // T-579: the install checklist stays on screen once it was offered, so its results can be read
   useEffect(() => {
     invoke<AgentInfo[]>("agent_list").then(setAgents, () => setAgents([]));
   }, []);
   if (!settings || !agents) return null;
   const p = agentPanel(agents, settings);
+  if (p.picker.length === 0 && p.fallback.length === 0) offered.current = true;
   const row = (a: AgentInfo) => (
     <label key={a.id} className="conn-switch">
       <input type="radio" name="default-agent" checked={p.current === a.id} onChange={() => void save({ [DEFAULT_AGENT_KEY]: a.id })} />
       {a.name}
     </label>
   );
-  if (p.picker.length === 0 && p.fallback.length === 0) return <p className="guide-note">No agent is installed yet. Install Claude Code or Codex, then check again.</p>;
   return (
     <>
-      <div role="radiogroup" aria-label="Default agent">
-        {p.picker.map(row)}
-      </div>
+      {offered.current && (agents.length > 0 ? <AgentPicker agents={agents} onChanged={setAgents} level={3} /> : <p className="guide-note">No agent is installed yet. Install Claude Code or Codex, then check again.</p>)}
+      {p.picker.length > 0 && (
+        <div role="radiogroup" aria-label="Default agent">
+          {p.picker.map(row)}
+        </div>
+      )}
       {p.fallback.length > 0 && (
         <>
           <button className="link" aria-expanded={open} onClick={() => setOpen(!open)}>
