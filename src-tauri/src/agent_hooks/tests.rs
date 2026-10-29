@@ -2484,3 +2484,57 @@ fn row_989_hooks_off_leaves_the_users_own_config_dir_as_it_was() {
     assert_eq!(ev(&fs::read_to_string(own.join("settings.json.bak-kolux")).unwrap()), ev(R989_USER), "the copy is the user's original");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// T-575: the bottom line is as short as the user's own status line and no longer. Kolux's report
+/// script is fed stdin and its words (stdout and stderr) go nowhere; with no line of the user's
+/// displaced the command prints nothing at all, and with one it prints exactly that line's text.
+#[test]
+fn t_575_kolux_adds_no_text_to_the_bottom_line() {
+    let run = |cmd: &str, stdin: &str| -> Option<(String, bool)> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("sh").arg("-c").arg(cmd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+        child.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
+        let out = child.wait_with_output().ok()?;
+        Some((String::from_utf8_lossy(&out.stdout).into_owned(), out.status.success()))
+    };
+    let dir = temp("t575-short");
+    let slash = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let script = dir.join("report.sh");
+    fs::write(&script, "#!/bin/sh\ncat >/dev/null\necho KOLUX-REPORT-NOISE\necho KOLUX-REPORT-ERR >&2\nexit 3\n").unwrap();
+    let prev = dir.join("prev.sh");
+    let sample = r#"{"model":{"display_name":"Opus"},"context_window":{"used_percentage":42}}"#;
+
+    // No line of the user's displaced: nothing is printed, and the exit code is 0 whatever the script did.
+    let none = status_command(&slash(&script), &slash(&dir.join("absent.sh")));
+    let Some((out, ok)) = run(&none, sample) else {
+        eprintln!("t_575: no `sh` on this PC, the command text is checked below instead");
+        assert!(none.contains(">/dev/null 2>&1"), "Kolux's script output is discarded");
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    };
+    assert!(ok && out.is_empty(), "no text from Kolux itself, got {out:?}");
+
+    // The user's own compact line comes through untouched, fed the same JSON, and nothing is added.
+    fs::write(&prev, r##"#!/bin/sh
+sed -n 's/.*"used_percentage":\([0-9]*\).*/ctx \1%/p'
+"##).unwrap();
+    let with = status_command(&slash(&script), &slash(&prev));
+    let (out, ok) = run(&with, sample).unwrap();
+    assert!(ok, "exit 0");
+    assert_eq!(out.trim_end(), "ctx 42%", "exactly the user's segment: {out:?}");
+    assert!(out.len() <= 8, "one short segment, got {} bytes", out.len());
+    assert!(!out.contains("KOLUX"), "none of Kolux's script words reach the bottom line");
+
+    // Install keeps the user's padding/refresh settings in the slot and off puts the whole slot back.
+    let (home, file) = (dir.join("home"), dir.join("settings.json"));
+    let user = r#"{"statusLine":{"type":"command","command":"my-line.sh","padding":1,"refreshInterval":5}}"#;
+    fs::write(&file, user).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    let slot = ev(&fs::read_to_string(&file).unwrap())["statusLine"].clone();
+    assert!(slot["command"].as_str().is_some_and(is_my_command), "Kolux's command holds the slot");
+    assert_eq!((slot["padding"].clone(), slot["refreshInterval"].clone()), (json!(1), json!(5)), "his padding and refresh stay");
+    remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
+    assert_eq!(ev(&fs::read_to_string(&file).unwrap()), ev(user), "off restores his own status line exactly");
+    let _ = fs::remove_dir_all(&dir);
+}
