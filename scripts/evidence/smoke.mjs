@@ -203,9 +203,24 @@ async function setup() {
   await waitFor("the project folder field", () => exists('input[aria-label="project folder"]'), 5000);
   await focusField('input[aria-label="project folder"]');
   await cdp("insert", repo, "enter");
+  // T-569/T-577: a new workspace opens the launch chooser, not a shell; pick Terminal and Start, the way a user would.
+  await waitFor("the launch chooser", async () => (await shown(CHOOSER)) >= 1, 30000);
+  await startTerminalFromChooser();
   await waitFor("the first shell pane", async () => (await shown(TERM)) >= 1, 30000);
   await waitFor("the first shell pane's input field", () => exists(`${TERM} .xterm-helper-textarea`), 30000);
   log(`setup: ${repo} added as a project; ${await shown(TERM)} shell pane shown`);
+}
+
+// The first chooser's seat 1 gets "Terminal" (React's select listens for change, so the value goes through
+// the native setter), then its Start button, once the agent search has finished and enabled it.
+async function startTerminalFromChooser() {
+  const seat = `${CHOOSER} select[aria-label="Seat 1: which AI"]`;
+  await waitFor("the chooser's Terminal choice", () => exists(`${seat} option[value="terminal"]`), 30000);
+  const r = await evalJs(`(() => { const s = document.querySelector(${JSON.stringify(seat)}); if (!s) return "missing"; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(s, "terminal"); s.dispatchEvent(new Event("change", { bubbles: true })); return s.value; })()`);
+  if (r !== "terminal") throw new Error(`could not pick Terminal in the chooser: ${r}`);
+  const start = `${CHOOSER} button.btn.primary`;
+  await waitFor("the chooser's Start button", () => evalJs(`[...document.querySelectorAll(${JSON.stringify(start)})].some(b => !b.disabled && /^\\s*Start\\s*$/.test(b.textContent))`), 60000);
+  await clickWhere(start, "/^\\s*Start\\s*$/");
 }
 
 // Types a line into the n-th shown shell and waits for the file it writes; a shell still starting up may
