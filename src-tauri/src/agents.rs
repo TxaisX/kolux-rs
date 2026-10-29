@@ -171,11 +171,49 @@ fn runnable(file: &Path) -> bool {
 pub fn search_dirs() -> Vec<PathBuf> {
     let mut dirs = shell_path_dirs();
     dirs.extend(std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default());
+    let mut dirs = kept_path_dirs(run_fenced(), dirs, has_scratch_marker);
     dirs.extend(usual_dirs());
     let mut seen = std::collections::HashSet::new();
     dirs.into_iter()
         .filter(|d| !d.as_os_str().is_empty() && d.is_dir())
         .filter(|d| seen.insert(d.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()))
+        .collect()
+}
+
+/// T-580: whether this run is fenced: `agent_hooks::fenced` on the profile folder it uses (`KOLUX_APP_DIR` when
+/// a lane, smoke or evidence run sets it, else the production one). Every test and debug build is.
+pub(crate) fn run_fenced() -> bool {
+    let profile = std::env::var_os(crate::cli::APP_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::resources::recovery::profile_dir(crate::hooks::agent_hooks::PRODUCTION_ID))
+        .unwrap_or_default();
+    crate::hooks::agent_hooks::fenced(&profile)
+}
+
+/// T-580: the files that mark a scratch home (`agent_hooks::SCRATCH_MARKER`) and a smoke run's temp folder.
+const SCRATCH_MARKERS: [&str; 2] = [crate::hooks::agent_hooks::SCRATCH_MARKER, ".kolux-rs-smoke-temp"];
+
+fn has_scratch_marker(dir: &Path) -> bool {
+    SCRATCH_MARKERS.iter().any(|m| dir.join(m).exists())
+}
+
+/// T-580 (b): the Path folders detection walks. A run that is not fenced drops every folder at or below one
+/// that holds a scratch marker, so a scratch folder an installer leaked into the user's Path can never make
+/// the real app think an agent is installed. A fenced run keeps them (its agents live there).
+fn kept_path_dirs(fenced: bool, dirs: Vec<PathBuf>, has_marker: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    if fenced {
+        return dirs;
+    }
+    // Each folder (entries share most of their parents) is asked at most once per pass.
+    let mut asked: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    dirs.into_iter()
+        .filter(|d| {
+            !d.ancestors().filter(|a| !a.as_os_str().is_empty()).any(|a| {
+                let key = a.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+                *asked.entry(key).or_insert_with(|| has_marker(a))
+            })
+        })
         .collect()
 }
 
@@ -880,6 +918,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    // ---- T-580 (b): a leaked scratch folder in the Path never counts in a run that is not fenced ----
+
+    #[test]
+    fn a_path_entry_below_a_scratch_or_smoke_marker_is_dropped_when_not_fenced() {
+        let root = temp_dir("t580-marker");
+        let scratch = root.join("live");
+        let smoke = root.join("smoke");
+        let plain = root.join("plain").join("bin");
+        let leaked = scratch.join(r"home\AppData\Roaming\npm");
+        let smoke_bin = smoke.join("bin");
+        for d in [&leaked, &smoke_bin, &plain] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(scratch.join(".kolux-rs-scratch"), b"").unwrap();
+        std::fs::write(smoke.join(".kolux-rs-smoke-temp"), b"").unwrap();
+        // Only folders inside this test's root are asked, so a marker elsewhere on the PC cannot sway it.
+        let inside = |a: &Path| a.starts_with(&root) && has_scratch_marker(a);
+        let dirs = vec![leaked.clone(), plain.clone(), smoke_bin.clone()];
+        assert_eq!(kept_path_dirs(false, dirs.clone(), inside), vec![plain.clone()]);
+        assert_eq!(kept_path_dirs(true, dirs.clone(), inside), dirs, "a fenced run keeps its scratch folders");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn each_parent_folder_is_asked_for_a_marker_at_most_once_per_pass() {
+        let asked = std::cell::RefCell::new(Vec::<PathBuf>::new());
+        let count = |a: &Path| {
+            asked.borrow_mut().push(a.to_path_buf());
+            false
+        };
+        let dirs: Vec<PathBuf> = [r"C:\Users\me\AppData\Roaming\npm", r"C:\Users\me\AppData\Local\bin", r"c:\users\ME\.cargo\bin", r"C:\Users\me\AppData\Roaming\npm\"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let kept = kept_path_dirs(false, dirs.clone(), count);
+        assert_eq!(kept, dirs, "no marker: every folder stays");
+        let asked = asked.into_inner();
+        let mut keys: Vec<String> = asked.iter().map(|a| a.to_string_lossy().trim_end_matches('\\').to_lowercase()).collect();
+        let n = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), n, "a folder was asked twice: {asked:?}");
+        // C:\, Users, me, AppData, Roaming, npm, Local, bin (Local), .cargo, bin (.cargo)
+        assert_eq!(n, 10, "{asked:?}");
+    }
+
+    #[test]
+    fn this_test_run_is_fenced() {
+        assert!(run_fenced(), "cargo test is a test build, so detection keeps every Path folder here");
     }
 
     fn runnable_file(path: &Path) {

@@ -22,6 +22,11 @@ use std::time::{Duration, Instant};
 
 use super::{find_in, search_dirs, AgentInfo, CATALOGUE};
 
+// T-580: the user Path a fenced run puts back, and npm's engine refusal as a plain sentence.
+#[path = "agent_install_fence.rs"]
+mod fence;
+use fence::StoredValue;
+
 // T-576: the reviewed allow-list the tests hold the table to (test only; not part of the program).
 #[cfg(test)]
 #[path = "agent_install_official.rs"]
@@ -238,7 +243,8 @@ fn child_path() -> OsString {
 const EARLY_CHECK: Duration = Duration::from_secs(2);
 
 /// Runs one program to its end: no window, no input, output to a temp file, `limit` as the deadline.
-/// Ok(exit code) or Err(one sentence). The last line of the output goes to `tail`.
+/// Ok(exit code) or Err(one sentence). The last `TAIL_LINES` lines of the output go to `tail` (T-580: npm's
+/// engine refusal sits a few lines above the last one).
 /// `done_early`, when given, is asked every couple of seconds; once it says yes the whole process tree is
 /// ended and the result is Ok(None) (no exit code).
 fn run(program: &Path, args: &[String], deadline: Instant, tail: &mut String, done_early: Option<&dyn Fn() -> bool>) -> Result<Option<i32>, String> {
@@ -274,11 +280,21 @@ fn run(program: &Path, args: &[String], deadline: Instant, tail: &mut String, do
             Err(e) => break Err(format!("Kolux lost track of the installer ({e}).")),
         }
     };
-    if let Ok(text) = std::fs::read_to_string(&out) {
-        *tail = text.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(200).collect();
+    if let Ok(bytes) = std::fs::read(&out) {
+        *tail = last_lines(&String::from_utf8_lossy(&bytes));
     }
     let _ = std::fs::remove_file(&out);
     result
+}
+
+/// How many of the output's last lines `run` keeps.
+const TAIL_LINES: usize = 40;
+
+/// The last `TAIL_LINES` non-empty lines of `text`, trimmed, each at most 200 characters, oldest first.
+fn last_lines(text: &str) -> String {
+    let mut lines: Vec<String> = text.lines().rev().map(str::trim).filter(|l| !l.is_empty()).take(TAIL_LINES).map(|l| l.chars().take(200).collect()).collect();
+    lines.reverse();
+    lines.join("\n")
 }
 
 /// True when `done_early` exists, it is time to ask, and it says yes.
@@ -373,6 +389,14 @@ trait Host: Sync {
     fn progress(&self, p: Progress);
     /// The log line(s) for one agent's end.
     fn report(&self, id: &str, result: &Result<(), String>, tail: &str);
+    /// T-580: whether this run must leave the user's own Path as it found it (`agents::run_fenced`).
+    fn fenced(&self) -> bool;
+    /// T-580: `HKCU\Environment` "Path" as stored; `Ok(None)` when there is none.
+    fn user_path(&self) -> Result<Option<StoredValue>, String>;
+    /// T-580: writes the user Path back (`None` removes it).
+    fn put_user_path(&self, value: Option<&StoredValue>) -> Result<(), String>;
+    /// One line for kolux.log.
+    fn note(&self, line: &str);
 }
 
 /// The event's name.
@@ -400,6 +424,55 @@ impl Host for RealHost {
     }
     fn report(&self, id: &str, result: &Result<(), String>, tail: &str) {
         log_result(id, result, tail);
+    }
+    fn fenced(&self) -> bool {
+        super::run_fenced()
+    }
+    fn user_path(&self) -> Result<Option<StoredValue>, String> {
+        fence::read_user_path()
+    }
+    fn put_user_path(&self, value: Option<&StoredValue>) -> Result<(), String> {
+        fence::write_user_path(value)
+    }
+    fn note(&self, line: &str) {
+        log(line);
+    }
+}
+
+/// T-580: in a fenced run, the user Path as it was before the batch, put back when the batch ends (also when a
+/// group's thread panics) if it changed. Outside a fenced run it holds nothing and does nothing.
+struct PathFence<'a> {
+    host: &'a dyn Host,
+    before: Option<Option<StoredValue>>,
+}
+
+impl<'a> PathFence<'a> {
+    fn start(host: &'a dyn Host) -> Self {
+        let before = if host.fenced() {
+            match host.user_path() {
+                Ok(v) => Some(v),
+                Err(why) => {
+                    host.note(&format!("agent install: {why} A script in this fenced run may change it."));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        PathFence { host, before }
+    }
+}
+
+impl Drop for PathFence<'_> {
+    fn drop(&mut self) {
+        let Some(before) = self.before.take() else { return };
+        if self.host.user_path().as_ref() == Ok(&before) {
+            return;
+        }
+        match self.host.put_user_path(before.as_ref()) {
+            Ok(()) => self.host.note("agent install: an installer changed the user Path in a fenced run; Kolux put it back."),
+            Err(why) => self.host.note(&format!("agent install: {why}")),
+        }
     }
 }
 
@@ -482,6 +555,12 @@ fn not_finished(name: &str, code: Option<i32>) -> String {
     format!("{name} did not finish installing (the installer ended with code {}).", code.map(|c| c.to_string()).unwrap_or_else(|| "none".into()))
 }
 
+/// The sentence for an install that ended without the agent: npm's engine refusal in `tail` reads as "needs a
+/// newer Node.js" (T-580), anything else as `not_finished`.
+fn failure(name: &str, code: Option<i32>, tail: &str) -> String {
+    fence::needs_newer_node(name, tail).unwrap_or_else(|| not_finished(name, code))
+}
+
 /// Installs one agent alone with its own call. Ok when it is found afterwards.
 fn install_single(host: &dyn Host, item: &Item, ctx: &Ctx, tail: &mut String) -> Result<(), String> {
     let (program, args) = call_for(host, item.route)?;
@@ -493,7 +572,7 @@ fn install_single(host: &dyn Host, item: &Item, ctx: &Ctx, tail: &mut String) ->
     if found() {
         Ok(())
     } else {
-        Err(not_finished(&item.name, code))
+        Err(failure(&item.name, code, tail))
     }
 }
 
@@ -591,7 +670,7 @@ impl Batch<'_> {
             // One package: its own call would be the same call again.
             let why = match code {
                 Err(why) => why,
-                Ok(code) => not_finished(&only.name, code),
+                Ok(code) => failure(&only.name, code, &tail),
             };
             self.finish(&only.id, Err(why), &tail);
         } else {
@@ -628,6 +707,8 @@ fn unique(ids: &[String]) -> Vec<String> {
 ///  4. every agent is detected again.
 fn run_batch(host: &dyn Host, ids: &[String], ctx: Ctx) -> Vec<InstallResult> {
     let ids = unique(ids);
+    // T-580: before any install (the vendors' scripts above all), so a fenced run ends with the user Path it began with.
+    let _path_fence = PathFence::start(host);
     let batch = Batch { host, ctx, results: Mutex::new(HashMap::new()) };
     for id in &ids {
         host.progress(Progress { id: id.clone(), state: State::Queued, error: None });
@@ -748,8 +829,8 @@ fn log_result(id: &str, result: &Result<(), String>, tail: &str) {
         Ok(()) => log(&format!("agent install {id}: ok")),
         Err(why) => {
             log(&format!("agent install {id}: failed: {why}"));
-            if !tail.is_empty() {
-                log(&format!("agent install {id}: last output: {tail}"));
+            if let Some(last) = tail.lines().last().filter(|l| !l.is_empty()) {
+                log(&format!("agent install {id}: last output: {last}"));
             }
         }
     }
@@ -983,6 +1064,16 @@ mod tests {
         fail_batch: bool,
         /// This agent id never installs.
         never: Option<String>,
+        /// T-580: the run is fenced.
+        fenced: bool,
+        /// T-580: the fake `HKCU\Environment` "Path" (never the real one).
+        user_path: Mutex<Option<StoredValue>>,
+        /// T-580: every write of the user Path.
+        puts: Mutex<Vec<Option<StoredValue>>>,
+        /// T-580: a script that runs adds this folder to the user Path, the way OpenClaw's did.
+        script_adds: Option<String>,
+        /// T-580: what a script's output ends with.
+        script_tail: String,
     }
 
     impl Fake {
@@ -997,6 +1088,11 @@ mod tests {
                 delay: Duration::from_millis(0),
                 fail_batch: false,
                 never: None,
+                fenced: false,
+                user_path: Mutex::new(None),
+                puts: Mutex::new(Vec::new()),
+                script_adds: None,
+                script_tail: String::new(),
             }
         }
         fn kind_calls(&self, kind: &str) -> Vec<Vec<String>> {
@@ -1034,7 +1130,7 @@ mod tests {
         fn program(&self, name: &str) -> Option<PathBuf> {
             self.have.lock().unwrap().contains(name).then(|| PathBuf::from(name))
         }
-        fn run(&self, program: &Path, args: &[String], _deadline: Instant, _tail: &mut String, _early: Option<&dyn Fn() -> bool>) -> Result<Option<i32>, String> {
+        fn run(&self, program: &Path, args: &[String], _deadline: Instant, tail: &mut String, _early: Option<&dyn Fn() -> bool>) -> Result<Option<i32>, String> {
             let kind = program.file_name().unwrap().to_string_lossy().to_string();
             self.calls.lock().unwrap().push((kind.clone(), args.to_vec()));
             {
@@ -1067,7 +1163,17 @@ mod tests {
                     }
                 }
                 "uv" => TABLE.iter().filter(|r| matches!(r.route, Some(Route::Uv(p)) if args.contains(&p.to_string()))).for_each(|r| self.install(r.id)),
-                _ => TABLE.iter().filter(|r| matches!(r.route, Some(Route::Script(s)) if args.last().is_some_and(|l| l.ends_with(s)))).for_each(|r| self.install(r.id)),
+                _ => {
+                    if let Some(dir) = &self.script_adds {
+                        let mut path = self.user_path.lock().unwrap();
+                        let mut text = path.as_ref().map(|v| String::from_utf8_lossy(&v.data).to_string()).unwrap_or_default();
+                        text.push(';');
+                        text.push_str(dir);
+                        *path = Some(StoredValue { kind: 2, data: text.into_bytes() });
+                    }
+                    tail.clone_from(&self.script_tail);
+                    TABLE.iter().filter(|r| matches!(r.route, Some(Route::Script(s)) if args.last().is_some_and(|l| l.ends_with(s)))).for_each(|r| self.install(r.id))
+                }
             }
             self.busy.lock().unwrap().get_mut(&kind).unwrap().0 -= 1;
             Ok(Some(0))
@@ -1078,6 +1184,114 @@ mod tests {
         fn report(&self, id: &str, result: &Result<(), String>, _tail: &str) {
             self.reports.lock().unwrap().push((id.to_string(), result.is_ok()));
         }
+        fn fenced(&self) -> bool {
+            self.fenced
+        }
+        fn user_path(&self) -> Result<Option<StoredValue>, String> {
+            Ok(self.user_path.lock().unwrap().clone())
+        }
+        fn put_user_path(&self, value: Option<&StoredValue>) -> Result<(), String> {
+            self.puts.lock().unwrap().push(value.cloned());
+            *self.user_path.lock().unwrap() = value.cloned();
+            Ok(())
+        }
+        fn note(&self, _line: &str) {}
+    }
+
+    // ---- T-580: a fenced run puts the user Path back; npm's engine refusal reads plainly ----
+
+    const LEAK: &str = r"G:\Temp\kolux-rs-live\home\AppData\Roaming\npm";
+
+    fn real_path() -> StoredValue {
+        StoredValue { kind: 2, data: br"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Tools".to_vec() }
+    }
+
+    #[test]
+    fn a_fenced_batch_puts_back_the_user_path_a_script_changed() {
+        let mut f = Fake::new();
+        f.fenced = true;
+        f.script_adds = Some(LEAK.to_string());
+        *f.user_path.lock().unwrap() = Some(real_path());
+        let out = run_batch(&f, &owned(&["openclaw"]), ctx());
+        assert!(out[0].ok, "{out:?}");
+        assert_eq!(f.kind_calls("powershell").len(), 1, "the script ran");
+        assert_eq!(*f.user_path.lock().unwrap(), Some(real_path()), "the value exactly as it was");
+        assert_eq!(*f.puts.lock().unwrap(), vec![Some(real_path())], "written back once");
+    }
+
+    #[test]
+    fn a_fenced_batch_with_no_user_path_before_removes_the_one_a_script_made() {
+        let mut f = Fake::new();
+        f.fenced = true;
+        f.script_adds = Some(LEAK.to_string());
+        run_batch(&f, &owned(&["openclaw"]), ctx());
+        assert_eq!(*f.user_path.lock().unwrap(), None);
+        assert_eq!(*f.puts.lock().unwrap(), vec![None]);
+    }
+
+    #[test]
+    fn a_fenced_batch_that_left_the_user_path_alone_writes_nothing() {
+        let mut f = Fake::new();
+        f.fenced = true;
+        *f.user_path.lock().unwrap() = Some(real_path());
+        run_batch(&f, &owned(&["openclaw"]), ctx());
+        assert!(f.puts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_release_batch_keeps_what_an_installer_added_to_the_user_path() {
+        let mut f = Fake::new();
+        f.script_adds = Some(LEAK.to_string());
+        *f.user_path.lock().unwrap() = Some(real_path());
+        run_batch(&f, &owned(&["openclaw"]), ctx());
+        assert!(f.puts.lock().unwrap().is_empty(), "nothing is written in a release run");
+        let now = String::from_utf8(f.user_path.lock().unwrap().clone().unwrap().data).unwrap();
+        assert!(now.ends_with(LEAK), "{now}");
+    }
+
+    #[test]
+    fn this_test_run_is_fenced_so_the_real_host_would_put_the_path_back() {
+        // `cargo test` is a test build: the real host's answer, without touching the registry.
+        assert!(RealHost { app: None }.fenced());
+    }
+
+    #[test]
+    fn an_npm_engine_refusal_reads_as_needs_a_newer_node() {
+        let mut f = Fake::new();
+        f.never = Some("openclaw".to_string());
+        f.script_tail = "npm error code EBADENGINE\nnpm error engine Unsupported engine\nnpm error notsup Required: {\"node\":\">=24.22.1 <25 || >=26.12.1\"}\nnpm error notsup Actual:   {\"npm\":\"11.6.2\",\"node\":\"v24.19.0\"}\nnpm error A complete log of this run can be found in: C:\\npm.log".to_string();
+        let out = run_batch(&f, &owned(&["openclaw"]), ctx());
+        assert_eq!(
+            out[0].error.as_deref(),
+            Some("OpenClaw needs a newer Node.js (>=24.22.1 <25 || >=26.12.1). Update Node.js (winget upgrade OpenJS.NodeJS.LTS), then install again.")
+        );
+    }
+
+    #[test]
+    fn any_other_failure_keeps_the_installer_code_sentence() {
+        let mut f = Fake::new();
+        f.never = Some("openclaw".to_string());
+        f.script_tail = "something else went wrong".to_string();
+        let out = run_batch(&f, &owned(&["openclaw"]), ctx());
+        assert_eq!(out[0].error.as_deref(), Some("OpenClaw did not finish installing (the installer ended with code 0)."));
+    }
+
+    #[test]
+    fn the_tail_keeps_the_last_lines_so_an_engine_line_above_the_last_is_seen() {
+        let text = (1..=50).map(|n| format!("  line {n}  ")).chain(["".to_string(), "npm error code EBADENGINE".into(), "last".into(), "   ".into()]).collect::<Vec<_>>().join("\r\n");
+        let tail = last_lines(&text);
+        let lines: Vec<&str> = tail.lines().collect();
+        assert_eq!(lines.len(), TAIL_LINES);
+        assert_eq!(lines[TAIL_LINES - 2..], ["npm error code EBADENGINE", "last"]);
+        assert_eq!(lines[0], "line 13");
+    }
+
+    #[test]
+    fn a_real_run_hands_back_several_output_lines() {
+        let mut tail = String::new();
+        let r = run(&powershell(), &["-NoProfile".into(), "-Command".into(), "'npm error code EBADENGINE'; 'npm error A complete log'".into()], Instant::now() + Duration::from_secs(60), &mut tail, None);
+        assert_eq!(r, Ok(Some(0)));
+        assert_eq!(tail, "npm error code EBADENGINE\nnpm error A complete log");
     }
 
     fn ctx() -> Ctx {
