@@ -3,7 +3,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import ChooserPane, { seatAgents, sheetKey } from "./ChooserPane";
+import ChooserPane, { sheetKey } from "./ChooserPane";
 import type { AgentInfo } from "./PlusMenu";
 import { defaultCopies, pickShape, sheetStart, TERMINAL, type Copies, type SavedShape, type Seat, type Shape } from "./seats";
 
@@ -38,10 +38,10 @@ test("SESS-015: three blank seats keep Start disabled and show the no-guessing c
   const blank = render([{ agent: null, model: null }, { agent: null, model: null }, { agent: null, model: null }]);
   expect(startButton(blank)).toContain("disabled");
   expect(blank).toContain("Kolux never picks an AI or a model for you");
-  expect(blank.split("<button").find((b) => b.includes("Same for all"))).toContain("disabled");
+  expect(blank.split("<button").find((b) => b.includes("Same for all"))?.split("</button>")[0]).toContain("disabled");
   const one = render([{ agent: "claude", model: "opus" }, { agent: null, model: null }, { agent: null, model: null }]);
-  expect(one.split("<button").find((b) => b.includes("Same for all"))).not.toContain("disabled");
-  expect(render([{ agent: "claude", model: "opus" }]).split("<button").find((b) => b.includes("Same for all"))).toContain("disabled");
+  expect(one.split("<button").find((b) => b.includes("Same for all"))?.split("</button>")[0]).not.toContain("disabled");
+  expect(render([{ agent: "claude", model: "opus" }]).split("<button").find((b) => b.includes("Same for all"))?.split("</button>")[0]).toContain("disabled");
   expect(render([{ agent: null, model: null, title: "Review" }])).toContain('value="Review"');
 });
 
@@ -151,40 +151,42 @@ const agent = (id: string, name: string, installed: boolean): AgentInfo => ({ id
 const renderWith = (agents: AgentInfo[], detecting = false, seats: Seat[] = [{ agent: null, model: null }]) =>
   renderToString(createElement(ChooserPane, { saved: [], onSaved: () => {}, onPickSaved: () => {}, number: 2, agents, detecting, seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: true, onCopies: () => {}, closable: true, onClose: () => {} }));
 
-test("SESS-017: Claude, Codex and Grok come first; a missing one is greyed with a set-up link; the rest fold away", () => {
+const optionsOf = (html: string) => [...html.matchAll(/<option[^>]*value="([^"]*)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2]]);
+
+test("T-570: one dropdown per seat lists every agent, Claude, Codex and Grok first; a missing one reads (not installed) and can still be picked", () => {
   const list = [agent("aider", "Aider", true), agent("grok", "Grok", false), agent("codex", "Codex", true), claude, agent("goose", "Goose", false)];
-  const { featured, more, none } = seatAgents(list, false);
-  expect(featured.map((f) => [f.agent.id, f.missing])).toEqual([["claude", false], ["codex", false], ["grok", true]]);
-  expect(more.map((a) => a.id)).toEqual(["aider"]);
-  expect(none).toBe(false);
   const html = renderWith(list);
-  expect(html.indexOf("Claude Code")).toBeLessThan(html.indexOf("Codex"));
-  expect(html.indexOf("Codex")).toBeLessThan(html.indexOf("Grok"));
-  expect(radio(html, "Grok")).toMatch(/<input[^>]*disabled/);
-  expect(html).toContain("Not installed");
-  expect(html).toContain("Set up Grok");
-  // Aider sits behind the fold until it is opened, or until a seat already uses it.
-  expect(html).toContain("More agents (1)");
-  expect(html).not.toContain(">Aider<");
-  expect(renderWith(list, false, [{ agent: "aider", model: null }])).toContain("Aider");
-  // Agents with a known page link out to it.
+  expect(html.match(/<select[^>]*which AI/g)).toHaveLength(1);
+  expect(optionsOf(html).map((o) => o[1])).toEqual(["Choose an AI…", "Claude Code", "Codex", "Grok (not installed)", "Aider", "Goose (not installed)", "Terminal"]);
+  expect(html).not.toContain('type="radio" name="seat-2-0-ai"');
+  expect(html).not.toContain("More agents");
+  expect(html).not.toContain(">Install<");
+  expect(startButton(renderWith(list))).toContain("disabled");
+  expect(startButton(renderWith(list, false, [{ agent: "claude", model: "opus" }]))).not.toContain("disabled");
+});
+
+test("T-570: the dropdown shows the seat's pick; a picked agent with docs links to them", () => {
+  const html = renderWith([claude, agent("grok", "Grok", true)], false, [{ agent: "claude", model: "opus" }]);
+  expect(html).toMatch(/<option[^>]*value="claude"[^>]*selected/);
   expect(html).toContain("Claude Code docs");
+  expect(renderWith([claude], false, [{ agent: TERMINAL, model: null }])).toMatch(/<option[^>]*value="terminal"[^>]*selected/);
 });
 
 test("T-201-c SESS-017: any agent with its own page links out to it, the folded ones too", () => {
   const list = [claude, agent("codex", "Codex", true), agent("grok", "Grok", true), { ...agent("aider", "Aider", true), docs: true }, agent("trae", "Trae", true)];
   const html = renderWith(list, false, [{ agent: "aider", model: null }]);
   expect(html).toContain("Aider docs");
-  expect(html).not.toContain("Trae docs");
+  expect(renderWith(list, false, [{ agent: "trae", model: null }])).not.toContain("Trae docs");
 });
 
 test("SESS-017: nothing reads not installed while detection runs, and finding no AI at all says so", () => {
   const looking = renderWith([], true);
-  expect(looking).not.toContain("Not installed");
+  expect(looking).not.toContain("not installed");
   expect(looking).toContain("Looking for AI programs");
   const none = renderWith([agent("claude", "Claude Code", false), agent("codex", "Codex", false), agent("grok", "Grok", false)]);
   expect(none).toContain("No AI programs have been found yet");
-  expect(radio(none, "Terminal").match(/<input[^>]*>/)![0]).not.toContain("disabled");
+  expect(optionsOf(none).find((o) => o[1] === "Terminal")).toBeDefined();
+  expect(none).not.toMatch(/<option[^>]*value="terminal"[^>]*disabled/);
 });
 
 const renderSeats = (seats: Seat[]) =>

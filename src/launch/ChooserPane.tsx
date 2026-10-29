@@ -17,7 +17,8 @@ import { openSettings } from "../settings/pages";
 import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
-import { canLaunch, FEATURED, type AgentPass } from "./agents";
+import { canLaunch, type AgentPass } from "./agents";
+import { canInstall, installTip, optionLabel, pickList, runInstall } from "./agentInstall";
 import { useKeymap } from "../keys/KeymapContext";
 import { savedSeat } from "../chat/controls";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup, LISTED, setDiscovered } from "./seats";
@@ -38,14 +39,6 @@ export function sheetKey(e: { key: string; ctrlKey: boolean; metaKey: boolean },
   if (e.key === "Escape") return "close";
   if (e.key !== "Enter" || !(mac ? e.metaKey : e.ctrlKey)) return null;
   return allReady(seats) ? "launch" : "blocked";
-}
-
-/** SESS-017: the featured three first (a missing one only once detection is done), the other
- * installed agents behind the fold, and whether no AI was found at all. */
-export function seatAgents(agents: AgentInfo[], detecting: boolean) {
-  const featured = FEATURED.flatMap((id) => agents.filter((a) => a.id === id)).map((agent) => ({ agent, missing: !agent.installed }));
-  const more = agents.filter((a) => a.installed && !FEATURED.includes(a.id));
-  return { featured: detecting ? [] : featured, more: detecting ? [] : more, none: !detecting && !agents.some((a) => a.installed) };
 }
 
 const asked: Record<string, Promise<boolean>> = {};
@@ -107,9 +100,14 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
   const [nudged, setNudged] = useState(false);
   const gap = seatGap(seats);
   const sessions = seats.length;
-  const lineup = seatAgents(agents, detecting);
-  // SESS-017: which seats show the folded agents; a seat already using one shows them anyway.
-  const [unfolded, setUnfolded] = useState<number[]>([]);
+  // T-570: one dropdown per seat lists every agent; a missing one can be picked, which shows Install. `fixed` holds agents
+  // installed from here until the next detection pass; `shown` is a seat's pick that is not startable yet.
+  const [fixed, setFixed] = useState<Record<string, AgentInfo>>({});
+  const [shown, setShown] = useState<Record<number, string>>({});
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<Record<string, string>>({});
+  const rows = pickList(agents.map((a) => fixed[a.id] ?? a), detecting);
+  const none = !detecting && !rows.some((a) => a.installed);
   const nameOf = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
   // TERM-012: a chooser Kolux focuses takes the keyboard, so typing no longer lands in the last pane.
   const box = useRef<HTMLElement>(null);
@@ -118,6 +116,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
   }, [focused, hidden]);
   // A program with no model list has nothing to pick: its seat uses the program's own default.
   const pickAgent = (i: number, id: string) => {
+    setShown(({ [i]: _gone, ...rest }) => rest);
     const only = modelsFor(id).length === 1;
     // Row 389: a choice saved for this agent (CHAT-024) is the starting pick; the user can still change it.
     const saved = id === TERMINAL ? null : savedSeat(id);
@@ -357,47 +356,65 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                   onChange={(e) => setSeat(i, { title: e.currentTarget.value })}
                 />
               </div>
-              <div className="choices" role="radiogroup" aria-label={`Seat ${i + 1}: which AI`}>
+              <div className="choices agent-pick">
                 {detecting && !pass && <span className="caption">Looking for AI programs…</span>}
-                {lineup.none && <span className="caption">No AI programs have been found yet.</span>}
-                {lineup.featured.map(({ agent: a, missing }) => (
-                  <span key={a.id} className="agent-card">
-                    <label className={`choice${missing ? " missing" : ""}`} title={missing ? `${a.name} is not installed on this computer` : a.path ?? a.name}>
-                      <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} disabled={missing} onChange={() => pickAgent(i, a.id)} />
-                      <VendorMark agent={markFor(a.id)} size={12} />
-                      {a.name}
-                      {missing && <span className="agent-missing">Not installed</span>}
-                    </label>
-                    {missing && (
-                      <button className="btn link agent-link" onClick={() => openSettings("accounts")} aria-label={`Set up ${a.name}`}>
-                        Set up
-                      </button>
-                    )}
-                    <DocsLink agent={a} />
-                  </span>
-                ))}
-                {lineup.more.length > 0 &&
-                  (unfolded.includes(i) || lineup.more.some((a) => a.id === seat.agent) ? (
-                    lineup.more.map((a) => (
-                      <span key={a.id} className="agent-seat">
-                        <label className="choice" title={a.path ?? a.name}>
-                          <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
-                          <VendorMark agent={markFor(a.id)} size={12} />
-                          {a.name}
-                        </label>
-                        <DocsLink agent={a} />
-                      </span>
-                    ))
-                  ) : (
-                    <button className="btn link agent-link" onClick={() => setUnfolded((u) => [...u, i])}>
-                      {`More agents (${lineup.more.length})`}
-                    </button>
+                {none && <span className="caption">No AI programs have been found yet.</span>}
+                {(shown[i] ?? seat.agent) && <VendorMark agent={(shown[i] ?? seat.agent) === TERMINAL ? "shell" : markFor(shown[i] ?? seat.agent ?? "")} size={12} />}
+                <select
+                  aria-label={`Seat ${i + 1}: which AI`}
+                  value={shown[i] ?? seat.agent ?? ""}
+                  onChange={(e) => {
+                    const id = e.currentTarget.value;
+                    const a = rows.find((x) => x.id === id);
+                    if (id === TERMINAL || a?.installed) return pickAgent(i, id);
+                    setShown((s) => ({ ...s, [i]: id }));
+                    setSeat(i, { agent: null, model: null, effort: undefined, fast: undefined });
+                  }}
+                >
+                  <option value="" disabled>
+                    Choose an AI…
+                  </option>
+                  {rows.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {optionLabel(a)}
+                    </option>
                   ))}
-                <label className="choice">
-                  <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === TERMINAL} onChange={() => pickAgent(i, TERMINAL)} />
-                  <VendorMark agent="shell" size={12} />
-                  Terminal
-                </label>
+                  <option value={TERMINAL}>Terminal</option>
+                </select>
+                {(() => {
+                  const a = rows.find((x) => x.id === (shown[i] ?? seat.agent));
+                  if (!a) return null;
+                  return (
+                    <>
+                      {canInstall(a) && (
+                      <button
+                        className="btn"
+                        disabled={installing !== null}
+                        title={installTip(a)}
+                        onClick={() => {
+                          setInstalling(a.id);
+                          setInstallError(({ [a.id]: _gone, ...rest }) => rest);
+                          void runInstall(a).then((r) => {
+                            setInstalling(null);
+                            if ("error" in r) return setInstallError((x) => ({ ...x, [a.id]: r.error }));
+                            setFixed((x) => ({ ...x, [a.id]: r.agent }));
+                            pickAgent(i, a.id);
+                            onRefresh?.();
+                          });
+                        }}
+                      >
+                        {installing === a.id ? "Installing…" : "Install"}
+                      </button>
+                      )}
+                      {installError[a.id] && (
+                        <span className="agent-missing" role="alert">
+                          {installError[a.id]}
+                        </span>
+                      )}
+                      <DocsLink agent={a} />
+                    </>
+                  );
+                })()}
               </div>
               {seat.agent !== null && seat.agent !== TERMINAL && modelsFor(seat.agent).length === 0 && <span className="caption">Uses the program's default model</span>}
               {seat.agent !== null && modelsFor(seat.agent).length > 0 && (
