@@ -187,40 +187,22 @@ test("SESS-017: nothing reads not installed while detection runs, and finding no
   expect(radio(none, "Terminal").match(/<input[^>]*>/)![0]).not.toContain("disabled");
 });
 
-const withKit = (seats: Seat[], kit: string | null, vendors: ("claude" | "codex" | "grok")[] = ["claude"]) =>
-  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: true, onCopies: () => {}, closable: true, onClose: () => {}, saved: [], onSaved: () => {}, onPickSaved: () => {}, kit, onKit: () => {}, vendors }));
-const advanced = (html: string) => html.split("<button").find((b) => b.includes(">Advanced<"))!;
-
-test("SESS-019: a starter kit row with a see-all link; with no kit the advanced controls sit in the open", () => {
-  const html = withKit([{ agent: null, model: null }], null);
-  expect(html).toContain('aria-label="Starter kits"');
-  expect(html).toContain("Build a sales follow-up list");
-  expect(html).toContain("See all kits");
-  expect(advanced(html)).toContain('aria-expanded="true"');
+const renderSeats = (seats: Seat[]) =>
+  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: true, onCopies: () => {}, closable: true, onClose: () => {}, saved: [], onSaved: () => {}, onPickSaved: () => {} }));
+test("SESS-019: with kits gone, the launch shape, session count, folders and task controls stay in the open", () => {
+  const html = renderSeats([{ agent: null, model: null }]);
+  expect(html).not.toContain("Starter kits");
+  expect(html).not.toContain("Advanced");
   for (const part of ['aria-label="Launch shape"', 'aria-label="How many sessions"', 'aria-label="Where the AIs work"', "Task for every seat"]) expect(html).toContain(part);
 });
 
-test("SESS-019: choosing a kit folds Advanced, lists its roles with their AIs and sets the kit up instead of starting seats", () => {
-  const html = withKit([{ agent: null, model: null }], "sales");
-  expect(advanced(html)).toContain('aria-expanded="false"');
-  for (const part of ['aria-label="Launch shape"', 'aria-label="How many sessions"', 'aria-label="Where the AIs work"', "Task for every seat", "Seat 1"]) expect(html).not.toContain(part);
-  expect(html.split("<button").find((b) => b.includes("Build a sales follow-up list"))).toContain('aria-pressed="true"');
-  expect(html).toContain("Lead scorer");
-  expect(html).toContain("Claude");
-  expect(html).toContain("3 sessions");
-  expect(html.split("<button").find((b) => b.includes("Set up kit"))).not.toContain("disabled");
-  const none = withKit([{ agent: null, model: null }], "sales", []);
-  expect(none.split("<button").find((b) => b.includes("Set up kit"))).toContain("disabled");
-  expect(none).toContain("Lead scorer still needs an AI");
-});
-
 test("SESS-019: the footer counts the sessions and names the first seat still lacking an AI", () => {
-  const two = withKit([{ agent: "claude", model: "opus" }, { agent: null, model: null }], null);
+  const two = renderSeats([{ agent: "claude", model: "opus" }, { agent: null, model: null }]);
   expect(startButton(two)).toContain("disabled");
   expect(two).toContain("2 sessions");
   expect(two).toContain("Seat 2 still needs an AI");
-  expect(withKit([{ agent: "claude", model: null }], null)).toContain("Seat 1 still needs a model");
-  const ready = withKit([{ agent: "claude", model: "opus" }], null);
+  expect(renderSeats([{ agent: "claude", model: null }])).toContain("Seat 1 still needs a model");
+  const ready = renderSeats([{ agent: "claude", model: "opus" }]);
   expect(ready).toContain("1 session");
   expect(ready).not.toContain("still needs");
 });
@@ -238,7 +220,7 @@ test("SESS-018: the New session page shows the project and its path, the add-age
   expect(html).toContain("Ctrl");
   expect(html).toContain("Seat 1 still needs an AI");
   // The older look keeps its pane: no page heading there.
-  expect(render([{ agent: null, model: null }])).not.toContain("New session");
+  expect(renderSeats([{ agent: null, model: null }])).not.toContain("New session");
 });
 
 test("SESS-018: Ctrl+Enter launches only a complete lineup, Escape closes the page", () => {

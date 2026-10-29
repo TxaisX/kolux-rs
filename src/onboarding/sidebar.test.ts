@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { doneFrom, type Facts, type StepId } from "./guide";
-import { checklistOf, OWN_FILE, type FirstRun } from "./newcomer";
+import { checklistOf, type FirstRun } from "./newcomer";
 import { entryLine, FOCUS_FLOOR_MS, guideWanted, onReread, PROJECT_ADDED, rereadFloor, sidebarSlot } from "./sidebar";
 import { GUIDE_CLOSED } from "./guide";
 
@@ -38,12 +38,12 @@ describe("the sidebar's onboarding slot (VIEW-114)", () => {
   });
 
   it("a finished checklist keeps the slot until it is dismissed, then the entry takes it", () => {
-    const all = run({ milestones: { aiConnected: 1, kitLaunched: 2, resultsOpened: 3 } });
-    const c = checklistOf(all, [OWN_FILE]);
+    const all = run({ milestones: { aiConnected: 1 } });
+    const c = checklistOf(all, []);
     expect(c.show).toBe(true);
     expect(sidebarSlot(c, all, new Set())).toBe("checklist");
     const gone = run({ ...all, checklistDismissed: true });
-    expect(sidebarSlot(checklistOf(gone, [OWN_FILE]), gone, new Set())).toBe("guide");
+    expect(sidebarSlot(checklistOf(gone, []), gone, new Set())).toBe("guide");
   });
 
   it("entryLine counts git projects: one leaves Multiple repos open, the second ticks it (the words only; the re-read on an add is the onReread test)", () => {

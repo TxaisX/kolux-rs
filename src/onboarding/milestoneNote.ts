@@ -1,13 +1,11 @@
 // ONB-011 rest (T-298-b): the copied terminal diagnostics list when each first-run milestone happened, so a bug
-// report shows how far a new profile had got. Only the three times are added, as UTC dates; the milestone times are
+// report shows how far a new profile had got. Only the times are added, as UTC dates; the milestone times are
 // kept on this machine (onboarding.rs) and carry no names, paths or text.
 import { invoke } from "@tauri-apps/api/core";
 import type { Milestone } from "./firstRun";
 
 const NAMES: [Milestone, string][] = [
   ["aiConnected", "AI connected"],
-  ["kitLaunched", "Kit launched"],
-  ["resultsOpened", "Results opened"],
 ];
 
 /** The record's milestone times in ms, or null when the profile has no first-run record (it had its firsts

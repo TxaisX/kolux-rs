@@ -5,7 +5,7 @@ import { WizardView } from "./Wizard";
 import { EN } from "../i18n/en";
 
 const view = (at: number, more: Record<string, unknown> = {}) =>
-  renderToString(createElement(WizardView, { at, connected: false, sample: "spreadsheet", busy: false, kit: "spreadsheet", ping: true, vendors: [], error: null, onSample() {}, onKit() {}, onPing() {}, onBack() {}, onMain() {}, onSecondary() {}, onPickFolder() {}, ...more }));
+  renderToString(createElement(WizardView, { at, connected: false, ping: true, onPing() {}, onBack() {}, onMain() {}, onSecondary() {}, onPickFolder() {}, ...more }));
 
 test("ONB-003 UX fix 3: a greyed-out Continue on the connect screen says why and names the way on", () => {
   const off = view(1);

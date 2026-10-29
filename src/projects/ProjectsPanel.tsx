@@ -50,7 +50,6 @@ import { cardProjectOf, newestOnly } from "./cardAsk";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import ScanRepos from "./ScanRepos";
-import { openKits } from "../kits/Kits";
 import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
@@ -2172,12 +2171,6 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               <FileCode />
             </span>
             Artifacts
-          </button>
-          <button className="row" onClick={() => openKits()}>
-            <span className="ic">
-              <Box />
-            </span>
-            Starter kits
           </button>
           {chromeShown(settings, "automationsButton") && <AutomationsRow open={page === "automations"} onOpen={() => onPage("automations")} onHide={() => onSetting("automationsButton", false)} />}
           {chromeShown(settings, "skillsButton") && <SkillsRow open={skillsOn} onOpen={onSkills} onHide={() => onSetting("skillsButton", false)} />}

@@ -2,10 +2,8 @@
 // where they used to sit.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { firstFolderAgent, kitLaunch, oneClick, openAt, REOPEN_WIZARD, reopenWizard, wizardCloser, type Outcome } from "./firstRun";
+import { firstFolderAgent, oneClick, openAt, REOPEN_WIZARD, reopenWizard, wizardCloser, type Outcome } from "./firstRun";
 import { projectAddedNote } from "./sidebar";
-import { KITS, assignRoles, type Kit, type Vendor } from "../kits/catalog";
-import { startValues } from "../kits/Kits";
 import { startGridTour } from "./tour";
 import { starAfterClose } from "./star";
 import type { AgentInfo } from "../launch/PlusMenu";
@@ -16,17 +14,12 @@ type WizardDeps = {
   agents: AgentInfo[];
   settings: Record<string, unknown>;
   activeDir: string | null;
-  kitAIs: Vendor[];
   startIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra?: string[], title?: string) => Promise<number | null>;
-  startKit: (kit: Kit, values: Record<string, string>, assigned: (Vendor | null)[], dir: string) => Promise<boolean>;
-  setKitConflict: (v: string | null) => void;
-  setKits: (v: { kit: string | null; sampleDir: string | null } | null) => void;
 };
 
-export function useWizard({ setToast, agents, settings, activeDir, kitAIs, startIn, startKit, setKitConflict, setKits }: WizardDeps) {
+export function useWizard({ setToast, agents, settings, activeDir, startIn }: WizardDeps) {
   // ONB-001..005: the first-run wizard floats over the app while its record says it is open.
   const [wizard, setWizard] = useState<number | null>(null);
-  const wizardSetup = useRef(false);
   useEffect(() => {
     invoke<{ step: number } | null>("onboarding_get").then((r) => setWizard(openAt(r)), () => {});
   }, []);
@@ -39,7 +32,6 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
       (outcome) => invoke("onboarding_close", { outcome }).then((r) => (starAfterClose(outcome), r)),
       () => {
         setWizard(null);
-        wizardSetup.current = false;
       },
       (err) => setToast(`Kolux could not keep your setup progress (${String(err)}). Click the same button again to try once more.`),
     ),
@@ -70,19 +62,6 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
     const agent = firstFolderAgent(offeredAgents(agents, settings), defaultAgentId(settings));
     if (agent) void startIn(agent, dir, branch, "", true);
   };
-  // ONB-005: Start kit launches at once in the kit's own sample folder with an AI ready; otherwise
-  // the setup dialog opens, the wizard hides behind it, and a start from there completes it.
-  const wizardKit = async (id: string) => {
-    if (wizardClose.retry()) return;
-    const kit = KITS.find((k) => k.id === id);
-    if (!kit) return;
-    const sampleDir = await invoke<string>("kit_samples_dir", { kit: id }).catch(() => null);
-    if (activeDir && kitLaunch(activeDir, sampleDir, kitAIs) === "launch") {
-      if (await startKit(kit, startValues(kit, activeDir, sampleDir, settings), assignRoles(kit, kitAIs), activeDir)) return endWizard("completed", startGridTour);
-    } else setKitConflict(null);
-    wizardSetup.current = true;
-    setKits({ kit: id, sampleDir });
-  };
   // ONB-005: one plain session on the first available agent (the default first), empty prompt;
   // nothing without an agent and a workspace.
   const wizardSession = async () => {
@@ -91,5 +70,5 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
     if (!agent || !activeDir) return;
     if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed", startGridTour);
   };
-  return { wizard, setWizard, wizardSetup, wizardClose, endWizard, firstFolder, projectAdded, wizardKit, wizardSession };
+  return { wizard, setWizard, wizardClose, endWizard, firstFolder, projectAdded, wizardSession };
 }

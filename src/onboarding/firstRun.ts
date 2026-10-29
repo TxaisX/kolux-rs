@@ -1,13 +1,12 @@
 // ONB-001..005: the first-run wizard's pure rules; Wizard.tsx draws it, onboarding.rs keeps its record.
 import { invoke } from "@tauri-apps/api/core";
-import { sameDir } from "../workspaces";
 import { isAiAgent } from "./agentKind";
 
 export const SCREENS = [
   { id: "welcome", name: "Welcome", heading: "Several AIs can work on your files at the same time", sub: "Claude, Codex and Grok each take a part of the job, side by side." },
   { id: "connect", name: "Connect an AI", heading: "Connect an AI", sub: "Sign in with a plan you already pay for. No terminal needed." },
-  { id: "work", name: "Your work", heading: "Your work", sub: "Use a folder of your own, or try Kolux on sample data first." },
-  { id: "kit", name: "Choose a kit", heading: "Choose a kit", sub: "A ready-made job for your AIs, each in its own role." },
+  { id: "work", name: "Your work", heading: "Your work", sub: "Pick the folder your AIs will work in." },
+  { id: "session", name: "Open a session", heading: "Open a session", sub: "Start with an AI or a plain terminal in your folder." },
 ] as const;
 
 /** The record onboarding_get returns while the wizard is still open; `step` is the last screen finished, -1 for none. */
@@ -26,10 +25,6 @@ export function chordFires(e: Chord, disabled: boolean): boolean {
   if (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "SELECT") return false;
   return !(t.tagName === "INPUT" && !["checkbox", "radio", "button", "submit", "range"].includes(t.type ?? "text"));
 }
-
-/** ONB-005: Start kit skips the setup dialog only in the kit's own sample folder (which fills every input) with an AI ready. */
-export const kitLaunch = (dir: string | null, sampleDir: string | null, connected: string[]): "launch" | "setup" =>
-  dir && sampleDir && connected.length > 0 && sameDir(dir, sampleDir) ? "launch" : "setup";
 
 /** ONB-004: 'Pick a folder' hands over to the sidebar's Add Project dialog through this window event. */
 export const ADD_PROJECT = "kolux-add-project";
@@ -78,7 +73,7 @@ export function oneClick(gap = 500) {
 }
 
 /** ONB-011: the first-success milestones onboarding.rs keeps, each once, on this machine only. */
-export type Milestone = "aiConnected" | "kitLaunched" | "resultsOpened";
+export type Milestone = "aiConnected";
 
 /** ONB-011: records a milestone (kept only the first time); the user sees nothing, even when the write fails. */
 export const milestone = (name: Milestone, send: (cmd: string, args: { name: Milestone }) => Promise<unknown> = invoke): Promise<boolean> =>

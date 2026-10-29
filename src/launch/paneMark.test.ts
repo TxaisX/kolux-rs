@@ -1,6 +1,5 @@
 // FIX-3: the pane mark, with real catalogue ids and real program paths, and the one credit rule shared with Rust.
 import { expect, test } from "vitest";
-import { hooksAbsent } from "../chat/kitPrompt";
 import { CREDIT_NAMES, creditedAgent, creditedProgram, markFor, paneMark, programMark } from "./paneMark";
 import { markFor as markForViaMenu } from "./PlusMenu";
 import rustSource from "../../src-tauri/src/agents.rs?raw";
@@ -109,14 +108,6 @@ test("FIX-3: a program is read as a command line, the way Rust credits it", () =
   expect(markFor("gemini", "python -m aider --model x")).toBe("shell");
   expect(programMark("")).toBe("shell");
   expect(programMark(undefined)).toBe("shell");
-});
-
-test("FIX-3: a Command that names Claude counts as hooked in the chat notice; Codex and a shell do not", () => {
-  expect(hooksAbsent(markFor("openclaude", "claude"), true, "openclaude")).toBe(false);
-  expect(hooksAbsent(markFor("openclaude", "claude"), false, "openclaude")).toBe(true);
-  expect(hooksAbsent(markFor("openclaude", "codex"), true, "openclaude")).toBe(true);
-  expect(hooksAbsent(markFor("openclaude", "pwsh"), true, "openclaude")).toBe(true);
-  expect(hooksAbsent(markFor("openclaude", "openclaude"), true, "openclaude")).toBe(true);
 });
 
 test("FIX-3: paneMark, the helper every pane-building site uses, follows the start line before the catalogue", () => {
