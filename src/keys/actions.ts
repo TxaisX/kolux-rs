@@ -63,6 +63,7 @@ export const agents: Array<[string, string]> = [
   ["openclaw", "OpenClaw"],
   ["copilot", "GitHub Copilot"],
   ["grok", "Grok"],
+  ["opencode", "OpenCode"],
 ];
 
 const a = (id: string, title: string, scope: Scope, win32: string[], extra: Partial<Action> = {}): Action => ({ id, title, scope, win32, ...extra });

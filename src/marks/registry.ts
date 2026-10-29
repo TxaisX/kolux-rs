@@ -68,6 +68,7 @@ export const NAME_ONLY: readonly NameOnlyEntry[] = [
   { id: "rovo", name: "Rovo Dev" },
   { id: "hermes", name: "Hermes" },
   { id: "openclaw", name: "OpenClaw" },
+  { id: "opencode", name: "OpenCode" },
   { id: "grok", name: "Grok" },
   // Providers that appear only in usage views.
   { id: "minimax", name: "MiniMax" },

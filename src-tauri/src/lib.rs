@@ -44,7 +44,6 @@ pub mod grok;
 mod grok_status;
 pub mod install;
 mod keybindings;
-mod kits;
 mod edit_menu;
 pub mod links;
 mod login_env;
@@ -839,14 +838,6 @@ pub fn run() {
             newproject::clone_cancel,
             newproject::project_new_defaults,
             newproject::project_create,
-            kits::kit_samples,
-            kits::kit_samples_dir,
-            kits::kit_check,
-            kits::kit_prepare,
-            kits::kit_open_results,
-            kits::kit_collect,
-            kits::kit_history,
-            kits::kit_open_file,
             onboarding::onboarding_get,
             onboarding::onboarding_step,
             onboarding::onboarding_close,

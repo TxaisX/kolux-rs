@@ -1,9 +1,8 @@
-// ONB-013: the newcomer checklist panel: four first-success items in a fixed order, the next one
+// ONB-013: the newcomer checklist panel: first-success items in a fixed order, the next one
 // highlighted with its action, and one all-done toast per profile. The sidebar mount is VIEW-114's
 // (T-295); this component only needs a place to sit.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { openKits } from "../kits/Kits";
 import { openSettings } from "../settings/pages";
 import { ALL_DONE_TEXT, allDoneToast, checklistOf, ITEMS, type ItemId } from "./newcomer";
 import { CHECKLIST_CHANGED } from "./firstRun";
@@ -13,9 +12,6 @@ import "./onboarding.css";
 /** What each item's button does; the checklist never ticks an item itself. */
 const ACT: Record<ItemId, { label: string; run: () => void }> = {
   connect: { label: "Connect", run: () => openSettings("agents") },
-  kit: { label: "Pick a kit", run: () => openKits() },
-  results: { label: "Open kits", run: () => openKits() },
-  ownFile: { label: "Pick a kit", run: () => openKits() },
 };
 
 /** Reads the record on mount, when the window gets focus and when a milestone is written. */
@@ -106,7 +102,7 @@ export default function Checklist({ onToast, compact = false, record }: Props) {
           );
         })}
       </ol>
-      {c.done && <p className="all-done">All four done.</p>}
+      {c.done && <p className="all-done">All done.</p>}
       {own && (
         <p className="toast" role="status">
           {own}

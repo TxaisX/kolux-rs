@@ -6,15 +6,15 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
 
 const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
 
-test("the table registers the 136 carried commands (TERM-053 added tab.search, VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches, T-146-e added view.space); 55 ship unbound (T-239 bound Reopen closed tab again; the two T-548 account switches ship unbound) and 6 have only a macOS chord", () => {
-  expect(actions.length).toBe(137);
+test("the table registers the 138 carried commands (TERM-053 added tab.search, VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches, T-146-e added view.space); 56 ship unbound (T-239 bound Reopen closed tab again; the two T-548 account switches ship unbound) and 6 have only a macOS chord", () => {
+  expect(actions.length).toBe(138);
   const ids = new Set(actions.map((a) => a.id));
-  expect(ids.size).toBe(137);
+  expect(ids.size).toBe(138);
   expect(ids.has("tab.newSimulator")).toBe(false);
   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
-  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(55);
+  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(56);
   expect(actions.filter((a) => a.win32.length === 0 && a.darwin).map((a) => a.id).sort()).toEqual(["floatingWorkspace.maximize", "sidebar.ports.toggle", "tab.newAgent", "tab.rename", "workspace.rename"].sort());
-  expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
+  expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(36);
 });
 
 test("chords parse, normalise their spelling and refuse Mod mixed with Ctrl", () => {

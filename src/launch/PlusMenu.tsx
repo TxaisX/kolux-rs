@@ -22,7 +22,9 @@ import ShellMark from "../terminal/ShellMark";
 import { shellIconOf, windowsShellMenu, type ShellEntry } from "../terminal/shellChoice";
 import "./plusMenuExtras.css";
 
-export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
+export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean;
+  /** T-570: Kolux knows an official install route for this agent on this OS; `install` is that command in words (a tooltip). */
+  installable?: boolean; install?: string | null };
 
 // FIX-3: markFor, paneMark and the credit rule live in paneMark.ts (one rule shared with Rust); re-exported so every caller keeps its import.
 export { markFor, paneMark } from "./paneMark";

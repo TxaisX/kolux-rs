@@ -291,7 +291,7 @@ export const Clock = (p: P) => (
     <path d="M8 4.75V8l2.25 1.5" />
   </Glyph>
 );
-// SKILL-002: one glyph per starter kit, and a plain box for a kit with none of its own.
+// Table to Box once served the starter kits (removed 2026-10-28); the project icon picker still uses them.
 export const Table = (p: P) => (
   <Glyph {...p}>
     <rect x="2.25" y="3" width="11.5" height="10" rx="1.5" />

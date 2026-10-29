@@ -1,15 +1,15 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, readFailed, connectFailed, escapeLeaves, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
+import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, readFailed, connectFailed, escapeLeaves, firstAiConnected, firstConnection, firstFolderAgent, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
 const view = (at: number, more: Record<string, unknown> = {}) =>
-  renderToString(createElement(WizardView, { at, connected: false, sample: "spreadsheet", busy: false, kit: "spreadsheet", ping: true, vendors: [], error: null, onSample() {}, onKit() {}, onPing() {}, onBack() {}, onMain() {}, onSecondary() {}, onPickFolder() {}, ...more }));
+  renderToString(createElement(WizardView, { at, connected: false, ping: true, onPing() {}, onBack() {}, onMain() {}, onSecondary() {}, onPickFolder() {}, ...more }));
 
 test("ONB-001: the wizard opens after the last screen it finished, within the four", () => {
-  expect(SCREENS.map((s) => s.id)).toEqual(["welcome", "connect", "work", "kit"]);
+  expect(SCREENS.map((s) => s.id)).toEqual(["welcome", "connect", "work", "session"]);
   expect(openAt(null)).toBeNull();
   expect(openAt({ step: -1 })).toBe(0);
   expect(openAt({ step: 1 })).toBe(2);
@@ -54,37 +54,21 @@ test("ONB-003: Continue waits for a connected AI; I'll do this later always move
   expect(view(1, { connected: true })).not.toMatch(/<button[^>]*disabled=""[^>]*>Continue/);
 });
 
-test("ONB-004: the spreadsheet sample is chosen, Pick a folder is the other route, Continue is busy while it works", () => {
+test("ONB-004: the work screen offers Pick a folder and Continue; kits and sample data are gone", () => {
   const html = view(2);
   expect(html).toContain("Pick a folder");
-  expect(html.match(/aria-pressed="true"/g)?.length).toBe(1);
-  expect(html).toMatch(/aria-pressed="true"[^>]*aria-label="Analyse a spreadsheet"|aria-label="Analyse a spreadsheet"[^>]*aria-pressed="true"/);
-  expect(html.match(/class="onb-sample"/g)?.length).toBe(6);
-  expect(html).toMatch(/>Try with sample data<span/);
-  const busy = view(2, { busy: true, error: "the disk is full" });
-  expect(busy).toMatch(/<button[^>]*disabled=""[^>]*>Setting up…/);
-  expect(busy).toContain("the disk is full");
+  expect(html).not.toContain("onb-sample");
+  expect(html).not.toContain("sample data");
+  expect(html).toMatch(/>Continue<span/);
 });
 
-test("ONB-005: kit cards with their roles, the finish switch on, Start kit and Just open a session", () => {
-  const html = view(3, { kit: "sales", vendors: ["claude"] });
+test("ONB-005: the last screen has the finish switch on and Open a session as its main button", () => {
+  const html = view(3);
   expect(html).toContain("4 of 4");
-  expect(html).toMatch(/aria-label="Build a sales follow-up list"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*aria-label="Build a sales follow-up list"/);
-  expect(html).toContain("Lead scorer");
   expect(html).toMatch(/<input type="checkbox" role="switch" checked=""/);
-  expect(html).toMatch(/>Start kit<span/);
-  expect(html).toContain(">Just open a session<");
+  expect(html).toMatch(/>Open a session<span/);
+  expect(html).not.toContain("kit");
   expect(view(3, { ping: false })).not.toMatch(/role="switch" checked=""/);
-});
-
-test("ONB-005: Start kit launches at once only in the kit's own sample folder with an AI ready", () => {
-  const sample = "C:\\samples\\spreadsheet";
-  expect(kitLaunch(sample, sample, ["claude"])).toBe("launch");
-  expect(kitLaunch("c:/samples/spreadsheet/", sample, ["codex"])).toBe("launch");
-  expect(kitLaunch(sample, sample, [])).toBe("setup");
-  expect(kitLaunch("C:\\work\\shop", sample, ["claude"])).toBe("setup");
-  expect(kitLaunch(null, sample, ["claude"])).toBe("setup");
-  expect(kitLaunch(sample, null, ["claude"])).toBe("setup");
 });
 
 test("ONB-036: the wizard's own words keep to plain words", () => {
@@ -172,7 +156,7 @@ test("ONB-011: a milestone goes to onboarding.rs by name, and a failed write sho
   await expect(milestone("aiConnected", async (cmd, args) => void sent.push([cmd, args]))).resolves.toBe(true);
   expect(sent).toEqual([["onboarding_milestone", { name: "aiConnected" }]]);
   // FIX-3: the answer says whether the write landed (no throw, nothing shown), so a caller can retry.
-  await expect(milestone("kitLaunched", () => Promise.reject(new Error("disk full")))).resolves.toBe(false);
+  await expect(milestone("aiConnected", () => Promise.reject(new Error("disk full")))).resolves.toBe(false);
 });
 
 test("ACCT-035: a failed connect names the agent it was for, in plain words", () => {
