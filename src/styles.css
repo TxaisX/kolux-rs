@@ -1491,3 +1491,11 @@ html[data-window-blur="on"] body { background: color-mix(in srgb, var(--app-bg) 
 .app-icon-swatch.classic { background: linear-gradient(135deg, #2b2b33, #8a8a96); }
 .app-icon-swatch.watercolor { background: linear-gradient(135deg, #f0b8c4, #a8dcd8); }
 .app-icon-swatch.blue { background: linear-gradient(135deg, #0b2a6e, #9cd0ff); }
+
+/* T-579: the "Install coding agents" checklist (Settings > Agents and the first-run Connect an AI step). */
+.picker-list { list-style: none; margin: 0; padding: 0; }
+.picker-row { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--chip-bg); }
+.picker-row .conn-switch { flex: 1; min-width: 0; margin: 0; padding: 8px 0; border-top: 0; }
+.picker-state { max-width: 55%; font-size: 12px; color: var(--fg-muted); text-align: right; overflow-wrap: anywhere; }
+.picker-state.ok { color: var(--done); }
+.picker-state.warn { color: var(--warn); }
