@@ -32,3 +32,13 @@ cargo-deny: advisories FAILED with no Cargo.lock change since round 1 (new RUSTS
 ## Decisions (overrulable, in DECISIONS-history.md)
 
 Kits gone; one default model/effort; chooser on new workspaces; OpenCode back; the installer installs no agents and every installable, not-installed agent starts ticked in the picker.
+
+## Round 3: fixes from the after-list (2026-10-29, main 155280c3 -> 91262628)
+
+| Task | What changed |
+|---|---|
+| T-580 | A fenced (debug + scratch) install batch saves the real user Path before script installs and writes it back afterwards (also on panic); a real run ignores Path folders below a scratch or smoke-temp marker; an npm engine refusal reads "OpenClaw needs a newer Node.js (>=24.22.1 <25 \|\| >=26.12.1). Update Node.js (winget upgrade OpenJS.NodeJS.LTS), then install again." |
+| T-581 | cargo-deny green: pulldown-cmark 0.13.4 -> 0.13.5; zip x3 (tauri-plugin-updater 2.13.3 is the newest 2.x, zip >= 9 only in the 3.0 alpha) and zbus_names/zvariant/zvariant_derive (notify-rust 4.18.2 pins zbus 5) recorded as deny.toml ignores with reasons. |
+
+Gates on the merged lane: build, clippy 0, cargo-deny ok, lib 2565/2566 (pty row1014 timing test failed under load, passes alone; the deps builder saw the same), integration 246/0, tsc 0, pnpm 4975/4975, plan-check OK, firewall 0 new, smoke 4/4 (evidence/smoke-ae44023d.txt).
+Overlap at 1400 and 1920: partial. A fresh scratch profile opens on the first-run screen, so 4 of the 8 standard pairs (top bar, pane header, group row) are not on the page; the 4 present are clear (evidence/fix-overlap-*.txt; after-list row to seed a workspace first).
