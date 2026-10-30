@@ -724,9 +724,32 @@ pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::S
     // SESS-005: a line that cannot be put together is refused here, before any pane is made, and
     // the refusal names the agent.
     let name = agent_name(&id);
-    let line = start_line_as(&settings, &id, &extra, &prompt, picked.unwrap_or(false), start).map_err(|e| named(&name, e))?;
+    let line = launch_line(&settings, &id, &extra, &prompt, picked.unwrap_or(false), start, |p| find_program(p).is_some_and(|f| crate::pty::through_cmd(&f))).map_err(|e| named(&name, e))?;
     command_check(&name, line.program.as_deref(), find_program)?;
     Ok(line)
+}
+
+/// T-605 (X-sec.1, L2-rust-crates.1, R08-orch-auto-chat.2): `start_line_as`, except that an agent
+/// whose program starts through cmd.exe (`via_cmd`, asked about the program the window will run: the
+/// user's own command, else the catalogue's installed one) starts bare and has its opening prompt
+/// typed in once it is ready (SESS-032), on every route. cmd.exe honours no quoting of a prompt, so
+/// a GitHub title with `"` and `&` could run a command, and it ends the line at the first line break.
+fn launch_line(settings: &serde_json::Value, id: &str, extra: &[String], prompt: &str, picked: bool, start: Start<'_>, via_cmd: impl Fn(&str) -> bool) -> Result<StartLine, String> {
+    let program = command_override(settings, id).map(str::to_string).or_else(|| installed_program(id));
+    let typed = !prompt.trim().is_empty() && program.as_deref().is_some_and(via_cmd);
+    let mut line = start_line_as(settings, id, extra, if typed { "" } else { prompt }, picked, start)?;
+    if typed {
+        line.typed = Some(prompt.trim().to_string());
+    }
+    Ok(line)
+}
+
+/// The program the window starts for `id` when the user set none: the first of its names that is
+/// installed, else its first name (as `catalogue` lists it).
+fn installed_program(id: &str) -> Option<String> {
+    let (_, _, programs, _) = CATALOGUE.iter().find(|e| e.0 == id)?;
+    let dirs = search_dirs();
+    programs.iter().find(|p| find_in(&dirs, p).is_some()).or(programs.first()).map(|p| p.to_string())
 }
 
 // ---------------------------------------------------------------- an agent that will not start (SESS-005)
@@ -1178,6 +1201,40 @@ X=1" } } });
         for id in ["ante", "devin", "kimi", "mistral-vibe", "continue"] {
             assert!(start_args(id, &[], "p").unwrap().typed.is_some(), "{id} is typed in");
         }
+    }
+
+    /// T-605 (X-sec.1, L2-rust-crates.1, R08-orch-auto-chat.2): an agent whose program starts
+    /// through cmd.exe (a `.cmd` or `.bat` that is not npm's shim) gets no opening prompt on its
+    /// command line, whatever its route: it starts bare and the prompt, line breaks and all, is typed
+    /// in once it is ready (SESS-032). An agent started directly keeps its own route.
+    #[test]
+    fn t605_an_agent_started_through_cmd_exe_has_its_prompt_typed_in_after_start() {
+        let none = serde_json::json!({});
+        let prompt = "Fix issue #12: \"Crash\" & del /q C:\\x | more\n\nEvent: a pull request";
+        let asked = std::cell::RefCell::new(Vec::new());
+        for id in ["claude", "codex", "gemini", "copilot", "opencode", "grok", "hermes", "aider"] {
+            let line = launch_line(&none, id, &[], prompt, true, Start::Fresh, |p| {
+                asked.borrow_mut().push(p.to_string());
+                true
+            })
+            .unwrap();
+            assert!(line.args.iter().all(|a| !a.contains("Crash") && !a.contains('&') && !a.contains('\n')), "{id}: {:?}", line.args);
+            assert_eq!(line.typed.as_deref(), Some(prompt), "{id}");
+            assert_eq!(line, start_line_as(&none, id, &[], "", true, Start::Fresh).map(|l| StartLine { typed: Some(prompt.into()), ..l }).unwrap(), "{id} starts bare");
+            let direct = launch_line(&none, id, &[], prompt, true, Start::Fresh, |_| false).unwrap();
+            assert_eq!(direct, start_line_as(&none, id, &[], prompt, true, Start::Fresh).unwrap(), "{id} keeps its route");
+        }
+        assert!(asked.borrow().iter().any(|p| p == "claude") && asked.borrow().iter().any(|p| p == "gemini"), "the catalogue's program is the one asked about: {:?}", asked.borrow());
+        // The user's own command is the program asked about; a blank prompt stays none.
+        let own = serde_json::json!({ OPTIONS_FIELD: { "codex": { "command": "C:\\tools\\my-codex.bat" } } });
+        let seen = std::cell::RefCell::new(String::new());
+        launch_line(&own, "codex", &[], prompt, true, Start::Fresh, |p| {
+            *seen.borrow_mut() = p.to_string();
+            true
+        })
+        .unwrap();
+        assert_eq!(*seen.borrow(), "C:\\tools\\my-codex.bat");
+        assert_eq!(launch_line(&none, "codex", &[], "  ", true, Start::Fresh, |_| true).unwrap().typed, None);
     }
 
     #[test]
