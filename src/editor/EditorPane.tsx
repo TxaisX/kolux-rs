@@ -37,13 +37,13 @@ import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { clampView, keepView, takeView } from "../terminal/viewKeep";
-import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, opening, relay, replaceAll, save, subscribe, textOf } from "./buffers";
+import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, lineEndsFor, loadText, opening, relay, replaceAll, save, subscribe, textOf, withLineBreaks } from "./buffers";
 import { keepUnsaved, keptToast } from "./unsavedCopy";
 import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";
 import { isUntitled, needsName } from "./untitled";
 import { seedSources, seedText } from "./searchSeed";
-import { followStep } from "./logFollow";
+import { followTick, type FollowIo } from "./logFollow";
 import { offersPreview, previewHtml } from "./htmlPreview";
 import DiffPane from "./DiffPane"; // EDIT-056: the Changes view (DiffPane imports this file back; both only use each other when rendering)
 import { drawn, underRoot, VIEW_LABEL, viewsFor, type View } from "./viewSwitch";
@@ -342,7 +342,7 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
           doc: shown,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, isMarkdown(path) ? sourceLinks(() => ({ note: path, root, files: () => { if (!wikiAsked.current && root) { wikiAsked.current = true; void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined); } return wikiFiles.current; }, onLink: (a, shift) => report.current.onLink?.(a, shift), onToast: (t) => report.current.onToast?.(t) })) : [], pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
+          extensions: [lineEndsFor(text), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, isMarkdown(path) ? sourceLinks(() => ({ note: path, root, files: () => { if (!wikiAsked.current && root) { wikiAsked.current = true; void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined); } return wikiFiles.current; }, onLink: (a, shift) => report.current.onLink?.(a, shift), onToast: (t) => report.current.onToast?.(t) })) : [], pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
             u.transactions.forEach((tr) => relay(path, u.view, tr));
             if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
             if (u.docChanged && isMarkdown(path)) {
@@ -533,7 +533,7 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
         const change = richChange(now, out, prev, () => fallBack({ text: "Showing source: the rich view could not place your last edit in the note, so it was not applied. The file is unchanged." }));
         if (change) {
           pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
-          cm.dispatch({ changes: change, userEvent: "input" });
+          cm.dispatch({ changes: withLineBreaks(cm.state, change), userEvent: "input" });
         }
       }, (t) => report.current.onToast?.(t), setSlashView, { files: () => wikiFiles.current, notePath: shortPath(path, root), show: setWikiView });
       if (root) {
@@ -667,29 +667,33 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
     if (focused && !hidden) seedSources.focus(id);
   }, [focused, hidden, id]);
 
-  // EDIT-026: a followed log reads the file once a second while its tab shows, and only when it changed.
+  // EDIT-026: a followed log reads the file once a second while its tab shows, and only when it changed; it waits while
+  // another tab of the file holds unsaved edits (T-317, followTick).
   // ponytail: reads the whole file each time it changes; a tail-only read if logs of hundreds of MB matter.
   useEffect(() => {
     if (!follow || !ready || hidden) return;
     let alive = true;
     let last = "";
     let busy = false;
-    const tick = async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        const st = JSON.stringify(await invoke("file_stamps", { paths: [path] }));
-        if (!alive || st === last) return;
-        const disk = await invoke<string>("file_read", { path });
+    const io: FollowIo = {
+      stamp: async () => JSON.stringify(await invoke("file_stamps", { paths: [path] })),
+      read: () => invoke<string>("file_read", { path }),
+      dirty: () => isDirty(path),
+      shown: () => textOf(path) ?? "",
+      show: (next) => {
         if (!alive) return;
-        last = st;
-        const next = followStep(textOf(path) ?? "", disk);
-        if (!next) return;
         const cm = view.current;
         const d = cm?.scrollDOM;
         const atEnd = !d || next.reset || d.scrollHeight - d.scrollTop - d.clientHeight < 40;
         replaceAll(path, next.text);
         if (cm && atEnd) cm.dispatch({ effects: EditorView.scrollIntoView(cm.state.doc.length) });
+      },
+    };
+    const tick = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        last = await followTick(last, io);
       } catch {
         // a read that failed is tried again on the next second
       } finally {
@@ -891,7 +895,7 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       {changesOn && <DiffPane embedded against="head" id={id} path={path} root={root} staged={false} hidden={hidden || comparing} focused={focused} onFocus={onFocus} onToast={onToast} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
-      {grid && (isSvg(path) ? <SvgView path={path} loaded={ready} hidden={shown !== "table" || comparing} /> : isNotebook(path) ? <NotebookView path={path} loaded={ready} hidden={shown !== "table" || comparing} readOnly={readOnly} onText={(t) => { const cm = view.current; if (cm) cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: t } }); }} /> : <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />)}
+      {grid && (isSvg(path) ? <SvgView path={path} loaded={ready} hidden={shown !== "table" || comparing} /> : isNotebook(path) ? <NotebookView path={path} loaded={ready} hidden={shown !== "table" || comparing} readOnly={readOnly} onText={(t) => { const cm = view.current; if (cm) cm.dispatch({ changes: withLineBreaks(cm.state, { from: 0, to: cm.state.doc.length, insert: t }) }); }} /> : <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />)}
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
         <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
           {copyKey} copies with path and lines

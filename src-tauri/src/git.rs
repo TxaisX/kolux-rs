@@ -135,10 +135,11 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     }
     // GIT-070: on macOS and Linux git leads its own process group, so stopping a stalled read
     // (procs::kill_tree's group signal) also ends the hooks, diff tools and pagers it started.
+    // Outside the terminal's foreground group a prompt would stop git (SIGTTIN): it fails at once.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+        cmd.process_group(0).env("GIT_TERMINAL_PROMPT", "0");
     }
     // GIT-070: paths past Windows' old 260-character limit work (Git for Windows' own switch). Given
     // through the environment so the command line stays as written, and only when nothing else is

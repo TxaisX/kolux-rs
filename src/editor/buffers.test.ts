@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { EditorState, type Transaction } from "@codemirror/state";
-import { attach, detach, hashOf, isDirty, isStale, keyOf, loadText, relay, replaceAll, sameText, save, subscribe, type View } from "./buffers";
+import { attach, detach, hashOf, isDirty, isStale, keyOf, lineEndsFor, loadText, opening, relay, replaceAll, sameText, save, subscribe, withLineBreaks, type View } from "./buffers";
+import { richChange } from "./frontMatter";
+import { roundTrip } from "./markdown";
 
 /** A stand-in for an editor view: a state that takes transactions and reports them to the buffer. */
 function fakeView(path: string, text: string, eol?: string): View & { type: (at: number, s: string) => void } {
@@ -141,6 +143,123 @@ describe("line ends (EDIT-001)", () => {
     await save(p, async (t) => void writes.push(t));
     expect(writes).toEqual(["zone\r\ntwo\r\n"]);
     detach(p, v);
+  });
+});
+
+// T-603 (audit F01-editor.2 and .4): the real path. The tab's editor is built as EditorPane builds it (lineEndsFor of the
+// text read), the rich view is handed doc.toString() (lines joined with \n, as the app does), and its edit goes in through
+// the tab's own dispatch (withLineBreaks); a reload goes through replaceAll, as the disk check does.
+describe("line ends survive the rich view and a rewrite on disk (T-603)", () => {
+  const editorOf = (path: string, text: string): View => {
+    const v: View = {
+      state: EditorState.create({ doc: text, extensions: lineEndsFor(text) }),
+      dispatch(spec) {
+        const tr = v.state.update(spec);
+        v.state = tr.state;
+        relay(path, v, tr);
+      },
+    };
+    return v;
+  };
+
+  it("F01-editor.2: a paragraph typed in the rich view of a CRLF note is saved with CRLF and shows as its own lines", async () => {
+    const p = "C:\\w\\readme.md";
+    const disk = "# Title\r\n\r\nFirst paragraph.\r\n\r\nSecond paragraph.\r\n";
+    const v = editorOf(p, disk);
+    attach(p, v, disk);
+    const now = v.state.doc.toString();
+    const prev = roundTrip(now)!;
+    const out = prev.replace("First paragraph.\n", "First paragraph.\n\nA new paragraph typed in the rich view.\n");
+    const change = richChange(now, out, prev, () => expect.fail("the edit was refused"))!;
+    v.dispatch({ changes: withLineBreaks(v.state, change), annotations: [] });
+    const want = "# Title\r\n\r\nFirst paragraph.\r\n\r\nA new paragraph typed in the rich view.\r\n\r\nSecond paragraph.\r\n";
+    expect(v.state.sliceDoc()).toBe(want);
+    expect(v.state.doc.lines).toBe(8);
+    expect(v.state.doc.line(5).text).toBe("A new paragraph typed in the rich view.");
+    const writes: string[] = [];
+    await save(p, async (t) => void writes.push(t));
+    expect(writes).toEqual([want]);
+    detach(p, v);
+  });
+
+  it("F01-editor.2: a notebook cell edit in a CRLF notebook keeps the notebook's lines and line ends", () => {
+    const disk = '{\r\n "cells": [],\r\n "nbformat": 4\r\n}\r\n';
+    const state = EditorState.create({ doc: disk, extensions: lineEndsFor(disk) });
+    const next = state.update({ changes: withLineBreaks(state, { from: 0, to: state.doc.length, insert: '{\n "cells": [1],\n "nbformat": 4\n}\n' }) }).state;
+    expect(next.sliceDoc()).toBe('{\r\n "cells": [1],\r\n "nbformat": 4\r\n}\r\n');
+    expect(next.doc.lines).toBe(5);
+  });
+
+  it("F01-editor.4: a CRLF file rewritten with LF on disk reloads as its own lines, and back again without stray CRs", () => {
+    const p = "C:\\w\\long.ts";
+    const crlf = Array.from({ length: 300 }, (_, i) => `const line${i + 1} = ${i + 1};`).join("\r\n") + "\r\n";
+    const lf = crlf.replace(/\r\n/g, "\n");
+    const v = editorOf(p, crlf);
+    attach(p, v, crlf);
+    replaceAll(p, lf); // a formatter rewrote the file with LF; the clean tab reloads quietly
+    expect(v.state.doc.lines).toBe(301);
+    expect(v.state.doc.line(120).text).toBe("const line120 = 120;"); // a file:line link lands on its line
+    expect(v.state.sliceDoc()).toBe(lf);
+    expect(isDirty(p)).toBe(false);
+    replaceAll(p, crlf); // and back to CRLF
+    expect(v.state.doc.lines).toBe(301);
+    expect(v.state.doc.line(2).text).toBe("const line2 = 2;"); // no CR left at the end of the line
+    expect(v.state.sliceDoc()).toBe(crlf);
+    expect(isDirty(p)).toBe(false);
+    detach(p, v);
+  });
+
+  // Review round 1: a reload switches the separator only for text with one line end throughout; anything else keeps the
+  // view's own, as before T-603, so nothing shows worse than it did (the at-open rule for a mixed file is unchanged).
+  it("an LF log that a CRLF writer appends to (PowerShell's Add-Content) keeps every line on reload", () => {
+    const p = "C:\\w\\logs\\mixed.log";
+    const lf = Array.from({ length: 10 }, (_, i) => `line${i + 1}`).join("\n") + "\n";
+    const mixed = lf + "added by Add-Content\r\n";
+    const v = editorOf(p, lf);
+    attach(p, v, lf);
+    replaceAll(p, mixed); // the quiet reload, or the followed log's tick
+    expect([v.state.doc.lines, v.state.doc.line(2).text, v.state.lineBreak]).toEqual([12, "line2", "\n"]);
+    expect(v.state.sliceDoc()).toBe(mixed);
+    expect(isDirty(p)).toBe(false);
+    detach(p, v);
+  });
+
+  it("a CRLF note emptied or cut to one line on disk stays CRLF, and one that gains LF-only lines keeps CRLF and its bytes", () => {
+    const p = "C:\\w\\note.md";
+    const crlf = "a\r\nb\r\n";
+    const v = editorOf(p, crlf);
+    attach(p, v, crlf);
+    replaceAll(p, ""); // no line end to go by: lines typed next are still saved CRLF
+    expect(v.state.lineBreak).toBe("\r\n");
+    replaceAll(p, "one line, no break");
+    expect(v.state.lineBreak).toBe("\r\n");
+    const withLf = crlf + "x\ny\n"; // an agent added LF-only lines: they show merged, as when such a file opens
+    replaceAll(p, withLf);
+    expect([v.state.lineBreak, v.state.sliceDoc(), isDirty(p)]).toEqual(["\r\n", withLf, false]);
+    detach(p, v);
+  });
+
+  // A tab that kept LF through a mixed reload, and a second tab of the file opened after it (the at-open rule gives a mixed
+  // file CRLF): two views of one buffer must split it the same way, or the second tab's typing never reaches the first,
+  // which is the one isDirty, save and the follow tick read.
+  it("a second tab of a log that stayed LF through such a reload (View file beside Follow log, a split pane) takes the first tab's lines, so its typing is kept and saved", async () => {
+    const p = "C:\\w\\logs\\twin.log";
+    const lf = "line1\nline2\n";
+    const mixed = lf + "added by Add-Content\r\n";
+    const first = editorOf(p, lf); // the followed tab, opened before the CRLF writer appended
+    attach(p, first, lf);
+    replaceAll(p, mixed);
+    const o = opening(p, mixed);
+    const second = editorOf(p, o.text); // View file, built as EditorPane builds it from the disk text it read
+    attach(p, second, o.base);
+    expect([second.state.lineBreak, second.state.doc.lines]).toEqual(["\n", 4]);
+    second.dispatch({ changes: { from: 0, to: 0, insert: "typed " }, annotations: [] });
+    expect([first.state.sliceDoc(), isDirty(p)]).toEqual(["typed " + mixed, true]);
+    const writes: string[] = [];
+    await save(p, async (t) => void writes.push(t));
+    expect(writes).toEqual(["typed " + mixed]);
+    detach(p, first);
+    detach(p, second);
   });
 });
 

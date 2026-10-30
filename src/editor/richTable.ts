@@ -63,6 +63,19 @@ const delimCell = (a: Align) => (a === "center" ? ":---:" : a === "right" ? "---
 export const rowLine = (cells: string[]): string => `| ${cells.join(" | ")} |`;
 export const delimLine = (align: Align[]): string => `| ${align.map(delimCell).join(" | ")} |`;
 
+/** T-602: whether a table in `md` has a row with more cells than its header. GitHub hides the extra cells and the rich view
+ *  would show only the header's, so an edit of the row could drop the rest: such a note stays in source view. */
+export function overfullRow(md: string): boolean {
+  const lines = md.split("\n");
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (!lines[i].includes("|") || !isDelimiterRow(lines[i + 1])) continue;
+    const n = splitRow(lines[i]).length;
+    if (splitRow(lines[i + 1]).length !== n) continue;
+    for (let j = i + 2; j < lines.length && lines[j].trim() !== "" && lines[j].includes("|"); j++) if (splitRow(lines[j]).length > n) return true;
+  }
+  return false;
+}
+
 /** Row 194: a row whose cells changed, in the file's own spelling. `raw` is the line as the file had it
  *  and `was` the cell texts it said then; a cell that did not change keeps its bytes, an edited cell keeps
  *  its neighbours' padding (an aligned cell stays as wide as it was), and so do the outer pipes. Null when
@@ -233,7 +246,9 @@ export function $createTable(rows: number, cols: number): TableNode {
   return t;
 }
 
-const cellTexts = (row: TableRowNode): string[] => row.getChildren().map((c) => c.getTextContent());
+// T-602: a cell's text as the file spells it. A cell shows its markdown as typed, so a pipe typed into it is escaped and
+// the cell does not split in two; one the file already escaped (\|) stays as it is.
+const cellTexts = (row: TableRowNode): string[] => row.getChildren().map((c) => c.getTextContent().replace(/\\.|\|/g, (m) => (m === "|" ? "\\|" : m)));
 
 // ---- markdown ----
 
@@ -265,8 +280,14 @@ export const TABLE: MultilineElementTransformer = {
     const lines: string[] = [];
     node.getChildren().forEach((r, i) => {
       if (!$isTableRowNode(r)) return;
-      const canon = rowLine(cellTexts(r));
-      lines.push(r.__raw ? (r.__canon === canon ? r.__raw : (respellRow(r.__raw, splitRow(r.__canon), cellTexts(r)) ?? canon)) : canon);
+      const now = cellTexts(r);
+      const canon = rowLine(now);
+      // T-602: a line holding more cells than its row shows is kept as it is: the canonical line would drop the rest.
+      // In the app this is a second guard only: limitsOf (markdown.ts, overfullRow) opens a note holding such a row in source
+      // view, and switches an open rich view to source when one arrives from disk, so the rich view never gets to export an
+      // edit of that row and `hides` cannot drop it.
+      const hides = r.__raw !== "" && splitRow(r.__raw).length > splitRow(r.__canon).length;
+      lines.push(r.__raw ? (r.__canon === canon ? r.__raw : (respellRow(r.__raw, splitRow(r.__canon), now) ?? (hides ? r.__raw : canon))) : canon);
       if (i === 0) {
         const dl = delimLine(node.getAlign());
         lines.push(node.__rawDelim && node.__canonDelim === dl ? node.__rawDelim : dl);
