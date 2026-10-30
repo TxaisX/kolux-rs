@@ -1,0 +1,187 @@
+T-620 · The whole top bar moves the window (Txais 2026-10-30) · integrator · 2026-10-30
+Proved in the Linux cloud sandbox (Chromium + Playwright, Vite dev server, node 22). Nothing was run
+on Txais's PC. CI is set aside (Txais, 2026-10-30).
+
+WHY ONLY ONE SPOT MOVED THE WINDOW
+Tauri 2.12.1's drag script (crate tauri-2.12.1, src/window/scripts/drag.js, isDragRegion) walks up
+from the element that was pressed:
+  bare or "true" data-tauri-drag-region -> drags only when the press lands on that element itself
+  "deep"                               -> drags from anywhere inside it
+  "false"                              -> never drags from here
+  a button, link, input or menu item without the attribute -> never drags
+The bar (src/chrome/TopBar.tsx) carried the bare attribute, but its left group fills the whole left
+third and the right group sits on the right, so only the gaps around the centred switcher were the
+header element itself.
+
+WHAT CHANGED
+1. src/chrome/TopBar.tsx: the header is data-tauri-drag-region="deep"; the View menu's backdrop and
+   list (drawn inside the bar) carry "false", so a press on them closes or uses the menu instead of
+   moving the window. Header comment updated.
+2. src/switcher/AccountSwitcher.tsx: the same "false" on the account menu's backdrop and list (the
+   switcher is mounted inside the bar).
+3. src/chrome/topBarDrag.test.ts (new): the header is "deep"; the open View menu and the open
+   account menu both carry "false".
+
+BEFORE
+- vitest, src/chrome/topBarDrag.test.ts with the old TopBar.tsx and AccountSwitcher.tsx (git stash):
+    AssertionError: expected 'true' to be 'deep' // Object.is equality
+    AssertionError: expected undefined to be 'false' // Object.is equality
+    Failed Tests 2
+- Browser proof (below), old bar: 67 of 467 presses on empty parts of the bar start a drag.
+
+AFTER
+- VITEST_MAX_WORKERS=2 flock pnpm exec vitest run src/chrome src/switcher
+    Test Files  20 passed (20)
+    Tests  117 passed (117)
+- flock pnpm exec tsc -p .  ->  exit 0
+- Browser proof: the real TopBar component with the app's styles.css, served by Vite, in Chromium,
+  with Tauri 2.12.1's own drag.js (os_name "windows") and a stand-in IPC that records each command.
+  Presses every 6 px along three rows of the 1280 x 36 bar (y = 3, 18, 32); "control" means the
+  press lands in a button, link, input or menu item, as drag.js decides.
+    variant         attr  empty presses that start a drag   presses on controls that drag
+    before          true   67/467  (not: left group x239, switcher frame x69, right group x92)   0/172
+    after           deep  467/467                                                            0/172
+    before Classic  true  308/510  (not: left group x110, right group x92)                   0/129
+    after Classic   deep  510/510                                                            0/129
+  Double-click on an empty spot (after): plugin:window|start_dragging, then
+  plugin:window|internal_toggle_maximize (the window maximizes or restores).
+  The View menu, opened with a real click (after):
+    backdrop attribute "false"; a press on the menu title does not drag; a press on the backdrop does
+    not drag and its click closes the menu. With the backdrop's "false" removed, the same press DOES
+    start a drag: the opt-out is what keeps the menus working.
+  No page errors.
+
+STILL OPEN
+- The native move itself is Tauri's start_dragging, unchanged, which already moved the window from
+  the one spot that worked. A press-and-drag on the installed app on Windows is the last check;
+  it needs the next build on Txais's PC.
+
+HOW TO RERUN THE BROWSER PROOF
+dist/drag-harness/ (dist/ is git-ignored) holds drag.js, copied from the crate with
+  sed 's/__TEMPLATE_os_name__/"windows"/' <cargo registry>/tauri-2.12.1/src/window/scripts/drag.js
+plus the two files below. Then: pnpm exec vite --port 5199 --strictPort, and
+  node drag-proof.cjs http://localhost:5199/dist/drag-harness/index.html after   (add ?classic for Classic)
+
+----- index.html -----
+<!doctype html>
+<html><head><meta charset="utf-8"><title>top bar drag harness</title></head>
+<body style="margin:0">
+<div id="root"></div>
+<script>
+  // A stand-in for Tauri's IPC: it records every command and answers the few the top bar reads.
+  window.__calls = [];
+  let nextId = 1;
+  window.__TAURI_INTERNALS__ = {
+    metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
+    transformCallback: () => nextId++,
+    unregisterCallback: () => {},
+    convertFileSrc: (p) => p,
+    invoke: (cmd) => {
+      window.__calls.push(cmd);
+      if (cmd === "plugin:window|is_maximized") return Promise.resolve(false);
+      if (cmd === "plugin:event|listen") return Promise.resolve(nextId++);
+      return Promise.reject("not in the harness: " + cmd);
+    },
+  };
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+</script>
+<script src="./drag.js"></script>
+<script type="module" src="./entry.tsx"></script>
+</body></html>
+
+----- entry.tsx -----
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import "../../src/styles.css";
+import TopBar from "../../src/chrome/TopBar";
+
+const classic = new URLSearchParams(location.search).has("classic");
+createRoot(document.getElementById("root")!).render(
+  createElement(TopBar, { screen: "terminals", classic, sidebarWidth: 260, onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {}, rightOpen: false, onToggleRight: () => {}, appName: true, onSearch: () => {}, onBack: () => {}, onForward: () => {}, onZoom: () => {}, appMenu: true, installed: [] }),
+);
+
+----- drag-proof.cjs -----
+// T-620 proof: load the real TopBar (Vite dev server) with Tauri 2.12.1's own drag.js and a recording
+// IPC stand-in, press across the whole bar, and report where a press starts a window drag.
+// usage: node drag-proof.cjs <url> <label>  -> prints a summary and writes <label>.json beside this file
+const { chromium } = require("playwright");
+const fs = require("fs");
+const path = require("path");
+const [url, label] = process.argv.slice(2);
+
+const CONTROL = 'a,button,input,select,textarea,label,summary,[contenteditable]:not([contenteditable="false"]),[tabindex]:not([tabindex="-1"]),[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=radio],[role=switch],[role=option]';
+
+(async () => {
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 300 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(url);
+  await page.waitForSelector("header");
+  await page.waitForTimeout(400);
+  // While scanning, swallow clicks so a press on a control does not open a menu and change the page.
+  await page.evaluate(() => {
+    window.__scan = true;
+    window.addEventListener("click", (e) => { if (window.__scan) { e.stopPropagation(); e.preventDefault(); } }, true);
+  });
+  const bar = await page.$eval("header", (h) => { const r = h.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, attr: h.getAttribute("data-tauri-drag-region") }; });
+  const probe = async (x, y) => {
+    const hit = await page.evaluate(([x, y, CONTROL]) => {
+      const el = document.elementFromPoint(x, y);
+      const ctl = el && el.closest(CONTROL);
+      const name = (n) => (n ? n.getAttribute("title") || n.getAttribute("aria-label") || (typeof n.className === "string" && n.className) || n.tagName.toLowerCase() : "nothing");
+      window.__calls.length = 0;
+      return { control: !!ctl, what: ctl ? name(ctl) : name(el) };
+    }, [x, y, CONTROL]);
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.up();
+    const calls = await page.evaluate(() => window.__calls.slice());
+    return { x, y, ...hit, drags: calls.includes("plugin:window|start_dragging") };
+  };
+  const rows = [];
+  for (const dy of [3, 18, 32]) for (let x = 2; x < bar.x + bar.w; x += 6) rows.push(await probe(x, bar.y + dy));
+  const empty = rows.filter((r) => !r.control), ctl = rows.filter((r) => r.control);
+  const group = (list) => [...list.reduce((m, r) => m.set(r.what, (m.get(r.what) || 0) + 1), new Map())].map(([k, n]) => `${k} x${n}`);
+  const out = {
+    label, bar,
+    points: rows.length,
+    emptyPoints: empty.length, emptyThatDrag: empty.filter((r) => r.drags).length,
+    controlPoints: ctl.length, controlsThatDrag: ctl.filter((r) => r.drags).length,
+    emptyNotDragging: group(empty.filter((r) => !r.drags)),
+    controlsDragging: group(ctl.filter((r) => r.drags)),
+  };
+  // Double-click on an empty spot of the bar: the second press asks Tauri to maximize.
+  const spot = empty.find((r) => r.drags) || empty[0];
+  await page.evaluate(() => (window.__calls.length = 0));
+  await page.mouse.click(spot.x, spot.y, { clickCount: 2 });
+  out.doubleClick = { at: [spot.x, spot.y, spot.what], calls: (await page.evaluate(() => window.__calls.slice())).filter((c) => c.startsWith("plugin:window|")) };
+  // The View menu: open it for real, then press its backdrop and its title.
+  await page.evaluate(() => (window.__scan = false));
+  await page.click('button[title="Menu"]');
+  await page.waitForSelector('[role="menu"]');
+  const pressNoUp = async (sel, x, y) => {
+    await page.evaluate(() => (window.__calls.length = 0));
+    if (sel) { const b = await page.$eval(sel, (n) => { const r = n.getBoundingClientRect(); return [r.x + 6, r.y + r.height / 2]; }); [x, y] = b; }
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    const drags = (await page.evaluate(() => window.__calls.slice())).includes("plugin:window|start_dragging");
+    await page.mouse.up();
+    return drags;
+  };
+  out.menu = {
+    backdropAttr: await page.$eval(".menu-backdrop", (n) => n.getAttribute("data-tauri-drag-region")),
+    pressOnMenuTitleDrags: await pressNoUp(".menu-title"),
+  };
+  out.menu.pressOnBackdropDrags = await pressNoUp(null, 640, 200);
+  out.menu.backdropClickClosedIt = (await page.$('[role="menu"]')) === null;
+  // Without the "false" opt-out the same backdrop press would move the window instead of closing the menu.
+  await page.click('button[title="Menu"]');
+  await page.waitForSelector('[role="menu"]');
+  await page.$eval(".menu-backdrop", (n) => n.removeAttribute("data-tauri-drag-region"));
+  out.menu.withoutOptOutBackdropPressDrags = await pressNoUp(null, 640, 200);
+  out.errors = errors.filter((e) => !e.includes("not in the harness"));
+  fs.writeFileSync(path.join(__dirname, `${label}.json`), JSON.stringify({ ...out, rows }, null, 1));
+  console.log(JSON.stringify(out, null, 1));
+  await browser.close();
+})().catch((e) => { console.error(e); process.exit(1); });
