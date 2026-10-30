@@ -597,10 +597,14 @@ impl Scratch {
             let mut h = std::collections::hash_map::RandomState::new().build_hasher();
             h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
             let dir = std::env::temp_dir().join(format!("kolux-writer-{:016x}", h.finish()));
-            let mut make = std::fs::DirBuilder::new();
-            // Only this user may look inside on Unix (Windows' temp folder is per user already).
-            #[cfg(unix)]
-            std::os::unix::fs::DirBuilderExt::mode(&mut make, 0o700);
+            let make = {
+                #[allow(unused_mut)] // set below on Unix only
+                let mut b = std::fs::DirBuilder::new();
+                // Only this user may look inside on Unix (Windows' temp folder is per user already).
+                #[cfg(unix)]
+                std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+                b
+            };
             // `create`, not `recursive`: a folder that is already there is never used.
             match make.create(&dir) {
                 Ok(()) => return Ok(Scratch(dir)),

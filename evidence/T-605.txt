@@ -143,3 +143,28 @@ test pty::tests::a_cmd_shim_runs_through_the_command_shell_and_an_exe_runs_itsel
 test pty::tests::t605_any_other_launcher_still_starts_through_cmd_exe ... ok
 test pty::tests::t605_an_npm_agent_starts_node_on_its_script_and_no_prompt_reaches_cmd_exe ... ok
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 2511 filtered out; finished in 0.01s
+
+REVIEW OF PR #15 (2026-10-30, integrator): fixes, each with a test that fails before and passes after
+Each test lists every case it misses, so the BEFORE output names each bypass. The BEFORE runs are the
+lane at 76201ceb with only the new tests added; the AFTER runs are the final code (merged with origin/main
+1a62cf1a). Run: from src-tauri, `. ../scripts/test-env.sh`, the lib test binary with `<name> --test-threads=1 --nocapture`.
+
+What changed (orchestration/sendonce.rs): before the bracketed paste, ESC and every control character
+(C0, DEL and C1) except line feed and tab leave the prompt (paste_safe), so text holding ESC[201~ and a
+carriage return can no longer close the paste early and press Enter on a command of its own.
+
+BEFORE:
+===== before the fix: t605_a_pasted
+test orchestration::sendonce::tests::t605_a_pasted_prompt_loses_escapes_and_control_characters_but_keeps_lines_and_tabs ... 
+thread 'orchestration::sendonce::tests::t605_a_pasted_prompt_loses_escapes_and_control_characters_but_keeps_lines_and_tabs' (18290) panicked at src/orchestration/sendonce.rs:569:9:
+assertion `left == right` failed
+  left: "\u{1b}[200~fix it\u{1b}[201~\rrm -rf ~\r\n\u{7}\0line two\tend\u{9b}2J\u{1b}[201~"
+ right: "\u{1b}[200~fix it[201~rm -rf ~\nline two\tend2J\u{1b}[201~"
+FAILED
+    orchestration::sendonce::tests::t605_a_pasted_prompt_loses_escapes_and_control_characters_but_keeps_lines_and_tabs
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2528 filtered out; finished in 0.20s
+
+AFTER:
+===== after the fix: t605_a_pasted
+test orchestration::sendonce::tests::t605_a_pasted_prompt_loses_escapes_and_control_characters_but_keeps_lines_and_tabs ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2540 filtered out; finished in 0.00s

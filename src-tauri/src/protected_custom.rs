@@ -619,14 +619,18 @@ mod tests {
             json!({ "hook_event_name": "PreToolUse", "session_id": session, "tool_use_id": "t604r5", "cwd": "/home/me/t604r5", "tool_name": "Bash", "tool_input": { "command": command } }).to_string()
         };
         let big = event("t604r5-big", format!("{}\nkubectl delete pod web-1", "export API_TOKEN=abc123 PASSWORD=hunter2 ".repeat((1 << 20) / 42)));
-        let small = event("t604r5-small", "kubectl delete pod web-2".into());
+        let small = "kubectl delete pod web-2".to_string();
         let r = rules.clone();
         let pane = std::thread::spawn(move || (listen("/claude", big.as_bytes(), &r).is_some(), HELD.with(|h| h.get())));
+        // The second pane runs listen's own two steps, the rule answer and the attempts lock, without
+        // keeping an attempt each time round: the list is shared and holds only ATTEMPTS.
+        let cwd = Some("/home/me/t604r5");
         let mut slowest = std::time::Duration::ZERO;
         let mut checks = 0;
         while !pane.is_finished() || checks == 0 {
             let t0 = std::time::Instant::now();
-            assert!(listen("/claude", small.as_bytes(), &rules).is_some(), "the second pane must ask");
+            assert!(check(&small, &crate::protected::Base::from_env(cwd), &rules, cwd).is_some(), "the second pane must ask");
+            with_store(|s| s.0.len());
             slowest = slowest.max(t0.elapsed());
             checks += 1;
         }

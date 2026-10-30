@@ -243,3 +243,122 @@ run 1: flags_p 145, flags_u 107, mysql_p 317, curl_u 289, pipes 144, heredoc_tab
 run 2: slowest heredoc_table 523, mysql_p 373, curl_u 355, heredoc_script 250 ms -> ok
 Slowest is 523 ms against the hook's 1.5 s: inside the 750 ms bar, but runs vary by about 35% on this
 loaded machine. Not borderline against 1.5 s.
+
+REVIEW OF PR #15 (2026-10-30, integrator): fixes, each with a test that fails before and passes after
+Each test lists every case it misses, so the BEFORE output names each bypass. The BEFORE runs are the
+lane at 76201ceb with only the new tests added; the AFTER runs are the final code (merged with origin/main
+1a62cf1a). Run: from src-tauri, `. ../scripts/test-env.sh`, the lib test binary with `<name> --test-threads=1 --nocapture`.
+
+What changed (protected.rs, Shell reading and rules; protected_custom.rs):
+- A backslash + LF or CRLF joins the next line with nothing between (`git reset --ha\<LF>rd` is --hard);
+  PowerShell's backtick join still leaves a space.
+- Outside quotes a backslash before an ordinary character is dropped (`g\it`, `--forc\e`). It stays before a
+  quote, a shell mark (; & | ( ) < > $ # \ ` space) or a wildcard (* ? [ ~), and every backslash of a word read
+  as a Windows path stays (a `:` or `%` earlier in the word, or a word starting `.\`, `..\`, `~\`), so
+  `C:\Users\..\Temp\x`, `dist\*.o` and `.\build\out` read as before. (A first version dropped those too; the
+  full cargo test caught it in safe013_home_or_an_ancestor_of_home_under_temp_is_never_a_temp_delete, and t604r2
+  now also checks that relative Windows-path deletes still run.)
+- `$'..'` (ANSI-C quote) honours `\'`.
+- `git -c alias.X=..` then running X reads the alias (`!` alias: its shell command) as the command.
+- Shortened long options: git push (--del, --force-w, --mirr, any prefix of force/force-with-lease/
+  force-if-includes/mirror/delete), git reset (--ha), git clean (--forc), rm (--recu).
+- Any rm short-option bundle of r f v d i holding r (`-rrrrf`), with no length cap.
+- `env -S` / `-S<value>` / `--split-string[=]` read as a command, with the words after it.
+- `$IFS` and `${IFS}` split words.
+- protected_custom.rs: a paused command is masked before the attempts lock is taken (Attempt::masked, then
+  Attempts::keep under the lock); the Safety page's list is copied under the lock and masked after. This closes
+  status-hooks STATE follow-up (4). In this lane the mask already read only the first 4 KB (mask_head), so the
+  lock was held about 8 ms rather than the 2 s seen on main's code; now about 8 to 22 microseconds.
+
+BEFORE:
+===== before the fix: t604r1
+test protected::tests::t604r1_a_backslash_line_join_joins_the_words_with_nothing_between ... 
+thread 'protected::tests::t604r1_a_backslash_line_join_joins_the_words_with_nothing_between' (18268) panicked at src/protected.rs:2502:9:
+[
+    "should ask (discard): \"git reset --ha\\\\\\nrd\", got None",
+    "should ask (force-push): \"git push -f origin ma\\\\\\nin\", got None",
+    "should ask (discard): \"git reset --ha\\\\\\r\\nrd\", got None",
+    "should ask (force-push): \"git push -f origin ma\\\\\\r\\nin\", got None",
+]
+FAILED
+    protected::tests::t604r1_a_backslash_line_join_joins_the_words_with_nothing_between
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2528 filtered out; finished in 0.21s
+===== before the fix: t604r2
+test protected::tests::t604r2_a_backslash_before_an_ordinary_character_is_dropped ... 
+thread 'protected::tests::t604r2_a_backslash_before_an_ordinary_character_is_dropped' (18272) panicked at src/protected.rs:2526:9:
+[
+    "should ask (force-push): \"git push --forc\\\\e origin main\", got None",
+    "should ask (discard): \"g\\\\it reset --hard\", got None",
+    "should ask (discard): \"git re\\\\set --ha\\\\rd\", got None",
+    "should ask (discard): \"bash -c 'g\\\\it reset --hard'\", got None",
+]
+FAILED
+    protected::tests::t604r2_a_backslash_before_an_ordinary_character_is_dropped
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2528 filtered out; finished in 0.20s
+===== before the fix: t604r3
+test protected::tests::t604r3_an_ansi_c_quote_honours_its_escaped_quote ... 
+thread 'protected::tests::t604r3_an_ansi_c_quote_honours_its_escaped_quote' (18276) panicked at src/protected.rs:2535:9:
+[
+    "\"echo $'\\\\'' ; git push -f origin main #'\": want Some(\"force-push\"), got None",
+]
+FAILED
+    protected::tests::t604r3_an_ansi_c_quote_honours_its_escaped_quote
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2528 filtered out; finished in 0.20s
+===== before the fix: t604r4
+test protected::tests::t604r4_aliases_short_options_rm_bundles_env_split_and_ifs_cannot_hide_a_command ... 
+thread 'protected::tests::t604r4_aliases_short_options_rm_bundles_env_split_and_ifs_cannot_hide_a_command' (18280) panicked at src/protected.rs:2569:9:
+[
+    "should ask (force-push): \"git -c alias.p='push -f' p origin main\", got None",
+    "should ask (discard): \"git -c alias.x='!git reset --hard' x\", got None",
+    "should ask (discard): \"git -c alias.X=reset x --hard\", got None",
+    "should ask (discard): \"git reset --ha\", got None",
+    "should ask (force-push): \"git push --del origin main\", got None",
+    "should ask (force-push): \"git push --force-w origin main\", got None",
+    "should ask (force-push): \"git push --mirr origin\", got None",
+    "should ask (delete): \"rm --recu ~/Documents\", got None",
+    "should ask (delete): \"rm -rrrrf ~/Documents\", got None",
+    "should ask (force-push): \"env -S 'git push -f origin main'\", got None",
+    "should ask (discard): \"env --split-string='git reset --hard'\", got None",
+    "should ask (discard): \"env -S'git reset --hard' \", got None",
+    "should ask (discard): \"git${IFS}reset${IFS}--hard\", got None",
+    "should ask (force-push): \"git$IFS'push' -f origin main\", got None",
+]
+FAILED
+    protected::tests::t604r4_aliases_short_options_rm_bundles_env_split_and_ifs_cannot_hide_a_command
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2528 filtered out; finished in 0.20s
+===== before the fix: t604r5
+test protected_custom::tests::t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked ... TIME second pane: 1455 checks, slowest 8.57701ms; the 1 MB pane held the lock 8.166352ms
+thread 'protected_custom::tests::t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked' (18285) panicked at src/protected_custom.rs:613:9:
+the 1 MB pane held the attempts lock 8.166352ms
+FAILED
+    protected_custom::tests::t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2528 filtered out; finished in 0.60s
+
+AFTER:
+===== after the fix: t604r1
+test protected::tests::t604r1_a_backslash_line_join_joins_the_words_with_nothing_between ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2540 filtered out; finished in 0.00s
+===== after the fix: t604r2
+test protected::tests::t604r2_a_backslash_before_an_ordinary_character_is_dropped ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2540 filtered out; finished in 0.00s
+===== after the fix: t604r3
+test protected::tests::t604r3_an_ansi_c_quote_honours_its_escaped_quote ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2540 filtered out; finished in 0.00s
+===== after the fix: t604r4
+test protected::tests::t604r4_aliases_short_options_rm_bundles_env_split_and_ifs_cannot_hide_a_command ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2540 filtered out; finished in 0.00s
+===== after the fix: t604r5
+test protected_custom::tests::t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked ... TIME second pane: 5440 checks, slowest 881.774µs; the 1 MB pane held the lock 17.092µs
+ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2540 filtered out; finished in 0.36s
+(t604r1 first ran with one more line of my own, "git push -f origin ma`<LF>in runs"; that was wrong: in the
+Plain reading the trailing backtick makes the push target unclear, so it asks, which is the safe direction.
+The line was removed; it had never been checked before, since the cases above it failed first.)
+
+protected:: protected_custom:: sendonce:: after the fix (`cargo test --lib -- protected sendonce`):
+TIME second pane: 6798 checks, slowest 439.663µs; the 1 MB pane held the lock 21.572µs
+test result: ok. 91 passed; 0 failed; 1 ignored; 0 measured; 2449 filtered out; finished in 133.58s
+Optimized 1 MB timing after the fix (probe, opt-level 3): slowest heredoc_table 417 ms, mysql_p 353, curl_u 305.
+Full Linux `cargo test --tests --no-fail-fast -- --test-threads=3`, lib: test result: FAILED. 2502 passed; 36 failed; 3 ignored; 0 measured; 0 filtered out; finished in 240.31s
+Every failure is on the 45-name Linux baseline (43 failed, no new ones); two baseline tests now pass
+(protected safe013_recursive_deletes_..., diag app041_...). windows-gnu cargo check and clippy -D warnings: Finished.

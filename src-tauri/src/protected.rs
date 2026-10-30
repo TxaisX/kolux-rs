@@ -389,6 +389,9 @@ fn shell_text(text: &str) -> String {
     let mut quote: Option<u8> = None;
     // Heredocs opened on the current line: each delimiter, and whether tabs may lead its closing line (`<<-`).
     let mut pending: Vec<(Vec<u8>, bool)> = Vec::new();
+    // Where the current word began, and whether it reads as a Windows path so far (a `:` or `%`
+    // in it, as in `C:\..` or `$env:TEMP\..` or `%TEMP%\..`): its backslashes are kept.
+    let (mut word_from, mut windows_word) = (0, false);
     let mut i = 0;
     while i < b.len() {
         let (c, next) = (b[i], b.get(i + 1).copied());
@@ -412,6 +415,11 @@ fn shell_text(text: &str) -> String {
                 out.push(c);
             }
             None => {
+                if c.is_ascii_whitespace() || b";&|()".contains(&c) {
+                    (word_from, windows_word) = (i + 1, false);
+                } else if c == b':' || c == b'%' {
+                    windows_word = true;
+                }
                 let continued = matches!(c, b'\\' | b'`') && (next == Some(b'\n') || (next == Some(b'\r') && b.get(i + 2) == Some(&b'\n')));
                 if continued {
                     // Bash joins `\` + line break to nothing (`--ha\<LF>rd` is `--hard`);
@@ -422,9 +430,12 @@ fn shell_text(text: &str) -> String {
                     i += if next == Some(b'\r') { 3 } else { 2 };
                     continue;
                 }
-                if c == b'\\' && next.is_some_and(|n| !b"'\"`\\;&|()<>$# \t\r\n".contains(&n)) {
+                windows_word |= c == b'\\' && matches!(&b[word_from..i], b"." | b".." | b"~");
+                let path_like = windows_word;
+                if c == b'\\' && !path_like && next.is_some_and(|n| !b"'\"`\\;&|()<>$#*?[~ \t\r\n".contains(&n)) {
                     // Bash drops a backslash before an ordinary character: `g\it` is `git`,
-                    // `--forc\e` is `--force`. One before a quote or a shell mark stays below.
+                    // `--forc\e` is `--force`. One before a quote, a shell mark or a wildcard stays
+                    // below, and so do those of a word read as a Windows path (`C:\Users`, `.\build`).
                     i += 1;
                     continue;
                 }
@@ -816,8 +827,8 @@ fn env_split(words: &[String]) -> Option<String> {
                 words.get(j).cloned()
             } else if let Some(v) = o.strip_prefix("--split-string=") {
                 Some(v.to_string())
-            } else if o.starts_with("-S") {
-                Some(o[2..].to_string())
+            } else if let Some(v) = o.strip_prefix("-S") {
+                Some(v.to_string())
             } else if matches!(o.as_str(), "-u" | "-C" | "--unset" | "--chdir") {
                 j += 2;
                 continue;
@@ -2623,7 +2634,7 @@ mod tests {
                 missed.push(format!("should ask ({id}): {c:?}, got {:?}", hit(c)));
             }
         }
-        for c in ["find . -name '*.tmp' -exec echo {} \\;", "echo a\\;git status"] {
+        for c in ["find . -name '*.tmp' -exec echo {} \\;", "echo a\\;git status", "del /s /q dist\\*.o", "rm -rf .\\build\\out", "rm -rf ..\\app\\build"] {
             if hit(c).is_some() {
                 missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
             }
