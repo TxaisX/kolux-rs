@@ -224,7 +224,7 @@ $ cargo test --lib -- t583_with_the_cap t583_a_job_after
    left: Err(Disconnected)
   right: Ok(2)
  test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2521 filtered out; finished in 2.33s
-(The over-cap connection was held and answered with a 64-byte reply after its read deadline; the queue's worker died
+(The over-cap connection was taken and answered (the read got 64 bytes) instead of closed; the queue's worker died
 with job 1, so jobs 2 and 3 were never run.)
 
 Found on the way: the first version of the cap test ended with a protected command and failed only when run next to
