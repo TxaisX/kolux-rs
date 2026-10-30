@@ -108,3 +108,18 @@ test("App (evidence/reliability-App.patch): the layout effect writes nothing unt
   expect(effect).toMatch(/^useEffect\(\(\) => \{\s*if \(!read\) return;/);
   expect(effect).not.toContain("settingsRead");
 });
+
+test("App (evidence/reliability-App.patch): a tab opened during a slow start never takes a saved tab's pane key", () => {
+  // Every pane asks the terminal service for the terminal of its key (terminal_attach), and terminals live
+  // on across a quit (APP-052). A wait tab with a saved tab's key would take over that tab's running agent,
+  // write into its history, and kill it when the window is drawn again with the saved tabs.
+  const app = nodeFs.readFileSync("src/App.tsx", "utf8");
+  const init = /const nextKey = useRef\((.*)\);/.exec(app)?.[1];
+  expect(init).toBeDefined();
+  const first = new Function("layout", "read", `return ${init};`) as (layout: SavedLayout | null, read: boolean) => number;
+  // Saved keys are handed out from 1 upward, one per tab opened in a session; none comes near the wait range.
+  const many = { ...SAVED, panes: Array.from({ length: 5000 }, (_, i) => ({ ...SAVED.panes[0], key: i + 1 })) };
+  expect(first(null, false)).toBeGreaterThan(Math.max(...many.panes.map((p: { key: number }) => p.key)));
+  expect(first(null, true)).toBe(2); // a timely start with nothing saved counts as before
+  expect(first(SAVED, true)).toBe(4);
+});
