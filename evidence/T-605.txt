@@ -168,3 +168,35 @@ AFTER:
 ===== after the fix: t605_a_pasted
 test orchestration::sendonce::tests::t605_a_pasted_prompt_loses_escapes_and_control_characters_but_keeps_lines_and_tabs ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2540 filtered out; finished in 0.00s
+
+RE-REVIEW OF PR #15: paste coverage
+The same rule (ESC and every control character except LF and tab dropped) now also covers a reused
+session's automation prompt (automations.rs bracketed, used by Panes::send; it calls sendonce::paste_safe)
+and the app's typed prompt (src/terminal/paste.ts pasteSafe and bracketed; App.tsx `type` calls bracketed,
+one changed line plus its import). Each helper first went in with the old behaviour, then the rule:
+
+BEFORE:
+===== before the fix: t605_a_reused
+test automations::tests::t605_a_reused_sessions_prompt_cannot_end_its_paste_early ... 
+thread 'automations::tests::t605_a_reused_sessions_prompt_cannot_end_its_paste_early' (11015) panicked at src/automations.rs:1494:9:
+assertion `left == right` failed
+  left: "\u{1b}[200~Fix: title\u{1b}[201~\rrm -rf ~\nnext\tline\u{7}\u{1b}[201~"
+ right: "\u{1b}[200~Fix: title[201~rm -rf ~\nnext\tline\u{1b}[201~"
+FAILED
+    automations::tests::t605_a_reused_sessions_prompt_cannot_end_its_paste_early
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2542 filtered out; finished in 0.21s
+===== before the fix: vitest src/terminal/paste.test.ts
+   × a typed prompt cannot end its bracketed paste early or press Enter 7ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  src/terminal/paste.test.ts > a typed prompt cannot end its bracketed paste early or press Enter
+AssertionError: expected '\u001b[200~Fix: title\u001b[201~\rrm …' to be '\u001b[200~Fix: title[201~rm -rf ~\nn…' // Object.is equality
+- Expected
++ Received
+      Tests  1 failed | 13 passed (14)
+
+AFTER:
+===== after the fix: t605_a_reused
+test automations::tests::t605_a_reused_sessions_prompt_cannot_end_its_paste_early ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2542 filtered out; finished in 0.00s
+===== after the fix: vitest src/terminal/paste.test.ts
+      Tests  14 passed (14)

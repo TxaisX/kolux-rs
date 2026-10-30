@@ -1,7 +1,7 @@
 // TERM-068: a paste lands only in the pane whose text area received it, and a paste made while the
 // opening prompt is still owed waits for it (T-010-fix). Node's EventTarget stands in for the text areas.
 import { expect, test } from "vitest";
-import { attachPaste, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT, needsAsk, prepareForTerminal } from "./paste";
+import { attachPaste, bracketed, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT, needsAsk, prepareForTerminal } from "./paste";
 
 const paste = (target: EventTarget, text: string) => {
   const e = Object.assign(new Event("paste", { cancelable: true }), { clipboardData: { getData: () => text } });
@@ -240,4 +240,10 @@ test("council D2 MERGE 47 FB2: a right-click paste goes through the same checks 
   p.paste("x\n");
   expect(got).toEqual(["x"]);
   p.detach();
+});
+
+// T-605 re-review of PR #15: an agent's typed prompt goes in as one bracketed paste with ESC and every
+// control character except line feed and tab dropped, so it cannot end the paste early.
+test("a typed prompt cannot end its bracketed paste early or press Enter", () => {
+  expect(bracketed("Fix: title\x1b[201~\rrm -rf ~\r\nnext\tline\x07\x9b2J")).toBe("\x1b[200~Fix: title[201~rm -rf ~\nnext\tline2J\x1b[201~");
 });

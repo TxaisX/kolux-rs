@@ -78,6 +78,11 @@ pub struct Base {
 }
 
 impl Base {
+    /// Whether the paths are Windows paths (a drive letter), where a backslash separates folders.
+    fn windows(&self) -> bool {
+        [&self.workspace, &self.cwd, &self.home].into_iter().flatten().chain(&self.temp).any(|p| p.as_bytes().get(1) == Some(&b':') && p.as_bytes()[0].is_ascii_alphabetic())
+    }
+
     /// From Claude's hook `cwd` (the folder its session began in, which is the worktree folder
     /// when a Kolux pane started it) and this process's environment.
     pub fn from_env(cwd: Option<&str>) -> Base {
@@ -91,7 +96,38 @@ impl Base {
 // SAFE-013: a recursive delete that reaches outside the workspace, or whose target is unknown.
 // Each reading's chain is walked in order so an earlier cd, pushd or Set-Location shifts the base.
 fn recursive_delete(c: &Read, base: &Base) -> bool {
-    c.chains.iter().any(|chain| deletes_outside(chain.iter().map(Seg::program_words), base))
+    // On a Windows base a backslash is a folder separator, so the `Bash` reading's paths are not
+    // judged as written (`C:\Users` would read `C:Users`): it is paired word for word with `Shell`,
+    // taking the program, wrappers and options from `Bash` (so `r\m -\rf` is `rm -rf`) and every
+    // other word from `Shell`. Anywhere else both readings are judged in full, so a delete runs only
+    // when each reading of it is safe. Unpaired chains are judged in full too.
+    let windows = base.windows();
+    let paired = windows.then(|| pair(&c.chains[1], &c.chains[2])).flatten();
+    c.chains.iter().enumerate().any(|(i, chain)| {
+        if i == 2 && paired.is_some() {
+            return false;
+        }
+        deletes_outside(chain.iter().map(Seg::program_words), base)
+    }) || paired.is_some_and(|chain| deletes_outside(chain.iter().map(Seg::program_words), base))
+}
+
+/// The `Shell` and `Bash` chains word for word (see `recursive_delete`), or None when they do not
+/// line up (a different count of commands or words, or the program at a different place).
+fn pair(shell: &[Seg], bash: &[Seg]) -> Option<Vec<Seg>> {
+    if shell.len() != bash.len() {
+        return None;
+    }
+    shell
+        .iter()
+        .zip(bash)
+        .map(|(s, b)| {
+            if s.words.len() != b.words.len() || s.at != b.at {
+                return None;
+            }
+            let words = s.words.iter().zip(&b.words).enumerate().map(|(k, (sw, bw))| if sw == bw || k <= s.at || bw.starts_with('-') { bw.clone() } else { sw.clone() }).collect();
+            Some(Seg { words, at: s.at })
+        })
+        .collect()
 }
 
 fn deletes_outside<'a>(chain: impl Iterator<Item = &'a [String]>, base: &Base) -> bool {
@@ -285,13 +321,16 @@ fn words(s: &str) -> Vec<String> {
 
 /// How a command's text is read (T-604, R03-safety-accounts.1). `Plain` reads it as written
 /// (SAFE-014). `Shell` reads it as a shell would (`shell_text`): comments gone, escaped quotes and
-/// the quotes of heredoc and here-string bodies plain text, continued lines joined. `Blind`
+/// the quotes of heredoc and here-string bodies plain text, continued lines joined, every other
+/// backslash kept (a Windows path's separator). `Bash` is the same with a backslash before an
+/// ordinary character dropped, as bash does (`g\it` is `git`); every word is read both ways. `Blind`
 /// ignores quotes; it is read only when one of the other two ended inside a quote that never
 /// closed. A rule asks when any reading trips it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reading {
     Plain,
     Shell,
+    Bash,
     Blind,
 }
 
@@ -337,7 +376,13 @@ fn chains(command: &str) -> Vec<Vec<Seg>> {
         chain
     };
     let mut open = false;
-    let mut out = vec![read(Reading::Plain, &mut open), read(Reading::Shell, &mut open)];
+    // The `Bash` reading differs from `Shell` only where a backslash is: in the text, or in what a
+    // PowerShell encoded command decodes to. Without either it would be `Shell` again, so it is empty.
+    let bash = command.contains('\\') || {
+        let lower = command.to_ascii_lowercase();
+        lower.contains("powershell") || lower.contains("pwsh")
+    };
+    let mut out = vec![read(Reading::Plain, &mut open), read(Reading::Shell, &mut open), if bash { read(Reading::Bash, &mut open) } else { Vec::new() }];
     if open {
         out.push(read(Reading::Blind, &mut open));
     }
@@ -350,8 +395,8 @@ fn collect(text: &str, depth: usize, r: Reading, out: &mut Vec<Seg>, open: &mut 
     }
     let shell;
     let text = match r {
-        Reading::Shell => {
-            shell = shell_text(text);
+        Reading::Shell | Reading::Bash => {
+            shell = shell_text(text, r == Reading::Bash);
             shell.as_str()
         }
         _ => text,
@@ -383,15 +428,12 @@ fn collect(text: &str, depth: usize, r: Reading, out: &mut Vec<Seg>, open: &mut 
 /// every quote of a heredoc or PowerShell here-string body and of its closing mark, becomes `_`,
 /// so none can open a quote that swallows the rest of the command. Bodies stay where they are and
 /// are still read line by line, since a heredoc may feed a shell.
-fn shell_text(text: &str) -> String {
+fn shell_text(text: &str, unescape: bool) -> String {
     let b = text.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(b.len());
     let mut quote: Option<u8> = None;
     // Heredocs opened on the current line: each delimiter, and whether tabs may lead its closing line (`<<-`).
     let mut pending: Vec<(Vec<u8>, bool)> = Vec::new();
-    // Where the current word began, and whether it reads as a Windows path so far (a `:` or `%`
-    // in it, as in `C:\..` or `$env:TEMP\..` or `%TEMP%\..`): its backslashes are kept.
-    let (mut word_from, mut windows_word) = (0, false);
     let mut i = 0;
     while i < b.len() {
         let (c, next) = (b[i], b.get(i + 1).copied());
@@ -415,11 +457,6 @@ fn shell_text(text: &str) -> String {
                 out.push(c);
             }
             None => {
-                if c.is_ascii_whitespace() || b";&|()".contains(&c) {
-                    (word_from, windows_word) = (i + 1, false);
-                } else if c == b':' || c == b'%' {
-                    windows_word = true;
-                }
                 let continued = matches!(c, b'\\' | b'`') && (next == Some(b'\n') || (next == Some(b'\r') && b.get(i + 2) == Some(&b'\n')));
                 if continued {
                     // Bash joins `\` + line break to nothing (`--ha\<LF>rd` is `--hard`);
@@ -430,12 +467,10 @@ fn shell_text(text: &str) -> String {
                     i += if next == Some(b'\r') { 3 } else { 2 };
                     continue;
                 }
-                windows_word |= c == b'\\' && matches!(&b[word_from..i], b"." | b".." | b"~");
-                let path_like = windows_word;
-                if c == b'\\' && !path_like && next.is_some_and(|n| !b"'\"`\\;&|()<>$#*?[~ \t\r\n".contains(&n)) {
-                    // Bash drops a backslash before an ordinary character: `g\it` is `git`,
-                    // `--forc\e` is `--force`. One before a quote, a shell mark or a wildcard stays
-                    // below, and so do those of a word read as a Windows path (`C:\Users`, `.\build`).
+                if unescape && c == b'\\' && next.is_some_and(|n| !b"'\"`\\;&|()<>$#*?[~ \t\r\n".contains(&n)) {
+                    // The `Bash` reading: a backslash before an ordinary character is dropped (`g\it`
+                    // is `git`, `--forc\e` is `--force`, `\.\.` is `..`). One before a quote, a shell
+                    // mark or a wildcard stays below, so the words split exactly as in `Shell`.
                     i += 1;
                     continue;
                 }
@@ -560,7 +595,7 @@ fn substitutions(text: &str, r: Reading) -> (String, Vec<String>) {
     while i < c.len() {
         if c[i] == '\'' && r != Reading::Blind && !double {
             single = !single;
-        } else if c[i] == '"' && r == Reading::Shell && !single {
+        } else if c[i] == '"' && matches!(r, Reading::Shell | Reading::Bash) && !single {
             double = !double;
         } else if !single && c[i] == '$' && c.get(i + 1) == Some(&'(') {
             let mut depth = 0;
@@ -2678,6 +2713,54 @@ mod tests {
             }
         }
         for c in ["git -c alias.st=status st", "git -c alias.p='push -f' status", "git push --follow-tags origin main", "env -S 'git status'", "echo \"${IFS}\"; git status"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 re-review of PR #15: every word is read both with its backslashes kept and with them
+    /// dropped by bash's rules, and a rule asks when either reading trips it. A `:` earlier in a word,
+    /// a backtick or `$(` cannot make a backslash count as a Windows separator, and `\.\.` cannot
+    /// stop `..` from leaving the temp folder. On a Windows base a backslash in a path is still a
+    /// separator, while the program and its options are read the bash way too.
+    #[test]
+    fn t604r6_each_word_is_read_with_and_without_its_backslashes() {
+        let mut missed: Vec<String> = Vec::new();
+        for (c, id) in [
+            ("git push -f origin HEAD:ma\\in", "force-push"),
+            ("git push -f origin :ma\\in", "force-push"),
+            ("git push -f origin +HEAD:ma\\in", "force-push"),
+            ("echo C:`g\\it reset --hard`", "discard"),
+            ("echo C:$(g\\it reset --hard)", "discard"),
+            ("echo %X%`g\\it push --forc\\e origin main`", "force-push"),
+            ("mkdir /tmp/a:; rm -rf /tmp/a:/\\.\\./\\.\\.$HOME", "delete"),
+            ("mkdir /tmp/a:; rm -rf /tmp/a:/\\.\\./\\.\\./home/me", "delete"),
+            ("rm -rf /tmp/\\.\\./home/me", "delete"),
+        ] {
+            if hit(c) != Some(id) {
+                missed.push(format!("should ask ({id}): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        let win = Base {
+            workspace: Some("C:\\Users\\me\\app".into()),
+            cwd: Some("C:\\Users\\me\\app".into()),
+            home: Some("C:\\Users\\me".into()),
+            temp: vec!["C:\\Users\\me\\AppData\\Local\\Temp".into()],
+        };
+        let w = |c: &str| check(c, &win, &json!({})).map(|r| r.id);
+        for c in ["r\\m -rf ~", "rm -\\rf ~", "r\\m -r C:\\Users\\me\\Documents", "rd /s /q C:\\Users\\me\\AppData\\Local\\Temp\\..\\..\\Roaming"] {
+            if w(c) != Some("delete") {
+                missed.push(format!("should ask on Windows (delete): {c:?}, got {:?}", w(c)));
+            }
+        }
+        for c in ["rd /s /q C:\\Users\\me\\AppData\\Local\\Temp\\other", "rm -rf C:\\Users\\me\\app\\build", "del /s /q dist\\*.o", "Remove-Item -Recurse -Force .\\build\\out"] {
+            if w(c).is_some() {
+                missed.push(format!("should run on Windows: {c:?}, got {:?}", w(c)));
+            }
+        }
+        for c in ["rm -rf /tmp/build", "rm -rf ./build\\ out"] {
             if hit(c).is_some() {
                 missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
             }

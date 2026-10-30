@@ -388,7 +388,7 @@ pub struct Delivery {
 /// A prompt as it may go inside a bracketed paste: ESC and every other control character (C0, DEL
 /// and C1) dropped except line feed and tab, so text cannot close the paste early (`ESC[201~`),
 /// press Enter with a carriage return, or drive the terminal.
-fn paste_safe(t: &str) -> String {
+pub(crate) fn paste_safe(t: &str) -> String {
     t.chars().filter(|&c| c == '\n' || c == '\t' || !c.is_control()).collect()
 }
 

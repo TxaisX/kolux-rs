@@ -362,3 +362,44 @@ Optimized 1 MB timing after the fix (probe, opt-level 3): slowest heredoc_table 
 Full Linux `cargo test --tests --no-fail-fast -- --test-threads=3`, lib: test result: FAILED. 2502 passed; 36 failed; 3 ignored; 0 measured; 0 filtered out; finished in 240.31s
 Every failure is on the 45-name Linux baseline (43 failed, no new ones); two baseline tests now pass
 (protected safe013_recursive_deletes_..., diag app041_...). windows-gnu cargo check and clippy -D warnings: Finished.
+
+RE-REVIEW OF PR #15 at 4e22f05d (2026-10-30, integrator): every word read both ways
+The Windows-path rule of the first review fix (keep a word's backslashes after a `:` or `%`, or after `.\`)
+is gone. In its place a fourth reading, `Bash`, reads the text with a backslash before an ordinary
+character dropped by bash's rules; `Shell` keeps every backslash. Every rule runs on every reading and
+asks when any reading trips it. The delete rule: on a non-Windows base both readings are judged in full,
+so a delete runs only when each reading of it is safe (temp or inside the workspace). On a Windows base
+(a drive letter in the workspace, folder, home or temp) a backslash is a folder separator: `Bash` is paired
+word for word with `Shell`, the program, its wrappers and its options from `Bash` (`r\m -\rf ~` asks) and
+every other word from `Shell` (`rd /s /q C:\...\Temp\other` still runs); chains that do not line up are judged
+in full. There is no per-word state in shell_text any more, so a backtick or `$(` needs no new-word rule.
+The `Bash` reading is built only when the text has a backslash or names powershell/pwsh (an encoded command
+may decode to one); otherwise it would equal `Shell`.
+
+BEFORE (4e22f05d with only the new test): cases 1 (all three) and the `/home/me` form of case 3 slipped
+through; case 2 (backtick or `$(` after `C:`) and case 3 as written (`..$HOME`) already asked, because a
+substitution's inner command is re-read from a fresh word and a `$` target is unknown. They stay in the
+test as guards.
+===== before the fix: t604r6
+test protected::tests::t604r6_each_word_is_read_with_and_without_its_backslashes ... 
+thread 'protected::tests::t604r6_each_word_is_read_with_and_without_its_backslashes' (10997) panicked at src/protected.rs:2733:9:
+[
+    "should ask (force-push): \"git push -f origin HEAD:ma\\\\in\", got None",
+    "should ask (force-push): \"git push -f origin :ma\\\\in\", got None",
+    "should ask (force-push): \"git push -f origin +HEAD:ma\\\\in\", got None",
+    "should ask (delete): \"mkdir /tmp/a:; rm -rf /tmp/a:/\\\\.\\\\./\\\\.\\\\./home/me\", got None",
+]
+FAILED
+    protected::tests::t604r6_each_word_is_read_with_and_without_its_backslashes
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2542 filtered out; finished in 0.21s
+
+AFTER:
+===== after the fix: t604r6
+test protected::tests::t604r6_each_word_is_read_with_and_without_its_backslashes ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2542 filtered out; finished in 0.00s
+===== cargo test --lib -- protected sendonce automations --test-threads=3
+test result: ok. 142 passed; 0 failed; 1 ignored; 0 measured; 2400 filtered out; finished in 138.15s
+Full Linux cargo test --tests, lib: test result: FAILED. 2503 passed; 37 failed; 3 ignored; 0 measured; 0 filtered out; finished in 253.56s; every failure is on the 45-name baseline, none new.
+windows-gnu cargo check and clippy -D warnings: Finished. Optimized 1 MB timing (probe): slowest
+heredoc_table 423 and 475 ms in two runs (689 ms when the Bash reading was built for every command; a 1 MB
+command full of backslashes still pays that).

@@ -212,6 +212,7 @@ import { deliverPrompt, startWatch } from "./launch/startWatch";
 import { answered as cardAnswered, hearStates, hearingNow, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
 import { editChatBox } from "./chat/menuEdit";
 import PlanSheet from "./terminal/PlanSheet";
+import { bracketed } from "./terminal/paste";
 import EditMenuHost from "./editmenu/EditMenuHost";
 import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
 
@@ -2250,7 +2251,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         );
       },
       asking: () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission",
-      type: (text) => write("\x1b[200~" + text + "\x1b[201~"),
+      type: (text) => write(bracketed(text)),
       enter: () => write("\r"),
       alive: () => ptys.current[p.key] !== undefined && panesRef.current.some((x) => x.key === p.key),
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
