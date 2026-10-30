@@ -1000,10 +1000,9 @@ impl Terminals {
             // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
             // registered system-wide, and it is told which app folder to call. An installed copy keeps
             // its CLI in the bin folder of the install (CLI-006); a development build runs kolux-dev
-            // from its own folder. ponytail: the Linux `kolux` launcher folder lands with that build.
-            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
-                let bin = dir.join("bin");
-                let dir = if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() { bin } else { dir };
+            // from its own folder (T-593: the rule registration and the setup guide share).
+            // ponytail: the Linux `kolux` launcher folder lands with that build.
+            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(crate::cli::cli_register::cli_dir)) {
                 // T-182 (APP-020): a tool installed after the app started is on the stored Path, not
                 // the process's; the pane gets both, the process's entries first.
                 let path = cli_first(&dir, Some(crate::lifecycle::fresh_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string))));

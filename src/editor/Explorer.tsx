@@ -22,7 +22,8 @@ import FileIcon from "./FileIcon";
 import { fileTargetsOf, loadTargets, openFileIn, openIn, type App, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
 import "./explorerBar.css";
-import { EXPAND_CAP, insideDir, menuLabel, nextWave, withExtraMenu, type AnyMenuId } from "./explorerBar";
+import { EXPAND_CAP, insideDir, menuLabel, nextWave, openRow, withExtraMenu, type AnyMenuId, type OpenFile } from "./explorerBar";
+import { isLog } from "./logFollow";
 import { currentSeed } from "./searchSeed";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
@@ -115,7 +116,8 @@ type Props = {
   root: string;
   hidden: boolean;
   focusAsk: number;
-  onOpen: (path: string) => void;
+  /** Opens a file; EDIT-026 (T-317): the row menu's Follow log asks for a followed tab (App's openFile). */
+  onOpen: OpenFile;
   onClose: () => void;
   /** EDIT-035: opens a terminal in a folder (the "Open in terminal" row item; without it the item is left out). */
   onOpenTerminal?: (dir: string) => void;
@@ -670,7 +672,8 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
     const folder = dir ? path : parentOf(path);
     switch (id) {
       case "view":
-        return onOpen(path);
+      case "follow":
+        return openRow(id, path, onOpen);
       case "collapse":
         return fold(path);
       case "copyFile":
@@ -752,8 +755,8 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
         <>
           <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} />
           <div className="menu row-menu" role="menu" aria-label={`Actions for ${baseName(menu.path)}`} style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - 340) }} onKeyDown={(e) => e.key === "Escape" && setMenu(null)}>
-            {withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: menu.dir && menu.path !== root && projectDrop.add !== null }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1 }).map((id) => (
-              <button key={id} role="menuitem" className="menu-item" autoFocus={id === withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: false }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1 })[0]} onClick={() => runMenu(id, menu.path, menu.dir)}>
+            {withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: menu.dir && menu.path !== root && projectDrop.add !== null }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1, log: isLog(menu.path) }).map((id) => (
+              <button key={id} role="menuitem" className="menu-item" autoFocus={id === withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: false }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1, log: isLog(menu.path) })[0]} onClick={() => runMenu(id, menu.path, menu.dir)}>
                 {menuLabel(id)}
               </button>
             ))}

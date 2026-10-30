@@ -22,8 +22,13 @@ export interface CardState {
   /** The card is on screen (expanded or collapsed). */
   shown: boolean;
   collapsed: boolean;
-  /** The current flow started with the user's own click. */
+  /** T-600: the user asked for what the card shows and still holds it: their Check for updates, the
+   *  status-bar item or the card's expand. Only then does a bare Enter run Restart. Collapse, dismiss,
+   *  fading and a quiet check clear it; a quiet check and a download error never set it. */
   requested: boolean;
+  /** The current flow started with the user's own check: its changes of phase reopen the card, also
+   *  after a collapse (APP-026). A quiet check starts a flow of its own, which never does. */
+  flow: boolean;
   /** Release notes of the offered version; cleared when a new check begins. */
   notes: string[];
   dismissed: string | null;
@@ -56,7 +61,7 @@ export type Action =
   | { type: "hydrate"; dismissed: string | null; tipDone: boolean };
 
 export function initialCard(dismissed: string | null, tipDone: boolean): CardState {
-  return { phase: { kind: "idle" }, shown: false, collapsed: false, requested: false, notes: [], dismissed, tipDone, tipNow: false, popup: null, popupSeen: [] };
+  return { phase: { kind: "idle" }, shown: false, collapsed: false, requested: false, flow: false, notes: [], dismissed, tipDone, tipNow: false, popup: null, popupSeen: [] };
 }
 
 export function nextStep(offline: boolean, stage: "check" | "download"): string {
@@ -105,43 +110,43 @@ export function versionOf(p: Phase): string | null {
 // dismissed this very version.
 function reopen(s: CardState, phase: Phase): CardState {
   const v = versionOf(phase);
-  const show = s.requested && !(v !== null && v === s.dismissed);
+  const show = s.flow && !(v !== null && v === s.dismissed);
   return { ...s, phase, shown: s.shown || show, collapsed: show ? false : s.collapsed };
 }
+
+/** The user's own check, or a quiet one they took over: the card comes up, expanded, in their hands. */
+const theirs = { requested: true, flow: true, shown: true, collapsed: false };
 
 export function cardReducer(s: CardState, a: Action): CardState {
   switch (a.type) {
     case "checkStart": {
-      // A request while a quiet check runs takes that check over; either way the notes reset.
-      const base = { ...s, notes: [] as string[] };
-      if (!a.requested) return s.phase.kind === "ready" ? s : { ...base, phase: s.shown ? { kind: "checking" } : s.phase };
-      return { ...base, requested: true, shown: true, collapsed: false, tipNow: false, phase: { kind: "checking" } };
+      // T-600: a quiet check is a flow of its own and leaves the card as it is (APP-026).
+      if (!a.requested) return { ...s, requested: false, flow: false };
+      // A request while a quiet check runs takes that check over; the notes reset.
+      return { ...s, ...theirs, notes: [], tipNow: false, phase: { kind: "checking" } };
     }
     case "checkDone": {
-      const requested = s.requested || a.requested;
-      if (!a.found) {
-        if (!requested) return { ...s, requested: false };
-        return { ...s, requested, shown: true, collapsed: false, phase: { kind: "upToDate" } };
-      }
+      // T-600: only a check the user asked for (the schedule says which) shows or reopens the card.
+      const asked = a.requested;
+      if (!a.found) return asked ? { ...s, ...theirs, phase: { kind: "upToDate" } } : s;
       const info = a.found;
       // A ready download of the same version stays ready.
       if (s.phase.kind === "ready" && s.phase.info.version === info.version) {
-        return requested ? { ...s, requested, shown: true, collapsed: false, notes: info.notes } : s;
+        return asked ? { ...s, ...theirs, notes: info.notes } : s;
       }
       const tipNow = s.tipNow || !s.tipDone;
-      const next: CardState = { ...s, requested, notes: info.notes, tipNow };
-      return requested ? { ...next, shown: true, collapsed: false, phase: { kind: "available", info } } : { ...next, phase: { kind: "available", info } };
+      const next: CardState = { ...s, notes: info.notes, tipNow, phase: { kind: "available", info } };
+      return asked ? { ...next, ...theirs } : next;
     }
     case "checkFailed": {
-      if (!(s.requested || a.requested)) return s;
+      // APP-024: a background check never shows an error.
+      if (!a.requested) return s;
       // T-199 (APP-031): a half-published feed is explained calmly; a protocol error offers compatibility mode.
       const special = problemPhase(a.message, null);
-      if (special) return { ...s, requested: true, shown: true, collapsed: false, phase: special };
+      if (special) return { ...s, ...theirs, phase: special };
       return {
         ...s,
-        requested: true,
-        shown: true,
-        collapsed: false,
+        ...theirs,
         phase: { kind: "error", message: a.next ? a.message : plainError(a.message), next: a.next ?? nextStep(a.offline, "check"), info: null, retry: "check" },
       };
     }
@@ -166,16 +171,15 @@ export function cardReducer(s: CardState, a: Action): CardState {
       if (a.message.startsWith(REFUSED_MARK)) {
         const message = a.message.slice(REFUSED_MARK.length);
         const next = "There is no way to install this download. If you did not expect this, get Kolux RS from its releases page.";
-        return { ...s, requested: true, shown: true, collapsed: false, popup: null, phase: { kind: "error", message, next, info: a.info, retry: "none", security: true } };
+        return { ...s, shown: true, collapsed: false, popup: null, phase: { kind: "error", message, next, info: a.info, retry: "none", security: true } };
       }
       // T-199 (APP-031): an installer not uploaded yet says nothing after a quiet check.
       const special = problemPhase(a.message, a.info);
-      if (special?.kind === "error" && special.calm && !s.requested) return { ...s, phase: { kind: "idle" } };
-      if (special) return { ...s, requested: true, shown: true, collapsed: false, phase: special };
-      // Download errors bring the card up even after a quiet check.
+      if (special?.kind === "error" && special.calm && !s.flow) return { ...s, phase: { kind: "idle" } };
+      // Download errors bring the card up even after a quiet check; T-600: they never put it in the user's hands.
+      if (special) return { ...s, shown: true, collapsed: false, phase: special };
       return {
         ...s,
-        requested: true,
         shown: true,
         collapsed: false,
         phase: { kind: "error", message: plainError(a.message), next: nextStep(a.offline, "download"), info: a.info, retry: "download" },
@@ -192,11 +196,12 @@ export function cardReducer(s: CardState, a: Action): CardState {
       return { ...s, popup: null, requested: true, shown: true, collapsed: false, phase: { kind: "error", message: a.message, next, info, retry: "restart" } };
     }
     case "faded":
-      return s.phase.kind === "upToDate" ? { ...s, shown: false, requested: false, phase: { kind: "idle" } } : s;
+      return s.phase.kind === "upToDate" ? { ...s, shown: false, requested: false, flow: false, phase: { kind: "idle" } } : s;
     case "collapse":
-      return s.shown ? { ...s, collapsed: true } : s;
+      // T-600: set aside, the card is no longer in the user's hands.
+      return s.shown ? { ...s, collapsed: true, requested: false } : s;
     case "expand":
-      return { ...s, collapsed: false };
+      return { ...s, collapsed: false, requested: true };
     case "dismiss": {
       const v = versionOf(s.phase);
       const keepFlow = s.phase.kind === "ready" || s.phase.kind === "downloading";
@@ -205,13 +210,14 @@ export function cardReducer(s: CardState, a: Action): CardState {
         shown: false,
         collapsed: false,
         requested: false,
+        flow: false,
         dismissed: v ?? s.dismissed,
         phase: keepFlow ? s.phase : s.phase.kind === "available" ? s.phase : { kind: "idle" },
       };
     }
     case "show":
       // VIEW-100: the status bar item brings the card back, expanded, while there is an update to show.
-      return s.phase.kind === "idle" ? s : { ...s, shown: true, collapsed: false };
+      return s.phase.kind === "idle" ? s : { ...s, shown: true, collapsed: false, requested: true };
     case "tipDismiss":
       return { ...s, tipDone: true, tipNow: false };
     case "popupClose":

@@ -417,9 +417,9 @@ fn guide_mark_in(store: &Store, list: &str, id: &str) -> Result<Guide, String> {
     Ok(g)
 }
 
-/// ONB-027 / ONB-028: whether this build's `kolux` launcher sits beside the app, and whether a
-/// terminal outside Kolux finds it (its folder is on PATH). Another program called kolux on PATH
-/// does not count.
+/// ONB-027 / ONB-028: whether this build's `kolux` launcher sits in its CLI folder (the install's
+/// bin folder, or beside the app in a development build), and whether a terminal outside Kolux
+/// finds it (that folder is on PATH). Another program called kolux on PATH does not count.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliStatus {
@@ -496,7 +496,9 @@ fn text_key(p: &std::path::Path) -> String {
 /// A PATH folder on another computer is never looked up (doing so signs in to it with the user's
 /// credentials); a folder spelled like the CLI's own counts without a lookup; the rest are asked
 /// through `same` at once, each on its own thread, under one deadline `wait` for the whole list.
-fn cli_status_in(dir: &std::path::Path, path: &std::ffi::OsStr, wait: std::time::Duration, same: fn(&std::path::Path, &std::path::Path) -> bool) -> CliStatus {
+/// `app` is the app's folder; T-593: the CLI's folder is found from it by the rule registration uses.
+fn cli_status_in(app: &std::path::Path, path: &std::ffi::OsStr, wait: std::time::Duration, same: fn(&std::path::Path, &std::path::Path) -> bool) -> CliStatus {
+    let dir = &crate::cli::cli_register::cli_dir(app);
     let names: &[&str] = if cfg!(windows) { &["kolux.exe", "kolux.cmd"] } else { &["kolux"] };
     let installed = names.iter().any(|n| dir.join(n).is_file());
     if !installed {
@@ -636,6 +638,24 @@ mod tests {
         assert_eq!(check(&dir, &path(&[&other])), CliStatus { installed: true, on_path: false }, "installed but missing from PATH");
         let spelled = std::path::PathBuf::from(format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR));
         assert_eq!(check(&dir, &path(&[&other, &spelled])), CliStatus { installed: true, on_path: true });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// T-593 (CLI-007, R01-cli.1): an installed copy keeps kolux.exe and kolux.cmd in the bin folder
+    /// beside the app (scripts/release.mjs, DT-R27); the guide's CLI step looks there, so it can complete.
+    #[test]
+    fn cli007_an_installed_copy_finds_its_cli_in_the_bin_folder() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-onb-bin-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(dir.join(if cfg!(windows) { "kolux-rs.exe" } else { "kolux-rs" }), "").unwrap();
+        for f in [if cfg!(windows) { "kolux.exe" } else { "kolux" }, "kolux.cmd"] {
+            std::fs::write(bin.join(f), "").unwrap();
+        }
+        let path = std::env::join_paths([&bin]).unwrap();
+        assert_eq!(cli_status_in(&dir, &path, PATH_ENTRY_WAIT, same_dir), CliStatus { installed: true, on_path: true });
+        let path = std::env::join_paths([&dir]).unwrap();
+        assert_eq!(cli_status_in(&dir, &path, PATH_ENTRY_WAIT, same_dir), CliStatus { installed: true, on_path: false }, "the app's own folder is not the CLI's");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

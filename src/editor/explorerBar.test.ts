@@ -1,7 +1,9 @@
 import { expect, test } from "vitest";
-import { EXPAND_CAP, insideDir, menuLabel, nextWave, withExtraMenu } from "./explorerBar";
+import { EXPAND_CAP, insideDir, menuLabel, nextWave, openRow, withExtraMenu } from "./explorerBar";
 import { rowMenu } from "./explorerView";
+import { isLog } from "./logFollow";
 import type { Node } from "./Explorer";
+import appSource from "../App.tsx?raw";
 
 const W = "C:\\w";
 const d = (name: string, parent = W): Node => ({ name, path: `${parent}\\${name}`, kind: "dir" });
@@ -42,4 +44,29 @@ test("VIEW-060: an open folder offers Collapse first, a single file offers Copy 
   expect(menuLabel("collapse")).toBe("Collapse");
   expect(menuLabel("copyFile")).toBe("Copy as file");
   expect(menuLabel("rename")).toBe("Rename");
+});
+
+test("EDIT-026 (T-317): a log file's row menu offers Follow log right after View file; other files and folders do not", () => {
+  const file = rowMenu({ isDir: false, hasTerminal: true, canProject: false });
+  expect(withExtraMenu(file, { isDir: false, isOpen: false, single: true, log: true }).slice(0, 2)).toEqual(["view", "follow"]);
+  expect(withExtraMenu(file, { isDir: false, isOpen: false, single: false, log: true }).slice(0, 2)).toEqual(["view", "follow"]);
+  expect(withExtraMenu(file, { isDir: false, isOpen: false, single: true, log: false })).not.toContain("follow");
+  const folder = rowMenu({ isDir: true, hasTerminal: true, canProject: false });
+  expect(withExtraMenu(folder, { isDir: true, isOpen: false, single: true, log: true })).not.toContain("follow");
+  expect(menuLabel("follow")).toBe("Follow log");
+});
+
+test("EDIT-026 (T-317): Follow log opens the file as a followed tab; View file opens a plain one; only .log names count", () => {
+  const asked: unknown[][] = [];
+  openRow("follow", "C:\\w\\logs\\agent.log", (...a) => void asked.push(a));
+  openRow("view", "C:\\w\\logs\\agent.log", (...a) => void asked.push(a));
+  expect(asked).toEqual([
+    ["C:\\w\\logs\\agent.log", undefined, undefined, true],
+    ["C:\\w\\logs\\agent.log", undefined, undefined, false],
+  ]);
+  expect([isLog("C:\\w\\logs\\Agent.LOG"), isLog("/w/build.log"), isLog("/w/a.ts"), isLog("/w/catalog"), isLog("/w/app.log.1")]).toEqual([true, true, false, false, false]);
+});
+
+test("EDIT-026 (T-317): App gives the Explorer its own openFile, so the follow flag is not dropped on the way to the tab", () => {
+  expect(appSource.replace(/\r/g, "")).toMatch(/<Explorer\b[^>]*\bonOpen=\{openFile\}/);
 });

@@ -7,7 +7,16 @@ import { createDraft } from "./draft";
 export function useDraft(value: string, save: (text: string) => Promise<unknown>) {
   const latest = useRef(save);
   latest.current = save;
-  const [draft] = useState(() => createDraft(value, { save: (t) => latest.current(t) }));
+  // T-598: a settings save that failed settles false (useSettings shows why on the page); the draft
+  // takes that as the failure it is, so the typed text stays in the field for another try.
+  const [draft] = useState(() =>
+    createDraft(value, {
+      save: (t) =>
+        latest.current(t).then((ok) => {
+          if (ok === false) throw new Error("not saved");
+        }),
+    }),
+  );
   const state = useSyncExternalStore(draft.subscribe, draft.state, draft.state);
   useEffect(() => void draft.outside(value), [draft, value]);
   useEffect(() => {

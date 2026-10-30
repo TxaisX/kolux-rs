@@ -3,7 +3,7 @@
 ## Provenance
 
 Txais confirmed on 2026-10-08 that he made this icon; it carries over as-is. Recreated as vector from the on-screen rendering only.
-No file of the old app was read: the only inputs were pixels Windows drew on screen (the taskbar) and an earlier PrintWindow capture of the Kolux window (`../reference/top-bar-left.png`).
+No file of the old app was read: the only inputs were pixels Windows drew on screen (the taskbar) and an earlier PrintWindow capture of the Kolux window's top bar (removed 2026-10-30 at Txais's request; the measurements above stay).
 
 ## What it looks like
 
@@ -28,11 +28,13 @@ No file of the old app was read: the only inputs were pixels Windows drew on scr
 
 ## What was captured, from where
 
+The capture and compare PNGs named on this page are not in this repository (checked 2026-10-30, when Txais asked for old-app material to be removed); only the SVGs and the numbers below are kept.
+
 | File | Source | Size |
 |---|---|---|
 | `capture-taskbar.png` | Screen copy of the whole primary taskbar (window class `Shell_TrayWnd`, 1920 x 48). Nothing clicked, no focus change. | 1920 x 48 |
 | `capture-taskbar-button.png` (+ `@8x`) | Crop of the button named "Kolux - 1 running window" (AppID `com.txais.kolux`, x 1183 to 1227). Identified by reading the taskbar buttons' accessible names through UI Automation. | 44 x 48 button, icon 24 x 24 |
-| `capture-topbar-mark.png` (+ `@8x`), `capture-topbar-left@8x.png` | Crop of the six-spoke mark from the earlier window capture `../reference/top-bar-left.png`. | 24 x 24, mark about 14 px |
+| `capture-topbar-mark.png` (+ `@8x`), `capture-topbar-left@8x.png` | Crop of the six-spoke mark from the earlier window capture of the top bar (removed 2026-10-30 at Txais's request; the measurements above stay). | 24 x 24, mark about 14 px |
 
 The largest size Windows shows on screen without touching the app is **24 x 24 px** (the taskbar at 100% scaling). Comparing pipelines showed the taskbar icon matches best as a 32 px icon frame scaled down to 24 px: the error was 14.2, against 18.6 for a direct 24 px render. So Windows is downscaling a 32 px frame, which is why the capture looks soft.
 
