@@ -1,22 +1,28 @@
-# APP-060: CI on main runs the test suite in four shards and reports one result. It can also be
-# started by hand for a branch that is pushed but not merged yet (Run workflow, pick the branch).
+# APP-060: CI. The front-end suite runs in four shards on Linux (1x minutes), and the
+# Windows-only work (Rust, PTY, the installer) runs on windows-latest. The installer is
+# built on demand or on a tag, not on every push, because a release build costs more
+# minutes than the rest of the pipeline together.
 name: CI
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: false
+  # A superseded pull request run is wasted minutes; a main run is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The job id stays `test` because scripts/workflow-check.mjs guards the four-shard
+  # promise (APP-060) against it. Only the runner changed: Linux bills at 1x.
   test:
     name: Shard ${{ matrix.shard }} of 4
-    runs-on: windows-latest
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -31,58 +37,103 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Every shard runs its quarter of the front-end tests.
       - name: Front-end tests
         run: pnpm exec vitest run --shard=${{ matrix.shard }}/4
-      # The Rust side and the checks are spread over the shards so each is about as long.
-      - name: Rust toolchain
-        if: matrix.shard <= 3
-        uses: dtolnay/rust-toolchain@stable
+
+  checks:
+    name: Types, licences, plan and workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc
+      - run: node scripts/license-check.mjs
+      - run: node scripts/plan-check.mjs
+      - run: node scripts/workflow-check.mjs
+
+  rust:
+    name: Rust tests, lints and dependencies
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - run: pnpm install --frozen-lockfile
       - name: Rust tests
-        if: matrix.shard == 1
         working-directory: src-tauri
         run: cargo test
       - name: Rust lints
-        if: matrix.shard == 2
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
-      # T-541: all four cargo-deny checks (advisories, bans, licences, sources), not licences alone.
-      # Installed as a binary because the cargo-deny Docker action cannot run on a Windows runner.
       - name: Install cargo-deny
-        if: matrix.shard == 3
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
-      - name: Dependency check (Rust advisories, bans, licences, sources)
-        if: matrix.shard == 3
+      - name: Dependency check
         working-directory: src-tauri
         run: cargo deny check
-      # T-541: the clean-room firewall over the spec fails on any hit not in scripts/firewall-baseline.txt.
-      - name: Spec firewall (new hits only)
-        if: matrix.shard == 3
+      - name: Spec firewall
         shell: pwsh
         run: ./scripts/firewall-check.ps1 -Baseline
-      - name: Types, licences, plan and workflows
-        if: matrix.shard == 4
-        run: |
-          pnpm exec tsc
-          node scripts/license-check.mjs
-          node scripts/plan-check.mjs
-          node scripts/workflow-check.mjs
+
+  # Not on every push: a cold Tauri release build is the most expensive job here.
+  # Run it by hand, or by pushing a v* tag when a release is actually being made.
+  bundle:
+    name: Installer (on demand)
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - name: Build the installer
+        run: pnpm exec tauri build --bundles nsis
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: kolux-rs-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
   result:
     name: CI result
-    needs: test
+    needs: [test, checks, rust, bundle]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      # Green only when all four shards passed.
-      - name: All four shards passed
+      - name: All required jobs passed
         run: |
-          if [ "${{ needs.test.result }}" != "success" ]; then
-            echo "One or more shards did not pass: ${{ needs.test.result }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.checks.result }}" != "success" ] || [ "${{ needs.rust.result }}" != "success" ]; then
+            echo "A required job did not pass: test=${{ needs.test.result }}, checks=${{ needs.checks.result }}, rust=${{ needs.rust.result }}" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "All four shards passed." >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ needs.bundle.result }}" = "failure" ] || [ "${{ needs.bundle.result }}" = "cancelled" ]; then
+            echo "The installer job did not pass: ${{ needs.bundle.result }}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "All required jobs passed (installer: ${{ needs.bundle.result }})." >> "$GITHUB_STEP_SUMMARY"
