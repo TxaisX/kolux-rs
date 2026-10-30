@@ -1,0 +1,21 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 0d542ce..176a0ba 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1559,11 +1559,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     return () => void off.then((f) => f()).catch(() => {});
+   }, []);
+   // PROJ-067: the tabs and layout are written down as they change, so they come back after a restart.
+-  // VIEW-107 (T-069-b): not before a real read of the settings landed (a start that timed out has
+-  // not seen the saved tabs, so writing its layout would drop them); a failed write is retried once,
+-  // then only the durable part is written.
++  // VIEW-107 (T-069-b): not before the saved tabs are back (`read`): a start that timed out has not put
++  // them back, so writing its layout would drop them, even once its own settings read lands (T-597:
++  // main.tsx draws the window again with them when the settings answer). A failed write is retried
++  // once, then only the durable part is written.
+   useEffect(() => {
+-    if (!read && !settingsRead) return;
++    if (!read) return;
+     const l = layoutOf(panes, activeTab, focused, activeDir, stacked, { pinned, colors: tabColors });
+     if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) === JSON.stringify(l)) return;
+     const next = { ...settingsRef.current, [LAYOUT_FIELD]: l };

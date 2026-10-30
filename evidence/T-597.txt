@@ -1,0 +1,68 @@
+T-597 · A slow start never wipes the saved tabs (F05-app-shell-launch.2; VIEW-107, PROJ-067), reliability lane, 2026-10-30
+
+Cause: when main.tsx's settings read lost the 1.5 s race, App started with no tabs and read=false. App's own
+settings read then landed and set settingsRead, which opened the layout-save guard (App.tsx:1566
+`if (!read && !settingsRead) return;`), but nothing ever put the saved tabs back (restoreLayout ran only in
+main.tsx). The first click changed the panes and the empty layout was written over the saved one.
+
+What changed:
+- src/main.tsx:37-69  start() keeps the settings read (`reading`) after the race. It draws App through draw(),
+  which keys App by `read`. When the race timed out, it waits on: if the settings answer, it applies the
+  terminal text (applyText) and runs settle() on them, then draws App again with read=true and the saved tabs.
+  A new key means a new App, so its state starts from the saved layout, as on a timely start. If the
+  settings never answer, the window stays as drawn (read=false).
+- src/main.tsx:71-105 settle(): the steps start() already ran on the settings, moved into one function so the
+  late answer gets the same ones: stamp the look on a first start, appearance, language, zoom, restoreLayout +
+  stillThere (path_kind) + terminal_prune_history + agent_start_line per agent tab in session order.
+  Side effect: after a slow start the saved language, zoom and terminal text now also follow the late answer;
+  before, they stayed at the defaults for the whole session.
+- src/App.tsx (integrator's file; evidence/reliability-App.patch, NOT committed): the layout-save guard is
+  `if (!read) return;`. App's own late settings read no longer opens it; writes start only in the App drawn
+  with the saved tabs back.
+
+Test added: src/main.slowStart.test.ts (main.tsx booted for real over mocked commands, with the real layout
+restore; App and react-dom mocked as in tower/entry.test.ts):
+  1. a slow start draws the window without the saved tabs, then draws it again with them once the settings answer
+  2. a slow start whose settings never answer stays as it was drawn: no saved tabs, read false     (guard)
+  3. a timely start draws once, with the saved tabs and read true                                  (guard)
+  4. App (evidence/reliability-App.patch): the layout effect writes nothing until the saved tabs are back,
+     even after its own settings read lands   (App source check, as skills/noticeMount.test.ts does; App
+     cannot be drawn in a test here)
+  Test 4 is red on lane/reliability until the integrator applies evidence/reliability-App.patch.
+
+--- before the fix: VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run --reporter=verbose src/main.slowStart.test.ts
+ × src/main.slowStart.test.ts > a slow start draws the window without the saved tabs, then draws it again with them once the settings answer 2677ms
+   → expected 1 to be 2 // Object.is equality
+ ✓ src/main.slowStart.test.ts > a slow start whose settings never answer stays as it was drawn: no saved tabs, read false 1542ms
+ ✓ src/main.slowStart.test.ts > a timely start draws once, with the saved tabs and read true 86ms
+ × src/main.slowStart.test.ts > App (evidence/reliability-App.patch): the layout effect writes nothing until the saved tabs are back, even after its own settings read lands 3ms
+   → expected 'useEffect(() => {\n    if (!read && !…' to match /^useEffect\(\(\) => \{\s*if \(!read\)…/
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+    if (!read && !settingsRead) return;
+ Test Files  1 failed (1)
+      Tests  2 failed | 2 passed (4)
+
+--- after the fix, with evidence/reliability-App.patch applied in the worktree:
+    VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run --reporter=verbose src/main.slowStart.test.ts src/tower/entry.test.ts src/shell/__cards__/VIEW-107.test.ts
+ ✓ src/tower/entry.test.ts > FIX-4 the window entry point > draws the Tower in the Tower window without evaluating the App module 327ms
+ ✓ src/tower/entry.test.ts > FIX-4 the window entry point > shows a message and the window when the App module fails to load 59ms
+ ✓ src/tower/entry.test.ts > FIX-4 the window entry point > leaves no unhandled rejection when the App module fails before it is awaited 75ms
+ ✓ src/tower/entry.test.ts > FIX-4 the window entry point > loads the App module in the main window 54ms
+ ✓ src/shell/__cards__/VIEW-107.test.ts > box 1: three tabs written down at quit come back as the same three tabs, in order, with the active one 3ms
+ ✓ src/shell/__cards__/VIEW-107.test.ts > box 2 (the question's content only; the close event is LIVE): unsaved editor files are listed and quitting says it loses them 1ms
+ ✓ src/main.slowStart.test.ts > a slow start draws the window without the saved tabs, then draws it again with them once the settings answer 1761ms
+ ✓ src/main.slowStart.test.ts > a slow start whose settings never answer stays as it was drawn: no saved tabs, read false 1546ms
+ ✓ src/main.slowStart.test.ts > a timely start draws once, with the saved tabs and read true 85ms
+ ✓ src/main.slowStart.test.ts > App (evidence/reliability-App.patch): the layout effect writes nothing until the saved tabs are back, even after its own settings read lands 2ms
+ Test Files  3 passed (3)
+      Tests  10 passed (10)
+--- flock /tmp/kolux-node.lock pnpm exec tsc, with the patch applied: exit 0 (no output)
+--- after `git checkout -- src/App.tsx` (the committed branch state): git apply --check evidence/reliability-App.patch -> applies
+    cleanly; tsc exit 0; src/main.slowStart.test.ts 3 passed, 1 failed (test 4, waiting for the patch, as intended)
+
+Still needs a live Windows run: a start whose settings read takes over 1.5 s (for example a debug delay in
+get_settings). Expected: the window shows with no tabs, settings.json's savedLayout is untouched while it shows
+(click a workspace meanwhile), and the saved tabs come back with their agents resuming once the settings answer.
+Known edge: a tab opened during that wait closes when the saved tabs come back (it was never saved). Its terminal
+is killed when that App unmounts, which happens before the restored tab with the same pane key asks the terminal
+service for its terminal; a live run should confirm the restored tab does not reattach to it.
