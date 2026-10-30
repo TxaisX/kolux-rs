@@ -36,14 +36,21 @@ export function insideDir(p: string, dir: string): boolean {
   return at.startsWith(base + "\\") || at.startsWith(base + "/");
 }
 
-export type ExtraId = "collapse" | "copyFile";
+export type ExtraId = "collapse" | "copyFile" | "follow";
 export type AnyMenuId = MenuId | ExtraId;
-export const menuLabel = (id: AnyMenuId): string => (id === "collapse" ? "Collapse" : id === "copyFile" ? "Copy as file" : MENU_LABEL[id]);
+export const menuLabel = (id: AnyMenuId): string => (id === "collapse" ? "Collapse" : id === "copyFile" ? "Copy as file" : id === "follow" ? "Follow log" : MENU_LABEL[id]);
 
-/** Row-menu entries added to rowMenu's own list: Collapse leads an open folder's menu, Copy as file ends a single file's copy items. */
-export function withExtraMenu(base: MenuId[], o: { isDir: boolean; isOpen: boolean; single: boolean }): AnyMenuId[] {
+/** Row-menu entries added to rowMenu's own list: Collapse leads an open folder's menu, Follow log comes after a log file's
+ * View file (EDIT-026, T-317), Copy as file ends a single file's copy items. */
+export function withExtraMenu(base: MenuId[], o: { isDir: boolean; isOpen: boolean; single: boolean; log?: boolean }): AnyMenuId[] {
   const out: AnyMenuId[] = [...base];
   if (o.isDir && o.isOpen) out.unshift("collapse");
+  if (!o.isDir && o.log) out.splice(out.indexOf("view") + 1, 0, "follow");
   if (!o.isDir && o.single) out.push("copyFile");
   return out;
 }
+
+/** The host's file open (App's openFile): the path, the line and column to show, and whether the tab follows a growing log. */
+export type OpenFile = (path: string, line?: number, column?: number, follow?: boolean) => void;
+/** EDIT-026 (T-317): View file opens a plain tab; Follow log opens a read-only tab that keeps adding lines as the log grows. */
+export const openRow = (id: "view" | "follow", path: string, onOpen: OpenFile) => onOpen(path, undefined, undefined, id === "follow");

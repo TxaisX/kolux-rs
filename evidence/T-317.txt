@@ -57,3 +57,41 @@ READINGS (patched tree, then reverted; logs G:/Temp/editor-v3-logs/j-*.log): car
 LIVE PROOF PENDING (batched)
  1. In a worktree with a ready branch, open Create pull request: click the Base box: branches are suggested; type "ma": main first; a name not in the list can still be typed.
 STILL OPEN IN T-317: nothing opens a followed log (the AI Vault View Log button is not in this tree).
+
+FOURTH PIECE (2026-10-30, lane/review-editor from 025eda2): the followed log has a real way in.
+CHANGED
+ - src/editor/logFollow.ts:12-14 isLog(path): a name ending in .log (any letter case) can be followed (ponytail: .log names only).
+ - src/editor/explorerBar.ts:39-56 the row-menu extra "follow" (label "Follow log") comes right after View file on a .log file
+   (withExtraMenu takes log); OpenFile is the host's open type (path, line, column, follow); openRow(id, path, onOpen) opens
+   View file plain and Follow log with follow=true.
+ - src/editor/Explorer.tsx:25-26, 119-120, 674-676, 758: onOpen is typed OpenFile; the menu passes log: isLog(path); the
+   "view"/"follow" cases go through openRow. App.tsx is unchanged: it already hands the Explorer openFile(path, line, column,
+   follow), which opens a read-only followed tab (Pane.follow -> EditorPane follow + readOnly, built in the second piece).
+   So: right-click a .log file in the Explorer > Follow log.
+TEST ADDED src/editor/explorerBar.test.ts (3 tests: the menu entry, openRow + isLog, App's wiring)
+BEFORE THE FIX (vitest run src/editor/explorerBar.test.ts):
+   ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+    FAIL  src/editor/explorerBar.test.ts > EDIT-026 (T-317): a log file's row menu offers Follow log right after View file; other files and folders do not
+   AssertionError: expected [ 'view', 'openTerminal' ] to deeply equal [ 'view', 'follow' ]
+    FAIL  src/editor/explorerBar.test.ts > EDIT-026 (T-317): Follow log opens the file as a followed tab; View file opens a plain one; only .log names count
+   TypeError: openRow is not a function
+         Tests  2 failed | 4 passed (6)
+AFTER THE FIX
+ - vitest run src/editor/explorerBar.test.ts src/editor/explorerView.test.ts src/editor/logFollow.test.ts src/editor/Explorer.test.ts:
+    Test Files  4 passed (4)
+         Tests  27 passed (27)
+ - The wiring test bites: with App's Explorer prop changed to onOpen={(p) => openFile(p)} (dropping follow), it fails
+   ("expected ... to match /<Explorer\b[^>]*\bonOpen=\{openFile\}/"); App.tsx restored with git checkout.
+ - pnpm exec tsc: exit 0 (App's openFile type-checks against the Explorer's OpenFile prop, so the follow argument lines up).
+EDIT-026 ACCEPTANCE
+ - [ ] Append lines to the log from a terminal -> they show in the tab within a second: NEEDS A LIVE RUN (the 1 s poll is in
+       EditorPane's follow effect; followStep's rules are unit-tested in logFollow.test.ts).
+ - [ ] Empty the log file -> the view reloads from the start: NEEDS A LIVE RUN (followStep's reset rule is unit-tested).
+ The card's own entry point (View Log on an AI Vault session row) still waits for the AI Vault page, which is not in this
+ tree; Follow log in the Explorer row menu is the way in until then.
+LIVE PROOF PENDING (Windows)
+ 1. In a worktree, make logs\a.log; right-click it in the Explorer: Follow log is listed right after View file (a .ts file
+    and a folder do not list it). Choose it: a read-only tab opens.
+ 2. In a terminal: Add-Content logs\a.log "line 2" (a few times): each line shows in the tab within a second, scrolled to the end.
+ 3. Write a half line ([IO.File]::AppendAllText("logs\a.log", "half")): nothing shows until a newline follows.
+ 4. Clear-Content logs\a.log: the tab empties and starts again from the top.

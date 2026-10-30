@@ -8,3 +8,7 @@ export function followStep(shown: string, disk: string): { text: string; reset: 
   if (whole === shown) return null;
   return { text: whole, reset: !whole.startsWith(shown) };
 }
+
+/** T-317: the files the Explorer row menu offers to follow (Follow log): a name ending in .log, in any letter case.
+ * ponytail: .log names only; widen this test if other growing files (a .jsonl transcript) need following. */
+export const isLog = (path: string): boolean => /\.log$/i.test(path);
