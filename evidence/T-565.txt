@@ -1,0 +1,65 @@
+T-565 · Escape closes Settings (VIEW-009), reliability lane, 2026-10-30, on lane/reliability (base 025eda2)
+
+Cause (found in the code; the installed build was not run here):
+- Settings is drawn over the panes, which stay mounted, and it never took the keyboard when it opened. After
+  Ctrl+, the keyboard stayed in the terminal under it. xterm handles a bare Escape itself: it sends ESC to the
+  program (an agent reads that as "interrupt") and calls stopPropagation (node_modules/@xterm/xterm/src/browser/
+  CoreBrowserTerminal.ts _keyDown -> cancel), so the Settings window listener (bubble phase) never saw it. This
+  matches T-544 run 4: "Escape closes Settings: no (opened fresh with Ctrl+, then a CDP rawKeyDown/keyUp Escape)".
+- Escape in the xAI key dialog inside Settings (GrokKeyDialog) closed the dialog and then bubbled on to the
+  Settings listener, which closed Settings too. The other Escape users inside Settings already stop it (Ask,
+  the search box, the font list, the Codex account name field, the chord recorder in the capture phase).
+
+What changed:
+- src/settings/SettingsPage.tsx:310-318  Settings focuses its own root when it opens and gives focus back to
+  the element that had it when it closes (the terminal it was opened from).
+- src/settings/SettingsPage.tsx:329       root gets ref, tabIndex={-1} and outline none (no focus ring around
+  the whole page). The Escape listener stays in the bubble phase, so the chord recorder (SET-009, capture
+  phase) and every inner dialog keep first claim on Escape.
+- src/settings/GrokCard.tsx:149-157       the xAI key dialog stops the Escape it uses.
+- src/settings/__cards__/ACCT-008.test.ts:67-72  the shallow test's fake key event gets stopPropagation (every
+  real React key event has it) and now also asserts the dialog stops the Escape.
+
+Test added: src/settings/SettingsPage.escape.test.ts (real SettingsPage on the fake DOM, plus a key dispatcher with
+capture/bubble phases, stopPropagation and focus tracking; the terminal is a field that acts like xterm).
+  1. Settings opened from a terminal takes the keyboard: Escape closes it and never reaches the terminal
+  2. Escape with the keyboard on a control inside Settings closes Settings          (guard; passed before too)
+  3. closing Settings gives the keyboard back to the terminal it was opened from
+  4. Escape in the xAI key dialog inside Settings closes only that dialog; the next one closes Settings
+
+--- before the fix: VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run src/settings/SettingsPage.escape.test.ts
+   × Settings opened from a terminal takes the keyboard: Escape closes it and never reaches the terminal 1147ms
+   × closing Settings gives the keyboard back to the terminal it was opened from 653ms
+   × Escape in the xAI key dialog inside Settings closes only that dialog; the next one closes Settings 74ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+AssertionError: expected [ 'Escape' ] to deeply equal []
++   "Escape",
+AssertionError: expected FakeNode{ nodeType: 1, …(11) } not to be FakeNode{ nodeType: 1, …(11) } // Object.is equality
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+ Test Files  1 failed (1)
+      Tests  3 failed | 1 passed (4)
+
+--- after the fix: VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run --reporter=verbose src/settings/SettingsPage.escape.test.ts src/settings/__cards__/ACCT-008.test.ts
+ ✓ src/settings/__cards__/ACCT-008.test.ts > box 1: Connect is disabled until something is typed, then enabled; submit sends the key once and the field and page hold no key text 16ms
+ ✓ src/settings/__cards__/ACCT-008.test.ts > box 2: typing a key, pressing Cancel and reopening the same dialog shows a blank field 1ms
+ ✓ src/settings/__cards__/ACCT-008.test.ts > the key route is labelled advanced and pay-per-use, unlike the subscription sign-in 1ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Settings opened from a terminal takes the keyboard: Escape closes it and never reaches the terminal 905ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape with the keyboard on a control inside Settings closes Settings 48ms
+ ✓ src/settings/SettingsPage.escape.test.ts > closing Settings gives the keyboard back to the terminal it was opened from 49ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape in the xAI key dialog inside Settings closes only that dialog; the next one closes Settings 79ms
+ Test Files  2 passed (2)
+      Tests  7 passed (7)
+
+--- the other tests that draw SettingsPage or the Grok card: vitest run SettingsPage.escape, ACCT-008, GrokCard, SettingsPage.restore, SET-004-006
+ Test Files  5 passed (5)
+      Tests  28 passed (28)
+--- flock /tmp/kolux-node.lock pnpm exec tsc: no output (clean)
+
+Not caused here, seen while checking: src/settings/__cards__/SET-006-link.test.ts "terminal-first" fails on the
+untouched base 025eda2 too when run alone in this sandbox (2 of 2 runs with the change stashed): its until() waits
+about 400 ms for the lazily loaded Shortcuts page, which takes longer on this shared machine. It passed once in a
+combined run. Left as it was; reported to the integrator.
+
+Still needs a live Windows run (the installed build): open Settings with Ctrl+, from a focused terminal, press
+Escape -> Settings closes, the terminal gets the keyboard back and no ESC reached the program. No visible focus
+ring should appear around the Settings page.

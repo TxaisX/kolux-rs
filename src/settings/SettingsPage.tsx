@@ -307,6 +307,15 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
   // USAGE 012: opening the Usage page counts as having tried the usage feature (Explore Kolux).
   useEffect(() => void (page === "usage" && markGuide("tried", "usage").catch(() => {})), [page]);
   useScrollTo(target?.section, page, n);
+  // T-565 (VIEW-009): Settings takes the keyboard when it opens and gives it back on close. Left in the
+  // terminal it covers, Escape went to the program and xterm stopped it before this listener; a dialog
+  // inside Settings stops the Escape it uses, so this one only sees an Escape nothing else took.
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const back = document.activeElement as HTMLElement | null;
+    root.current?.focus();
+    return () => back?.focus();
+  }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -317,7 +326,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
   const repo = page.startsWith("repo:") ? projects.find((p) => `repo:${p.id}` === page) : undefined;
   const title = repo ? repo.name : page in PAGES ? PAGES[page as keyof typeof PAGES] : "";
   return (
-    <div className="settings" role="dialog" aria-label="Settings">
+    <div ref={root} className="settings" role="dialog" aria-label="Settings" tabIndex={-1} style={{ outline: "none" }}>
       <nav className="settings-nav" aria-label="Settings pages">
         <div className="settings-title">Settings</div>
         <input
