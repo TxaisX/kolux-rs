@@ -56,6 +56,7 @@ import { openSettings as openSettingsPage } from "../settings/pages";
 import { BehindNote, ListButtons, OutsideCard, PickedBar } from "../shell/ProjectsExtras";
 import { dismissedOutside, jumpToCurrent, outsideOf, toggleRow, useAutoIcons, useTopButton, withDismissed, OUTSIDE_DISMISSED_SETTING } from "../shell/projectsGlue";
 import { headerLabels } from "./headers";
+import { renameTarget } from "../keys/commands";
 import { behindHint, HINT_DISMISSED_SETTING, isBehindHint, REFRESH_SETTING, refreshesOnCreate } from "./baseHint";
 import { outsideCard } from "./outsideCard";
 import { isToggleClick } from "./selection";
@@ -149,6 +150,10 @@ type Props = {
   createName?: string;
   /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
   deleteRequest: number;
+  /** T-611: bumped by workspace.rename (PROJ-059): starts the inline rename of the workspace shown. */
+  renameRequest?: number;
+  /** T-611: the rename request was served (renamed, or nothing to rename); the window clears it. */
+  onRenameTaken?: () => void;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => Promise<number | null> | void;
   /** PROJ-047: child workspaces nest under their parent unless this is off. */
@@ -203,7 +208,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onRemovedAll = (paths) => paths.forEach(onRemoved), onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup, skillsOn = false, onSkills = () => {} }: Props) {
+export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onRemovedAll = (paths) => paths.forEach(onRemoved), onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, renameRequest = 0, onRenameTaken = () => {}, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup, skillsOn = false, onSkills = () => {} }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   // PROJ-065: the right-click menu, PROJ-060: the details form, T-055: a parent deleted together with its children.
   const [menu, setMenu] = useState<{ x: number; y: number; projectId: string; path: string; items: MenuItem[] } | null>(null);
@@ -931,6 +936,17 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     }
     say("warn", `The workspace ${hovered === null ? "shown" : "under the pointer"} is not one Kolux can delete (a project's main folder, or no workspace).`);
   }, [deleteRequest]);
+  // T-611 (PROJ-059): workspace.rename opens the same inline rename as F2 on the workspace shown. A sidebar
+  // the command just opened has no list yet, so the request stays pending until the lists come in; taking it
+  // clears it, so it never fires later on another workspace or when the panel mounts again.
+  useEffect(() => {
+    if (renameRequest === 0) return;
+    const w = renameTarget(activeDir, projects, worktrees, same);
+    if (w === "wait") return;
+    if (w === "none") say("warn", "There is no workspace in front to rename.");
+    else startRename(w);
+    onRenameTaken();
+  }, [renameRequest, worktrees, projects, activeDir]);
   // SESS-035: Recent (projects the composer made workspaces in), then the rest by match, then Add project.
   const projectItems = (q: string): PickItem[] => {
     const hints = pathHints(projects);

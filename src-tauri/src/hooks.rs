@@ -677,8 +677,10 @@ fn settings_now(store: Option<&Mutex<crate::state::Store>>, last: &Mutex<Arc<Val
     last.clone()
 }
 
-/// T-583: one thread that runs `run` on every job in the order the jobs were handed over. A job that panics is
-/// reported and dropped; the thread lives on for the jobs after it.
+/// T-583: one thread that runs `run` on every job in the order the jobs were handed over. In debug builds a job that
+/// panics is reported and dropped, and the thread lives on for the jobs after it. This only helps in debug builds:
+/// Cargo.toml's release profile sets `panic = "abort"`, so in a release build a panicking job still ends the app and
+/// the catch_unwind below never gets to run.
 fn queue<T: Send + 'static>(run: impl Fn(T) + Send + 'static) -> impl Fn(T) + Send + Sync {
     let (jobs, taken) = std::sync::mpsc::channel::<T>();
     std::thread::spawn(move || {
