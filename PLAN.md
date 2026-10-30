@@ -480,7 +480,11 @@ Built only after day one (2026-10-15); none of these is on the cutline. Order: T
 No new features. Each task names the audit finding it closes; done means its test failed before the change and passes after, with real output in `evidence/<task>.txt`. Lanes work on `lane/<name>` branches; the integrator ticks tasks on merge. Live Windows proofs stay open until CI runs again.
 
 ### foundation (integrator)
-- [ ] T-582 · Cloud proof foundation: on macOS and Linux `procs::kill_tree` ends option parsing (`kill -9 -- -<pid>`) and never signals pid 0, 1 or itself (audit item 18, R06-terminal-process.1, X-test.1); git children lead their own process group there so a stopped read takes its children; the Rust tests compile off Windows (git.rs:1600, X-proc.8); STAT 052's spinner test reads the CSS the same on CRLF and LF checkouts (X-proc.3); `scripts/test-env.ps1` / `.sh` make the scratch homes the integration tests require and CI's Rust job uses them (X-proc.4, X-test.2); the raw NUL byte in scm.rs is written as `\0` · acceptance: vitest green on Linux; the Rust unit tests run to the end on Linux; workflow-check OK; `cargo check --target x86_64-pc-windows-gnu --all-targets` clean
+- [x] T-582 · Cloud proof foundation: on macOS and Linux `procs::kill_tree` ends option parsing (`kill -9 -- -<pid>`) and never signals pid 0, 1 or itself (audit item 18, R06-terminal-process.1, X-test.1); git children lead their own process group there so a stopped read takes its children; the Rust tests compile off Windows (git.rs:1600, X-proc.8); STAT 052's spinner test reads the CSS the same on CRLF and LF checkouts (X-proc.3); `scripts/test-env.ps1` / `.sh` make the scratch homes the integration tests require and CI's Rust job uses them (X-proc.4, X-test.2); the raw NUL byte in scm.rs is written as `\0` · acceptance: vitest green on Linux; the Rust unit tests run to the end on Linux; workflow-check OK; `cargo check --target x86_64-pc-windows-gnu --all-targets` clean · DONE 2026-10-30 (integrator, lane/foundation): evidence/T-582.txt
+
+- [x] T-620 · Txais 2026-10-30: the whole top bar moves the window, not one spot: a press anywhere on the bar that is not a control drags it (double-click maximizes), while its buttons, search box and pop-up menus keep working · integrator · DONE 2026-10-30 (integrator, lane/topbar-drag): evidence/T-620.txt
+- [ ] T-621 · Found by T-620's browser proof (on main too): the screen switcher fits its four segments (Tower sticks out of the 210 px frame by about 77 px in the app's font) and the top bar's right group never covers it, from the 900 px minimum to 1920 px wide (at 1400, the default, with every right-side item drawn, a click on Tower's centre presses Show Source Control) · evidence/T-620.txt "FOUND ON THE WAY" · integrator
+- [ ] T-622 · Txais 2026-10-30: every installed copy updates itself from GitHub: the release job publishes v0.1.0 and then v0.1.1 to the public TxaisX/kolux-rs-releases, and an installed v0.1.0 finds v0.1.1 on its own (at start-up or the 30-minute check), downloads it, checks its signature and installs it on "Restart to update" (APP 024, APP 025, APP 059; DT-R01, DT-R39) · blocked on Txais's four setup steps (STATE.md Needs Txais) · integrator + release-ci lane
 
 ### status-hooks lane
 - [ ] T-583 · The hook line never blocks: each hook connection on its own thread with a deadline and size cap; automation follow-up runs after the reply; the protected-command answer never waits on the main store lock (audit item 6; ponytail hooks.rs:707, automations.rs:1206/1005) · status-hooks lane
@@ -501,7 +505,7 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [ ] T-593 · Register finds kolux.exe and kolux.cmd in the installed bin folder; the setup guide's CLI step can complete (R01-cli.1; CLI 007) · cli lane
 - [ ] T-594 · The installer adds the bin folder to the user PATH and removes it on uninstall (CLI 007; live proof pending) · cli lane
 - [ ] T-595 · `kolux open` starts Kolux and its terminal service from a neutral folder, never the caller's (R01-cli.4, L2-rust-crates.2; CLI 011) · cli lane
-- [ ] T-596 · `kolux worktree list` lists what it can when one project folder is missing; an oversized --wait-submit is refused, not a crash (R01-cli.8, R01-cli.7) · cli lane
+- [ ] T-596 · `kolux worktree list` lists what it can when one project folder is missing; an oversized --wait-submit is refused, not a crash (R01-cli.8, R01-cli.5) · cli lane
 - [ ] T-619 · Closing a busy terminal never freezes the other terminals: the service closes a pane's console outside its shared lock (R06-terminal-process.2) · cli lane
 
 ### reliability lane
@@ -522,10 +526,10 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [ ] T-607 · Browser tabs and sign-in pop-ups refuse frames of Kolux's own address (L1-tauri.1, R07-browser.1; live proof pending) · safety lane
 
 ### product-ux lane
-- [ ] T-608 · Status hooks on with one line of consent, and the Board, Tower, Inbox, needs strip and bell read one status (brief Phase 0) · product-ux lane
-- [ ] T-609 · "Review changes" from a Board Done card and an Inbox row; the sidebar changed-files count on by default (brief Phase 0) · product-ux lane
+- [ ] T-608 · Status hooks on with one line of consent, and the Board, Tower, Inbox, needs strip and bell read one status (brief Phase 0); lands after T-583 and T-604, because the audit asks for those fixes before hooks are on by default · product-ux lane
+- [ ] T-609 · "Review changes" from a Board Done card and an Inbox row; the sidebar changed-files count on by default (brief Phase 0); it wires existing screens into reach, as the brief's section 3 requires, and adds no new screen · product-ux lane
 - [ ] T-610 · No screen is unreachable: Floor, Space and Workspace Board wired or hidden; the two Boards no longer share a name (brief Phase 0) · product-ux lane
-- [ ] T-611 · A Commands section in the palette makes every action runnable; the five actions with no handler get one or go (brief Phase 0) · product-ux lane
+- [ ] T-611 · A Commands section in the palette makes every action runnable; the five actions with no handler get one or go (brief Phase 0); it wires existing screens into reach, as the brief's section 3 requires, and adds no new screen · product-ux lane
 - [ ] T-612 · The first-run wizard always finishes after Continue on "Your work"; the Tip card's Close button closes it (F08-onboarding-look-misc.2; T-566 Tip part) · product-ux lane
 
 ### workspaces lane
