@@ -91,3 +91,21 @@ LIVE PROOF PENDING (CI and signing, APP-025)
   APP-029). Then the same with a plain quit (install on quit).
 - With the outside changes above: Settings > Restart Kolux and Restart in safe graphics come back
   (APP-043).
+
+REVIEW ROUND 1 FIX: the update.rs source test passes on a CRLF checkout
+Problem (reviewer): t592_the_installer_leaves_the_app_job_last_and_only_when_it_will_start matched the
+literal "crate::procs::hand_off(true);\n    app.restart()" in include_str!("update.rs"). A Windows
+checkout (core.autocrlf=true, CI's windows-latest rust job) is CRLF, so it found 0 against 1 restart.
+Fix: src-tauri/src/update.rs:569
+    let src = include_str!("update.rs").replace("\r\n", "\n"); // a Windows checkout is CRLF
+(the same normalisation browser.rs already does); `code` is sliced from that String as before.
+Reproduction (the test's counting run over the committed source; cargo test is not run in lanes):
+    LF                 restarts 1, hand-off-then-restart 1   (pass)
+    CRLF, before fix   restarts 1, hand-off-then-restart 0   (fail)
+    CRLF, normalised   restarts 1, hand-off-then-restart 1   (pass)
+After the fix (from src-tauri, shared target):
+$ cargo check --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 54s
+$ cargo check --target x86_64-pc-windows-gnu --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 51s
+The integrator's central cargo test run (and CI's Windows rust job) remains the run proof of this test.

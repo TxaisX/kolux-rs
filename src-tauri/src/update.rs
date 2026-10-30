@@ -566,7 +566,7 @@ mod tests {
         assert!(order.lock().unwrap().is_empty(), "a package that fails its check hands off nothing");
         assert!(plugin_install(true, true, &hook).is_ok());
         assert_eq!(*order.lock().unwrap(), ["terminals", "clean-up", "leave the job"]);
-        let src = include_str!("update.rs");
+        let src = include_str!("update.rs").replace("\r\n", "\n"); // a Windows checkout is CRLF
         let code = &src[..src.find("#[cfg(test)]").unwrap()];
         assert!(code.contains("|| crate::procs::hand_off(false)"), "the updater's before-exit hook hands off");
         assert_eq!(code.matches("app.restart()").count(), code.matches("crate::procs::hand_off(true);\n    app.restart()").count(), "a restart that skips the hand-off dies with the job");
