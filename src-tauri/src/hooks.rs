@@ -8,11 +8,11 @@
 use base64::Engine as _;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -56,6 +56,12 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 /// One Codex install at a time, so several launches write the trust table once (STAT-008).
 static CODEX_INSTALL: Mutex<()> = Mutex::new(());
 const MAX_BODY: usize = 4 << 20;
+/// T-583 (R02-hooks-status.3): the request line and headers together stay under this, so an endless line is cut off
+/// rather than grown.
+const MAX_HEAD: u64 = 64 << 10;
+/// T-583: a hook connection has this long from its accept to send its whole request; one that trickles bytes or sends
+/// nothing is cut off then, holding only its own thread (the hook's curl itself gives up at 1.5 s).
+const READ_WITHIN: Duration = Duration::from_secs(2);
 
 /// The listener the panes' hooks report to.
 pub struct Hooks {
@@ -279,13 +285,19 @@ pub struct Request {
 }
 
 pub fn parse_request(r: &mut impl BufRead) -> Option<Request> {
+    // T-583: the head is read under MAX_HEAD; one cut off there, or ended before its blank line, is no request.
+    let mut head = r.by_ref().take(MAX_HEAD);
     let mut line = String::new();
-    r.read_line(&mut line).ok()?;
+    if head.read_line(&mut line).ok()? == 0 {
+        return None;
+    }
     let path = line.split_whitespace().nth(1)?.to_string();
     let mut headers = HashMap::new();
     loop {
         line.clear();
-        r.read_line(&mut line).ok()?;
+        if head.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
         let l = line.trim_end_matches(['\r', '\n']);
         if l.is_empty() {
             break;
@@ -612,41 +624,94 @@ fn limits_of(store: &crate::state::Store, dir: Option<&str>) -> Vec<Limit> {
     store.get(&limits_key(dir)).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
-fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    let mut reader = BufReader::new(&stream);
+/// T-583: what a hook's answer leaves for after its reply: the work that may wait on the store or start an automation.
+enum After {
+    /// A status the hooks reported, with the request that carried it.
+    Status(Request, crate::status::Status),
+    /// A status-line report (STAT-040, USAGE-021): its figures go to the store and the window.
+    Usage(Usage),
+}
+
+/// T-583: what each hook connection is given besides its stream. Only `settings` is read before the reply, and it never
+/// waits on the store; `raise` and `after` only hand things on.
+struct Line {
+    token: String,
+    /// The settings the protected-command answer reads (SAFE-009).
+    settings: Box<dyn Fn() -> Arc<Value> + Send + Sync>,
+    /// The window hears a status before its reply goes, so a pane's events reach it in the order they were answered.
+    raise: Box<dyn Fn(&crate::status::Status) + Send + Sync>,
+    /// The work after the reply, handed over before the reply goes, so it keeps the order the hooks were answered in.
+    after: Box<dyn Fn(After) + Send + Sync>,
+}
+
+/// T-583: a connection read against one deadline: each read waits only for the time left of it.
+struct Within<'a>(&'a TcpStream, Instant);
+
+impl Read for Within<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.1.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.0.set_read_timeout(Some(left))?;
+        let mut stream = self.0;
+        stream.read(buf)
+    }
+}
+
+/// T-583: the settings the protected-command answer reads (SAFE-009). Read fresh whenever the store is free, as before,
+/// so a rule switched off applies to the next command; while slow work holds the store, the last read stands in.
+// ponytail: a rule changed while the store is busy applies from the first hook after it frees; a snapshot that every
+// settings save refreshes (state.rs) would close that.
+fn settings_now(store: Option<&Mutex<crate::state::Store>>, last: &Mutex<Arc<Value>>) -> Arc<Value> {
+    let fresh = store.and_then(|s| s.try_lock().ok().map(|s| s.settings()));
+    let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(fresh) = fresh {
+        *last = Arc::new(fresh);
+    }
+    last.clone()
+}
+
+/// T-583: one thread that runs `run` on every job in the order the jobs were handed over.
+fn queue<T: Send + 'static>(run: impl Fn(T) + Send + 'static) -> impl Fn(T) + Send + Sync {
+    let (jobs, taken) = std::sync::mpsc::channel::<T>();
+    std::thread::spawn(move || taken.into_iter().for_each(run));
+    move |job| drop(jobs.send(job))
+}
+
+/// T-583: every connection gets a thread of its own, so a slow or silent client holds up nothing but itself.
+// ponytail: a thread per connection, no pool; a flood of local connections costs a thread each, cut off within
+// READ_WITHIN unless it carries the token; a small pool if that ever shows.
+fn accept(listener: TcpListener, line: Arc<Line>) {
+    for stream in listener.incoming().flatten() {
+        let (line, accepted) = (line.clone(), Instant::now());
+        std::thread::spawn(move || handle(&stream, accepted, &line));
+    }
+}
+
+/// One hook connection (T-583): its request is read within READ_WITHIN of `accepted`; the reply comes from the request,
+/// the status machine and the settings snapshot alone; the work that may wait goes to `line.after` first.
+fn handle(stream: &TcpStream, accepted: Instant, line: &Line) {
+    let mut reader = BufReader::new(Within(stream, accepted + READ_WITHIN));
     let mut body = String::from("{}");
     let code = match parse_request(&mut reader) {
-        Some(req) if gate(&req, token).is_some() => 404,
-        Some(req) if req.path == "/claude-status" => match usage(&req, token) {
-            // USAGE-021: a report from another config folder than the active account's is dropped.
-            Ok(u) if same_folder(active_config_dir(app).as_deref(), u.config_dir.as_deref()) => {
-                record_usage(app, &u);
-                200
-            }
-            // T-548-b: kept under its own folder for that account's figures, never raised as the active one's.
+        Some(req) if gate(&req, &line.token).is_some() => 404,
+        Some(req) if req.path == "/claude-status" => match usage(&req, &line.token) {
             Ok(u) => {
-                keep_other_account(app, &u);
+                (line.after)(After::Usage(u));
                 200
             }
             Err(code) => code,
         },
         Some(req) => {
-            let (code, status) = answer(&req, token);
-            if let Some(status) = status {
-                crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
-                agent_hooks::saved::note(app, &req.path, &req.body, &status, req.headers.get(IDENTITY_HEADER).and_then(|h| identity_version(h)));
-                // AUTO-012: an automation run in this pane completes on its agent's real finish.
-                crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), status.change.session.as_deref(), crate::automations::now_ms()));
-                // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
-                crate::automations::on_finish(app, status.pane_key, status.terminal, status.change.state, status.change.boundary, status.child.is_some(), status.interrupted);
-                rename_on_prompt(app, &status);
-                let _ = app.emit(EVENT, status);
-            }
+            let (code, status) = answer(&req, &line.token);
             if code == 200 {
-                // SAFE-009: the settings are read now, so a rule switched off applies to this command.
-                let settings = app.try_state::<Mutex<crate::state::Store>>().and_then(|s| s.lock().ok().map(|s| s.settings())).unwrap_or_default();
-                body = reply_body(&req.path, &req.body, &settings);
+                // SAFE-009: the settings as last read, fresh whenever the store is free.
+                body = reply_body(&req.path, &req.body, &(line.settings)());
+            }
+            if let Some(status) = status {
+                (line.raise)(&status);
+                (line.after)(After::Status(req, status));
             }
             code
         }
@@ -655,8 +720,28 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     if code == 404 {
         body.clear();
     }
+    let mut stream = stream;
     let _ = write!(stream, "HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = stream.flush();
+}
+
+/// T-583: the work a hook's answer left, run after its reply, in the order the hooks were answered.
+fn after_reply(app: &AppHandle, job: After) {
+    match job {
+        // USAGE-021: a report from another config folder than the active account's is dropped.
+        After::Usage(u) if same_folder(active_config_dir(app).as_deref(), u.config_dir.as_deref()) => record_usage(app, &u),
+        // T-548-b: kept under its own folder for that account's figures, never raised as the active one's.
+        After::Usage(u) => keep_other_account(app, &u),
+        After::Status(req, status) => {
+            crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
+            agent_hooks::saved::note(app, &req.path, &req.body, &status, req.headers.get(IDENTITY_HEADER).and_then(|h| identity_version(h)));
+            // AUTO-012: an automation run in this pane completes on its agent's real finish.
+            crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), status.change.session.as_deref(), crate::automations::now_ms()));
+            // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
+            crate::automations::on_finish(app, status.pane_key, status.terminal, status.change.state, status.change.boundary, status.child.is_some(), status.interrupted);
+            rename_on_prompt(app, &status);
+        }
+    }
 }
 
 /// T-116-b (row 213, PROJ-039): what the window hears after a hook-started rename, with the
@@ -695,20 +780,24 @@ fn rename_on_prompt(app: &AppHandle, status: &crate::status::Status) {
     });
 }
 
-/// Opens the listener on a loopback port and writes the endpoint file; hooks answer on a thread.
+/// Opens the listener on a loopback port and writes the endpoint file; each hook connection is answered on a thread of
+/// its own, and what may wait (the store, automations) runs after the reply (T-583).
 pub fn serve(app: AppHandle, data_dir: &Path) -> Result<Hooks, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = crate::cli::secret();
     let endpoint = data_dir.join(ENDPOINT_FILE);
     std::fs::write(&endpoint, format!("{port} {token}\n")).map_err(|e| e.to_string())?;
-    let t = token.clone();
-    std::thread::spawn(move || {
-        // ponytail: one hook at a time; each is answered in well under its script's 1.5 s limit.
-        for stream in listener.incoming().flatten() {
-            handle(stream, &app, &t);
-        }
-    });
+    // T-583: the settings are read once before any hook, so not even the first answer waits on the store.
+    let last = Mutex::new(app.try_state::<Mutex<crate::state::Store>>().and_then(|s| s.lock().ok().map(|s| Arc::new(s.settings()))).unwrap_or_default());
+    let (read, raise) = (app.clone(), app.clone());
+    let line = Line {
+        token: token.clone(),
+        settings: Box::new(move || settings_now(read.try_state::<Mutex<crate::state::Store>>().as_deref(), &last)),
+        raise: Box::new(move |status| drop(raise.emit(EVENT, status))),
+        after: Box::new(queue(move |job| after_reply(&app, job))),
+    };
+    std::thread::spawn(move || accept(listener, Arc::new(line)));
     Ok(Hooks { port, token, endpoint })
 }
 
@@ -1890,5 +1979,133 @@ Content-Length: {}
         let again = rename_after_prompt(&git, &store, &made.path, "Something else entirely").unwrap().unwrap();
         assert!(!again.renamed, "{again:?}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ---- T-583: the hook line never blocks (R02-hooks-status.3, audit item 6) ----
+
+    /// The real accept loop, request reading and reply on a loopback port, with the app's parts stood in.
+    fn line_with(settings: impl Fn() -> Arc<Value> + Send + Sync + 'static, after: impl Fn(After) + Send + Sync + 'static) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let line = Line { token: "tok".into(), settings: Box::new(settings), raise: Box::new(|_| {}), after: Box::new(after) };
+        std::thread::spawn(move || accept(listener, Arc::new(line)));
+        port
+    }
+
+    /// One Claude hook as its script sends it: the reply's body and how long the answer took.
+    fn hook(port: u16, pane: u32, event: &str) -> (String, Duration) {
+        use std::io::Read as _;
+        let started = Instant::now();
+        let id = base64::engine::general_purpose::STANDARD.encode(format!(r#"{{"paneKey":{pane},"terminal":{pane}}}"#));
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        write!(s, "POST /claude HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: {}\r\n\r\n{event}", event.len()).unwrap();
+        let mut reply = String::new();
+        let _ = s.read_to_string(&mut reply);
+        (reply.split_once("\r\n\r\n").map(|(_, body)| body.to_string()).unwrap_or_default(), started.elapsed())
+    }
+
+    fn shell(command: &str) -> String {
+        json!({ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": command }, "session_id": "t583" }).to_string()
+    }
+
+    /// What the agent side allows the whole hook (COMPAT 3.1: one and a half seconds in all).
+    const LIMIT: Duration = Duration::from_millis(1500);
+
+    #[test]
+    fn t583_a_hook_is_answered_inside_its_limit_while_other_connections_send_nothing() {
+        let port = line_with(|| Arc::new(json!({})), |_| {});
+        // One local client connects and says nothing; another starts a request and stalls mid-header.
+        let _silent = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut stalled = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stalled.write_all(b"POST /claude HTTP/1.1\r\nX-Kolux-").unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let (body, took) = hook(port, 58_301, &shell("git push --force origin main"));
+        assert!(took < LIMIT, "answered after {took:?}");
+        assert!(body.contains(r#""permissionDecision":"ask""#), "the protected command still asks: {body}");
+    }
+
+    #[test]
+    fn t583_a_client_that_trickles_bytes_is_cut_off_at_the_deadline_not_held_forever() {
+        use std::io::Read as _;
+        let port = line_with(|| Arc::new(json!({})), |_| {});
+        let mut slow = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        slow.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        // A byte every 300 ms for 12 s: every single read is quick, the request never ends.
+        let mut writer = slow.try_clone().unwrap();
+        std::thread::spawn(move || {
+            for _ in 0..40 {
+                if writer.write_all(b"a").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let started = Instant::now();
+        let mut buf = [0u8; 256];
+        while matches!(slow.read(&mut buf), Ok(n) if n > 0) {}
+        assert!(started.elapsed() < READ_WITHIN + Duration::from_secs(2), "the connection ended after {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn t583_an_endless_header_line_or_a_head_that_never_ends_is_no_request() {
+        let endless = [b"POST /claude HTTP/1.1\r\nX-Pad: ".as_slice(), &vec![b'x'; 1 << 20]].concat();
+        assert!(parse_request(&mut endless.as_slice()).is_none(), "refused at the head cap, never read whole");
+        assert!(parse_request(&mut b"POST /claude HTTP/1.1\r\nX-Kolux-Token: tok\r\n".as_slice()).is_none(), "a head without its blank line");
+        let fits = format!("POST /claude HTTP/1.1\r\nX-Pad: {}\r\nContent-Length: 2\r\n\r\n{{}}", "x".repeat(60 << 10));
+        assert!(parse_request(&mut fits.as_bytes()).is_some(), "a head under the cap still reads");
+    }
+
+    #[test]
+    fn t583_a_protected_command_is_answered_while_an_agent_finished_automation_is_still_in_its_precheck() {
+        let (started, begun) = std::sync::mpsc::channel::<()>();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        // The work after each reply, as `serve` runs it: one queue in arrival order. The first job stands for an
+        // agent-finished automation whose precheck is still running (up to 10 minutes in the app).
+        let after = queue(move |_job: After| {
+            let _ = started.send(());
+            let _ = held.recv_timeout(Duration::from_secs(30));
+        });
+        let port = line_with(|| Arc::new(json!({})), after);
+        assert!(hook(port, 58_302, r#"{"hook_event_name":"UserPromptSubmit","prompt":"run the tests","session_id":"t583"}"#).1 < LIMIT);
+        let (_, took) = hook(port, 58_302, r#"{"hook_event_name":"Stop","session_id":"t583"}"#);
+        assert!(took < LIMIT, "the finish itself is answered at once ({took:?})");
+        begun.recv_timeout(Duration::from_secs(5)).expect("the work after the first reply began and is still running");
+        let (body, took) = hook(port, 58_303, &shell("git push --force origin main"));
+        assert!(took < LIMIT, "answered after {took:?}");
+        assert!(body.contains(r#""permissionDecision":"ask""#), "{body}");
+        let _ = release.send(());
+    }
+
+    #[test]
+    fn t583_a_protected_command_is_answered_from_the_last_settings_read_while_slow_work_holds_the_store() {
+        use crate::state::Store;
+        let dir = std::env::temp_dir().join(format!("kolux-rs-hooks-t583-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(Mutex::new(Store::open(&dir).unwrap()));
+        store.lock().unwrap().save_settings(&json!({ "protectedRules": [{ "id": "t583", "name": "Pod deletes", "kind": "starts-with", "pattern": "kubectl delete" }] })).unwrap();
+        let last = Arc::new(Mutex::new(Arc::new(Value::Null)));
+        let (s, l) = (store.clone(), last.clone());
+        let port = line_with(move || settings_now(Some(&s), &l), |_| {});
+        let (body, _) = hook(port, 58_304, &shell("kubectl delete pod web"));
+        assert!(body.contains("Pod deletes"), "the user's own rule, read while the store is free: {body}");
+        // Slow work (a git scan for every project, say) takes the store and keeps it.
+        let (taken, ready) = std::sync::mpsc::channel::<()>();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let store = store.clone();
+            std::thread::spawn(move || {
+                let _guard = store.lock().unwrap();
+                let _ = taken.send(());
+                let _ = held.recv_timeout(Duration::from_secs(30));
+            })
+        };
+        ready.recv().unwrap();
+        let (body, took) = hook(port, 58_304, &shell("kubectl delete pod api"));
+        assert!(took < LIMIT, "answered after {took:?}");
+        assert!(body.contains("Pod deletes") && body.contains(r#""permissionDecision":"ask""#), "the last read stands in: {body}");
+        let _ = release.send(());
+        holder.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

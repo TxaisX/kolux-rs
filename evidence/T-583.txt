@@ -1,0 +1,96 @@
+T-583 (status-hooks lane, 2026-10-30): the hook line never blocks, so status never freezes and the safety pause is never skipped
+=================================================================================================================================
+Audit item 6, R02-hooks-status.3, ponytail notes hooks.rs:707, automations.rs:1206 and automations.rs:1005.
+
+THE PROBLEM (old code, hooks.rs serve/handle)
+- One listener thread answered every hook connection in turn, with a 2 s timeout per read, not per request, and no cap
+  on the request line or headers: a local client that sent nothing held every hook for 2 s, one that trickled a byte
+  under 2 s held them for good, and an endless header line grew memory without limit.
+- Before writing the reply, handle() ran resume::on_stop (store lock), saved::note (store write),
+  automations::follow (store lock, then reading the pane's text and up to 8 MB of transcript) and automations::on_finish,
+  which for an "agent finished" automation ran its precheck (60 s by default, up to 10 minutes) right there; then it took
+  the main store lock again to read the settings for the protected-command answer (SAFE-009).
+- The hook script's curl gives up after 1.5 s (COMPAT 3.1) and prints nothing, so meanwhile every pane's status froze
+  and a protected command got no "ask": the agent ran it without the pause.
+
+WHAT CHANGED
+- src-tauri/src/hooks.rs:59-64 MAX_HEAD (64 KiB for the request line and headers) and READ_WITHIN (2 s for the whole
+  request, from the accept).
+- src-tauri/src/hooks.rs:287-301 parse_request reads the head through take(MAX_HEAD); a head cut off at the cap, or
+  that ends before its blank line, is no request (400). The body keeps its MAX_BODY cap.
+- src-tauri/src/hooks.rs:627-727 the listener: Line (what a connection is given: token, settings, raise, after),
+  Within (a reader that gives each read only the time left before the deadline), settings_now (the settings read
+  fresh whenever the store is free, else the last read: try_lock, never lock), queue (one FIFO thread for the work after
+  replies), accept (a thread per connection) and handle (read within the deadline, answer from the request, the status
+  machine and the settings snapshot only, raise the status to the window, hand the rest to the queue, then write the
+  reply).
+- src-tauri/src/hooks.rs:728-747 after_reply: on_stop, saved::note, automations::follow, automations::on_finish and the
+  branch rename, in the order the hooks were answered; the status-line figures (record_usage / keep_other_account) too.
+- src-tauri/src/hooks.rs:783-802 serve: reads the settings once before any hook, builds the Line from the app and starts
+  the accept loop. The old note "ponytail: one hook at a time; each is answered in well under its script's 1.5 s
+  limit" is gone; its replacement (hooks.rs:683-684) states the new ceiling (a thread per connection, no pool).
+- src-tauri/src/automations.rs:846-869 follow(): the change is still saved under the store lock in order; keeping the
+  finished run's pane text and transcript and telling the Automations page now run on a thread of their own. The
+  ponytail note at the old automations.rs:1005 (transcript read on the caller's thread) is deleted: fixed.
+- src-tauri/src/automations.rs:490-522 on_finish(): which pane finished is decided inline and in order (agent_finished);
+  the automation launch (own-pane check, on_event, run_with with its precheck) runs on its own thread.
+- src-tauri/src/automations.rs:1215-1217 the clock note keeps its true part (the clock runs automations one after
+  another) and says an agent-finished run now has its own thread, off the hook line.
+
+KEPT EXACTLY (COMPAT 3.1)
+Same loopback port and endpoint file, same paths, headers, token and identity checks (gate, answer), same status codes
+(200, 400, 403, 404 with an empty body), same reply bodies (reply_body unchanged: {} or the SAFE-009 ask, Antigravity's
+"allow", Cursor's "ask"/"continue"), same reply format (HTTP/1.1, Content-Type, Content-Length, Connection: close).
+The window still hears each status before its reply goes (now before the store work rather than after it).
+
+ORDER
+A pane's next hook starts only after its previous one got its reply. The status machine (answer), the protected-attempt
+record (reply_body), the window event (raise) and the hand-over to the after-reply queue all happen before that reply,
+so they keep each pane's order; the queue then runs the store work in that same order. Events a pane sends at the same
+moment (parallel helper agents) are taken in parallel, in no fixed order, as they were sent.
+
+TESTS ADDED (src-tauri/src/hooks.rs, mod tests; they drive the real accept loop, reading and reply on a loopback port,
+with the app's parts stood in, as cli.rs serve_loop_with does)
+1. t583_a_hook_is_answered_inside_its_limit_while_other_connections_send_nothing           (acceptance 1)
+2. t583_a_protected_command_is_answered_while_an_agent_finished_automation_is_still_in_its_precheck   (acceptance 2:
+   the real after-reply queue, its first job blocked as a running precheck)
+3. t583_a_protected_command_is_answered_from_the_last_settings_read_while_slow_work_holds_the_store   (acceptance 3:
+   a real Store with the user's own rule; another thread holds the store lock)
+4. t583_a_client_that_trickles_bytes_is_cut_off_at_the_deadline_not_held_forever
+5. t583_an_endless_header_line_or_a_head_that_never_ends_is_no_request
+
+Before the fix: the listener had no seam a test could drive (serve and handle took the AppHandle), so the tests could
+not be written against it; the first compile of the tests shows exactly that:
+ error[E0422]: cannot find struct, variant or union type `Line` in this scope   --> src/hooks.rs:1901:20
+ error[E0425]: cannot find function `accept` in this scope                      --> src/hooks.rs:1902:36
+ error[E0425]: cannot find value `READ_WITHIN` in this scope                    --> src/hooks.rs:1958:37
+ error[E0425]: cannot find function `queue` in this scope                       --> src/hooks.rs:1976:21
+ error[E0425]: cannot find function `settings_now` in this scope                --> src/hooks.rs:2000:38
+What each test meets in the old code: (1) the hook waits behind the silent and the stalled connection, 2 s each, so it
+is answered after about 4 s; (2) the reply waits for on_finish's precheck; (3) the reply waits for the store lock;
+(4) the trickling client is never cut off (each read gets a byte inside 2 s); (5) parse_request reads the whole 1 MiB
+line and returns a request.
+cargo test is not run in the lanes; the integrator runs these.
+
+After the fix:
+$ CARGO_TARGET_DIR=... CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check --all-targets
+ Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 11s   (no warning in hooks.rs, automations.rs, status.rs, agent_hooks/)
+$ ... cargo check --target x86_64-pc-windows-gnu --all-targets
+ Checking kolux-rs v0.1.0 (/home/user/kolux-lanes/status-hooks/src-tauri)
+ Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 14s   (no errors, no warnings)
+
+NEEDS THE INTEGRATOR: cargo test t583_ (five tests above) and the existing hooks, cards_13 and s9_fuzz tests.
+
+LIMITS AND WHAT IS LEFT
+- Settings: read fresh whenever the store is free (as before), else the last read. A protected rule changed while slow
+  work holds the store applies from the first hook after it frees (ponytail note at hooks.rs:664-665). Closing that needs a
+  snapshot refreshed by every settings save in state.rs (not this lane's file).
+- Still before the reply and not in this lane's files: protected_custom::listen masks a paused command before it
+  answers (audit item 6, third bullet, protected_custom.rs:371); a very large command can take seconds there. Now it
+  holds only its own connection, not every hook.
+- Not in this task: the main store lock held by tools.rs:204 and cli.rs:1982 while git runs (audit item 6, second
+  bullet). The hook answer no longer waits on it; the window and the saved status still do.
+- on_finish and follow need an AppHandle, so their move to their own threads is proved by compile and by the queue test
+  standing in for them, not by driving them.
+- Live proof on Windows: an "agent finished" automation with a precheck such as `Start-Sleep 120`; while it runs, other
+  panes' status keeps moving and a protected command in another Claude pane still asks.
