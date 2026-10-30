@@ -283,6 +283,9 @@ export const TABLE: MultilineElementTransformer = {
       const now = cellTexts(r);
       const canon = rowLine(now);
       // T-602: a line holding more cells than its row shows is kept as it is: the canonical line would drop the rest.
+      // In the app this is a second guard only: limitsOf (markdown.ts, overfullRow) opens a note holding such a row in source
+      // view, and switches an open rich view to source when one arrives from disk, so the rich view never gets to export an
+      // edit of that row and `hides` cannot drop it.
       const hides = r.__raw !== "" && splitRow(r.__raw).length > splitRow(r.__canon).length;
       lines.push(r.__raw ? (r.__canon === canon ? r.__raw : (respellRow(r.__raw, splitRow(r.__canon), now) ?? (hides ? r.__raw : canon))) : canon);
       if (i === 0) {

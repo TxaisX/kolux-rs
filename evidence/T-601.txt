@@ -131,3 +131,85 @@ INTEGRATION RE-RUN (2026-10-30, lane/review-editor merged with main feee15ff; re
     ✓ src/editor/PreviewPane.test.ts > T-601: a note's task list still shows which items are done, without form fields
     ✓ src/editor/PreviewPane.test.ts > T-601: a plain click in a note's page does nothing on its own (an image map, a form button, a link); a collapsible section still opens
     ✓ src/editor/PreviewPane.test.ts > T-601 (L4-web-js-toolchain.3): diagram text cannot change mermaid's settings, and a diagram that fails leaves no error picture
+
+REVIEW ROUND 1 (2026-10-30, lane/review-editor, PR #7): a note can no longer borrow the app's full-window classes.
+PROBLEM (reviewer): NOTE_HTML let class through. styles.css has fixed full-window classes (.scrim, .ask-backdrop,
+  .menu-backdrop: position: fixed; inset: 0), and .md-preview had no containment, so <div class="scrim"></div> in a note
+  covered the whole window and caught every click.
+CHANGED (two layers)
+ - src/styles.css:976 .pane.editor .md-preview gets contain: paint (the only container that renders a note's own HTML;
+   PlanSheet, chat and DrawPanel render agent text or katex). Anything fixed inside a note is now placed in, and clipped to,
+   its pane, whatever class or style reaches it.
+ - src/editor/PreviewPane.tsx:43-67 noteClassHook, a DOMPurify uponSanitizeAttribute hook. It is added just before a
+   note's sanitize call and removed in a finally right after it (sanitizeNote), so katex (diagramLibs.ts), cleanSvg
+   (diagrams.ts) and agent text are not affected. A class attribute keeps only language-* (a code block's language, which
+   also marks mermaid code for drawDiagrams) and md-task. Order against renderNote: md-task is made by the note's marked
+   renderer BEFORE sanitising, so it is listed by name. md-math* (restoreMath) and md-diagram* (drawDiagrams) are added
+   AFTER sanitising and never pass through the hook. A note that writes class="md-task" itself only gets an
+   unselectable span.
+ Nits from the same review: Explorer.tsx, the menu's autoFocus call to withExtraMenu now passes log: too, so on a .log row
+ the first item it focuses matches the menu that is drawn. richTable.ts export: a comment says limitsOf (overfullRow) forces
+ source view before `hides` can drop an edit.
+PROOF IN CHROMIUM: evidence/T-601-proof.mjs now also bundles styles.css and mounts the class cases in the preview's own
+ markup (section.pane.editor.preview > div.pane-body.md-preview, a 300x200 pane at 400,300 in a 1280x720 window).
+ note_classCollision runs a note with <div class="scrim">, <div class="ask-backdrop">, <div class="menu-backdrop">,
+ <svg class="scrim"><rect class="menu-backdrop">, a js code block and a task item through the real renderers.
+ pane_rawOverlay puts the three classes into the pane without the sanitiser, to test the CSS layer on its own.
+ hitOutside is what a click at (10,10) lands on. note_selection now mounts in the pane too: with styles.css bundled, body's
+ user-select: none applied to the old bare mount.
+BEFORE (fix stashed, same probe; flock /tmp/kolux-node.lock node evidence/T-601-proof.mjs):
+  note_selection             "\"done item\\n open item\""
+  note_classCollision        {"classesKept":"scrim | ask-backdrop | menu-backdrop | scrim | menu-backdrop | language-js | md-task","hitOutside":"note:ask-backdrop","covers":"1280x720","paneContain":"none"}
+  pane_rawOverlay            {"classesKept":"scrim | ask-backdrop | menu-backdrop","hitOutside":"note:ask-backdrop","covers":"1280x720","paneContain":"none"}
+AFTER:
+  note_auditor               {"style":0,"htmlDisplay":"block","hiddenTextShown":true,"form":0,"input":0,"button":0}
+  note_hidden                {"hiddenAttr":0,"textShown":true}
+  note_imagemap              {"map":0,"area":0,"img":1}
+  note_overlay               {"styleAttr":0,"popover":0,"popovertarget":0,"dialog":0,"textarea":0,"select":0,"textKept":true}
+  note_legit                 {"details":1,"summary":1,"kbd":1,"b":1,"sub":1,"img":1,"text":"☑ done item ☐ open item More Ctrl bold 2"}
+  note_clicks                {"summaryOpens":true,"linkCancelled":true}
+  note_selection             "\"done item\\n open item\""
+  note_classCollision        {"classesKept":"language-js | md-task","hitOutside":"app:#root","covers":null,"paneContain":"paint"}
+  pane_rawOverlay            {"classesKept":"scrim | ask-backdrop | menu-backdrop","hitOutside":"app:#root","covers":"300x200","paneContain":"paint"}
+  note_htmlDisplayAfter      "block"
+  agent_plan                 {"style":0,"htmlDisplay":"block","hiddenTextShown":true,"form":0,"input":0,"button":0,"styleShownAsText":true}
+  agent_hidden               {"hiddenAttr":0,"textShown":true}
+  agent_todos                {"li":3,"checkboxes":3,"checked":1,"lastShown":true,"scriptShownAsText":true}
+  agent_misc                 {"map":0,"area":0,"styleAttr":0,"img":0}
+  agent_htmlDisplayAfter     "block"
+  mermaid_valid              {"drew":true,"err":null,"leftover":0,"htmlDisplay":"block","red":false,"forest":false}
+  mermaid_syntaxError        {"drew":false,"err":"Error: Parse error on line 2:\ngraph TD; A-->\n--------------^","leftover":0,"htmlDisplay":"block","red":null,"forest":null}
+  mermaid_fontFamilyAttack   {"drew":false,"err":"Error: Parse error on line 2:\ngraph TD; A-->\n--------------^","leftover":0,"htmlDisplay":"block","red":null,"forest":null}
+  mermaid_themeCssAttack     {"drew":false,"err":"Error: Parse error on line 2:\ngraph TD; A-->\n--------------^","leftover":0,"htmlDisplay":"block","red":null,"forest":null}
+  mermaid_themeDirective     {"drew":true,"err":null,"leftover":0,"htmlDisplay":"block","red":false,"forest":false}
+Reading it: before, the note's classes were all kept, the overlay covered the whole window (1280x720) and caught a click
+far outside the pane. After, the note keeps only language-js and md-task. Even unsanitised overlays are held to the pane
+(300x200), and the click outside reaches the app (#root). Every earlier case reads as before.
+UNIT TEST ADDED src/editor/PreviewPane.test.ts, "T-601 (review round 1) ...". There is no DOM library in this repo's
+ vitest (no jsdom or happy-dom installed), so the real DOMPurify has no sanitize there and the mock stays. The test drives
+ noteClassHook with the attribute records DOMPurify hands it (scrim, ask-backdrop, menu-backdrop, svg's "scrim
+ menu-backdrop": dropped; "language-js scrim" -> "language-js"; md-task kept; other attributes untouched). It also
+ checks that the hook is added, used for one sanitize and removed in that order for a note, and not added for agent text.
+ The real DOMPurify with the hook is the Chromium probe above.
+BEFORE THE FIX (PreviewPane.tsx stashed; vitest run src/editor/PreviewPane.test.ts):
+  ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+   FAIL  src/editor/PreviewPane.test.ts > T-601 (review round 1): a note keeps none of its own class names, so it cannot borrow the app's full-window overlays; a code block's language and the task boxes stay
+  AssertionError: expected 'undefined' to be 'function' // Object.is equality
+        Tests  1 failed | 6 passed (7)
+AFTER THE FIX (vitest run --reporter=verbose src/editor/PreviewPane.test.ts):
+   ✓ src/editor/PreviewPane.test.ts > T-601: an agent's plan shows raw HTML as text, so no style sheet, form, image map, overlay or hidden span reaches the page
+   ✓ src/editor/PreviewPane.test.ts > T-601: a to-do that mentions <script> keeps every to-do after it, and the to-do boxes still show
+   ✓ src/editor/PreviewPane.test.ts > T-601: a note keeps its own HTML, but the sanitiser is told to drop style sheets, style attributes, forms, image maps, dialogs, popovers and hidden text
+   ✓ src/editor/PreviewPane.test.ts > T-601: a note's task list still shows which items are done, without form fields
+   ✓ src/editor/PreviewPane.test.ts > T-601: a plain click in a note's page does nothing on its own (an image map, a form button, a link); a collapsible section still opens
+   ✓ src/editor/PreviewPane.test.ts > T-601 (L4-web-js-toolchain.3): diagram text cannot change mermaid's settings, and a diagram that fails leaves no error picture
+   ✓ src/editor/PreviewPane.test.ts > T-601 (review round 1): a note keeps none of its own class names, so it cannot borrow the app's full-window overlays; a code block's language and the task boxes stay
+   Test Files  1 passed (1)
+        Tests  7 passed (7)
+ full suite on the merged tree (main feee15ff unchanged), pnpm exec vitest run:
+   Test Files  679 passed (679)
+        Tests  5000 passed (5000)
+ pnpm exec tsc -p .: exit 0
+LIVE PROOF PENDING (Windows), added to steps 1-4 above
+ 5. A note holding <div class="scrim"></div> and <div class="ask-backdrop">x</div>: the preview shows nothing dark, and
+    the sidebar and other panes still take clicks.

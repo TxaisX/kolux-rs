@@ -971,7 +971,9 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .notice.md-banner { color: var(--fg-muted); border-color: var(--line); }
 .notice.md-banner .btn { margin-left: auto; }
 .pane.editor .md-rich, .pane.editor .md-preview { overflow: auto; padding: 14px 28px 40px; font: 14px/1.6 var(--ui-font); color: var(--fg); outline: none; overflow-wrap: break-word; }
-.pane.editor .md-preview { user-select: text; }
+/* T-601: contain: paint makes the preview the box for anything fixed inside a note, and clips it to the pane, so no note
+   can draw over or catch clicks outside its own pane, whatever classes or styles reach it. */
+.pane.editor .md-preview { user-select: text; contain: paint; }
 .md-rich h1, .md-preview h1 { font-size: 1.7em; margin: 0.6em 0 0.4em; line-height: 1.25; }
 .md-rich h2, .md-preview h2 { font-size: 1.35em; margin: 1em 0 0.4em; padding-bottom: 0.2em; border-bottom: 1px solid var(--line-subtle); }
 .md-rich h3, .md-preview h3 { font-size: 1.15em; margin: 1em 0 0.3em; }

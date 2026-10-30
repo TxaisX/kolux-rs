@@ -2,14 +2,17 @@
 // list and a diagram may put into the app's own window. Vitest has no DOM, and without one DOMPurify has no sanitize,
 // so a stand-in hands the HTML back and keeps the settings it was given: a note's sanitiser is checked by those settings
 // (evidence/T-601-proof.mjs runs the same payloads through the real renderers in Chromium), and agent text, which marked
-// itself escapes, is checked as it comes out.
+// itself escapes, is checked as it comes out. The class rule (review round 1) is a DOMPurify hook: the hook itself is
+// driven here with the attribute records DOMPurify hands it, and that it is on for a note's sanitise call only; the
+// real DOMPurify with the hook runs in Chromium in evidence/T-601-proof.mjs (no DOM library is installed for vitest).
 import { expect, test, vi } from "vitest";
 import DOMPurify from "dompurify";
+import * as preview from "./PreviewPane";
 import { renderMarkdown } from "./PreviewPane";
 import { mermaidConfig } from "./diagrams";
 import { inertClick } from "./linkClicks";
 
-vi.mock("dompurify", () => ({ default: { sanitize: vi.fn((html: string) => html) } }));
+vi.mock("dompurify", () => ({ default: { sanitize: vi.fn((html: string) => html), addHook: vi.fn(), removeHook: vi.fn() } }));
 
 // The auditor's payloads: a style sheet that blanks the window, hidden text, a form that sends what is typed, an image
 // map whose area navigates, a full-window overlay and a popover.
@@ -103,4 +106,38 @@ test("T-601 (L4-web-js-toolchain.3): diagram text cannot change mermaid's settin
   expect(c.htmlLabels).toBe(false);
   expect(c.securityLevel).toBe("strict");
   expect(c.suppressErrorRendering).toBe(true);
+});
+
+test("T-601 (review round 1): a note keeps none of its own class names, so it cannot borrow the app's full-window overlays; a code block's language and the task boxes stay", () => {
+  const p = preview as Record<string, unknown>;
+  const hook = p.noteClassHook as ((node: unknown, data: { attrName: string; attrValue: string; keepAttr: boolean }) => void) | undefined;
+  expect(typeof hook).toBe("function");
+  const run = (attrName: string, attrValue: string) => {
+    const data = { attrName, attrValue, keepAttr: true };
+    hook!({}, data);
+    return data.keepAttr ? data.attrValue : null;
+  };
+  // <div class="scrim">, <div class="ask-backdrop">, <div class="menu-backdrop">, <svg class="scrim"><rect class="menu-backdrop">
+  expect([run("class", "scrim"), run("class", "ask-backdrop"), run("class", "menu-backdrop"), run("class", "scrim menu-backdrop")]).toEqual([null, null, null, null]);
+  expect(run("class", "language-js scrim")).toBe("language-js");
+  expect(run("class", "language-mermaid")).toBe("language-mermaid");
+  expect(run("class", "md-task")).toBe("md-task");
+  expect(run("href", "scrim")).toBe("scrim");
+  // the hook is on for a note's sanitise call only, and off again after it (katex and agent text keep their classes)
+  const purify = vi.mocked(DOMPurify);
+  purify.addHook.mockClear();
+  purify.removeHook.mockClear();
+  purify.sanitize.mockClear();
+  const order: string[] = [];
+  purify.addHook.mockImplementation(((..._a: unknown[]) => void order.push("add")) as never);
+  purify.sanitize.mockImplementation(((html: string) => (order.push("sanitize"), html)) as never);
+  purify.removeHook.mockImplementation(((..._a: unknown[]) => void order.push("remove")) as never);
+  renderMarkdown('<div class="scrim"></div>', true);
+  expect(order).toEqual(["add", "sanitize", "remove"]);
+  expect(purify.addHook).toHaveBeenCalledWith("uponSanitizeAttribute", hook);
+  expect(purify.removeHook).toHaveBeenCalledWith("uponSanitizeAttribute", hook);
+  order.length = 0;
+  renderMarkdown('<div class="scrim"></div>');
+  expect(order).toEqual(["sanitize"]);
+  purify.sanitize.mockImplementation(((html: string) => html) as never);
 });

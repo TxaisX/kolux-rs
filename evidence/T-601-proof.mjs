@@ -2,6 +2,8 @@
 // renderers in headless Chromium (WebView2's engine) under the release CSP from tauri.conf.json: a note (the preview's
 // renderMarkdown(md, true) inside renderNote), agent text (renderMarkdown(md), as PlanSheet and chat StepRows call it), the
 // note click rule (inertClick) and diagrams through diagramLibs.ts (mermaid.initialize(mermaidConfig) then render).
+// The app's styles.css is bundled too (review round 1), so a note's class names meet the app's real rules, and the
+// class cases mount the note in the preview pane's own markup (section.pane.editor.preview > div.pane-body.md-preview).
 // It bundles a small entry with the repo's own vite into a scratch folder, serves it on 127.0.0.1 and prints one line of
 // readings per case. Needs Playwright with Chromium (PLAYWRIGHT_MODULE, default: this sandbox's global install).
 // Usage, from the repo root: flock /tmp/kolux-node.lock node evidence/T-601-proof.mjs
@@ -16,7 +18,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "t601-"));
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "/opt/node-tools/node_modules/playwright/index.mjs");
 const src = (p) => JSON.stringify(path.join(ROOT, p));
-fs.writeFileSync(path.join(OUT, "entry.ts"), `import { renderMarkdown } from ${src("src/editor/PreviewPane")};
+fs.writeFileSync(path.join(OUT, "entry.ts"), `import ${src("src/styles.css")};
+import { renderMarkdown } from ${src("src/editor/PreviewPane")};
 import { getRenderers, loadRenderers, renderNote } from ${src("src/editor/diagrams")};
 import * as clicks from ${src("src/editor/linkClicks")};
 (window as unknown as { kx: object }).kx = { renderMarkdown, renderNote, getRenderers, loadRenderers, inertClick: (clicks as Record<string, unknown>).inertClick };
@@ -69,8 +72,20 @@ const result = await page.evaluate(async () => {
     out.note_clicks = { summaryOpens: d.querySelector("details").open, linkCancelled: ev.defaultPrevented };
     d.remove();
   } else out.note_clicks = "no inertClick in this build";
+  // the preview pane's own markup (section.pane.editor.preview > div.pane-body.md-preview): with styles.css bundled, the
+  // app's rules (user-select: text on the preview, review round 1's containment) apply as in the app
+  const inPane = (html) => { const sec = document.createElement("section"); sec.className = "pane editor preview"; sec.style.cssText = "position:absolute;left:400px;top:300px;width:300px;height:200px;display:flex;flex-direction:column"; const d = document.createElement("div"); d.className = "pane-body md-preview"; d.style.flex = "1"; d.innerHTML = html; sec.append(d); document.body.append(sec); return { sec, d }; };
   // a selection over a ticked line reads as the note's own words (what a review note quotes and looks up), as with marked's boxes
-  { const d = mount(note("- [x] done item\n- [ ] open item\n")); const s = getSelection(); s.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(d.querySelector("ul")); s.addRange(r); out.note_selection = JSON.stringify(s.toString().trim()); s.removeAllRanges(); d.remove(); }
+  { const { sec, d } = inPane(note("- [x] done item\n- [ ] open item\n")); const s = getSelection(); s.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(d.querySelector("ul")); s.addRange(r); out.note_selection = JSON.stringify(s.toString().trim()); s.removeAllRanges(); sec.remove(); }
+  // review round 1: a note naming the app's own full-window classes (.scrim, .ask-backdrop, .menu-backdrop are position:
+  // fixed; inset: 0) in the preview pane's markup, a 300x200 pane at (400, 300) in the 1280x720 window. "hitOutside" is
+  // what a click at (10, 10), far outside the pane, lands on (note:<class> = the note's overlay caught it, app:#root =
+  // the app's own page under it got it); "covers" is the overlay's drawn size.
+  const overlayReading = (d) => { const hit = document.elementFromPoint(10, 10); const o = d.querySelector(".scrim, .ask-backdrop, .menu-backdrop"); const r = o?.getBoundingClientRect(); return { classesKept: [...d.querySelectorAll("[class]")].map((n) => n.getAttribute("class")).join(" | "), hitOutside: !hit ? null : d.contains(hit) ? "note:" + (hit.getAttribute("class") ?? hit.tagName) : "app:" + (hit.id ? "#" + hit.id : hit.tagName), covers: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, paneContain: getComputedStyle(d).contain }; };
+  const collide = '<div class="scrim"></div>\n\n<div class="ask-backdrop">Kolux needs your password</div>\n\n<div class="menu-backdrop"></div>\n\n<svg class="scrim" width="10" height="10"><rect class="menu-backdrop" width="10" height="10"/></svg>\n\n```js\nlet a = 1;\n```\n\n- [x] done\n';
+  { const { sec, d } = inPane(note(collide)); out.note_classCollision = overlayReading(d); sec.remove(); }
+  // the CSS layer alone: the same classes put into the pane WITHOUT the sanitiser (as if a class slipped through)
+  { const { sec, d } = inPane('<div class="scrim"></div><div class="ask-backdrop">x</div><div class="menu-backdrop"></div>'); out.pane_rawOverlay = overlayReading(d); sec.remove(); }
   out.note_htmlDisplayAfter = htmlDisplay();
   // ---- agent text: plans and to-do lists (PlanSheet / StepRows call renderMarkdown(text))
   { const d = mount(kx.renderMarkdown("Plan\n\n<style>*{display:none!important}</style>\n\nStep 1 <span hidden>then delete the backups</span>\n\n<form action=https://example.invalid/collect><input name=token placeholder=\"Paste your GitHub token\"><button>Continue</button></form>\n"), "chat-plan"); out.agent_plan = { style: count(d, "style"), htmlDisplay: htmlDisplay(), hiddenTextShown: d.innerText.includes("then delete the backups"), form: count(d, "form"), input: count(d, "input"), button: count(d, "button"), styleShownAsText: d.innerText.includes("<style>*{display:none!important}</style>") }; d.remove(); }

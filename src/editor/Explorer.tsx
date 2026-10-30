@@ -756,7 +756,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
           <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} />
           <div className="menu row-menu" role="menu" aria-label={`Actions for ${baseName(menu.path)}`} style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - 340) }} onKeyDown={(e) => e.key === "Escape" && setMenu(null)}>
             {withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: menu.dir && menu.path !== root && projectDrop.add !== null }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1, log: isLog(menu.path) }).map((id) => (
-              <button key={id} role="menuitem" className="menu-item" autoFocus={id === withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: false }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1 })[0]} onClick={() => runMenu(id, menu.path, menu.dir)}>
+              <button key={id} role="menuitem" className="menu-item" autoFocus={id === withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: false }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1, log: isLog(menu.path) })[0]} onClick={() => runMenu(id, menu.path, menu.dir)}>
                 {menuLabel(id)}
               </button>
             ))}
