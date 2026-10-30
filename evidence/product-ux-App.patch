@@ -1,0 +1,105 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 0d542ce..f29c366 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -161,13 +161,13 @@ import { Bell, Globe, Pin, Spinner, StatusGlyph } from "./chrome/icons";
+ import Tip from "./chrome/Tip";
+ import InboxView from "./inbox/InboxView";
+ import { inboxOverlay, onClose, onRunning, type Kept } from "./inbox/exitedPrompt";
+-import { inboxItems, type Source } from "./inbox/inbox";
++import { inboxItems, sourceOf, type Source } from "./inbox/inbox";
+ import TowerView from "./tower/TowerView";
+ import FloorView from "./floor/FloorView";
+ import SpaceView from "./space/SpaceView";
+ import { nameSeats, nameUsage, towerRows, usageByAccount } from "./tower/tower";
+ import { useTowerBridge } from "./tower/TowerWindow";
+-import { LANES, chipOf } from "./board/chip";
++import { LANES, chipOf, needsYou, paneStatus } from "./board/chip";
+ import Ring from "./usage/Ring";
+ import { capOn, codexOf, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
+ import { useAccountSwitcher } from "./switcher/AccountSwitcher";
+@@ -353,6 +353,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   }, [tabMenu]);
+   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
+   const [liveIds, setLiveIds] = useState<Record<number, Identity>>({}); // TERM-058: terminal panes' running program, from the shell marks
++  const [guess, setGuess] = useState<Record<number, AgentState | null>>({}); // T-608: each pane's title guess, as its header shows it
++  // T-608: the one status the Board, the Tower, the Inbox, the needs strip and the bell read (board/chip.ts).
++  const statusOf = (p: { key: number; agent: string }) => paneStatus(p.agent, hook[p.key], guess[p.key], running[p.key]);
+   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
+   const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
+   const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
+@@ -557,7 +560,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // SESS-004: the default agent is a settings key; the plus menu lists it first.
+   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
+   // ux fix 2: one count of waiting panes feeds the bell and the window title.
+-  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)));
++  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(panes.filter((p) => needsYou(statusOf(p))).map((p) => p.key)));
+   useEffect(() => {
+     document.title = windowTitle(info, needing);
+   }, [info, needing]);
+@@ -2034,11 +2037,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   }, [timed]);
+   const sources: Source[] = panes
+     .filter((p) => !p.kind && !p.seats)
+-    .map((p) => {
+-      const state = hook[p.key] ?? paneState(p.agent, running[p.key]);
+-      const m = stamp[p.key];
+-      return { key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, state, interrupted: m?.interrupted ?? false, running: running[p.key] !== false, changed: m?.at ?? 0, finishedAt: state === "done" ? (m?.at ?? null) : null };
+-    });
++    .map((p) => sourceOf(p, tabName(p, titles), statusOf(p), running[p.key], stamp[p.key]));
+   // T-035-b: the Inbox sees an exited pane's open prompt; a restart, a closed pane or a fresh hook state drops it.
+   const inboxSeen = inboxOverlay(sources, exitedPrompt.current, hook);
+   exitedPrompt.current = inboxSeen.kept;
+@@ -2083,7 +2082,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // when that last moved so the smart sort can put the newest change first.
+   const byDir: Record<string, AgentState[]> = {};
+   // STAT-001: a hook-fed state wins over the guess from the program's state.
+-  for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
++  for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(statusOf(p) ?? paneState(p.agent, running[p.key]));
+   const rowStates: Record<string, RowInfo> = {};
+   const workingIn = workingByDir(panes, hook, running, liveIds); // STAT-036: working agents per workspace
+   const cacheFor = cacheMinutes(settings); // SET-059
+@@ -2155,7 +2154,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     window.dispatchEvent(new Event(DIVIDER_DONE));
+   };
+   // TERM-029: this grid's sessions waiting on a permission or a question, in grid order.
+-  const waiting = stripOn(settings) ? waitingInGrid(shown.flatMap((c) => c.panes.map((p) => p.key)), hook).map((k) => panes.find((p) => p.key === k)!) : [];
++  const waiting = stripOn(settings) ? waitingInGrid(shown.flatMap((c) => c.panes.map((p) => p.key)), Object.fromEntries(panes.map((p) => [p.key, statusOf(p)]))).map((k) => panes.find((p) => p.key === k)!) : [];
+   const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
+   // VIEW-015 / VIEW-021: the Agents rail groups sessions under the saved (switched-on, installed)
+   // agents; the shown session is the remembered pick, else the first agent's newest; + adds a
+@@ -2183,11 +2182,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     setFocused(key);
+   };
+   // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
+-  const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
++  const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: statusOf(p), running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
+   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
+   // T-546: the control tower reads the same chip and meter per agent pane as the Board.
+   // FIX-6 (council d2 carry-over): built only when one of the things it reads changed, not on every render; `now` moves the chips on its 30 s tick.
+-  const towerNow = useMemo(() => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), capOn(settings)), since: stamp[p.key]?.at ?? 0 })), [panes, titles, context, plan, settings, hook, running, stale, turn, stamp, now, accountSwitcher.active.codex]);
++  const towerNow = useMemo(() => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), capOn(settings)), since: stamp[p.key]?.at ?? 0 })), [panes, titles, context, plan, settings, hook, guess, running, stale, turn, stamp, now, accountSwitcher.active.codex]);
+   // T-546-c: the Tower's own window shows the same seats and usage; a row clicked there opens the pane here.
+   // T-548 FIX-1: the figures are worked out on account ids, then the Tower is shown the names the switcher shows.
+   const towerUsage = useMemo(() => nameUsage(usageByAccount(towerNow, plan, accountSwitcher.active), (agent, id) => switcherLabel(accountSwitcher.groups, agent, id)), [towerNow, plan, accountSwitcher.active, accountSwitcher.groups]);
+@@ -2806,10 +2805,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           {terminals && page === null && waiting.length > 0 && (
+             <div className="needs-strip" role="list" aria-label="Sessions that need you">
+               {waiting.map((p) => (
+-                <button key={p.key} role="listitem" className="needs-chip" onClick={() => openPane(p.key)} title={VOCAB[hook[p.key]].explain}>
++                <button key={p.key} role="listitem" className="needs-chip" onClick={() => openPane(p.key)} title={VOCAB[statusOf(p)!].explain}>
+                   <StatusGlyph glyph="attention" size={11} />
+                   <span className="name">{tabName(p, titles)}</span>
+-                  <span className="why">{hook[p.key] === "permission" ? "needs permission" : "asked a question"}</span>
++                  <span className="why">{statusOf(p) === "permission" ? "needs permission" : "asked a question"}</span>
+                 </button>
+               ))}
+             </div>
+@@ -3079,6 +3078,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     crew={crew[p.key]}
+                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                     onIdentity={(l) => setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }))}
++                    onGuess={(g) => setGuess((m) => (m[p.key] === g ? m : { ...m, [p.key]: g }))}
+                     onBell={() => noticed(p, BELL_NOTE.what, "", BELL_NOTE.gate)}
+                     unread={unreadPanes.has(p.key)}
+                     onPty={(id, account) => {

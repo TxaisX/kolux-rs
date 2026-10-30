@@ -6,7 +6,7 @@ import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
 const view = (at: number, more: Record<string, unknown> = {}) =>
-  renderToString(createElement(WizardView, { at, connected: false, ping: true, onPing() {}, onBack() {}, onMain() {}, onSecondary() {}, onPickFolder() {}, ...more }));
+  renderToString(createElement(WizardView, { at, connected: false, ping: true, hooks: true, onHooks() {}, onPing() {}, onBack() {}, onMain() {}, onSecondary() {}, onPickFolder() {}, ...more }));
 
 test("ONB-001: the wizard opens after the last screen it finished, within the four", () => {
   expect(SCREENS.map((s) => s.id)).toEqual(["welcome", "connect", "work", "session"]);

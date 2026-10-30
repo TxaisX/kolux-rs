@@ -58,6 +58,22 @@ export function askLine(ask: string | undefined): string {
   return (ask ?? "").split("\n").map((l) => l.trim()).filter(Boolean).join(" · ");
 }
 
+/** T-608: the one state every surface reads for a pane: the Board's lane and the Tower's row (chipOf), the
+ *  Inbox's group, the needs strip and the bell. The hook's word wins; else, while the program runs, the title
+ *  guess the pane header shows (STAT-033); undefined before either has spoken. A pane opened as a plain
+ *  terminal has none on any of them, as the Board and the Tower never showed one: an agent started there by
+ *  hand keeps its status in its own header and tab (ACCT-050), and its last hook word would go stale there
+ *  once it quits. ponytail: the window does not know which agent a plain terminal shows (TerminalPane's
+ *  `found`); passing that up would put hand-started agents on all five. */
+export function paneStatus(agent: string, hook: AgentState | undefined, guess: AgentState | null | undefined, running: boolean | undefined): AgentState | undefined {
+  if (agent === "shell") return undefined;
+  return hook ?? (running === true ? (guess ?? undefined) : undefined);
+}
+
+/** T-608: what needs you, the same on every surface: a permission or a question (STAT-050, VIEW-023, TERM-029).
+ *  A stop (blocked, interrupted) reads Stopped, and the bell does not count it. */
+export const needsYou = (state: AgentState | undefined): boolean => state === "permission" || state === "waiting";
+
 /** The most urgent signal wins: an approval, then working, then done, then idle; with no evidence the line stays empty. */
 export function chipOf(s: Signal, now: number): Chip | null {
   if (s.agent === "shell") return null;

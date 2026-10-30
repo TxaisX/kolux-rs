@@ -1,0 +1,34 @@
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -118,6 +118,9 @@
+   onNeedsYou?: (needs: boolean) => void;
+   /** TERM-058: what the shell's marks say about the running program (title, agent), for the tab's name and icon. */
+   onIdentity?: (live: Identity) => void;
++  /** T-608: the title guess this header reads while no hook reports (STAT-033), so the Board, Tower, Inbox,
++   *  needs strip and bell read the same state (board/chip.ts paneStatus). */
++  onGuess?: (guess: AgentState | null) => void;
+   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
+   hook?: AgentState | "background";
+   /** The tool a hook PermissionRequest is waiting on (the hook status's `tool` while `hook` is "permission"): the
+@@ -247,7 +250,7 @@
+     }, 150 + 60 * waiting++),
+   );
+ 
+-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, session, onSessionLaunch, entryTabs, onEntry, shells, onShell, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
++export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, onGuess, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, session, onSessionLaunch, entryTabs, onEntry, shells, onShell, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+   const host = useRef<HTMLDivElement>(null);
+   const keySettingsRef = useRef(keySettings);
+   keySettingsRef.current = keySettings;
+@@ -1428,6 +1431,12 @@
+   useEffect(() => {
+     needs.current?.(needsYou);
+   }, [needsYou]);
++  // T-608: the window reads the same title guess this header does.
++  const guessed = useRef(onGuess);
++  guessed.current = onGuess;
++  useEffect(() => {
++    guessed.current?.(guess);
++  }, [guess]);
+   const drawing = renderer === "webgl" ? "GPU renderer" : renderer === "dom" ? "plain renderer" : "";
+   // TERM-116: the last 60 lines on screen plus what Kolux knows, scrubbed on the Rust side, to the
+   // clipboard; every way it can fail says so in the header.
