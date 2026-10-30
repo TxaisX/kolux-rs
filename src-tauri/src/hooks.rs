@@ -677,20 +677,63 @@ fn settings_now(store: Option<&Mutex<crate::state::Store>>, last: &Mutex<Arc<Val
     last.clone()
 }
 
-/// T-583: one thread that runs `run` on every job in the order the jobs were handed over.
+/// T-583: one thread that runs `run` on every job in the order the jobs were handed over. A job that panics is
+/// reported and dropped; the thread lives on for the jobs after it.
 fn queue<T: Send + 'static>(run: impl Fn(T) + Send + 'static) -> impl Fn(T) + Send + Sync {
     let (jobs, taken) = std::sync::mpsc::channel::<T>();
-    std::thread::spawn(move || taken.into_iter().for_each(run));
+    std::thread::spawn(move || {
+        for job in taken {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(job))).is_err() {
+                eprintln!("kolux-rs: hooks: the work after a hook's reply failed; the next one still runs");
+            }
+        }
+    });
     move |job| drop(jobs.send(job))
 }
 
-/// T-583: every connection gets a thread of its own, so a slow or silent client holds up nothing but itself.
-// ponytail: a thread per connection, no pool; a flood of local connections costs a thread each, cut off within
-// READ_WITHIN unless it carries the token; a small pool if that ever shows.
+/// T-583: at most this many hook connections are handled at once. One over it is closed at once, unanswered: the hook
+/// script then goes on without Kolux, as when the app is closed, and the accept loop never runs out of threads.
+const MAX_IN_FLIGHT: usize = 64;
+
+/// T-583: one connection's place under MAX_IN_FLIGHT, given back when its handler ends (or its thread never starts).
+struct InFlight(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// T-583: every connection gets a thread of its own, so a slow or silent client holds up nothing but itself; a silent
+/// one is cut off within READ_WITHIN. Above MAX_IN_FLIGHT, or when no thread can be made, the connection is closed
+/// and the loop goes on: it never panics, so status and the protected-command check outlive any flood.
 fn accept(listener: TcpListener, line: Arc<Line>) {
+    let busy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Logged once per flood: set at the first refusal, cleared when a connection is taken again.
+    let mut told = false;
     for stream in listener.incoming().flatten() {
+        if busy.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+            busy.fetch_sub(1, Ordering::SeqCst);
+            if !std::mem::replace(&mut told, true) {
+                eprintln!("kolux-rs: hooks: {MAX_IN_FLIGHT} hook connections already open; closing new ones unanswered until one ends");
+            }
+            continue;
+        }
+        let place = InFlight(busy.clone());
         let (line, accepted) = (line.clone(), Instant::now());
-        std::thread::spawn(move || handle(&stream, accepted, &line));
+        let started = std::thread::Builder::new().name("kolux-hook".into()).spawn(move || {
+            let _place = place;
+            handle(&stream, accepted, &line);
+        });
+        // On Err the closure is dropped here with its stream (closed, unanswered) and its place (given back).
+        match started {
+            Ok(_) => told = false,
+            Err(e) => {
+                if !std::mem::replace(&mut told, true) {
+                    eprintln!("kolux-rs: hooks: no thread for a hook connection ({e}); closing it unanswered");
+                }
+            }
+        }
     }
 }
 
@@ -2119,6 +2162,43 @@ Content-Length: {}
         assert!(took < LIMIT && body.contains(r#""permissionDecision":"ask""#), "another pane's protected command: {took:?} {body}");
         let _ = release.send(());
         assert!(huge.join().unwrap().0.contains(r#""permissionDecision":"ask""#), "the huge command still asks");
+    }
+
+    #[test]
+    fn t583_with_the_cap_reached_a_new_connection_is_closed_at_once_and_the_line_keeps_accepting() {
+        use std::io::Read as _;
+        let port = line_with(|| Arc::new(json!({})), |_| {});
+        // MAX_IN_FLIGHT clients that connect and say nothing: each holds its handler for up to READ_WITHIN.
+        let silent: Vec<TcpStream> = (0..MAX_IN_FLIGHT).map(|_| TcpStream::connect(("127.0.0.1", port)).unwrap()).collect();
+        std::thread::sleep(Duration::from_millis(300));
+        let mut over = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        over.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let started = Instant::now();
+        let mut buf = [0u8; 64];
+        let got = over.read(&mut buf);
+        let took = started.elapsed();
+        assert!(matches!(got, Ok(0)) || got.is_err(), "the connection over the cap gets no answer: {got:?}");
+        assert!(took < READ_WITHIN / 2, "closed at once, not held for its read deadline ({took:?})");
+        // The silent clients go; their handlers end and free their places. The line still answers.
+        drop(silent);
+        std::thread::sleep(Duration::from_millis(300));
+        let (body, took) = hook(port, 58_308, &shell("git push --force origin main"));
+        assert!(took < LIMIT && body.contains(r#""permissionDecision":"ask""#), "the listener keeps accepting: {took:?} {body}");
+    }
+
+    #[test]
+    fn t583_a_job_after_the_reply_that_panics_leaves_the_queue_running_for_the_next() {
+        let (done, heard) = std::sync::mpsc::channel::<u32>();
+        let done = Mutex::new(done);
+        let run = queue(move |job: u32| {
+            assert_ne!(job, 1, "the first job fails");
+            let _ = done.lock().unwrap().send(job);
+        });
+        run(1);
+        run(2);
+        run(3);
+        assert_eq!(heard.recv_timeout(Duration::from_secs(5)), Ok(2), "the job after the panic still runs");
+        assert_eq!(heard.recv_timeout(Duration::from_secs(5)), Ok(3), "and the one after it, in order");
     }
 
     #[test]

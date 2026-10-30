@@ -96,6 +96,11 @@ recorded default until told otherwise; nothing here blocks a pass.
   already calls terminal_forget_history; a matching agent_hooks::saved forget needs one more command or a line in
   terminal.rs). (4) Optional, T-583: make protected::mask in protected.rs cheaper on very large commands, so one huge
   protected command's own reply stays under 1.5 s (it no longer holds up other panes).
+- [status-hooks] 2026-10-30 · Follow-ups from the PR #13 review, not built: (1) refresh the hook line's settings snapshot on
+  every settings save (state.rs), so a protected rule changed while slow work holds the store applies at once, not from the
+  first hook after the store frees. (2) Keep each pane's order for near-simultaneous events: two hooks of one pane that
+  arrive together are stepped in the order their threads take the ORDER lock, not always the order they were sent.
+  (3) automations.rs still starts a bare thread per job with no cap; give it a cap and a Builder spawn as the hook line has.
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
