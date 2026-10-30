@@ -1140,10 +1140,17 @@ impl Panes for crate::terminal::Terminals {
     // ponytail: the pause between the pasted prompt and Enter blocks the caller for a quarter of a
     // second; a thread if sends ever come in bunches.
     fn send(&self, terminal: u32, text: &str) -> Result<(), String> {
-        self.write(terminal, &format!("\u{1b}[200~{}\u{1b}[201~", text.replace("\r\n", "\n")))?;
+        self.write(terminal, &bracketed(text))?;
         std::thread::sleep(std::time::Duration::from_millis(250));
         self.write(terminal, "\r")
     }
+}
+
+/// A prompt as one bracketed paste for a reused session (AUTO-009), with ESC and every control
+/// character except line feed and tab dropped first (`sendonce::paste_safe`), so its text (a
+/// pull-request title, say) cannot end the paste early.
+fn bracketed(text: &str) -> String {
+    format!("\u{1b}[200~{}\u{1b}[201~", crate::orchestration::sendonce::paste_safe(text))
 }
 
 /// AUTO-009: the session this run may continue in: the automation asks for reuse (existing
@@ -1480,6 +1487,14 @@ pub async fn automation_run_now(app: tauri::AppHandle, id: String) -> Result<Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-605 re-review of PR #15: a reused session's prompt (it can carry a pull-request title) goes
+    /// in as one bracketed paste with ESC and every control character except line feed and tab
+    /// dropped, so it cannot end the paste early and press Enter on a command of its own.
+    #[test]
+    fn t605_a_reused_sessions_prompt_cannot_end_its_paste_early() {
+        assert_eq!(bracketed("Fix: title\u{1b}[201~\rrm -rf ~\r\nnext\tline\u{7}"), "\u{1b}[200~Fix: title[201~rm -rf ~\nnext\tline\u{1b}[201~");
+    }
     use std::cell::RefCell;
 
     fn temp(name: &str) -> PathBuf {

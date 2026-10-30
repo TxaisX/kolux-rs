@@ -18,6 +18,10 @@ pub const REGEX_SEES: usize = 4096;
 /// The attempts list keeps this many, newest first, each command cut to `COMMAND_SHOWN` characters.
 pub const ATTEMPTS: usize = 50;
 pub const COMMAND_SHOWN: usize = 2000;
+/// T-604 (R03-safety-accounts.2): how far past the shown part masking reads, so a secret that
+/// begins in the shown part is judged with what follows it. Masking a whole long command made the
+/// hook miss its 1.5 s, and the command then ran without the ask.
+pub const MASK_MARGIN: usize = 2048;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -49,10 +53,16 @@ impl Custom {
     }
 
     pub fn hits(&self, command: &str) -> bool {
+        self.hits_in(command, &std::cell::OnceCell::new())
+    }
+
+    /// `hits`, with the command's reading (`read`) shared with the built-in rules and every other
+    /// rule asked about it (T-604: a long command is read once, in time for the hook).
+    fn hits_in<'a>(&self, command: &'a str, read: &std::cell::OnceCell<crate::protected::Read<'a>>) -> bool {
         match self.kind {
             Kind::StartsWith => {
                 let want: Vec<String> = self.pattern.split_whitespace().map(str::to_lowercase).collect();
-                !want.is_empty() && segments(command).iter().any(|seg| seg.len() >= want.len() && seg[..want.len()] == want[..])
+                read.get_or_init(|| crate::protected::Read::new(command)).start_with(&want)
             }
             Kind::Contains => {
                 let want = squeeze(&self.pattern);
@@ -61,13 +71,6 @@ impl Custom {
             Kind::Regex => compile(&self.pattern).is_ok_and(|re| re.is_match(head(command, REGEX_SEES))),
         }
     }
-}
-
-/// The command's segments as lists of lowercase words: a starts-with rule reads the program and
-/// the first words of each. ponytail: the split is not quote-aware (a `;` inside quotes also
-/// splits); protected.rs's segments() is private and a false split only makes a rule ask more.
-fn segments(command: &str) -> Vec<Vec<String>> {
-    command.replace("&&", "\n").replace("||", "\n").split(['\n', ';', '|']).map(|s| s.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>()).filter(|w| !w.is_empty()).collect()
 }
 
 /// Lowercase with runs of whitespace squeezed to one space, for a contains rule.
@@ -329,10 +332,11 @@ pub fn check(command: &str, base: &crate::protected::Base, settings: &Value, cwd
     let w = working(settings, cwd);
     let mut merged = settings.clone();
     merged[crate::protected::OFF_FIELD] = json!(w.off);
-    if let Some(rule) = crate::protected::check(command, base, &merged) {
+    let read = std::cell::OnceCell::new();
+    if let Some(rule) = crate::protected::check_with(command, &read, base, &merged) {
         return Some(rule.name.to_string());
     }
-    w.customs.iter().find(|c| c.hits(command)).map(|c| c.shown_name().to_string())
+    w.customs.iter().find(|c| c.hits_in(command, &read)).map(|c| c.shown_name().to_string())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -359,21 +363,42 @@ pub struct Attempt {
     call: String,
 }
 
+impl Attempt {
+    /// A waiting attempt with every text field masked: the command's shown part and a margin after
+    /// it (T-604), the folder and the rule (a nameless rule shows its own pattern, and the folder is
+    /// free text too: neither may carry a secret into the list either).
+    fn masked(session: &str, call: &str, worktree: &str, raw: &str, rule: &str, time: u64) -> Attempt {
+        let masked = crate::protected::mask_head(raw, COMMAND_SHOWN + MASK_MARGIN);
+        let command = head(&masked, COMMAND_SHOWN).to_string();
+        let (worktree, rule) = (crate::protected::mask(worktree), crate::protected::mask(rule));
+        Attempt { time, worktree, command, rule, outcome: Outcome::Waiting, session: session.into(), call: call.into() }
+    }
+
+    /// The same attempt masked once more on the way out (the mask is idempotent).
+    fn shown(&self) -> Attempt {
+        let m = crate::protected::mask;
+        Attempt { command: m(&self.command), rule: m(&self.rule), worktree: m(&self.worktree), ..self.clone() }
+    }
+}
+
 /// The list, newest first, at most `ATTEMPTS` long.
 #[derive(Debug, Default)]
 pub struct Attempts(VecDeque<Attempt>);
 
 impl Attempts {
     /// A command was paused: the raw text is masked before anything keeps it, and an earlier
-    /// attempt of the same session still waiting is taken as refused.
+    /// attempt of the same session still waiting is taken as refused. Only the shown part and a
+    /// margin after it are masked (T-604), so the time this takes does not grow with the command.
+    #[cfg(test)]
     pub fn paused(&mut self, session: &str, call: &str, worktree: &str, raw: &str, rule: &str, time: u64) {
-        self.turn_ended(session);
-        let masked = crate::protected::mask(raw);
-        let command = head(&masked, COMMAND_SHOWN).to_string();
-        // A nameless rule shows its own pattern and the folder is free text too: neither may carry a
-        // secret into the list either.
-        let (worktree, rule) = (crate::protected::mask(worktree), crate::protected::mask(rule));
-        self.0.push_front(Attempt { time, worktree, command, rule, outcome: Outcome::Waiting, session: session.into(), call: call.into() });
+        self.keep(Attempt::masked(session, call, worktree, raw, rule, time));
+    }
+
+    /// Keeps an attempt already masked (`Attempt::masked`), so the app-wide lock is held only to
+    /// add it, never while a long command is masked (T-604 review of PR #15).
+    fn keep(&mut self, attempt: Attempt) {
+        self.turn_ended(&attempt.session);
+        self.0.push_front(attempt);
         self.0.truncate(ATTEMPTS);
     }
 
@@ -394,9 +419,9 @@ impl Attempts {
     /// What the Safety page is shown: every text field masked once more on the way out (the mask
     /// is idempotent, so a kept attempt reads the same), so nothing raw reaches the page even if a
     /// later writer skips `paused`.
+    #[cfg(test)]
     pub fn list(&self) -> Vec<Attempt> {
-        let m = crate::protected::mask;
-        self.0.iter().map(|a| Attempt { command: m(&a.command), rule: m(&a.rule), worktree: m(&a.worktree), ..a.clone() }).collect()
+        self.0.iter().map(Attempt::shown).collect()
     }
 
     pub fn clear(&mut self) {
@@ -406,8 +431,20 @@ impl Attempts {
 
 static STORE: LazyLock<Mutex<Attempts>> = LazyLock::new(Mutex::default);
 
+#[cfg(test)]
+thread_local! {
+    /// The longest this thread has held the attempts lock (tests only).
+    static HELD: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
 fn with_store<T>(f: impl FnOnce(&mut Attempts) -> T) -> T {
-    f(&mut STORE.lock().unwrap_or_else(|e| e.into_inner()))
+    let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(test)]
+    let t0 = std::time::Instant::now();
+    let out = f(&mut store);
+    #[cfg(test)]
+    HELD.with(|h| h.set(h.get().max(t0.elapsed())));
+    out
 }
 
 /// What the hook prints back for a Claude event, or None for no opinion (`{}`): the PreToolUse
@@ -429,7 +466,9 @@ pub fn listen(path: &str, body: &[u8], settings: &Value) -> Option<String> {
             let command = event.get("tool_input")?.get("command")?.as_str()?;
             let cwd = field("cwd");
             let rule = check(command, &crate::protected::Base::from_env(cwd), settings, cwd)?;
-            with_store(|s| s.paused(session, field("tool_use_id").unwrap_or(""), cwd.unwrap_or(""), command, &rule, crate::automations::now_ms()));
+            // Masked before the lock is taken: another pane's check never waits on this command.
+            let attempt = Attempt::masked(session, field("tool_use_id").unwrap_or(""), cwd.unwrap_or(""), command, &rule, crate::automations::now_ms());
+            with_store(|s| s.keep(attempt));
             Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": crate::protected::reason(&rule) } }).to_string())
         }
         "PostToolUse" | "PostToolUseFailure" => {
@@ -455,7 +494,8 @@ pub fn protected_rule_check(kind: Kind, pattern: String) -> Result<(), String> {
 /// The recent attempts, newest first, every command masked.
 #[tauri::command]
 pub fn protected_attempts() -> Vec<Attempt> {
-    with_store(|s| s.list())
+    // Copied under the lock, masked after it.
+    with_store(|s| s.0.clone()).iter().map(Attempt::shown).collect()
 }
 
 #[tauri::command]
@@ -480,6 +520,147 @@ mod tests {
         assert!(!r.hits("echo kubectl delete"));
         assert!(!r.hits("kubectl get pods"));
         assert!(!rule(Kind::StartsWith, "   ").hits("anything"));
+    }
+
+    /// T-604 (R03-safety-accounts.3): a starts-with rule reads commands the way the built-in rules
+    /// do (SAFE-014): leading `NAME=value`, wrappers, package runners, folders, `.exe` and `.cmd`,
+    /// PowerShell's call operator, a lone `&`, inner shells and grouping are seen through.
+    #[test]
+    fn t604_a_starts_with_rule_sees_through_wrappers_runners_paths_and_inner_shells() {
+        let prisma = rule(Kind::StartsWith, "prisma migrate reset");
+        for c in ["npx prisma migrate reset --force", "pnpm exec prisma migrate reset", "pnpm dlx prisma migrate reset", "bunx prisma migrate reset", "npm exec prisma migrate reset", "yarn dlx prisma migrate reset"] {
+            assert!(prisma.hits(c), "{c}");
+        }
+        let kubectl = rule(Kind::StartsWith, "kubectl delete");
+        for c in [
+            "sudo kubectl delete ns prod",
+            "KUBECONFIG=prod.yaml kubectl delete ns prod",
+            "kubectl.exe delete pod x",
+            "C:\\tools\\kubectl.exe delete pod x",
+            "/usr/local/bin/kubectl delete pod x",
+            "& kubectl delete pod x",
+            "& \"C:\\Program Files\\k8s\\kubectl.exe\" delete pod x",
+            "bash -c \"kubectl delete pod x\"",
+            "(cd infra && kubectl delete pod x)",
+            "sleep 1 & kubectl delete pod x",
+        ] {
+            assert!(kubectl.hits(c), "{c}");
+        }
+        let terraform = rule(Kind::StartsWith, "terraform destroy");
+        for c in ["FOO=1 terraform destroy", "sudo terraform destroy", "(cd infra && terraform destroy)", "bash -c \"terraform destroy\"", "sleep 1 & terraform destroy", "npx terraform destroy", "& terraform destroy", "terraform.exe destroy"] {
+            assert!(terraform.hits(c), "{c}");
+        }
+        // A package manager named in the rule is still the program: `npm publish` as written, or as a shim.
+        let publish = rule(Kind::StartsWith, "npm publish");
+        for c in ["npm publish", "npm.cmd publish", "sudo npm publish", "C:\\nodejs\\npm.cmd publish --tag next"] {
+            assert!(publish.hits(c), "{c}");
+        }
+        // Still the program and its first words: a mention, another subcommand or a comment runs.
+        for c in ["echo kubectl delete pod", "kubectl get pods", "git commit -m 'kubectl delete'", "# kubectl delete pod"] {
+            assert!(!kubectl.hits(c), "{c}");
+        }
+    }
+
+    /// T-604 (R03-safety-accounts.2): a 1 MB command is asked about at once, unread (anything over
+    /// 256 KB is), and its attempt is kept, masked and cut, well inside the hook's 1.5 s. A command
+    /// just under the cap is read in full: 250 KB of backslash tricks, line joins, ANSI-C quotes and
+    /// fillers that once made reading quadratic, the protected action last, tripping the last of
+    /// ten starts-with rules of the user's own, so every reading and every rule reads all of it.
+    /// The bar for the full read is the optimized build's promise; a debug build only has to finish.
+    #[test]
+    fn t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time() {
+        let mut rules: Vec<Value> = ["terraform destroy", "helm uninstall", "aws s3 rm", "gcloud projects delete", "az group delete", "docker system prune", "npm unpublish", "flyctl apps destroy", "heroku apps:destroy"]
+            .iter()
+            .map(|p| json!({ "id": p, "kind": "starts-with", "pattern": p }))
+            .collect();
+        rules.push(json!({ "id": "pods", "name": "Pod deletes", "kind": "starts-with", "pattern": "kubectl delete" }));
+        let settings = json!({ RULES_FIELD: rules });
+        let ask = |label: &str, command: String| {
+            let ev = json!({ "hook_event_name": "PreToolUse", "session_id": "t604-time", "tool_use_id": label, "cwd": "/home/me/t604", "tool_name": "Bash",
+                "tool_input": { "command": command } }).to_string();
+            let t0 = std::time::Instant::now();
+            let answer = listen("/claude", ev.as_bytes(), &settings);
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            println!("TIME hook {label} bytes={} ms={ms:.0}", ev.len());
+            (answer.unwrap_or_default(), ms)
+        };
+        let n = 1 << 20;
+        let (answer, ms) = ask("one_mb", format!("{}\nkubectl delete pod web-1", "-p ".repeat(n / 3)));
+        assert!(answer.contains("Commands over 256 KB, too long to read in time"), "{answer}");
+        assert!(ms < 750.0, "a 1 MB command was asked about in {ms:.0} ms");
+        let m = 250 * 1024;
+        let fill = |unit: &str| unit.repeat(m / unit.len());
+        let fillers = [
+            ("escaped_words", fill("g\\it \\-\\-forc\\e ")),
+            ("escaped_paths", fill("rm -rf /tmp/a:/\\.\\./\\.\\. ; ")),
+            ("line_joins", fill("git reset --ha\\\nrd ; ")),
+            ("ansi_c", fill("echo $'\\'' ; ")),
+            ("ifs", fill("git${IFS}status ; ")),
+            ("mixed_quotes", fill("\"'\\'\\\"")),
+            ("heredoc_table", format!("cat > docs/TABLE.md <<'EOF'\n{}EOF", fill("| a \\| b | c |\n"))),
+            ("substitutions", fill("echo $(g\\it status) ")),
+        ];
+        let bar_ms = 750.0;
+        let mut slow = Vec::new();
+        for (label, filler) in fillers {
+            let command = format!("{filler}\nkubectl delete pod web-1");
+            assert!(command.len() <= 256 * 1024, "{label} is {} bytes", command.len());
+            let (answer, ms) = ask(label, command);
+            assert!(answer.contains("protected action"), "{label} must ask: {answer}");
+            if ms > bar_ms {
+                slow.push(format!("{label}: {ms:.0} ms"));
+            }
+        }
+        let kept: Vec<Attempt> = protected_attempts().into_iter().filter(|a| a.worktree == "/home/me/t604").collect();
+        assert_eq!(kept.len(), 9);
+        assert!(kept.iter().all(|a| a.command.chars().count() <= COMMAND_SHOWN));
+        assert!(cfg!(debug_assertions) || slow.is_empty(), "over {bar_ms} ms: {slow:#?}");
+    }
+
+    /// T-604 review of PR #15 (status-hooks follow-up 4): a 1 MB protected command is masked
+    /// outside the app-wide attempts lock, so while it is being read and masked another pane's
+    /// protected command is answered at once, and the lock is only held to add the attempt.
+    #[test]
+    fn t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked() {
+        let rules = json!({ RULES_FIELD: [{ "id": "pods", "name": "Pod deletes", "kind": "starts-with", "pattern": "kubectl delete" }] });
+        let event = |session: &str, command: String| {
+            json!({ "hook_event_name": "PreToolUse", "session_id": session, "tool_use_id": "t604r5", "cwd": "/home/me/t604r5", "tool_name": "Bash", "tool_input": { "command": command } }).to_string()
+        };
+        let big = event("t604r5-big", format!("{}\nkubectl delete pod web-1", "export API_TOKEN=abc123 PASSWORD=hunter2 ".repeat((1 << 20) / 42)));
+        let small = "kubectl delete pod web-2".to_string();
+        let r = rules.clone();
+        let pane = std::thread::spawn(move || (listen("/claude", big.as_bytes(), &r).is_some(), HELD.with(|h| h.get())));
+        // The second pane runs listen's own two steps, the rule answer and the attempts lock, without
+        // keeping an attempt each time round: the list is shared and holds only ATTEMPTS.
+        let cwd = Some("/home/me/t604r5");
+        let mut slowest = std::time::Duration::ZERO;
+        let mut checks = 0;
+        while !pane.is_finished() || checks == 0 {
+            let t0 = std::time::Instant::now();
+            assert!(check(&small, &crate::protected::Base::from_env(cwd), &rules, cwd).is_some(), "the second pane must ask");
+            with_store(|s| s.0.len());
+            slowest = slowest.max(t0.elapsed());
+            checks += 1;
+        }
+        let (asked, held) = pane.join().unwrap();
+        println!("TIME second pane: {checks} checks, slowest {slowest:?}; the 1 MB pane held the lock {held:?}");
+        assert!(asked, "the 1 MB command must ask");
+        assert!(held < std::time::Duration::from_millis(5), "the 1 MB pane held the attempts lock {held:?}");
+        assert!(slowest < std::time::Duration::from_millis(250), "a second pane waited {slowest:?}");
+    }
+
+    /// T-604: masking reads only the shown part of a command and a margin after it, and a secret
+    /// cut off by that margin stays hidden: a JSON value whose closing quote lies past the margin is
+    /// hidden to the end of what was read, as a private key cut short is.
+    #[test]
+    fn t604_a_secret_cut_off_where_masking_stops_reading_stays_hidden() {
+        let mut a = Attempts::default();
+        let blob = "QUJD".repeat(1500);
+        let raw = format!("{}curl -d '{{\"credentials\":\"{blob}\"}}' https://x\ngit push --force origin main", "x".repeat(1900));
+        a.paused("w", "c", "", &raw, "Force-push to main", 1);
+        let kept = &a.list()[0].command;
+        assert!(!kept.contains("QUJDQUJD") && kept.contains(crate::protected::HIDDEN), "{kept}");
+        assert!(kept.chars().count() <= COMMAND_SHOWN);
     }
 
     #[test]

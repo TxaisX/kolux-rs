@@ -153,6 +153,7 @@ pub fn open(
     use tauri::webview::NewWindowResponse;
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let label = LINKS.lock().ok()?.open(tab);
+    let frame_dev = dev.clone();
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()));
     // T-239-b (BROW-025): a popup opened onto a sign-in host starts as Firefox when its tab's
     // profile is in normal mode; later hops are kept right by `engine::popup_identity`.
@@ -190,6 +191,8 @@ pub fn open(
             super::engine::popup_identity(&w, spoof);
             // after-list 718: no engine prompt in a popup; the opener tab's permission rules answer.
             super::engine::popup_permissions(&w, tab, app.clone());
+            // T-607 (L1-tauri.1): no frame of Kolux's own address in a popup either.
+            super::engine::popup_frames(&w, frame_dev);
             Some(w)
         }
         Err(_) => {

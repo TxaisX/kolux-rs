@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 714 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 8 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 718 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -110,7 +110,9 @@ recorded default until told otherwise; nothing here blocks a pass.
   to the program. (3) Optional, T-618: drop a closed tab's saved status row at the moment it closes (App.tsx dropPanes
   already calls terminal_forget_history; a matching agent_hooks::saved forget needs one more command or a line in
   terminal.rs). (4) Optional, T-583: make protected::mask in protected.rs cheaper on very large commands, so one huge
-  protected command's own reply stays under 1.5 s (it no longer holds up other panes).
+  protected command's own reply stays under 1.5 s (it no longer holds up other panes). Done by lane/safety T-604: masking reads
+  only the shown 2,000 characters and a 2,048-character margin (mask_head); a 1 MB command is answered in at most
+  523 ms optimized (evidence/T-604.txt).
 - [status-hooks] 2026-10-30 · Follow-ups from the PR #13 review, not built: (1) refresh the hook line's settings snapshot on
   every settings save (state.rs), so a protected rule changed while slow work holds the store applies at once, not from the
   first hook after the store frees. (2) Keep each pane's order for near-simultaneous events: two hooks of one pane that
@@ -119,7 +121,10 @@ recorded default until told otherwise; nothing here blocks a pass.
   (4) Found while fixing the review: protected_custom.rs Attempts::paused masks the whole command under the app-wide
   attempts lock (STORE), so while one huge protected command is masked, every other pane's protected command (and any
   prompt, which also takes that lock) waits for it: about 2 s in the hook tests. Mask before taking the lock. Not this
-  lane's file, so not changed here; T-583's "holds up no other pane" is true only until that mask starts.
+  lane's file, so not changed here; T-583's "holds up no other pane" is true only until that mask starts. DONE 2026-10-30
+  (lane/safety, PR #15 review): the command is masked before the lock is taken and the list is copied under it and
+  masked after; the 1 MB pane now holds the lock about 8 µs (was 8 ms with the lane's 4 KB mask cap), test
+  protected_custom t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked; evidence/T-604.txt.
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
@@ -167,6 +172,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 ## Decisions made for Txais
 
+- 2026-10-30 · [safety] T-606 · AI writer agents (the commit-message button, the one-click flow, agent recipes, PR text, branch naming) run from an empty temp folder with Claude limited to user settings (`--setting-sources user`) and no project MCP (`--strict-mcp-config`). Custom commands and recipe templates still run in the workspace.
 - 2026-10-30 · [status-hooks] T-583 · The order of a pane's status events is kept by one app-wide lock held only around the status step, the emit and the after-queue; a protected-command reply is worked out per connection, outside that lock, so one slow hook never holds up another pane.
 - 2026-10-30 · [release-ci] T-588 · CI release signing acts only on the build this run's `--build-only` recorded, never on the newest output folder; a run on an already-released main ends with "nothing was built, nothing to sign".
 - 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
@@ -212,6 +218,27 @@ recorded default until told otherwise; nothing here blocks a pass.
   the branch) does not take branch_turn; take it there too.
 - 2026-10-30 · [workspaces] T-617 · Review of PR #10: src-tauri/src/files.rs:79 save copies left by a save through a
   dangling link are no longer cleared up; clear them again.
+
+- 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: a recursive rm of a symbolic link into the temp
+  folder is let through by the temp-folder exemption although it may point elsewhere; resolve the link (or ask) first.
+- 2026-10-30 · [safety] T-607 · Review of PR #15: browser_engine.rs frame_ok judges the dev server by its own origin
+  only; also refuse 127.0.0.1:1420 and [::1]:1420 in a development build.
+- 2026-10-30 · [safety] T-606 · Review of PR #15: the Cursor writer now gets --trust (it runs in the empty temp folder,
+  so it trusts nothing of the workspace); confirm that is wanted when Cursor's writer is checked live.
+- 2026-10-30 · [safety] T-606 · Review of PR #15: a writer installed as a non-npm .cmd/.bat script refuses a multi-line
+  prompt with a plain message (cmd.exe cannot take a line break); a typed or file hand-over would lift that.
+
+- 2026-10-30 · [product-ux] Review of PR #16, not built: (a) Force Reload's unsaved-work question uses window.confirm;
+  switch it to the app's own close question, or to the dialog plugin's ask() with dialog:allow-ask.
+- 2026-10-30 · [product-ux] Review of PR #16, not built: (b) programWord (src/launch/PlusMenu.tsx:39) labels agents
+  without a vendor mark "PowerShell".
+- 2026-10-30 · [product-ux] Review of PR #16, not built: (c) a pane whose program failed to start no longer rings the
+  bell (needsAttention leaves out "failed"), unlike main before PR #16.
+- 2026-10-30 · [product-ux] Review of PR #16, not built: (d) a late Stop/done hook that arrives after the prompt mark
+  can bring a stale status word back.
+
+- 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: the protected-delete rule does not cover
+  `[IO.Directory]::Delete`, `find -delete`, `rimraf` or `robocopy /MIR`.
 
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt

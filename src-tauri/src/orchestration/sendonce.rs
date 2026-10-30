@@ -385,6 +385,13 @@ pub struct Delivery {
     pub pasted_ms: Option<u64>,
 }
 
+/// A prompt as it may go inside a bracketed paste: ESC and every other control character (C0, DEL
+/// and C1) dropped except line feed and tab, so text cannot close the paste early (`ESC[201~`),
+/// press Enter with a carriage return, or drive the terminal.
+pub(crate) fn paste_safe(t: &str) -> String {
+    t.chars().filter(|&c| c == '\n' || c == '\t' || !c.is_control()).collect()
+}
+
 /// Drives `send` to its end: `look` is asked each time round, `write` types, `sleep` waits. An agent
 /// takes the text as one bracketed paste so its line breaks do not send it early; a shell takes it
 /// as typed.
@@ -398,7 +405,7 @@ pub fn drive(send: &mut Send, text: Option<&str>, agent: bool, mut look: impl Fn
             Step::Paste => {
                 if let Some(t) = text {
                     if agent {
-                        write(&format!("\u{1b}[200~{t}\u{1b}[201~"))?;
+                        write(&format!("\u{1b}[200~{}\u{1b}[201~", paste_safe(t)))?;
                     } else {
                         write(t)?;
                     }
@@ -554,6 +561,20 @@ mod tests {
         let mut s = Send::new(5, true, true, 0);
         let d = drive(&mut s, Some("hello"), true, || Look { live: false, ..idle(0, None) }, |_| Ok(()), |_| {}).unwrap();
         assert_eq!((d.outcome, d.delivered), (Outcome::Gone, vec![]));
+    }
+
+    /// T-605 review of PR #15: a prompt cannot end the bracketed paste early or drive the
+    /// terminal: ESC and every other control character except line feed and tab is dropped first,
+    /// so a hidden `ESC[201~` followed by a carriage return cannot send a command of its own.
+    #[test]
+    fn t605_a_pasted_prompt_loses_escapes_and_control_characters_but_keeps_lines_and_tabs() {
+        let clock = AtomicU64::new(0);
+        let mut typed = Vec::new();
+        let mut s = Send::new(5, true, true, 0);
+        let text = "fix it\u{1b}[201~\rrm -rf ~\r\n\u{7}\u{0}line two\tend\u{9b}2J";
+        drive(&mut s, Some(text), true, || idle(clock.load(Ordering::SeqCst), None), |t| { typed.push(t.to_string()); Ok(()) }, |w| { clock.fetch_add(w.as_millis() as u64, Ordering::SeqCst); }).unwrap();
+        assert_eq!(typed[0], "\u{1b}[200~fix it[201~rm -rf ~\nline two\tend2J\u{1b}[201~");
+        assert_eq!(typed[0].matches('\u{1b}').count(), 2, "{:?}", typed[0]);
     }
 
     #[test]

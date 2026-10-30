@@ -36,6 +36,12 @@ export function cutChunks(text: string, size = CHUNK): string[] {
  *  T-278-d (council D2 MERGE 32 A1): inside a bracketed paste every ESC byte is dropped too, so a clipboard
  *  holding ESC[201~ can never close the bracket early and type what follows straight into the shell (the
  *  rule is "every ESC", not only the two bracket sequences: simpler, and no control sequence belongs in a paste). */
+/** Text as it may go inside a bracketed paste: ESC and every control character (C0, DEL, C1) dropped
+ *  except line feed and tab, so it cannot end the paste early or press Enter (as sendonce.rs paste_safe). */
+// eslint-disable-next-line no-control-regex
+export const pasteSafe = (text: string) => text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+/** A prompt typed into an agent as one bracketed paste. */
+export const bracketed = (text: string) => BRACKET_OPEN + pasteSafe(text) + BRACKET_CLOSE;
 export const prepareForTerminal = (text: string, bracketed = false) => (bracketed ? text.replace(/\x1b/g, "") : text).replace(/\r?\n/g, "\r");
 
 type Chunk = { data: string; open: boolean };

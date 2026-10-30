@@ -314,12 +314,17 @@ pub fn start_dir(workspace: &str, requested: Option<&str>) -> String {
 /// A pane that runs one program (an agent such as `claude`) instead of a shell. `program` is
 /// resolved the way a shell would (`claude` becomes `...\claude.exe`) so the process starts
 /// without a shell in between; a name that does not resolve is passed through unchanged and the
-/// spawn error says what was missing. A Windows command-script shim (npm's `codex.cmd`) is run
-/// through `cmd.exe /d /c`, as the command line would (SESS-001). Starts in `cwd` when that
-/// folder exists.
+/// spawn error says what was missing. A Windows command-script shim is started the way
+/// `start_line` says. Starts in `cwd` when that folder exists.
 pub fn program_command(program: &str, args: &[String], cwd: Option<&str>) -> CommandBuilder {
     let resolved = crate::agents::find_program(program).unwrap_or_else(|| program.into());
-    let (exe, head) = start_line(&resolved);
+    command_for(&resolved, args, cwd, cfg!(windows))
+}
+
+/// `program_command` once the program is found, under Windows' start rules or not (`windows`), so
+/// a test builds the Windows start line on any system.
+fn command_for(resolved: &Path, args: &[String], cwd: Option<&str>, windows: bool) -> CommandBuilder {
+    let (exe, head) = start_line_on(resolved, windows);
     let mut cmd = CommandBuilder::new(exe);
     cmd.args(head);
     cmd.args(args);
@@ -329,22 +334,63 @@ pub fn program_command(program: &str, args: &[String], cwd: Option<&str>) -> Com
     cmd
 }
 
-/// What is started for `resolved`: the file itself, or for a `.cmd` / `.bat` shim `cmd.exe` with
-/// `/d /c <shim>` in front of the program's own arguments.
-// ponytail: cmd.exe's quote rules bite when the shim's folder has a space AND an argument carries
-// quotes (both together), which an opening prompt (SESS-051) can; run the shim's target directly
-// if a prompt with quotes ever misfires.
+/// What is started for `resolved`: the file itself; for npm's shim of an agent (`gemini.cmd`, made
+/// by `npm install -g`) the program the shim would run, node on the package's script, so no command
+/// shell reads the arguments (T-605: cmd.exe honours no quoting of them, so a GitHub title with `"`
+/// and `&` in an opening prompt could run a command, and it cuts a prompt at its first line break);
+/// for any other `.cmd` / `.bat`, `cmd.exe` with `/d /c <shim>` in front of the program's own
+/// arguments, and then the opening prompt is typed in after start instead (`agents::launch_line`).
+// ponytail: only npm's own shim is read (cmd-shim 7, npm 7 and later); pnpm's (it sets NODE_PATH),
+// yarn's or a hand-written launcher still go through cmd.exe with no prompt on their line; read
+// their shapes too if their typed-in prompt is ever too slow.
 pub fn start_line(resolved: &std::path::Path) -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
-    let shim = cfg!(windows)
+    start_line_on(resolved, cfg!(windows))
+}
+
+/// Whether `resolved` starts through cmd.exe (T-605).
+pub fn through_cmd(resolved: &Path) -> bool {
+    start_line(resolved).0 == "cmd.exe"
+}
+
+/// `start_line` under Windows' rules or not (`windows`), so a test builds the Windows line anywhere.
+pub(crate) fn start_line_on(resolved: &Path, windows: bool) -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
+    let shim = windows
         && resolved
             .extension()
             .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
             .unwrap_or(false);
-    if shim {
-        ("cmd.exe".into(), vec!["/d".into(), "/c".into(), resolved.as_os_str().to_owned()])
-    } else {
-        (resolved.as_os_str().to_owned(), Vec::new())
+    if !shim {
+        return (resolved.as_os_str().to_owned(), Vec::new());
     }
+    npm_target(resolved).unwrap_or_else(|| ("cmd.exe".into(), vec!["/d".into(), "/c".into(), resolved.as_os_str().to_owned()]))
+}
+
+/// T-605: what npm's shim at `shim` runs, read from the shim as npm writes it: `"%_prog%"
+/// "%dp0%\<script>" %*` with `_prog` set to node (the node.exe beside the shim, else the one on the
+/// PATH, as the shim itself picks), or `"%dp0%\<file>.exe" %*` for a package whose program is its
+/// own `.exe`. None for anything else, or when the file it names is not there.
+fn npm_target(shim: &Path) -> Option<(std::ffi::OsString, Vec<std::ffi::OsString>)> {
+    if std::fs::metadata(shim).ok()?.len() > 4096 {
+        return None;
+    }
+    let text = std::fs::read_to_string(shim).ok()?;
+    if !text.contains("SET dp0=%~dp0") || text.contains("NODE_PATH") {
+        return None;
+    }
+    let dir = shim.parent()?;
+    let run = text.lines().map(str::trim).find(|l| l.ends_with("%*"))?;
+    let (before, target) = run.strip_suffix("%*")?.trim_end().strip_suffix('"')?.rsplit_once('"')?;
+    let file = dir.join(target.strip_prefix("%dp0%\\")?.replace('\\', std::path::MAIN_SEPARATOR_STR));
+    if !file.is_file() {
+        return None;
+    }
+    let before = before.trim_end();
+    if before.ends_with("\"%_prog%\"") && text.contains("SET \"_prog=%dp0%\\node.exe\"") {
+        let beside = dir.join("node.exe");
+        let node = if beside.is_file() { beside } else { crate::agents::find_program("node.exe")? };
+        return Some((node.into_os_string(), vec![file.into_os_string()]));
+    }
+    (before.is_empty() && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))).then(|| (file.into_os_string(), Vec::new()))
 }
 
 /// The program's input, behind its own lock (council D2 MERGE 31 item 1): a caller clones it out of
@@ -568,6 +614,135 @@ mod tests {
             assert_eq!(program, shim.as_os_str());
             assert!(head.is_empty());
         }
+    }
+
+    /// What `npm install -g` writes on Windows (cmd-shim 7.0.0 inside npm 10.9.4, output taken on
+    /// 2026-10-30 from `require("cmd-shim")(target, name)`): node on a package's script ...
+    fn npm_node_shim(script: &str) -> String {
+        format!("@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\{script}\" %*\r\n")
+    }
+
+    /// ... and a package's own `.exe`.
+    fn npm_exe_shim(exe: &str) -> String {
+        format!("@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\{exe}\"   %*\r\n")
+    }
+
+    /// The Windows command line portable-pty hands CreateProcess for `argv`: each word as the C
+    /// runtime reads it (Microsoft's "Parsing C command-line arguments"), quoted when it holds a
+    /// space, tab, line break or quote, with its quotes and the backslashes before them escaped.
+    fn crt_line(argv: &[String]) -> String {
+        let quote = |a: &String| {
+            if !a.is_empty() && !a.contains([' ', '\t', '\n', '\x0b', '"']) {
+                return a.clone();
+            }
+            let (mut q, mut slashes) = (String::from("\""), 0);
+            for c in a.chars() {
+                if c == '\\' {
+                    slashes += 1;
+                    continue;
+                }
+                q.push_str(&"\\".repeat(if c == '"' { slashes * 2 + 1 } else { slashes }));
+                q.push(c);
+                slashes = 0;
+            }
+            q.push_str(&"\\".repeat(slashes * 2));
+            q.push('"');
+            q
+        };
+        argv.iter().map(quote).collect::<Vec<_>>().join(" ")
+    }
+
+    /// The words a C-runtime program such as node.exe reads back from `line`.
+    fn crt_words(line: &str) -> Vec<String> {
+        let c: Vec<char> = line.chars().collect();
+        let (mut out, mut cur, mut quoted, mut any, mut i) = (Vec::new(), String::new(), false, false, 0);
+        while i < c.len() {
+            let slashes = c[i..].iter().take_while(|x| **x == '\\').count();
+            if slashes > 0 {
+                let before_quote = c.get(i + slashes) == Some(&'"');
+                cur.push_str(&"\\".repeat(if before_quote { slashes / 2 } else { slashes }));
+                i += slashes;
+                if before_quote && slashes % 2 == 1 {
+                    cur.push('"');
+                    i += 1;
+                }
+                any = true;
+                continue;
+            }
+            match c[i] {
+                '"' => quoted = !quoted,
+                ' ' | '\t' if !quoted => {
+                    if any {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                    any = false;
+                    i += 1;
+                    continue;
+                }
+                x => cur.push(x),
+            }
+            any = true;
+            i += 1;
+        }
+        if any {
+            out.push(cur);
+        }
+        out
+    }
+
+    fn argv_of(cmd: &CommandBuilder) -> Vec<String> {
+        cmd.get_argv().iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    /// T-605 (X-sec.1, L2-rust-crates.1, R08-orch-auto-chat.2): the exact command line an
+    /// npm-installed agent starts with on Windows, its shim in a folder whose path has a space,
+    /// given an opening prompt with quotes, `&`, `|`, `<`, `>`, `%` and a line break. Node runs the
+    /// package's script itself, so cmd.exe never reads the prompt, and node reads each word back whole.
+    #[test]
+    fn t605_an_npm_agent_starts_node_on_its_script_and_no_prompt_reaches_cmd_exe() {
+        let root = crate::test_dir::temp("t605 npm shims");
+        let npm = root.join("Program Files").join("nodejs");
+        let script = npm.join("node_modules").join("@google").join("gemini-cli").join("bundle").join("gemini.js");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "#!/usr/bin/env node\n").unwrap();
+        std::fs::write(npm.join("node.exe"), "").unwrap();
+        let shim = npm.join("gemini.cmd");
+        std::fs::write(&shim, npm_node_shim("node_modules\\@google\\gemini-cli\\bundle\\gemini.js")).unwrap();
+        let prompt = "Fix issue #12: \"Crash\" & echo pwned | more < in > out %PATH%\nThen run the tests.";
+        let args = vec!["--prompt-interactive".to_string(), prompt.to_string()];
+        let argv = argv_of(&command_for(&shim, &args, None, true));
+        let path = |p: &Path| p.to_string_lossy().into_owned();
+        assert_eq!(argv, [path(&npm.join("node.exe")), path(&script), args[0].clone(), args[1].clone()]);
+        let line = crt_line(&argv);
+        assert!(!line.to_ascii_lowercase().contains("cmd.exe") && !line.contains(" /c "), "{line}");
+        assert_eq!(crt_words(&line), argv, "node reads each word back whole, the line break too: {line}");
+        // A package whose program is its own .exe starts that .exe.
+        let tool = npm.join("node_modules").join("tool").join("bin").join("tool.exe");
+        std::fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        std::fs::write(&tool, "MZ").unwrap();
+        std::fs::write(npm.join("tool.cmd"), npm_exe_shim("node_modules\\tool\\bin\\tool.exe")).unwrap();
+        assert_eq!(argv_of(&command_for(&npm.join("tool.cmd"), &args, None, true)), [path(&tool), args[0].clone(), args[1].clone()]);
+    }
+
+    /// T-605: a `.cmd` or `.bat` that is not npm's shim (one written by hand, pnpm's with its
+    /// NODE_PATH, an npm shim whose script is gone) still starts through cmd.exe, and such a start
+    /// is never given the opening prompt (`agents::launch_line` types it in after start).
+    #[test]
+    fn t605_any_other_launcher_still_starts_through_cmd_exe() {
+        let root = crate::test_dir::temp("t605 other launchers");
+        let own = root.join("claude.bat");
+        std::fs::write(&own, "@echo off\r\nnode \"%~dp0\\cli.js\" %*\r\n").unwrap();
+        let pnpm = root.join("codex.cmd");
+        std::fs::write(&pnpm, "@SETLOCAL\r\n@IF NOT DEFINED NODE_PATH (\r\n  @SET \"NODE_PATH=C:\\pnpm\\node_modules\"\r\n)\r\n@IF EXIST \"%~dp0\\node.exe\" (\r\n  \"%~dp0\\node.exe\"  \"%~dp0\\..\\codex\\bin\\codex.js\" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  \"%~dp0\\..\\codex\\bin\\codex.js\" %*\r\n)\r\n").unwrap();
+        let gone = root.join("gemini.cmd");
+        std::fs::write(&gone, npm_node_shim("node_modules\\missing\\cli.js")).unwrap();
+        for p in [&own, &pnpm, &gone] {
+            let (program, head) = start_line_on(p, true);
+            assert_eq!(program, "cmd.exe", "{p:?}");
+            assert_eq!(head, [std::ffi::OsString::from("/d"), "/c".into(), p.as_os_str().to_owned()]);
+        }
+        // Outside Windows a .cmd file is a plain file and runs itself.
+        assert_eq!(start_line_on(&gone, false), (gone.as_os_str().to_owned(), Vec::new()));
     }
 
     #[cfg(windows)]
