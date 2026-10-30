@@ -533,8 +533,8 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [ ] T-612 · The first-run wizard always finishes after Continue on "Your work"; the Tip card's Close button closes it (F08-onboarding-look-misc.2; T-566 Tip part) · product-ux lane
 
 ### workspaces lane
-- [ ] T-613 · Deleting a workspace never silently deletes unpushed commits: the question names them and the branch is kept by default (F04-projects-scm.1) · workspaces lane
-- [ ] T-614 · Removing workspaces never closes tabs opened in the meantime (F04-projects-scm.2) · workspaces lane
-- [ ] T-615 · "Discard N changes?" only discards in the workspace it was asked in (F04-projects-scm.3) · workspaces lane
-- [ ] T-616 · Renaming a file onto another file's name in different capitals is refused (R04-projects-files.1) · workspaces lane
-- [ ] T-617 · Saving through a link writes the real file and keeps the link (R04-projects-files.4) · workspaces lane
+- [x] T-613 · Deleting a workspace never silently deletes unpushed commits: the question names them and the branch is kept by default (F04-projects-scm.1) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-613.txt (the `kolux worktree rm` path is a follow-up, STATE.md)
+- [x] T-614 · Removing workspaces never closes tabs opened in the meantime (F04-projects-scm.2) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-614.txt
+- [x] T-615 · "Discard N changes?" only discards in the workspace it was asked in (F04-projects-scm.3) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-615.txt
+- [x] T-616 · Renaming a file onto another file's name in different capitals is refused (R04-projects-files.1) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-616.txt
+- [x] T-617 · Saving through a link writes the real file and keeps the link (R04-projects-files.4) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-617.txt

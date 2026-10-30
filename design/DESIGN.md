@@ -2,7 +2,7 @@
 
 Source: three screenshots of the running Kolux window (user32 PrintWindow, flag 2), taken
 2026-10-08, 20 s apart. Pixels only; no code, CSS or assets of the old app were read.
-All hex values were sampled from `reference/kolux-full.png`.
+All hex values were sampled from the full window capture (removed 2026-10-30 at Txais's request; the measurements below stay).
 
 ## 0. How to read the numbers
 
@@ -10,8 +10,8 @@ All hex values were sampled from `reference/kolux-full.png`.
   The raw capture is 1936 x 1048 because a maximized window's rect includes an 8 px
   off-screen frame (solid `#202020`) on every side. **All coordinates below are client
   coordinates**: subtract 8 from raw x and y. Client area = **1920 x 1032**.
-- `reference/client.png` is the client area alone; every crop in `reference/` is cut from it
-  (the two `window-corner-*-raw.png` crops come from the raw capture).
+- The crops (removed 2026-10-30 at Txais's request; the measurements in this file stay) were cut
+  from a capture of the client area alone; the two window-corner crops came from the raw capture.
 - "x 305..1105" means first and last pixel inclusive.
 - Text is rendered with Windows ClearType (sub-pixel colour fringes). Text hex values are the
   colour of fully covered stems; treat them as accurate to about plus or minus 4 per channel.
@@ -166,7 +166,7 @@ minus 1 px.
   Mono** (Windows Terminal's font). Second guess JetBrains Mono. Suggested stack:
   `"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace`.
 - Text looks heavier than a regular weight; it may be weight 500-600 or just ClearType on a
-  dark background. UNSURE; start at 400 and compare against `reference/terminal-body.png`.
+  dark background. UNSURE; start at 400 and compare against a capture of the terminal body (removed 2026-10-30 at Txais's request; the measurements above stay).
 - Terminal text inset: column 0 starts **4 px** inside the pane's inner edge (pane border at
   x 305, column 0 at x 309/310). Rows sit on a 16 px grid; leftover height goes to the bottom.
 - The branch chip in the pane header uses a monospace face too (`main`), about 11 px.
@@ -330,22 +330,6 @@ sidebar, layout strip, borders, status bar) was pixel-identical.
 - Light theme (if any).
 - Animation timing of the spinner.
 
-## 13. Reference files (`reference/`)
+## 13. Reference files
 
-| File | Shows |
-|---|---|
-| kolux-full.png | Raw capture 1936 x 1048 (with 8 px off-screen frame) |
-| kolux-full-t20.png, kolux-full-t40.png | Same, 20 s and 40 s later |
-| client.png | Client area 1920 x 1032, the coordinate space used above |
-| top-bar.png, top-bar-left.png, top-bar-center-tabs.png, top-bar-right.png | Top bar whole and in thirds |
-| search-box.png, usage-pill.png, window-controls.png | Top-bar controls |
-| sidebar.png, sidebar-top.png, sidebar-tabs.png, sidebar-rows.png, sidebar-bottom.png | Sidebar whole and parts |
-| layout-strip.png, layout-buttons.png | Layout strip and its button group |
-| pane-active.png, pane-inactive.png | A focused pane and an unfocused one |
-| pane-header-active.png, pane-header-inactive.png | Headers: working and done |
-| branch-chip-and-status.png, pane-header-actions.png | Header details |
-| terminal-body.png, terminal-prompt-footer.png | Terminal text |
-| status-bar.png, status-bar-right.png | Status bar |
-| corner-sidebar-tl.png, corner-pane-active-tl.png, corner-pane-inactive-tl.png, corner-panes-bottom-gap.png | Corners and gaps |
-| window-corner-tl-raw.png, window-corner-br-raw.png | Window corners incl. off-screen frame |
-| zoom4x/*.png | 4x nearest-neighbour enlargements of the small crops |
+The 36 screenshot crops of the old app that this file was measured from (removed 2026-10-30 at Txais's request; the measurements above stay).

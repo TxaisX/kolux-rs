@@ -108,8 +108,9 @@ type Composer = { title: string; body: string; base: string; draft: boolean; err
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
 export default function SourceControlPanel({ dir, initialStatus, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, aiShown = true, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
-  // GIT-003: the rows waiting for a yes before their work is thrown away.
-  const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
+  // GIT-003: the rows waiting for a yes before their work is thrown away, with the workspace they
+  // were picked in (T-615): the yes only ever acts there.
+  const [discardingRows, setDiscardingRows] = useState<{ dir: string | null; rows: Change[] } | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
   const [busyAgent, setBusyAgent] = useState(false);
@@ -235,6 +236,7 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
     setSelected([]);
     setAnchor(null);
     setDiscarding(null);
+    setDiscardingRows(null); // T-615: a question asked in another workspace goes with it
     statusRef.current = null;
     void load();
     if (dir === null) return;
@@ -334,11 +336,12 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
     void guarded(() => invoke("scm_discard", { worktree: dir, section, paths: d.paths }));
   };
   // GIT-003: rows picked across sections go through the section-free discard.
-  const discardRows = (rows: Change[]) => rows.length > 0 && !busy && setDiscardingRows(rows);
+  const discardRows = (rows: Change[]) => rows.length > 0 && !busy && setDiscardingRows({ dir, rows });
   const confirmDiscard = () => {
-    const rows = discardingRows ?? [];
+    const asked = discardingRows;
     setDiscardingRows(null);
-    void guarded(() => invoke("scm_discard", { worktree: dir, paths: rows.map((r) => r.path) }));
+    if (!asked || asked.dir !== dir) return; // T-615: never same-named files in the workspace shown now
+    void guarded(() => invoke("scm_discard", { worktree: dir, paths: asked.rows.map((r) => r.path) }));
   };
   const commit = () =>
     canCommit(status, draft) &&
@@ -556,7 +559,7 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
     if (!e.shiftKey || !spanRuns(drawnKeys, row, anchor)) setAnchor(row);
   };
   const chosen = status ? bulk(status, selected.filter((p) => drawnOrder.includes(p)), groupOrder) : { present: [], stage: [], unstage: [] };
-  const plan = discardingRows && discardPlan(discardingRows);
+  const plan = discardingRows && discardPlan(discardingRows.rows);
   const rowsOf = (paths: string[]): Change[] => {
     const all = status ? [...status.conflicts, ...status.staged, ...status.changed, ...status.untracked] : [];
     return paths.flatMap((p) => all.find((c) => c.path === p) ?? []);
@@ -1285,9 +1288,9 @@ export default function SourceControlPanel({ dir, initialStatus, writer = DEFAUL
           body={
             <>
               <p>{plan.body}</p>
-              {discardingRows.length > 1 && (
+              {discardingRows.rows.length > 1 && (
                 <ul className="ask-list" aria-label="files affected">
-                  {discardingRows.map((r) => (
+                  {discardingRows.rows.map((r) => (
                     <li key={r.path}>{r.from ? `${r.from} → ${r.path}` : r.path}</li>
                   ))}
                 </ul>

@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 709 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 5 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 714 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -34,6 +34,11 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
+- [integrator] 2026-10-30 · Open: reclaim the old Kolux (about 408 GB), as in docs/reclaim-old-kolux.md. (1) Archive
+  TxaisX/kolux and TxaisX/kolux-releases on GitHub (Settings > Danger Zone > Archive this repository). (2) Sign test
+  account A in at its new folder G:\Temp\live-signin\account-a. (3) Uninstall the old app, then run
+  scripts/reclaim-old-kolux.ps1 (look first, move anything that is not an old-repo copy out of the backups folder, then
+  -Delete and type DELETE). Leave ~/.kolux/agent-hooks alone for now.
 - [reliability] 2026-10-30 · Open: live Windows checks on the installed build. T-565 (round 1 review fixed): Escape
   in the Usage Share card or the Send feedback box closes only that box (SettingsPage.tsx:318-334, 7 tests in
   SettingsPage.escape.test.ts); check Ctrl+, from a terminal then Escape, and Escape in Share and Send feedback.
@@ -157,6 +162,24 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [release] T-203 · Secret-looking files are left out of a first commit by name, not content, and the user's own Git identity signs it (DT-R29).
 - 2026-10-12 · [release] T-202 · Disconnect deletes only what Kolux made and always asks first; for a login the user made it only explains how to sign out in that tool, and removing the active Codex account leaves none active (DT-R28).
 - 2026-10-12 · [release] T-185-a · The installed CLI is a kolux.exe plus kolux.cmd shim in the install's bin folder, built only by the release script; only a refused connection means the app is down, lost answers print an exact --retry-request command, and reset takes exactly one scope (DT-R27).
+## Follow-ups (not built yet)
+
+- 2026-10-30 · [workspaces] T-613 · Optional, Space lane: the Space batch delete names the branches it kept only in
+  its summary note (src/space/view.ts:58-61); add them (batch.items[].kept) to the kept-branch list as the Projects
+  panel does.
+- 2026-10-30 · [workspaces] T-613 · DATA LOSS (review of PR #10): `kolux worktree rm` (src-tauri/src/cli.rs:2206)
+  bypasses remove_one and can delete a branch holding commits found on no other branch and no remote; route it
+  through remove_one with keep_branch None.
+- 2026-10-30 · [workspaces] T-613 · DATA LOSS, pre-existing (review of PR #10): a detached-HEAD workspace with
+  commits found nowhere else loses them on any delete; the batch paths never ask and the single delete's "Keep the
+  branch" does nothing there. Refuse the delete, or create a keep-branch at HEAD first.
+- 2026-10-30 · [workspaces] T-613 · Review of PR #10: src-tauri/src/projects.rs:1519 rev_exists treats a failed read
+  as "nothing to lose"; treat it as keep.
+- 2026-10-30 · [workspaces] T-613 · Review of PR #10: src-tauri/src/projects.rs:1548 an explicit Some(false) (delete
+  the branch) does not take branch_turn; take it there too.
+- 2026-10-30 · [workspaces] T-617 · Review of PR #10: src-tauri/src/files.rs:79 save copies left by a save through a
+  dangling link are no longer cleared up; clear them again.
+
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt
 - 2026-10-13 · [main] T-543 · done: App.tsx agent status, settings, workspaces, palette/notice/toast, kits and wizard moved into six hooks as they were, hook order unchanged; lib.rs save_settings deleted, setup log lines go to diag, handler list grouped by module (per-module start() left: needs files outside the pass) · evidence/smoke-2e6821b.txt + evidence/smoke-97bb712.txt
