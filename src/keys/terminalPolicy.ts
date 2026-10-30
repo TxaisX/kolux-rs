@@ -3,6 +3,7 @@
 // every other chord goes to the program in the terminal. It covers every terminal pane, the
 // floating terminal included, because all of them are xterm views.
 import { actionById } from "./actions";
+import { runningCommand } from "./runCommand";
 
 export const POLICY_FIELD = "terminalShortcuts";
 export type Policy = "kolux" | "terminal";
@@ -20,6 +21,7 @@ export function inTerminal(id: string, policy: Policy): "works" | "held" | null 
   return policy === "kolux" || a.terminalSafe ? "works" : "held";
 }
 
-/** The window's key handler leaves this command's chord to the terminal program. */
+/** The window's key handler leaves this command's chord to the terminal program. T-611: never a command
+ *  picked in the palette, which is no key the program could be waiting for. */
 export const heldByTerminal = (id: string, settings: Record<string, unknown> | null | undefined, active: Element | null = document.activeElement): boolean =>
-  readPolicy(settings) === "terminal" && !!active?.closest(".xterm") && inTerminal(id, "terminal") === "held";
+  !runningCommand() && readPolicy(settings) === "terminal" && !!active?.closest(".xterm") && inTerminal(id, "terminal") === "held";

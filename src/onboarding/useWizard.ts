@@ -2,7 +2,8 @@
 // where they used to sit.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { firstFolderAgent, oneClick, openAt, REOPEN_WIZARD, reopenWizard, wizardCloser, type Outcome } from "./firstRun";
+import { ADD_PROJECT, firstFolderAgent, oneClick, openAt, REOPEN_WIZARD, reopenWizard, wizardCloser, type Outcome } from "./firstRun";
+import { isAiAgent } from "./agentKind";
 import { projectAddedNote } from "./sidebar";
 import { startGridTour } from "./tour";
 import { starAfterClose } from "./star";
@@ -54,21 +55,33 @@ export function useWizard({ setToast, agents, settings, activeDir, startIn }: Wi
   // ONB-010: armed by Pick a folder, or by Skip while no project exists; the next project added
   // starts the saved default agent in it, once.
   const firstFolder = useRef(false);
+  // T-612: the AI agent Open a session would have started, for the folder picked after it (else ONB-010's saved default).
+  const firstAgent = useRef<AgentInfo | null>(null);
   // VIEW-114 (FIX-2): every added project tells the sidebar entry to read its steps again.
   const projectAdded = (dir: string, branch: string | null) => {
     projectAddedNote();
     if (!firstFolder.current) return;
     firstFolder.current = false;
-    const agent = firstFolderAgent(offeredAgents(agents, settings), defaultAgentId(settings));
+    const agent = firstAgent.current ?? firstFolderAgent(offeredAgents(agents, settings), defaultAgentId(settings));
+    firstAgent.current = null;
     if (agent) void startIn(agent, dir, branch, "", true);
   };
-  // ONB-005: one plain session on the first available agent (the default first), empty prompt;
-  // nothing without an agent and a workspace.
+  // ONB-004: Pick a folder closes setup as completed and hands over to Add Project; the folder added next starts `agent`.
+  const pickFolder = (agent: AgentInfo | null = null) =>
+    endWizard("completed", () => {
+      firstFolder.current = true;
+      firstAgent.current = agent;
+      window.dispatchEvent(new CustomEvent(ADD_PROJECT));
+    });
+  // ONB-005: one plain session on the first available agent (the default first), empty prompt.
+  // T-612 (audit F08-onboarding-look-misc.2): with no workspace yet (Continue on "Your work" makes none since kits went,
+  // T-568), it leads to picking a folder, and the session opens there; a plain terminal opens with the folder anyway.
   const wizardSession = async () => {
     if (wizardClose.retry()) return;
     const agent = menuAgents(offeredAgents(agents, settings), defaultAgentId(settings))[0];
-    if (!agent || !activeDir) return;
+    if (!activeDir) return pickFolder(agent && isAiAgent(agent.id) ? agent : null);
+    if (!agent) return;
     if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed", startGridTour);
   };
-  return { wizard, setWizard, wizardClose, endWizard, firstFolder, projectAdded, wizardSession };
+  return { wizard, setWizard, wizardClose, endWizard, firstFolder, projectAdded, wizardSession, pickFolder };
 }

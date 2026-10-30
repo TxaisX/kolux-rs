@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 714 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 4 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 714 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 8 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -34,6 +34,21 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
+- [product-ux] 2026-10-30 · Question (T-608): should a pane that is blocked (a limit or a sign-in) still count as
+  needing you, or only permissions and questions? Today the Inbox and the bell still count it, as before; the
+  Board and the Tower show it as Stopped.
+- [product-ux] 2026-10-30 · Question (T-608): when an agent's program has exited, the Board and Tower say "Stopped"
+  but the Inbox lists it under "Done today", because the window does not keep the program's exit code. Should the
+  Inbox say "Stopped" too? Until you answer, it stays as it is.
+- [product-ux] 2026-10-30 · Question (T-608): the Ctrl+J jump between panes that need you, and the little badges on
+  tabs, still use each pane's own "needs attention" flag, which also lights up when a pane is blocked or was
+  interrupted. Everywhere else, "Needs you" now means only a permission request or a question. Should Ctrl+J and the
+  tab badges follow that same rule? Until you answer, they stay as they are.
+- [product-ux] 2026-10-30 · Open: live Windows checks for T-608 to T-612 (steps in each evidence/T-6xx.txt):
+  the consent line on a fresh profile and the one-time card on an old one; a hand-started Claude asking permission
+  shows Needs you on the Board, Tower, Inbox, needs strip, bell and sidebar; Review changes from a Done card and an
+  Inbox row; Show Floor, Space, Workspace Statuses, Artifacts and Skills from the palette; Rename worktree from the
+  palette with the sidebar closed; Open a session with no workspace asks for a folder; Escape closes the Tip.
 - [integrator] 2026-10-30 · Open: reclaim the old Kolux (about 408 GB), as in docs/reclaim-old-kolux.md. (1) Archive
   TxaisX/kolux and TxaisX/kolux-releases on GitHub (Settings > Danger Zone > Archive this repository). (2) Sign test
   account A in at its new folder G:\Temp\live-signin\account-a. (3) Uninstall the old app, then run
@@ -173,6 +188,15 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [release] T-185-a · The installed CLI is a kolux.exe plus kolux.cmd shim in the install's bin folder, built only by the release script; only a refused connection means the app is down, lost answers print an exact --retry-request command, and reset takes exactly one scope (DT-R27).
 ## Follow-ups (not built yet)
 
+- 2026-10-30 · [product-ux] T-609 · Not built: the sidebar's changed-files count on by default. First give the
+  count a real source: src/projects/ProjectsPanel.tsx (around line 1628) feeds RowInfo.changed, which is a timestamp
+  (App.tsx sets changed: Date.now()), as the number of changed files. Then set src/look/cards.ts PRESETS.default
+  to ["status", "agents", "changes"], update its note, and update src/look/cards.test.ts and
+  src/look/clickThrough.test.ts.
+- 2026-10-30 · [product-ux] T-608 / T-612 · Docs not updated (not this lane's files): docs/guide/settings.md
+  (lines 181, 187, 193), docs/guide/getting-started.md (12-14, 39) and docs/guide/board-agents-inbox.md (118)
+  should describe the consent line, "Open a session" asking for a folder when there is no workspace, and a blocked
+  pane reading Stopped rather than Needs you.
 - 2026-10-30 · [workspaces] T-613 · Optional, Space lane: the Space batch delete names the branches it kept only in
   its summary note (src/space/view.ts:58-61); add them (batch.items[].kept) to the kept-branch list as the Projects
   panel does.

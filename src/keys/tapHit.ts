@@ -4,7 +4,7 @@
 // (global, tabs, terminal) can hold a double tap.
 import type { Scope } from "./actions";
 import { actionForTap, createDoubleTap } from "./doubleTap";
-import type { Keymap, Match } from "./keymap";
+import { matchOf, type Keymap, type Match } from "./keymap";
 
 const SCOPES: Scope[] = ["global", "tabs", "terminal"];
 type Down = Parameters<ReturnType<typeof createDoubleTap>["down"]>[0] & { timeStamp?: number };
@@ -15,7 +15,7 @@ export function tapHit(matcher: ReturnType<typeof createDoubleTap>, map: Keymap,
   if (!tap) return null;
   const bound = [...map.bindings.values()].filter((b) => SCOPES.includes(b.action.scope)).map((b) => ({ id: b.action.id, chords: b.chords }));
   const id = actionForTap(bound, tap);
-  return id ? { id } : null;
+  return id ? matchOf(id) : null; // T-611: an old id answers as the command it stands for
 }
 
 /** The window's one matcher: it must outlive the key handler's effect, which is set up again as panes change. */

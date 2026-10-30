@@ -2,12 +2,13 @@
 // the Inbox alone. Pure, so the rule is tested here instead of living untested inside the window.
 import type { AgentState } from "../projects/rows";
 import type { Source } from "./inbox";
+import { needsYou } from "../board/chip";
 
 /** Pane key to the prompt state it left open. Never mutated: every function returns a new map, or the same one when nothing changed. */
 export type Kept = Record<number, AgentState>;
 
-/** Only a question or a permission is a prompt; a stop or a finish is not. */
-const isPrompt = (state: AgentState | undefined): state is AgentState => state === "permission" || state === "waiting";
+/** Only a question or a permission is a prompt; a stop or a finish is not (T-608: the one needs-you rule). */
+const isPrompt = (state: AgentState | undefined): state is AgentState => needsYou(state);
 
 const without = (kept: Kept, keys: number[]): Kept => {
   if (!keys.some((k) => k in kept)) return kept;

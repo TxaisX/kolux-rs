@@ -1,6 +1,7 @@
 // T-142 (PROJ-085, VIEW-027): the workspace board. A lane for each status; drag a card (or a row from
 // the sidebar) onto a lane to change its status. Only the lanes and cards near the visible area are
-// drawn, so hundreds of cards scroll smoothly. Opens from the "Toggle Workspace Board" command.
+// drawn, so hundreds of cards scroll smoothly. Opens from the "Show Workspace Statuses" command; T-610:
+// it is called Workspace statuses on screen, so the Board in the top bar is the only Board.
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Close, Search } from "../chrome/icons";
@@ -120,14 +121,14 @@ export default function WorkspaceBoard({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={boxRef} className="ws-board" role="dialog" aria-modal="true" aria-label="Workspace board" tabIndex={-1} onKeyDown={keys}>
+      <div ref={boxRef} className="ws-board" role="dialog" aria-modal="true" aria-label="Workspace statuses" tabIndex={-1} onKeyDown={keys}>
         <header className="board-head">
-          <h2>Workspace board</h2>
+          <h2>Workspace statuses</h2>
           <label className="board-search">
             <Search />
-            <input className="field" type="search" placeholder="Search workspaces" aria-label="Search the board" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <input className="field" type="search" placeholder="Search workspaces" aria-label="Search workspace statuses" value={query} onChange={(e) => setQuery(e.target.value)} />
           </label>
-          <button className="ib" aria-label="Close the board" onClick={onClose}><Close /></button>
+          <button className="ib" aria-label="Close workspace statuses" onClick={onClose}><Close /></button>
         </header>
         {error && <p className="board-error" role="alert">{error}</p>}
         {!data && !error && <p className="board-note">Loading workspaces…</p>}

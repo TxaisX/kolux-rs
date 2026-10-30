@@ -3,7 +3,8 @@
 // per platform. "Mod" is Ctrl on Windows and Linux and Cmd on macOS. Linux takes the Windows
 // column unless a row says otherwise. Two ids in the old table are not carried
 // (`tab.newSimulator`, `tab.openQuickCommandsMenu`, see DECISIONS.md): they are not registered
-// here, so a file naming them gets a warning, as any unknown id does.
+// here, so a file naming them gets a warning, as any unknown id does. T-611: nor is
+// `sidebar.ports.toggle`, whose Ports tab went with remote hosts (VIEW-079, dropped).
 
 export type Platform = "win32" | "linux" | "darwin";
 export type Scope = "global" | "tabs" | "browser" | "editor" | "explorer" | "settings" | "terminal";
@@ -78,7 +79,7 @@ export const actions: Action[] = [
   a("workspace.create", "Create worktree", "global", ["Mod+N", "Mod+Shift+N"], { darwin: ["Mod+N"] }),
   a("workspace.rename", "Rename worktree", "global", [], { darwin: ["Mod+Alt+R"], group: "workspace-shell" }),
   a("workspace.delete", "Delete Workspace", "global", ["Mod+Shift+Backspace"]),
-  a("workspace.openBoard", "Toggle Workspace Board", "global", []),
+  a("workspace.openBoard", "Show Workspace Statuses", "global", []), // T-610: not a second "Board" (VIEW-001's keeps the name)
   a("dashboard.toggle", "Toggle Agent Dashboard", "global", []),
   a("workspace.selectByIndex", "Select Workspace 1–9", "global", ["Mod+1"], { index: true }),
   a("view.tasks", "Open Tasks", "global", []),
@@ -88,7 +89,6 @@ export const actions: Action[] = [
   a("sidebar.search.toggle", "Show Search", "global", ["Mod+Shift+F"]),
   a("sidebar.sourceControl.toggle", "Show Source Control", "global", ["Mod+Shift+G"]),
   a("sidebar.checks.toggle", "Show Checks", "global", []),
-  a("sidebar.ports.toggle", "Show Ports", "global", [], { darwin: ["Mod+Shift+I"] }),
   a("sidebar.sleepingWorkspaces.toggle", "Toggle Sleeping Workspaces", "global", []),
   a("sidebar.focusWorktreeList", "Focus worktree list", "global", ["Mod+Shift+0"]),
   a("floatingTerminal.toggle", "Toggle Floating Terminal", "global", ["Mod+Alt+A"], { terminalSafe: true }),
@@ -180,6 +180,18 @@ export const actions: Action[] = [
 ];
 
 export const actionById: ReadonlyMap<string, Action> = new Map(actions.map((x) => [x.id, x]));
+
+/** T-611: an id kept so a keybindings file that names it still works, and the command whose code it runs
+ *  (keymap.ts matchEvent answers with that one). */
+export const sameAs: Readonly<Record<string, string>> = {
+  // PROJ-053 / VIEW-053: COMPAT's id for showing sleeping workspaces; VIEW-053 built the toggle as sidebar.sleeping.toggle.
+  "sidebar.sleepingWorkspaces.toggle": "sidebar.sleeping.toggle",
+  // VIEW-029 / HID-020: the Agent Dashboard drawer was skipped for the Tower, its always-on successor (OD-09, DT-C35).
+  "dashboard.toggle": "view.tower",
+  // BROW-005: the toolbar's Mod+Shift+R reloads, as the same chord already does inside a page (browser.rs chord script).
+  // ponytail: WebView2's reload keeps the cache; a cache-skipping reload in browser.rs is the upgrade path.
+  "browser.hardReload": "browser.reload",
+};
 
 /** The built-in chords for one platform. */
 export function defaultsFor(action: Action, platform: Platform): string[] {
