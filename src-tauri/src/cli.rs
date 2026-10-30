@@ -676,9 +676,9 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         } else if local_cli::COMMANDS.iter().any(|c| c.1 == command) {
             args = flags.clone();
         } else if TERM.iter().any(|(_, c, _)| *c == command) {
-            // MERGE 49: a zero wait is refused before anything is sent.
-            if command == "terminal.send" && flags.get("wait-submit").and_then(Value::as_str).and_then(|s| s.trim().parse::<u64>().ok()) == Some(0) {
-                return Err(Fail::args(WAIT_SUBMIT_ZERO));
+            // MERGE 49: a zero wait is refused before anything is sent; T-596: so is one over the cap.
+            if command == "terminal.send" && flags.get("wait-submit").and_then(Value::as_str).and_then(|s| s.trim().parse::<u64>().ok()).is_some_and(|n| n == 0 || n > WAIT_SUBMIT_MAX) {
+                return Err(Fail::args(WAIT_SUBMIT_RANGE));
             }
             // CLI-024 / CLI-025: --text may be anything, even blank; the rest are keys and numbers.
             for (k, v) in &flags {
@@ -2740,18 +2740,22 @@ fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "worktree.ps" => ps(ctx, req, text("repo").map(|r| pick_project(ctx, Some(&r), &req.cwd)).transpose()?, limit),
         "worktree.list" => {
             let only = text("repo").map(|r| pick_project(ctx, Some(&r), &req.cwd)).transpose()?;
-            let mut lists = Vec::new();
+            let (mut lists, mut unreadable) = (Vec::new(), Vec::new());
             {
                 let store = lock()?;
                 for p in projects::load_projects(&store).into_iter().filter(|p| only.as_ref().is_none_or(|o| o.id == p.id)) {
-                    let all = projects::list_workspaces(ctx.git, &store, &p)?;
-                    lists.push((p, all));
+                    // T-596 (CLI-017, R01-cli.8): a project whose folder is gone or offline (APP-051 keeps
+                    // it) is named, not fatal: the others are still listed, as pick_in and terminal_rows do.
+                    match projects::list_workspaces(ctx.git, &store, &p) {
+                        Ok(all) => lists.push((p, all)),
+                        Err(e) => unreadable.push(json!({ "repoId": p.id, "repo": p.name, "path": p.path, "error": e.trim() })),
+                    }
                 }
             }
             let mut rows: Vec<Value> = lists.iter().flat_map(|(p, all)| all.iter().map(move |w| worktree_row(p, w, all))).collect();
             let truncated = limit.is_some_and(|n| rows.len() > n);
             rows.truncate(limit.unwrap_or(usize::MAX));
-            Ok(json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts() }))
+            Ok(json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts(), "unreadable": unreadable }))
         }
         "worktree.changes" | "worktree.overlap" => {
             let (p, w) = pick_worktree(ctx, &text("worktree").unwrap_or_else(|| "current".into()), &req.cwd)?;
@@ -2822,6 +2826,9 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
                 .collect();
             if out.is_empty() {
                 out.push(if command == "worktree.ps" { "no sessions or workers are running".into() } else { "no worktrees".into() });
+            }
+            for x in rows("unreadable") {
+                out.push(format!("{}: not listed, its folder could not be read ({})", s(&x, "repo"), s(&x, "error")));
             }
             if r["truncated"] == true {
                 out.push("(more rows; raise --limit)".into());
@@ -3378,8 +3385,11 @@ fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
 
 /// How long `send` watches for the agent to take a prompt unless `--wait-submit` says otherwise.
 const SUBMIT_WATCH: Duration = Duration::from_secs(3);
+/// T-596 (R01-cli.5): the longest `--wait-submit`, in seconds, as long as the longest browser wait.
+/// The app answers kolux calls one at a time, and a huge number overflowed the clock and ended the app.
+const WAIT_SUBMIT_MAX: u64 = 300;
 /// MERGE 49: a zero wait would report an idle agent not submitted before it could start a turn.
-const WAIT_SUBMIT_ZERO: &str = "--wait-submit takes the seconds to watch, 1 or more; leave it out for the default 3 s";
+const WAIT_SUBMIT_RANGE: &str = "--wait-submit takes the seconds to watch, from 1 to 300; leave it out for the default 3 s";
 /// `terminal send` receipts by terminal and `--retry-request` id live in the store
 /// (`orchestration::sendonce::Receipts`, ORCH-055): an exact retry, also after a restart, answers
 /// without sending again.
@@ -3404,7 +3414,9 @@ struct Submit {
 /// stream is watched for the same time and the answer says whether anything was written after Enter.
 fn submit_verdict(handle: &str, before: Option<((u64, usize), bool)>, watch: Duration, explicit: bool, mut activity: impl FnMut() -> Option<((u64, usize), bool)>, state: impl Fn() -> Option<&'static str>, mut output_moved: impl FnMut() -> bool) -> Submit {
     let start = Instant::now();
-    let until = start + watch;
+    // T-596: clamped and added without overflow, so no wait can panic (a panic ends the app).
+    let watch = watch.min(Duration::from_secs(WAIT_SUBMIT_MAX));
+    let until = start.checked_add(watch).unwrap_or(start);
     let secs = watch.as_secs();
     let Some((mark, busy)) = before else {
         let mut wrote = false;
@@ -3553,8 +3565,8 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 return Err(Fail::args("nothing to send: give --text, --enter or --interrupt"));
             }
             let asked = num("waitSubmit", "--wait-submit")?;
-            if asked == Some(0) {
-                return Err(Fail::args(WAIT_SUBMIT_ZERO));
+            if asked.is_some_and(|n| n == 0 || n > WAIT_SUBMIT_MAX) {
+                return Err(Fail::args(WAIT_SUBMIT_RANGE));
             }
             let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
@@ -5518,8 +5530,40 @@ mod tests {
         // --wait-submit 0 is refused before sending; 1 is fine.
         let refused = |w: &str| parse(&words(w)).1.unwrap_err();
         let f = refused("terminal send --terminal term-2 --text hi --enter --wait-submit 0");
-        assert_eq!((f.code, f.message.as_str()), ("invalid_arguments", WAIT_SUBMIT_ZERO));
+        assert_eq!((f.code, f.message.as_str()), ("invalid_arguments", WAIT_SUBMIT_RANGE));
         assert!(parse(&words("terminal send --terminal term-2 --text hi --enter --wait-submit 1")).1.is_ok());
+    }
+
+    /// T-596 (R01-cli.5): an oversized --wait-submit is refused by the command line and by the app,
+    /// and the watch itself never overflows the clock (a panic there ended the whole app: panic = abort).
+    #[test]
+    fn t596_an_oversized_wait_submit_is_refused_and_never_ends_the_app() {
+        let huge = u64::MAX.to_string();
+        let line = |w: &str| words(&format!("terminal send --terminal term-2 --text hi --enter --wait-submit {w}"));
+        for w in [huge.as_str(), "301"] {
+            let f = parse(&line(w)).1.unwrap_err();
+            assert_eq!((f.code, f.message.as_str()), ("invalid_arguments", WAIT_SUBMIT_RANGE), "--wait-submit {w}");
+        }
+        assert!(parse(&line("300")).1.is_ok());
+        assert!(WAIT_SUBMIT_RANGE.contains(&WAIT_SUBMIT_MAX.to_string()));
+        // The app refuses it too, whichever client sent it, before anything is typed.
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t596w-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let args = json!({ "terminal": "term-2", "text": "hi", "enter": true, "waitSubmit": huge });
+        let req = Request { id: "r".into(), token: String::new(), command: "terminal.send".into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let f = dispatch(&ctx, &req).unwrap_err();
+        assert_eq!((f.code, f.message.as_str()), ("invalid_arguments", WAIT_SUBMIT_RANGE));
+        // The watch: u64::MAX seconds once panicked with "overflow when adding duration to instant".
+        let v = submit_verdict("term-2", None, Duration::from_secs(u64::MAX), true, || None, || None, || true);
+        assert_eq!(v.receipt, "unknown");
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -6153,6 +6197,43 @@ mod tests {
     fn git(args: &[&str], cwd: &Path) {
         let out = Command::new("git").args(args).current_dir(cwd).output().unwrap();
         assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// T-596 (CLI-017, R01-cli.8): a project whose folder is gone (deleted, or on a drive that is
+    /// offline; APP-051 keeps it registered) no longer empties `worktree list`: the other projects
+    /// are listed and the missing one is named, in JSON and in the text.
+    #[test]
+    fn cli017_worktree_list_lists_what_it_can_and_names_a_project_whose_folder_is_gone() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t596-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (kept, gone) = (dir.join("kept"), dir.join("gone"));
+        for r in [&kept, &gone] {
+            std::fs::create_dir_all(r).unwrap();
+            git(&["init", "-q", "-b", "main"], r);
+            git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"], r);
+        }
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        for r in [&kept, &gone] {
+            projects::add_project(&git_, &store.lock().unwrap(), r).unwrap();
+        }
+        std::fs::remove_dir_all(&gone).unwrap();
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = Request { id: "r".into(), token: String::new(), command: "worktree.list".into(), cwd: dir.display().to_string(), args: json!({}), pane: None, cli: String::new(), arrived: None };
+        let list = dispatch(&ctx, &req).expect("one missing project folder must not fail the whole listing");
+        let rows = list["worktrees"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{list}");
+        assert!(Path::new(rows[0]["path"].as_str().unwrap()).ends_with("kept"), "{list}");
+        let missing = list["unreadable"].as_array().unwrap();
+        assert_eq!((missing.len(), missing[0]["repo"].as_str()), (1, Some("gone")), "{list}");
+        assert!(!missing[0]["error"].as_str().unwrap().is_empty());
+        let text = text_of("worktree.list", &list);
+        assert!(text.contains("kept") && text.contains("gone: not listed"), "{text}");
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
