@@ -39,7 +39,7 @@ pub const MARK_QUIET: &str = "update:quiet|";
 pub const MARK_COMPAT: &str = "update:compat|";
 pub const MARK_STALE: &str = "update:stale";
 /// Where a user can always get the newest installer by hand.
-pub const RELEASES_PAGE: &str = "https://github.com/TxaisX/kolux-rs-releases/releases/latest";
+pub const RELEASES_PAGE: &str = "https://github.com/TxaisX/kolux-rs/releases/latest";
 
 // ---------------------------------------------------------------- APP-028: install attempts
 

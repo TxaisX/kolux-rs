@@ -74,13 +74,11 @@ recorded default until told otherwise; nothing here blocks a pass.
   opens, its LF lines show joined to the next line. Pick one: (a) show every line separately and save
   the file exactly as it was; (b) show every line separately and convert the whole file to one line
   ending on the next save. Nothing changes until you pick (T-603).
-- [updates] 2026-10-30 · Open: four steps make every installed copy update itself (DT-R39). (1) Create
-  the public repository TxaisX/kolux-rs-releases with a README (Claude's GitHub connection cannot create
-  repositories). (2) Give the Claude GitHub App access to it. (3) Lift the GitHub Actions billing block
-  (Settings > Billing and plans). (4) Add the repository secrets KOLUX_RELEASE_KEY (the text of
-  ~/.kolux-rs/release-signing/kolux-rs.key), KOLUX_RELEASE_PUBKEY (its .pub), KOLUX_RELEASE_KEY_PASSWORD
-  (when it has one) and KOLUX_RELEASES_TOKEN (a fine-grained token: contents read and write on
-  kolux-rs-releases only). Then the integrator runs the release job for v0.1.0 and v0.1.1 (T-622).
+- [updates] 2026-10-30 · The feed is now the public TxaisX/kolux-rs itself (DT-R40); the signing key is at
+  ~/.kolux-rs/release-signing/kolux-rs.key (no password) and releases ship from the owner's PC
+  (`node scripts/release.mjs`). Only for release.yml on GitHub's runners: lift the GitHub Actions billing block
+  (Settings > Billing and plans) and add the secrets KOLUX_RELEASE_KEY (the key file's text) and
+  KOLUX_RELEASE_PUBKEY (its .pub); KOLUX_RELEASES_TOKEN is no longer needed (T-622).
 - [release-ci] 2026-10-30 · Question (optional, X-proc.13): should CI fail on every new high-severity library advisory
   (`pnpm audit --audit-level high` added to the ci.yml checks)? It is a one-line change, but it can turn builds red without
   any code change. Not added; nothing changes until you say yes.

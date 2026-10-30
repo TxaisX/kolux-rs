@@ -22,7 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const FEED_REPO = "TxaisX/kolux-rs-releases";
+export const FEED_REPO = "TxaisX/kolux-rs";
 export const NOTES_MAX = 30;
 export const STALE_MS = 3 * 60 * 60 * 1000;
 const MARKER = /<!-- kolux-rs-source: ([0-9a-f]{7,40}) -->/;

@@ -22,7 +22,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// The update manifest of the newest published release (OD-20: Kolux RS's own feed).
-pub const RELEASE_ENDPOINT: &str = "https://github.com/TxaisX/kolux-rs-releases/releases/latest/download/latest.json";
+pub const RELEASE_ENDPOINT: &str = "https://github.com/TxaisX/kolux-rs/releases/latest/download/latest.json";
 /// The minisign public key releases are signed with. The release job (scripts/release.mjs, T-091)
 /// builds it in from the public half of the signing key; a build made without it says it cannot
 /// update instead of accepting anything unsigned.

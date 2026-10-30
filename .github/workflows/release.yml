@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
@@ -56,7 +56,7 @@ jobs:
       - name: Build and smoke-test
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.KOLUX_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           KOLUX_RELEASE_CHECKOUT: ${{ runner.temp }}/release-checkout
           KOLUX_RELEASE_KEY: ${{ runner.temp }}/signing/kolux-rs.key
         run: node scripts/release.mjs --build-only --repo "$GITHUB_WORKSPACE"
@@ -66,7 +66,7 @@ jobs:
         shell: bash
         env:
           KEY: ${{ secrets.KOLUX_RELEASE_KEY }}
-          GH_TOKEN: ${{ secrets.KOLUX_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           KOLUX_RELEASE_CHECKOUT: ${{ runner.temp }}/release-checkout
           KOLUX_RELEASE_KEY: ${{ runner.temp }}/signing/kolux-rs.key
           KOLUX_RELEASE_KEY_PASSWORD: ${{ secrets.KOLUX_RELEASE_KEY_PASSWORD }}
