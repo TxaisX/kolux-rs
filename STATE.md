@@ -240,6 +240,13 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: the protected-delete rule does not cover
   `[IO.Directory]::Delete`, `find -delete`, `rimraf` or `robocopy /MIR`.
 
+- 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8), not fixed here: nested folder wrappers
+  (`env -C a env -C b rm ...`) use only the last folder; join them the way the shell does, or make the folder unknown.
+- 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8): how PowerShell wildcards treat `..` is unchecked; prove it
+  live on Windows, and ask on any PowerShell wildcard in a delete folder if it can match `..`.
+- 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8): a user whose own environment sets CDPATH is asked about
+  every relative `cd ... && rm -rf ...` (an extra question, not a hole).
+
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt
 - 2026-10-13 · [main] T-543 · done: App.tsx agent status, settings, workspaces, palette/notice/toast, kits and wizard moved into six hooks as they were, hook order unchanged; lib.rs save_settings deleted, setup log lines go to diag, handler list grouped by module (per-module start() left: needs files outside the pass) · evidence/smoke-2e6821b.txt + evidence/smoke-97bb712.txt
