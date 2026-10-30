@@ -28,6 +28,8 @@ No file of the old app was read: the only inputs were pixels Windows drew on scr
 
 ## What was captured, from where
 
+The capture and compare PNGs named on this page are not in this repository (checked 2026-10-30, when Txais asked for old-app material to be removed); only the SVGs and the numbers below are kept.
+
 | File | Source | Size |
 |---|---|---|
 | `capture-taskbar.png` | Screen copy of the whole primary taskbar (window class `Shell_TrayWnd`, 1920 x 48). Nothing clicked, no focus change. | 1920 x 48 |
