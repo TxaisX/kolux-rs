@@ -27,8 +27,8 @@ WHAT CHANGED
 
 BEFORE
 - The Linux unit-test run of 2026-10-30 05:33 killed every process in the machine: git070/proj027
-  stop a stalled git through procs::kill_tree, which ran `kill -9 -<pid>`; with a pid over 10000
-  procps-ng read it as kill(-1).
+  stop a stalled git through procs::kill_tree, which ran `kill -9 -<pid>`; procps-ng misreads any
+  pid that starts with 1 as kill(-1), not only pids over 10000.
 - The parsing bug, shown safely with signal 0 (nothing delivered), 2026-10-30 14:3x:
     $ /usr/bin/kill --version            -> kill from procps-ng 4.0.4
     $ /usr/bin/kill -0 -1999999          -> exit 1, no "No such process" (it signalled -1 instead)
@@ -56,7 +56,8 @@ AFTER
 - Rerun with that test-env, the lib and every integration test binary:
     . ../scripts/test-env.sh; cargo test --tests --no-fail-fast -- --test-threads=3
     lib:    test result: FAILED. 2453 passed; 38 failed; 3 ignored; 0 measured; 0 filtered out; finished in 281.83s
-    tests/: 19 binaries ok (cards_01 to cards_20, cards_19_diag, cards_scratch_root, shim);
+    tests/: 20 binaries; 17 passed (cards_01 to cards_09, cards_13, cards_15, cards_17, cards_19,
+            cards_19_diag, cards_20, cards_scratch_root, shim) and 3 had failures (cards_10, cards_11, cards_12):
             cards_10 37 passed 3 failed · cards_11 11 passed 1 failed · cards_12 10 passed 3 failed
   Each of the 45 failures was read; none comes from this change. 42 assume Windows:
     - C:\ or backslash paths: agents marker, scm git014 and staging, scm_open git014, lifecycle
@@ -90,3 +91,79 @@ STILL OPEN
   clippy above stand in for it.
 - The 44 Linux-only failures and the diag bug are not fixed here: Linux is a compile target, not a
   shipped platform (LOOP.md section 1). They are listed so a later task can gate or port them.
+
+REVIEW FIXES (fresh review, 2026-10-30)
+1. src-tauri/src/procs.rs kill_args: a pid past i32::MAX gets no kill command either. kill casts the
+   pid to pid_t, so 2147483648 would wrap to a negative group and 4294967295 to -1 (every process).
+   kill_tree_on_unix_ends_option_parsing_and_never_signals_everything also checks i32::MAX as u32 + 1
+   and u32::MAX.
+     $ . ../scripts/test-env.sh; cargo test --lib procs:: -- --test-threads=2
+     scratch homes under /tmp/krs-scratch.m9J3vs
+     test procs::tests::kill_tree_on_unix_ends_option_parsing_and_never_signals_everything ... ok
+     test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2490 filtered out; finished in 0.25s
+2. src/chrome/__cards__/STAT-052.test.ts: the check that the reduce block turns each spinner off is
+   anchored, (?:^|[{};\n])\s* + selector + \s*\{\s*animation:\s*none, so `.spin` no longer matches
+   inside `.statusbar .skill-item .spin { animation: none`. Mutation on a scratch copy of styles.css
+   (the real file untouched); a scratch script applies both checks after the test's own CSS prep:
+     $ diff styles.css styles.mutated.css
+     549d548
+     <   .spin { animation: none; }
+     styles.css:         old (unanchored) PASS · new (anchored) PASS
+     styles.mutated.css: old (unanchored) PASS, wrongly · new (anchored) FAIL (.spin NOT OFF)
+     $ VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run src/chrome/__cards__/STAT-052.test.ts
+     Test Files  1 passed (1) · Tests  2 passed (2)
+3. scripts/test-env.sh: the root is a fresh mktemp folder per shell,
+   root="${KRS_SCRATCH_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/krs-scratch.XXXXXX")}" || return 1, with
+   KRS_SCRATCH_ROOT exported, so sourcing it again reuses the root; a failed mktemp returns before
+   anything is set. XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME and XDG_STATE_HOME point inside the
+   scratch home and are created; the header lists exactly what is redirected. Nothing in
+   src-tauri/src or src-tauri/tests/scratch_root reads KRS_SCRATCH_ROOT: both go by the
+   .kolux-rs-scratch marker (scratch_root::MARKER, agent_hooks::SCRATCH_MARKER).
+     $ bash -n scripts/test-env.sh -> exit 0
+     sourced twice in one subshell -> /tmp/krs-scratch.NJUKKx both times ("same root reused"), its
+       tmp/ still empty after the second source (nothing nested), mode 700, XDG_*_HOME under its
+       home (.config, .local/share, .cache, .local/state)
+     two separate subshells -> /tmp/krs-scratch.JNXirQ and /tmp/krs-scratch.C4pB8b ("roots differ")
+     TMPDIR=/nonexistent-krs-dir -> mktemp: failed to create directory via template
+       '/nonexistent-krs-dir/krs-scratch.XXXXXX': No such file or directory; source status 1,
+       KRS_SCRATCH_ROOT empty, HOME unchanged
+4. scripts/test-env.ps1: reuses $env:KRS_SCRATCH_ROOT when it is set, else computes the root as
+   before and sets it, so a second run in one session does not nest a root under the TMP the first
+   run set (GetTempPath reads TMP). The header no longer says "user settings" are safe: it says
+   APPDATA and LOCALAPPDATA are not redirected. Not run: this sandbox has no PowerShell.
+5. src-tauri/src/git.rs command(): the Unix block that calls process_group(0) also sets
+   GIT_TERMINAL_PROMPT=0. Outside the terminal's foreground process group a git that prompts there
+   stops on SIGTTIN (a dev run started from a terminal); now it fails at once. Askpass programs and
+   credential helpers still run. The NO_PROMPT test still makes sense: NO_PROMPT is applied after
+   command(), so a wrong value in it still fails the test on Unix, and on Windows, where command()
+   sets nothing, it still tests NO_PROMPT alone; on Unix it can no longer see GIT_TERMINAL_PROMPT
+   go missing from NO_PROMPT.
+     $ cargo test --lib git:: -- --test-threads=2   (same shell, after test-env.sh)
+     test git::tests::an_unattended_git_fails_fast_on_a_remote_that_wants_a_password ... ok
+     test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 2467 filtered out; finished in 1.85s
+6. PLAN.md section 8: T-608 lands after T-583 and T-604 (the audit wants those fixes before hooks
+   are on by default); T-609 and T-611 wire existing screens into reach, as the brief's section 3
+   requires, and add no new screen.
+     $ node scripts/plan-check.mjs -> done 684/773 tasks · P0 cards passing 208/228 · plan-check: OK
+7. This file: line 30 (procps-ng misreads any pid that starts with 1 as kill(-1), not only pids over
+   10000) and line 59 (20 integration test binaries: 17 passed, 3 had failures) are corrected.
+   Shown safely with signal 0 on a pid under 10000:
+     $ /usr/bin/kill -0 -1999        -> exit 1, no "No such process" (read as kill(-1))
+     $ /usr/bin/kill -0 -- -1999     -> /usr/bin/kill: (-1999): No such process (exit 1)
+Checks, from src-tauri (CARGO_TARGET_DIR shared, CARGO_BUILD_JOBS=3, CARGO_INCREMENTAL=0):
+     $ cargo check --all-targets
+       Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 38s   (exit 0; rustc warnings:
+       lib 87, test cards_17 1, lib test 24, all in code this branch did not change, none in procs.rs
+       or git.rs: mostly Windows-only helpers that are dead off Windows)
+     $ cargo clippy --all-targets -- -D warnings
+       error: could not compile `kolux-rs` (lib) due to 93 previous errors   (exit 101)
+       The first Unix clippy run of this code. All 93 are in code this branch did not change: 83 dead
+       items (42 functions, 29 constants and others; 38 errors in browser_crash.rs), 3 unused
+       variables, 1 unreachable statement, 1 needless borrow, and 5 drop_non_drop on the Unix Job
+       stub (e.g. scm.rs:932 and :949, both from before this branch). Not fixed here. A --keep-going
+       rerun gives the same lib result, with no error in procs.rs or git.rs.
+     $ cargo check --target x86_64-pc-windows-gnu --all-targets
+       Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 10s   (exit 0, 0 warnings)
+     $ cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings
+       Finished `dev` profile [unoptimized + debuginfo] target(s) in 6m 20s   (exit 0)
+     $ node scripts/workflow-check.mjs -> workflow-check: 2 workflows, 0 problem(s) · workflow-check: OK

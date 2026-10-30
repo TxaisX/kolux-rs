@@ -524,10 +524,10 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [ ] T-607 · Browser tabs and sign-in pop-ups refuse frames of Kolux's own address (L1-tauri.1, R07-browser.1; live proof pending) · safety lane
 
 ### product-ux lane
-- [ ] T-608 · Status hooks on with one line of consent, and the Board, Tower, Inbox, needs strip and bell read one status (brief Phase 0) · product-ux lane
-- [ ] T-609 · "Review changes" from a Board Done card and an Inbox row; the sidebar changed-files count on by default (brief Phase 0) · product-ux lane
+- [ ] T-608 · Status hooks on with one line of consent, and the Board, Tower, Inbox, needs strip and bell read one status (brief Phase 0); lands after T-583 and T-604, because the audit asks for those fixes before hooks are on by default · product-ux lane
+- [ ] T-609 · "Review changes" from a Board Done card and an Inbox row; the sidebar changed-files count on by default (brief Phase 0); it wires existing screens into reach, as the brief's section 3 requires, and adds no new screen · product-ux lane
 - [ ] T-610 · No screen is unreachable: Floor, Space and Workspace Board wired or hidden; the two Boards no longer share a name (brief Phase 0) · product-ux lane
-- [ ] T-611 · A Commands section in the palette makes every action runnable; the five actions with no handler get one or go (brief Phase 0) · product-ux lane
+- [ ] T-611 · A Commands section in the palette makes every action runnable; the five actions with no handler get one or go (brief Phase 0); it wires existing screens into reach, as the brief's section 3 requires, and adds no new screen · product-ux lane
 - [ ] T-612 · The first-run wizard always finishes after Continue on "Your work"; the Tip card's Close button closes it (F08-onboarding-look-misc.2; T-566 Tip part) · product-ux lane
 
 ### workspaces lane
