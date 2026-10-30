@@ -34,6 +34,11 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
+- [integrator] 2026-10-30 · Open: reclaim the old Kolux (about 408 GB), as in docs/reclaim-old-kolux.md. (1) Archive
+  TxaisX/kolux and TxaisX/kolux-releases on GitHub (Settings > Danger Zone > Archive this repository). (2) Sign test
+  account A in at its new folder G:\Temp\live-signin\account-a. (3) Uninstall the old app, then run
+  scripts/reclaim-old-kolux.ps1 (look first, move anything that is not an old-repo copy out of the backups folder, then
+  -Delete and type DELETE). Leave ~/.kolux/agent-hooks alone for now.
 - [reliability] 2026-10-30 · Open: live Windows checks on the installed build. T-565 (round 1 review fixed): Escape
   in the Usage Share card or the Send feedback box closes only that box (SettingsPage.tsx:318-334, 7 tests in
   SettingsPage.escape.test.ts); check Ctrl+, from a terminal then Escape, and Escape in Share and Send feedback.
