@@ -41,3 +41,13 @@ export function windowCommand(id: string, w: WindowCalls): boolean {
   }
   return false;
 }
+
+/** T-611 (PROJ-059): what a pending workspace.rename does with the sidebar's lists: rename the row of the
+ *  workspace in front, say there is none ("none"), or wait ("wait"): a sidebar the command just opened lists
+ *  nothing until its first scan, so the request is held until it is served, never dropped on an empty list. */
+export function renameTarget<W extends { path: string }>(activeDir: string | null, projects: readonly { id: string }[], lists: Record<string, readonly W[]>, same: (a: string, b: string) => boolean): W | "none" | "wait" {
+  if (activeDir === null) return "none";
+  const w = projects.flatMap((p) => lists[p.id] ?? []).find((x) => same(x.path, activeDir));
+  if (w) return w;
+  return projects.length > 0 && projects.every((p) => p.id in lists) ? "none" : "wait";
+}

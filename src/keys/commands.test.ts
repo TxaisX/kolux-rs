@@ -5,7 +5,7 @@
 import { expect, test } from "vitest";
 import { actions, actionById, sameAs } from "./actions";
 import { matchEvent, resolve, type KeyLike } from "./keymap";
-import { commandRows, windowCommand } from "./commands";
+import { commandRows, renameTarget, windowCommand } from "./commands";
 import { runCommand } from "./runCommand";
 import { heldByTerminal } from "./terminalPolicy";
 import { SCREEN_OF } from "../chrome/reach";
@@ -112,4 +112,18 @@ test("T-611: with Terminal first, a command picked in the palette is never left 
   target.addEventListener("keydown", () => void (held = heldByTerminal("view.floor", settings, xterm)));
   runCommand("view.floor", undefined, { later: (f) => f(), target, event: () => new Event("keydown") });
   expect(held).toBe(false);
+});
+
+test("T-611: Rename worktree from the palette on the Board with the sidebar collapsed: the sidebar mounts with empty lists, the request waits for them, then renames the workspace in front", () => {
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const projects = [{ id: "p1" }, { id: "p2" }];
+  const row = { path: "C:/code/app-fix" };
+  // The panel just mounted: no project and no list yet. Nothing to rename, and nothing to give up on.
+  expect(renameTarget("C:/code/app-fix", [], {}, same)).toBe("wait");
+  expect(renameTarget("C:/code/app-fix", projects, { p1: [] }, same)).toBe("wait");
+  // The lists arrive: the row in front is renamed.
+  expect(renameTarget("C:/code/app-fix", projects, { p1: [], p2: [{ path: "C:/code/other" }, row] }, same)).toBe(row);
+  // Every list is in and none holds the workspace in front, or nothing is in front: say so (and drop the request).
+  expect(renameTarget("C:/code/gone", projects, { p1: [], p2: [row] }, same)).toBe("none");
+  expect(renameTarget(null, projects, {}, same)).toBe("none");
 });
