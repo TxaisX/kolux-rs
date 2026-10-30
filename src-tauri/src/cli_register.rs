@@ -713,7 +713,9 @@ mod tests {
         assert_eq!(folder_and_exe_of(app.clone(), None).unwrap(), (d.to_path_buf(), app.clone()));
         let bin = d.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        for f in [if cfg!(windows) { "kolux.exe" } else { "kolux" }, "kolux.cmd"] {
+        // cli_dir keys on kolux.exe; command_file wants this build's own command, kolux-dev in a test build.
+        let own = format!("{}.cmd", crate::orchestration::CLI);
+        for f in [if cfg!(windows) { "kolux.exe" } else { "kolux" }, "kolux.cmd", own.as_str()] {
             std::fs::write(bin.join(f), "").unwrap();
         }
         let (dir, exe) = folder_and_exe_of(app.clone(), None).unwrap();
