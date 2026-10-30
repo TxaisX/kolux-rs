@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 698 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 704 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -61,6 +61,14 @@ recorded default until told otherwise; nothing here blocks a pass.
   ~/.kolux-rs/release-signing/kolux-rs.key), KOLUX_RELEASE_PUBKEY (its .pub), KOLUX_RELEASE_KEY_PASSWORD
   (when it has one) and KOLUX_RELEASES_TOKEN (a fine-grained token: contents read and write on
   kolux-rs-releases only). Then the integrator runs the release job for v0.1.0 and v0.1.1 (T-622).
+- [release-ci] 2026-10-30 · Question (optional, X-proc.13): should CI fail on every new high-severity library advisory
+  (`pnpm audit --audit-level high` added to the ci.yml checks)? It is a one-line change, but it can turn builds red without
+  any code change. Not added; nothing changes until you say yes.
+- [release-ci] 2026-10-30 · Optional repository setting: protect the release job with a GitHub environment that needs a
+  reviewer's approval before it signs and publishes (GitHub repository Settings > Environments). Only you can set it.
+- [release-ci] 2026-10-30 · Open: live proofs. APP-025 box 2 (a downloaded update installs and Kolux comes back), APP-059
+  box 1 and APP-060 box 1 (a real release run) need the CI billing block lifted (X-proc.2) and the signing secrets; APP-043
+  (Restart Kolux and both safe-graphics restarts come back) needs one check on the installed Windows build (T-592).
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
@@ -108,6 +116,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 ## Decisions made for Txais
 
+- 2026-10-30 · [release-ci] T-588 · CI release signing acts only on the build this run's `--build-only` recorded, never on the newest output folder; a run on an already-released main ends with "nothing was built, nothing to sign".
 - 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
 - 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters is left untouched, and the installer log says to use Settings > CLI > Register (NSIS string limit). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
 - 2026-10-30 · [editor] T-601 · A click on a collapsible section's heading (<summary>) keeps its normal action, so the section still opens. Mermaid's protected settings also cover fontFamily, altFontFamily and htmlLabels, so a diagram cannot change them. A note's inline style attributes are dropped.

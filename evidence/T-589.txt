@@ -82,3 +82,11 @@ NOT DONE HERE / STILL OPEN
 - No CI gate runs pnpm audit yet (X-proc.13); adding `pnpm audit --audit-level high` to ci.yml's checks job
   is a one-line follow-up if Txais wants a red build on every new high advisory.
 - The Rust tests were not run here (the integrator runs them centrally); they compile on Linux and Windows.
+
+INTEGRATION 2026-10-30: the src/editor/diagrams.ts follow-up was not applied, because main already has it from the
+review-editor lane (PR #7, commit d001ed2e, T-601). Real grep on the merged tree:
+$ grep -n "secure\|suppressErrorRendering\|htmlLabels" src/editor/diagrams.ts
+  49:    htmlLabels: false,
+  50:    flowchart: { htmlLabels: false },
+  52:    suppressErrorRendering: true,
+  55:    secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges", "theme", "themeVariables", "themeCSS", "fontFamily", "altFontFamily", "htmlLabels"],

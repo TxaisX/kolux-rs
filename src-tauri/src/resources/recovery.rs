@@ -878,6 +878,7 @@ pub fn graphics_restart_safe(app: tauri::AppHandle) -> Result<(), String> {
     }
     crate::diag::write(&dir, "restarting in safe graphics (APP-043)");
     note_self_end(&app, "restart in safe graphics (APP-043)");
+    crate::procs::hand_off(true);
     app.restart()
 }
 
@@ -901,6 +902,7 @@ pub fn graphics_choose(app: tauri::AppHandle, stay: bool) -> Result<(), String> 
     flag_clear(&dir);
     crate::diag::write(&dir, "trying hardware acceleration again: flag removed, restarting (APP-043)");
     note_self_end(&app, "restart with hardware graphics (APP-043)");
+    crate::procs::hand_off(true);
     app.restart()
 }
 

@@ -494,12 +494,12 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [ ] T-618 · A new tab never inherits a closed tab's saved status after a restart; saved rows are pruned when their tab closes (F05-app-shell-launch.3) · status-hooks lane
 
 ### release-ci lane
-- [ ] T-587 · Releases publish: `release.mjs` defines `onGitHub` (DT-R11) and a test runs the real publish path with `gh` stubbed (X-proc.1; APP 059) · release-ci lane
-- [ ] T-588 · The release job pins third-party actions to commit SHAs, signs in its own step and gives the token only to `gh release` (X-proc.5; APP 059, APP 060) · release-ci lane
-- [ ] T-589 · Library upgrades that close known holes: mermaid 11.17.2, highlight.js 11.12.0, katex 0.16.47, DOMPurify 3.4.17, vitest 4.1.12, tauri-plugin-updater 2.14.1 (drop the three zip ignores), pulldown-cmark removed; the licence check reads licence files (L4-web-js-toolchain.1, L3-terminal-editor-js.1, L1-tauri.3) · release-ci lane
-- [ ] T-590 · The content policy forbids framing Kolux: frame-ancestors 'none' in tauri.conf.json and the Vite dev headers (L1-tauri.1, R07-browser.1, CSP part) · release-ci lane
-- [ ] T-591 · CI checks that every `invoke("name")` in src/ is a registered command, and a first-load bundle-size budget (brief Phase 1) · release-ci lane
-- [ ] T-592 · Downloaded updates install: the installer and the restarted copy outlive the app's kill-on-close job (R09-app-core-install.1; APP 025; live proof pending CI and signing) · release-ci lane
+- [x] T-587 · Releases publish: `release.mjs` defines `onGitHub` (DT-R11) and a test runs the real publish path with `gh` stubbed (X-proc.1; APP 059) · release-ci lane · DONE 2026-10-30 (lane/release-ci): evidence/T-587.txt
+- [x] T-588 · The release job pins third-party actions to commit SHAs, signs in its own step and gives the token only to `gh release` (X-proc.5; APP 059, APP 060) · release-ci lane · DONE 2026-10-30 (lane/release-ci): evidence/T-588.txt
+- [x] T-589 · Library upgrades that close known holes: mermaid 11.17.2, highlight.js 11.12.0, katex 0.16.47, DOMPurify 3.4.17, vitest 4.1.12, tauri-plugin-updater 2.14.1 (drop the three zip ignores), pulldown-cmark removed; the licence check reads licence files (L4-web-js-toolchain.1, L3-terminal-editor-js.1, L1-tauri.3) · release-ci lane · DONE 2026-10-30 (lane/release-ci): evidence/T-589.txt
+- [x] T-590 · The content policy forbids framing Kolux: frame-ancestors 'none' in tauri.conf.json and the Vite dev headers (L1-tauri.1, R07-browser.1, CSP part) · release-ci lane · DONE 2026-10-30 (lane/release-ci): evidence/T-590.txt
+- [x] T-591 · CI checks that every `invoke("name")` in src/ is a registered command, and a first-load bundle-size budget (brief Phase 1) · release-ci lane · DONE 2026-10-30 (lane/release-ci): evidence/T-591.txt
+- [x] T-592 · Downloaded updates install: the installer and the restarted copy outlive the app's kill-on-close job (R09-app-core-install.1; APP 025; live proof pending CI and signing) · release-ci lane · DONE 2026-10-30 (lane/release-ci): evidence/T-592.txt; live Windows update and restart check still pending
 
 ### cli lane
 - [x] T-593 · Register finds kolux.exe and kolux.cmd in the installed bin folder; the setup guide's CLI step can complete (R01-cli.1; CLI 007) · cli lane · DONE 2026-10-30 (lane/cli): evidence/T-593.txt

@@ -109,3 +109,54 @@ $ cargo check --all-targets
 $ cargo check --target x86_64-pc-windows-gnu --all-targets
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 51s
 The integrator's central cargo test run (and CI's Windows rust job) remains the run proof of this test.
+
+INTEGRATION 2026-10-30 (integrator helper, lane/release-ci merged with origin/main, Linux sandbox)
+Outside changes applied as listed above. The restart sites, real grep -n -B1 output:
+  == before (HEAD) src-tauri/src/lifecycle.rs
+  261-pub fn claim_or_forward<R: tauri::Runtime>(app: &tauri::App<R>) {
+  262:    match claim(&app.config().identifier) {
+  --
+  643-    app.state::<Terminals>().kill_all();
+  644:    app.restart();
+  == after src-tauri/src/lifecycle.rs
+  262-    crate::procs::wait_for_restarted_from(); // T-592: a restarted copy lets the old one finish exiting
+  263:    match claim(&app.config().identifier) {
+  --
+  645-    crate::procs::hand_off(true);
+  646:    app.restart();
+  == before (HEAD) src-tauri/src/resources/recovery.rs
+  880-    note_self_end(&app, "restart in safe graphics (APP-043)");
+  881:    app.restart()
+  --
+  903-    note_self_end(&app, "restart with hardware graphics (APP-043)");
+  904:    app.restart()
+  == after src-tauri/src/resources/recovery.rs
+  881-    crate::procs::hand_off(true);
+  882:    app.restart()
+  --
+  905-    crate::procs::hand_off(true);
+  906:    app.restart()
+(update.rs needed nothing: its restart was already preceded by crate::procs::hand_off(true).)
+
+Rust tests, run centrally (from src-tauri, . ../scripts/test-env.sh, shared target):
+$ cargo test --lib -- procs:: t592 --test-threads=3
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 28s
+       Running unittests src/lib.rs (/home/user/kolux-rs/src-tauri/target/debug/deps/kolux_rs_lib-1c800ee4b2c701c1)
+  running 6 tests
+  test procs::tests::kill_tree_on_unix_ends_option_parsing_and_never_signals_everything ... ok
+  test procs::tests::t592_a_restarted_copy_waits_only_for_the_copy_that_started_it ... ok
+  test procs::tests::term045_a_process_running_a_child_has_children_and_the_child_has_none ... ok
+  test update::tests::t592_the_installer_leaves_the_app_job_last_and_only_when_it_will_start ... ok
+  test procs::tests::orch058_kill_tree_ends_a_shell_and_the_program_it_started ... ok
+  test procs::tests::orch058_a_gone_pid_is_never_stuck_while_a_live_or_unknowable_one_is ... ok
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2498 filtered out; finished in 0.25s
+Not run here: procs::tests::t592_after_the_hand_off_what_a_member_starts_outlives_the_job is #[cfg(windows)];
+it compiles for x86_64-pc-windows-gnu (cargo check and clippy -D warnings clean) and runs in CI's Windows job.
+
+Full suite: cargo test --tests --no-fail-fast -- --test-threads=3
+  2673 passed, 45 failed, 3 ignored across all test binaries; the 45 failures are exactly
+  the 45 known Linux-only failures in the baseline list (none new, none missing).
+
+STILL PENDING: the live Windows check. On the installed build, Settings > Restart Kolux, Restart in safe
+graphics, and the choice to try hardware graphics again each bring Kolux back (APP-043); a downloaded update installs and
+Kolux comes back on the new version (APP-025 box 2, needs CI billing and the signing secrets).
