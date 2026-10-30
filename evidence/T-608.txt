@@ -123,9 +123,35 @@ STILL OPEN / NEEDS A LIVE RUN OR TXAIS
   agentStatusHooks -> the card shows once; Done records it. Not run here (no app in the cloud sandbox).
 - Live: an agent with no hooks of its own (Aider, Gemini with hooks off) asking for a permission shows Needs you on the Board, Tower,
   Inbox, strip and bell at once (needs the App and TerminalPane patches applied).
-- Txais decisions (see result): (1) DECISIONS.md text below; (2) a pane opened as a plain terminal with an agent started there by hand
-  (ACCT-050) now has no status on any of the five (before: the strip and Inbox read its hooks, the bell its title, the Board and Tower
-  nothing); putting it on all five needs the agent each pane shows passed up from TerminalPane; (3) an agent whose program exited
-  reads Stopped on the Board and Tower but Done today in the Inbox (unchanged; the window keeps no exit code); (4) TERM-030's
+- Txais decisions (see result): (1) DECISIONS.md text below; (2) an agent whose program exited
+  reads Stopped on the Board and Tower but Done today in the Inbox (unchanged; the window keeps no exit code); (3) TERM-030's
   Ctrl+J cycle and the tab badges still read the header's own flag (they also stop on blocked or interrupted panes).
 - Docs (not this lane's): docs/guide/settings.md:181,187,193, getting-started.md:12,39, board-agents-inbox.md:118 (see result).
+
+REVIEW ROUND 2 (2026-10-30): a hand-started agent in a plain terminal is credited on all five (ACCT-050, DT-C11)
+The round-1 change took status away from an agent started by hand in a plain terminal pane (paneStatus gave nothing for agent
+"shell"). The window already knows that agent: liveIds (TERM-058 shell marks), the same identity the tab icon reads.
+- src/board/chip.ts:68-71 paneAgent(p, live) = shownAgent(p.agent, creditedLive(launchedAgent(p), live ?? IDLE)): the pane's own agent,
+  or in a plain terminal the agent running there now; back at the prompt the shell marks forget it (reduceIdentity "end"/"prompt" ->
+  IDLE), so no last hook word lingers. The round-1 ponytail note on paneStatus is gone; paneStatus and chipOf are unchanged.
+- evidence/product-ux-App.patch: `const agentOf = (p: Pane) => paneAgent(p, liveIds[p.key])`; statusOf = paneStatus(agentOf(p), ...);
+  chipFor passes agent: agentOf(p); laneOf tests agentOf(p) === "shell"; towerNow filters on agentOf(p) !== "shell", its row's agent is
+  agentOf(p), and liveIds joined its useMemo deps. byDir keeps `statusOf(p) ?? paneState(...)`, so the sidebar row has it again too.
+- Test: src/board/paneStatus.test.ts "T-608 (ACCT-050, DT-C11): an agent started by hand in a plain terminal is credited ..."; surfaces()
+  now reads the agent through paneAgent as the window does. Failing output before the fix (paneAgent stubbed to p.agent, what the
+  round-1 App patch read):
+    FAIL ... an agent started by hand in a plain terminal is credited ...
+    - Expected [true, true, true, true, true]
+    + Received [false, false, false, false, false]
+     > src/board/paneStatus.test.ts:97:25
+     Tests  1 failed | 8 passed (9)
+  After the fix:
+    $ VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run src/board/paneStatus.test.ts src/board/chip.test.ts
+     Test Files  2 passed (2)   Tests  17 passed (17)
+    $ VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run src/board src/keys src/inbox src/tower src/settings/shortcutRows.test.ts
+      (with the App, ProjectsPanel, TerminalPane and settings patches applied in the worktree)
+     Test Files  32 passed (32)   Tests  206 passed (206)
+    $ flock /tmp/kolux-node.lock pnpm exec tsc   (all four outside patches applied) -> exit 0, no output
+    then the outside files were restored; `git apply --check` passes for all four patches on the branch.
+- Live (Windows): open a plain terminal, type `claude`, let it ask a permission -> Needs you on the Board, Tower, Inbox, needs strip,
+  bell and the sidebar row; quit Claude -> back at the prompt it is on none of them.

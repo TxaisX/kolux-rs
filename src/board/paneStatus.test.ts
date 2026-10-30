@@ -4,7 +4,9 @@
 // sourceOf and inboxItems, the strip from waitingInGrid and the bell from needsYouCount over needsYou, all
 // over the one paneStatus.
 import { expect, test } from "vitest";
-import { chipOf, needsYou, paneStatus, type Lane } from "./chip";
+import { chipOf, needsYou, paneAgent, paneStatus, type Lane } from "./chip";
+import { IDLE, reduceIdentity, type Identity } from "../terminal/shellMarks";
+import type { Agent } from "../chrome/VendorMark";
 import { towerRows } from "../tower/tower";
 import { inboxItems, sourceOf, type Group } from "../inbox/inbox";
 import type { AgentState } from "../projects/rows";
@@ -12,11 +14,12 @@ import { waitingInGrid } from "../terminal/tabs";
 import { needsYouCount } from "../terminal/status";
 
 const now = 1_000_000;
-type Case = { agent?: string; hook?: AgentState; guess?: AgentState | null; running: boolean | undefined };
+type Case = { agent?: string; live?: Identity; hook?: AgentState; guess?: AgentState | null; running: boolean | undefined };
 
 /** One pane drawn on all five surfaces from the same signals (the Tower lists agent panes only, App.tsx towerNow). */
 function surfaces(c: Case) {
-  const agent = c.agent ?? "claude";
+  // The window reads the agent a pane shows (App.tsx agentOf): a plain terminal's live program counts.
+  const agent = paneAgent({ agent: (c.agent ?? "claude") as Agent, program: null }, c.live);
   const state = paneStatus(agent, c.hook, c.guess, c.running);
   const chip = chipOf({ agent, state, running: c.running, stale: false, since: now - 60_000 }, now);
   const board: Lane = chip?.lane ?? "idle";
@@ -67,7 +70,7 @@ test("T-608: a title guess counts only while the program runs: starting or ended
   expect(surfaces({ guess: "permission", running: false }).board).toBe("stopped");
 });
 
-test("T-608: a pane opened as a plain terminal has no status on any of the five, whatever a hook or its title said last", () => {
+test("T-608: a plain terminal with nothing running in it has no status on any of the five, whatever a hook or its title said last", () => {
   for (const hook of [undefined, "permission", "waiting", "done"] as const)
     for (const guess of [null, "permission"] as const) {
       const s = surfaces({ agent: "shell", hook, guess, running: true });
@@ -86,4 +89,13 @@ test("T-608: every live state reads one way on every surface (the Board and the 
       expect(s.inbox, `${hook}/${guess}`).toBe(inboxOf[s.board]);
       expect(new Set(needs(s)).size, `${hook}/${guess}`).toBe(1);
     }
+});
+
+test("T-608 (ACCT-050, DT-C11): an agent started by hand in a plain terminal is credited: its permission needs you on all five, and back at the prompt on none", () => {
+  const claude = reduceIdentity(reduceIdentity(IDLE, { kind: "start" }), { kind: "title", text: "✳ Claude Code" });
+  expect(claude.agent).toBe("claude");
+  const asking = surfaces({ agent: "shell", live: claude, hook: "permission", running: true });
+  expect(needs(asking)).toEqual([true, true, true, true, true]);
+  const back = reduceIdentity(claude, { kind: "end", code: 0 });
+  expect(needs(surfaces({ agent: "shell", live: back, hook: "permission", running: true }))).toEqual([false, false, false, false, false]);
 });
