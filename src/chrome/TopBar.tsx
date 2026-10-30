@@ -2,8 +2,9 @@
 // the left; the centred Agents / Board / Terminals switcher; panel toggle, search hint, bell,
 // usage pill and the window's own minimize / maximize / close on the right. The bar is the
 // window's drag region (the window has no OS title bar): T-620, a press anywhere on it that is not a
-// control moves the window ("deep"), and the pop-up menus drawn inside it opt out ("false") so a click
-// on their backdrop still closes them. The search box shows the palette chord
+// control moves the window ("deep"); the switcher's frame and the pop-up menus drawn inside the bar opt
+// out ("false"), so a press that just misses a segment does not move the window and a click on a
+// menu's backdrop still closes it. The search box shows the palette chord
 // from the keymap (T-005), so an edit to ~/.kolux/keybindings.json changes the chips.
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -95,9 +96,7 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
           <Mark />
         </button>
         {appName && (
-          <span className="app-name" data-tauri-drag-region>
-            Kolux
-          </span>
+          <span className="app-name">Kolux</span>
         )}
         <button
           className="ib dots"
@@ -137,7 +136,7 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
       </div>
 
       {layout.switcher && (
-        <nav className="switcher" aria-label="Screen">
+        <nav className="switcher" aria-label="Screen" data-tauri-drag-region="false">
           {screens.map((s) => (
             <button key={s.id} aria-pressed={screen === s.id} onClick={() => onScreen(s.id)}>
               {s.label}
