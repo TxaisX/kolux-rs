@@ -146,3 +146,68 @@ WHAT STILL NEEDS A LIVE WINDOWS RUN OR TXAIS
   message is written, no marker file appears and no server process starts (after the integrator
   applies the scm.rs change). Then with GitHub Copilot installed through npm as the writer: the
   message is written (it failed with "batch file arguments are invalid" before).
+
+INTEGRATOR RUN (2026-10-30, lane/safety merged with origin/main 98a494a6 and evidence/safety-scm.patch applied)
+Real cargo test on Linux, from src-tauri with `. ../scripts/test-env.sh`, CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target.
+Full suite: `cargo test --tests --no-fail-fast -- --test-threads=3`, lib line: test result: FAILED. 2481 passed; 39 failed; 3 ignored; 0 measured; 0 filtered out; finished in 249.97s
+Every lib failure is on the 45-name Linux baseline except two skill_delete tests that re-launch the test binary
+(another cargo process was rebuilding the shared target at the time); both pass when run again alone. safe013_recursive_deletes_...
+(on the baseline) now passes.
+
+BEFORE the patch (lane commits only, evidence/safety-scm.patch reversed with git apply -R):
+$ cargo test --lib -- t606_ git019 git018_d --test-threads=3
+     Running unittests src/lib.rs (/home/user/kolux-rs/src-tauri/target/debug/deps/kolux_rs_lib-1c800ee4b2c701c1)
+test scm::writers::tests::git018_d_a_model_that_looks_like_a_flag_or_an_unoffered_effort_is_dropped ... ok
+test scm::writers::tests::git018_d_a_missing_cli_shows_an_empty_list_with_a_hint_and_runs_nothing ... ok
+test scm::writers::tests::git018_d_claude_keeps_sonnet_until_a_model_is_picked_and_takes_an_effort ... ok
+test scm::writers::tests::git018_d_an_installed_cli_is_asked_its_own_list_command ... ok
+test scm::writers::tests::git018_d_codex_runs_exec_read_only_with_the_model_and_effort_and_the_prompt_on_stdin ... ok
+test scm::writers::tests::git018_d_claude_models_and_efforts_are_read_from_its_help_text ... ok
+test scm::writers::tests::git018_d_codex_models_come_from_its_catalog_json_without_the_hidden_ones ... ok
+test scm::writers::tests::git018_d_copilot_choices_pi_tables_and_id_lines_parse ... ok
+test scm_recipe::tests::git019_a_hostile_value_stays_in_one_argument_of_the_template ... ok
+test scm_recipe::tests::git019_a_template_without_content_variables_gets_the_prompt_on_standard_input ... ok
+test scm_recipe::tests::git019_a_value_is_never_expanded_again_and_is_cut_to_size ... ok
+test scm::writers::tests::t606_an_npm_writer_starts_as_node_and_another_command_script_refuses_line_breaks_plainly ... ok
+test scm_recipe::tests::git019_expand_fills_known_variables_and_refuses_unknown_ones ... ok
+test scm_recipe::tests::git019_fix_with_an_agent_recipe_returns_the_agent_extras_and_prompt_for_the_apps_own_launch ... ok
+test scm_recipe::tests::git019_quote_arg_leaves_plain_words_and_escapes_quotes_and_trailing_backslashes ... ok
+test scm_recipe::tests::git019_the_program_may_not_be_a_variable_and_a_recipe_needs_exactly_one_of_agent_or_template ... ok
+test scm_recipe::tests::git019_worktree_values_come_from_the_repository ... ok
+test scm::writers::tests::t606_the_claude_writer_runs_from_an_empty_folder_of_its_own_with_only_the_users_settings ... ok
+test scm_recipe::tests::git019_an_agent_recipe_puts_its_extra_arguments_where_each_agent_takes_flags ... FAILED
+thread 'scm_recipe::tests::git019_an_agent_recipe_puts_its_extra_arguments_where_each_agent_takes_flags' (12172) panicked at src/scm_recipe.rs:367:9:
+  left: ["-p", "--setting-sources", "user", "--strict-mcp-config", "--model", "sonnet", "--add-dir", "my branch", "--max-turns", "2"]
+ right: ["-p", "--model", "sonnet", "--add-dir", "my branch", "--max-turns", "2"]
+test result: FAILED. 18 passed; 1 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.21s
+
+AFTER the patch (applied with git apply from the repo root; scm.rs and scm_recipe.rs now call writers::run,
+so the commit-message button, the one-click flow and agent recipes run their agent from the empty folder):
+$ cargo test --lib -- t606_ git019 git018_d git017_d scm_recipe:: --test-threads=3
+     Running unittests src/lib.rs (/home/user/kolux-rs/src-tauri/target/debug/deps/kolux_rs_lib-1c800ee4b2c701c1)
+test scm::writers::tests::git017_d_a_shim_gets_a_smaller_argument_share_than_an_exe ... ok
+test scm::tests::git017_d_a_command_line_writer_gets_a_prompt_that_fits_and_keeps_the_note ... ok
+test scm::writers::tests::git017_d_each_other_writer_gets_its_own_flags ... ok
+test scm::writers::tests::git018_d_a_missing_cli_shows_an_empty_list_with_a_hint_and_runs_nothing ... ok
+test scm::writers::tests::git018_d_a_model_that_looks_like_a_flag_or_an_unoffered_effort_is_dropped ... ok
+test scm::writers::tests::git018_d_claude_keeps_sonnet_until_a_model_is_picked_and_takes_an_effort ... ok
+test scm::writers::tests::git018_d_an_installed_cli_is_asked_its_own_list_command ... ok
+test scm::writers::tests::git018_d_claude_models_and_efforts_are_read_from_its_help_text ... ok
+test scm::writers::tests::git018_d_codex_runs_exec_read_only_with_the_model_and_effort_and_the_prompt_on_stdin ... ok
+test scm::writers::tests::git018_d_copilot_choices_pi_tables_and_id_lines_parse ... ok
+test scm::writers::tests::git018_d_codex_models_come_from_its_catalog_json_without_the_hidden_ones ... ok
+test scm::writers::tests::t606_an_npm_writer_starts_as_node_and_another_command_script_refuses_line_breaks_plainly ... ok
+test scm_recipe::tests::git019_a_hostile_value_stays_in_one_argument_of_the_template ... ok
+test scm_recipe::tests::git019_a_template_without_content_variables_gets_the_prompt_on_standard_input ... ok
+test scm_recipe::tests::git019_a_value_is_never_expanded_again_and_is_cut_to_size ... ok
+test scm_recipe::tests::git019_an_agent_recipe_puts_its_extra_arguments_where_each_agent_takes_flags ... ok
+test scm_recipe::tests::git019_expand_fills_known_variables_and_refuses_unknown_ones ... ok
+test scm_recipe::tests::git019_fix_with_an_agent_recipe_returns_the_agent_extras_and_prompt_for_the_apps_own_launch ... ok
+test scm_recipe::tests::git019_quote_arg_leaves_plain_words_and_escapes_quotes_and_trailing_backslashes ... ok
+test scm_recipe::tests::git019_the_program_may_not_be_a_variable_and_a_recipe_needs_exactly_one_of_agent_or_template ... ok
+test scm::tests::git017_d_conflicted_files_stay_out_of_the_message_diff_with_a_note ... ok
+test scm::writers::tests::t606_the_claude_writer_runs_from_an_empty_folder_of_its_own_with_only_the_users_settings ... ok
+test scm_recipe::tests::git019_worktree_values_come_from_the_repository ... ok
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 2500 filtered out; finished in 0.12s
+Re-run of `t606_ git019 git018_d` after rebuilding with the patch: test result: ok. 19 passed; 0 failed.
+T-606 code is now complete; the live Windows check above is still pending.

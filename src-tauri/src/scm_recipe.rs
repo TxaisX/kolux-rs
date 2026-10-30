@@ -232,6 +232,11 @@ pub async fn scm_recipe_commit(worktree: String, recipe: Recipe, instructions: O
         vars.insert("issue".to_string(), issue.unwrap_or_default());
         let c = compose("commit", &recipe, &vars, &prompt)?;
         let program = resolve(&c)?;
+        // T-606 (R05-git-scm.1): an agent recipe runs from an empty folder, never the workspace; a
+        // template is the user's own command and still runs in the workspace.
+        if let Some(spec) = c.agent.as_deref().and_then(writers::spec) {
+            return writers::run(spec, &program, &writers::Invocation { args: c.args, input: c.input }, &worktree, LIMIT);
+        }
         scm::write_message(&program, &c.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, c.input.as_deref(), &worktree, LIMIT)
     })
     .await
@@ -364,9 +369,9 @@ mod tests {
         let v = vars(&[("branch", "my branch")]);
         let claude = compose("commit", &agent("claude", "--add-dir {branch} --max-turns 2"), &v, "P").unwrap();
         assert_eq!(claude.program, "claude");
-        assert_eq!(claude.args, ["-p", "--model", "sonnet", "--add-dir", "my branch", "--max-turns", "2"]);
+        assert_eq!(claude.args, ["-p", "--setting-sources", "user", "--strict-mcp-config", "--model", "sonnet", "--add-dir", "my branch", "--max-turns", "2"]);
         assert_eq!(claude.input.as_deref(), Some("P"));
-        assert_eq!(claude.line, "claude -p --model sonnet --add-dir \"my branch\" --max-turns 2");
+        assert_eq!(claude.line, "claude -p --setting-sources user --strict-mcp-config --model sonnet --add-dir \"my branch\" --max-turns 2");
         // Codex reads standard input through a trailing "-": extra arguments go in front of it.
         let codex = compose("pr", &agent("codex", "--profile fast"), &v, "P").unwrap();
         assert_eq!(codex.args.last().unwrap(), "-");

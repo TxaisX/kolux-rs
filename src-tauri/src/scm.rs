@@ -1381,8 +1381,10 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
         let id = agent.as_deref().filter(|a| !a.is_empty()).unwrap_or("claude");
         if id == "claude" {
             if let Some(program) = stand_in {
-                let inv = writers::invocation(writers::spec("claude").ok_or("no writer")?, model.as_deref(), effort.as_deref(), &prompt);
-                return write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit);
+                let spec = writers::spec("claude").ok_or("no writer")?;
+                let inv = writers::invocation(spec, model.as_deref(), effort.as_deref(), &prompt);
+                // T-606 (R05-git-scm.1): a writer agent runs from an empty folder, never the workspace.
+                return writers::run(spec, &program, &inv, &worktree, limit);
             }
         }
         let spec = writers::spec(id).ok_or_else(|| format!("unknown writer {id}"))?;
@@ -1394,7 +1396,7 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
             prompt
         };
         let inv = writers::invocation(spec, model.as_deref(), effort.as_deref(), &prompt);
-        write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit)
+        writers::run(spec, &program, &inv, &worktree, limit)
     })
     .await
     .map_err(|e| e.to_string())?

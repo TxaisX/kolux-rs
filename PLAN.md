@@ -520,10 +520,10 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [x] T-603 · The rich view keeps a note's line endings, and a file whose line endings change on disk is re-read correctly (F01-editor.2, .4) · review-editor lane · DONE 2026-10-30 (lane/review-editor): evidence/T-603.txt
 
 ### safety lane
-- [ ] T-604 · Protected rules fail closed: comments, heredocs, here-strings and escapes cannot hide a command; your own "starts with" rules see through env prefixes, sudo, npx, .exe paths and bash -c; masking a large command stays fast (R03-safety-accounts.1, .2, .3) · safety lane
-- [ ] T-605 · Opening prompts never pass through cmd.exe: npm-installed agents start their real program or get the prompt typed after start, and multi-line prompts arrive whole (L2-rust-crates.1, X-sec.1, R08-orch-auto-chat.2) · safety lane
-- [ ] T-606 · AI commit and pull-request writers run outside the workspace without the repository's own Claude settings (R05-git-scm.1, .3) · safety lane
-- [ ] T-607 · Browser tabs and sign-in pop-ups refuse frames of Kolux's own address (L1-tauri.1, R07-browser.1; live proof pending) · safety lane
+- [x] T-604 · Protected rules fail closed: comments, heredocs, here-strings and escapes cannot hide a command; your own "starts with" rules see through env prefixes, sudo, npx, .exe paths and bash -c; masking a large command stays fast (R03-safety-accounts.1, .2, .3) · safety lane · DONE 2026-10-30 (lane/safety): evidence/T-604.txt
+- [x] T-605 · Opening prompts never pass through cmd.exe: npm-installed agents start their real program or get the prompt typed after start, and multi-line prompts arrive whole (L2-rust-crates.1, X-sec.1, R08-orch-auto-chat.2) · safety lane · DONE 2026-10-30 (lane/safety): evidence/T-605.txt
+- [x] T-606 · AI commit and pull-request writers run outside the workspace without the repository's own Claude settings (R05-git-scm.1, .3) · safety lane · DONE 2026-10-30 (lane/safety, with evidence/safety-scm.patch applied): evidence/T-606.txt; live Windows check pending
+- [x] T-607 · Browser tabs and sign-in pop-ups refuse frames of Kolux's own address (L1-tauri.1, R07-browser.1; live proof pending) · safety lane · DONE 2026-10-30 (lane/safety): evidence/T-607.txt
 
 ### product-ux lane
 - [ ] T-608 · Status hooks on with one line of consent, and the Board, Tower, Inbox, needs strip and bell read one status (brief Phase 0); lands after T-583 and T-604, because the audit asks for those fixes before hooks are on by default · product-ux lane

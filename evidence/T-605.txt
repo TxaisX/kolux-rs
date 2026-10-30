@@ -120,3 +120,26 @@ WHAT STILL NEEDS A LIVE WINDOWS RUN OR TXAIS
   Manager command line), no calculator opens, and the agent shows every line of the prompt; then
   the same with a user folder holding a space. Also a pnpm-installed agent: it starts and the prompt
   is pasted in after start.
+
+INTEGRATOR RUN (2026-10-30, lane/safety merged with origin/main 98a494a6 and evidence/safety-scm.patch applied)
+Real cargo test on Linux, from src-tauri with `. ../scripts/test-env.sh`, CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target.
+Full suite: `cargo test --tests --no-fail-fast -- --test-threads=3`, lib line: test result: FAILED. 2481 passed; 39 failed; 3 ignored; 0 measured; 0 filtered out; finished in 249.97s
+Every lib failure is on the 45-name Linux baseline except two skill_delete tests that re-launch the test binary
+(another cargo process was rebuilding the shared target at the time); both pass when run again alone. safe013_recursive_deletes_...
+(on the baseline) now passes.
+
+$ cargo test --lib -- pty::tests::t605 agents::tests::t605 pty::tests::a_cmd_shim agents::tests::sess051 --test-threads=3
+     Running unittests src/lib.rs (/home/user/kolux-rs/src-tauri/target/debug/deps/kolux_rs_lib-1c800ee4b2c701c1)
+test agents::tests::sess051_a_blank_prompt_counts_as_none_and_an_unknown_agent_is_refused ... ok
+test agents::tests::sess051_foreground_matching_ignores_case_folder_and_windows_endings ... ok
+test agents::tests::sess051_grok_trae_and_prime_agent_get_an_end_of_options_dash_before_the_prompt ... ok
+test agents::tests::sess051_hermes_takes_its_query_route_once_and_refuses_an_overlong_line ... ok
+test agents::tests::sess051_trailing_prompt_comes_after_the_fixed_and_model_arguments ... ok
+test agents::tests::sess051_typed_route_starts_bare_and_hands_the_prompt_over_for_later ... ok
+test agents::tests::sess051_flag_routes_copilot_interactive_gemini_antigravity_prompt_interactive_mimo_prompt ... ok
+test agents::tests::sess051_an_agent_run_through_an_interpreter_is_credited_by_its_entry_script ... ok
+test agents::tests::t605_an_agent_started_through_cmd_exe_has_its_prompt_typed_in_after_start ... ok
+test pty::tests::a_cmd_shim_runs_through_the_command_shell_and_an_exe_runs_itself ... ok
+test pty::tests::t605_any_other_launcher_still_starts_through_cmd_exe ... ok
+test pty::tests::t605_an_npm_agent_starts_node_on_its_script_and_no_prompt_reaches_cmd_exe ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 2511 filtered out; finished in 0.01s

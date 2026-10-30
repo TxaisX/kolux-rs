@@ -88,3 +88,16 @@ LIVE PROOF PENDING (Windows, WebView2)
    over CDP, typeof frames[0].__TAURI_INTERNALS__ is "undefined" (the frame never loaded Kolux).
 2. The same from a sign-in popup (window.open with a size from a tab page).
 3. A dev build: a page framing http://localhost:1420/ stays empty.
+
+INTEGRATOR RUN (2026-10-30, lane/safety merged with origin/main 98a494a6 and evidence/safety-scm.patch applied)
+Real cargo test on Linux, from src-tauri with `. ../scripts/test-env.sh`, CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target.
+Full suite: `cargo test --tests --no-fail-fast -- --test-threads=3`, lib line: test result: FAILED. 2481 passed; 39 failed; 3 ignored; 0 measured; 0 filtered out; finished in 249.97s
+Every lib failure is on the 45-name Linux baseline except two skill_delete tests that re-launch the test binary
+(another cargo process was rebuilding the shared target at the time); both pass when run again alone. safe013_recursive_deletes_...
+(on the baseline) now passes.
+
+$ cargo test --lib -- t607 --test-threads=3
+     Running unittests src/lib.rs (/home/user/kolux-rs/src-tauri/target/debug/deps/kolux_rs_lib-1c800ee4b2c701c1)
+test browser::engine::tests::t607_every_tab_and_every_popup_hooks_the_frame_rule ... ok
+test browser::engine::tests::t607_a_frame_of_koluxs_own_address_is_refused_and_an_ordinary_frame_loads ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2521 filtered out; finished in 0.00s

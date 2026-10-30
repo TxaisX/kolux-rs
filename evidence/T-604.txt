@@ -189,3 +189,57 @@ Possible next step (not needed for the bar): mysql_p and curl_u spend most of th
 4,048-character head (one read of the words before each flag); keeping the last read and extending
 it when no quote, bracket or separator lies between two flags (as HeaderContext::command_start does
 for labels) would make that linear too.
+
+INTEGRATOR RUN (2026-10-30, lane/safety merged with origin/main 98a494a6 and evidence/safety-scm.patch applied)
+Real cargo test on Linux, from src-tauri with `. ../scripts/test-env.sh`, CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target.
+Full suite: `cargo test --tests --no-fail-fast -- --test-threads=3`, lib line: test result: FAILED. 2481 passed; 39 failed; 3 ignored; 0 measured; 0 filtered out; finished in 249.97s
+Every lib failure is on the 45-name Linux baseline except two skill_delete tests that re-launch the test binary
+(another cargo process was rebuilding the shared target at the time); both pass when run again alone. safe013_recursive_deletes_...
+(on the baseline) now passes.
+
+$ cargo test --lib -- protected::tests::safe014 protected::tests::mask_answers --test-threads=3
+     Running unittests src/lib.rs (/home/user/kolux-rs/src-tauri/target/debug/deps/kolux_rs_lib-1c800ee4b2c701c1)
+test protected::tests::safe014_comments_heredocs_here_strings_and_escapes_cannot_hide_a_command ... ok
+test protected::tests::mask_answers_the_written_down_cases_exactly ... ok
+test protected::tests::safe014_wrapped_chained_nested_and_encoded_commands_still_ask_and_lookalikes_run ... ok
+test protected::tests::safe014_known_asking_commands_still_ask_behind_comment_heredoc_and_escape_prefixes ... ok
+test protected::tests::mask_answers_generated_inputs_exactly_as_before ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2518 filtered out; finished in 3.45s
+
+$ cargo test --lib -- protected_custom::tests --test-threads=3
+     Running unittests src/lib.rs (/home/user/kolux-rs/src-tauri/target/debug/deps/kolux_rs_lib-1c800ee4b2c701c1)
+test protected_custom::tests::t156b_a_contains_rule_ignores_case_and_squeezes_whitespace ... ok
+test protected_custom::tests::t156b_a_starts_with_rule_reads_the_program_and_first_words_of_each_segment ... ok
+test protected_custom::tests::t156b_check_runs_built_ins_first_then_the_customs_in_force_and_a_nameless_rule_shows_its_pattern ... ok
+test protected_custom::tests::t156b_listen_asks_once_for_a_custom_rule_and_keeps_the_attempt ... ok
+test protected_custom::tests::t156b_scopes_join_the_built_in_off_lists_and_the_custom_rules_per_folder ... ok
+test protected_custom::tests::t156b_a_regex_rule_is_case_insensitive_and_sees_the_first_4096_characters ... ok
+test protected_custom::tests::t156b_validate_refuses_what_safe_016_names_and_allows_the_rest ... ok
+test protected_custom::tests::t156b_the_attempts_list_masks_tokens_env_lines_pem_blocks_url_credentials_and_auth_headers ... ok
+test protected_custom::tests::t604_a_secret_cut_off_where_masking_stops_reading_stays_hidden ... ok
+test protected_custom::tests::t604_a_starts_with_rule_sees_through_wrappers_runners_paths_and_inner_shells ... ok
+test protected_custom::tests::t156b_attempts_are_masked_newest_first_capped_and_settled_by_what_follows ... ok
+TIME hook flags_p bytes=1048751 ms=570
+TIME hook flags_u bytes=1048751 ms=509
+TIME hook mysql_p bytes=1048757 ms=2110
+TIME hook curl_u bytes=1048755 ms=1551
+TIME hook pipes bytes=1048750 ms=1147
+TIME hook heredoc_table bytes=1123684 ms=4094
+TIME hook heredoc_script bytes=1089083 ms=3390
+TIME hook assignments bytes=1048756 ms=295
+TIME hook wrappers bytes=1048752 ms=486
+TIME hook comments bytes=1198545 ms=850
+TIME hook quotes bytes=1573039 ms=1704
+TIME hook substitutions bytes=1048749 ms=2468
+test protected_custom::tests::t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 2511 filtered out; finished in 20.69s
+
+The TIME lines above are the debug build, where the test only has to finish (its 750 ms bar applies to an
+optimized build, cfg!(debug_assertions)). Optimized timing, same test from the real protected.rs and
+protected_custom.rs at opt-level=3 (lane probe: scratchpad/lanes/safety-probe/probe.sh O; serde_json/regex
+still debug builds, so this errs slow), load average 1.67:
+run 1: flags_p 145, flags_u 107, mysql_p 317, curl_u 289, pipes 144, heredoc_table 383, heredoc_script 252,
+       assignments 60, wrappers 61, comments 96, quotes 118, substitutions 208 ms -> ok
+run 2: slowest heredoc_table 523, mysql_p 373, curl_u 355, heredoc_script 250 ms -> ok
+Slowest is 523 ms against the hook's 1.5 s: inside the 750 ms bar, but runs vary by about 35% on this
+loaded machine. Not borderline against 1.5 s.
