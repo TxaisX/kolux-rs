@@ -1,6 +1,7 @@
 // T-302-b: the small pieces ProjectsPanel mounts (see projectsGlue.ts for the rules, and the patch for where they sit).
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
+import type { KeptBranch, KeptItem } from "../projects/cleanup";
 import type { RemoveCheck } from "../projects/deleting";
 import { outsideLines, outsideTitle } from "../projects/outsideCard";
 import type { Worktree } from "../projects/model";
@@ -77,6 +78,7 @@ export function PickedBar({
   picked,
   find,
   onRemoved,
+  onKept = () => {},
   onLeft,
   onReload,
   say,
@@ -84,6 +86,8 @@ export function PickedBar({
   picked: string[];
   find: (path: string) => { projectId: string; name: string } | undefined;
   onRemoved: (path: string) => void;
+  /** PROJ-073: the branches that stayed, for the one review list. */
+  onKept?: (items: KeptItem[]) => void;
   onLeft: (left: string[]) => void;
   onReload: () => Promise<unknown> | void;
   say: Say;
@@ -113,9 +117,12 @@ export function PickedBar({
     if (!asked) return;
     setBusy(true);
     let gone = 0;
+    const kept: KeptItem[] = [];
     try {
       for (const s of planRemoval(asked.q, asked.items)) {
-        await invoke("workspace_remove", { projectId: s.projectId, path: s.path, force: s.force, stamp: s.stamp, keepBranch: false });
+        // T-613: no branch choice (null), so the workspace's own record decides and a branch holding commits found nowhere else stays.
+        const k = await invoke<KeptBranch | null>("workspace_remove", { projectId: s.projectId, path: s.path, force: s.force, stamp: s.stamp, keepBranch: null });
+        if (k) kept.push({ ...k, projectId: s.projectId });
         void invoke("editor_drafts_drop", { worktree: s.path }).catch(() => undefined);
         onRemoved(s.path);
         gone++;
@@ -128,6 +135,7 @@ export function PickedBar({
       onLeft(picked.filter((p) => !asked.q.removable.slice(0, gone).includes(p)));
       setAsked(null);
     } finally {
+      if (kept.length > 0) onKept(kept);
       setBusy(false);
       await onReload();
     }

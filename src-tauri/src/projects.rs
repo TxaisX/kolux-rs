@@ -1497,6 +1497,27 @@ pub struct RemoveCheck {
     pub stamp: String,
     /// PROJ-072: the folder is already gone while Git still lists it; deleting only tidies the record.
     pub missing: bool,
+    /// T-613: commits on its branch (or detached HEAD) that no other branch and no remote holds,
+    /// newest first as `<short id> <subject>`: deleting the branch would lose them.
+    pub commits: Vec<String>,
+}
+
+/// T-613: the commits deleting `w`'s branch would lose: reachable from its branch (or a detached
+/// HEAD) and from no other local branch and no remote-tracking branch. Reads only refs Git already
+/// has, never the network; an unborn branch has none.
+/// ponytail: every such commit comes back, one short line each, so a branch with thousands never
+/// pushed sends thousands of lines; count with `rev-list --count` and list the first few if one shows up.
+fn only_here(git: &Git, repo: &Path, w: &Worktree) -> Result<Vec<String>, String> {
+    let rev = w.branch.as_deref().map_or_else(|| w.head.clone(), |b| format!("refs/heads/{b}"));
+    if !git.rev_exists(repo, &rev) {
+        return Ok(Vec::new());
+    }
+    // `--exclude` drops the branch itself from the `--branches` it comes before (a ref name has no glob characters).
+    let itself = w.branch.as_deref().map(|b| format!("--exclude={b}"));
+    let mut args = vec!["log", "--format=%h %s", rev.as_str(), "--not"];
+    args.extend(itself.as_deref());
+    args.extend(["--branches", "--remotes", "--"]);
+    crate::git::run(&args, Some(repo)).map(|out| out.lines().map(str::to_string).collect())
 }
 
 pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result<RemoveCheck, String> {
@@ -1516,7 +1537,8 @@ pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result
     // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
     let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();
     let stamp = format!("{}|{}", target.head, changes.join("|"));
-    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp, missing })
+    let commits = only_here(git, Path::new(&project.path), target)?;
+    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp, missing, commits })
 }
 
 /// Why a delete must not go ahead (PROJ-070), or `None` when it may: the workspace changed
@@ -2292,7 +2314,8 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 /// PROJ-070: deletes the workspace only when the check made just now still matches `stamp` (what
 /// the question showed) and nothing refuses it; `force` loses uncommitted changes. Async (T-033-e
 /// FIX-1): it joins the watch's reader threads and runs git, never on the window's thread.
-/// `keep_branch` is the remove form's choice; none means what the workspace's own record says.
+/// `keep_branch` is the remove form's choice; none means what the workspace's own record says, and
+/// (T-613) keeps a branch holding commits no other branch and no remote has.
 /// The branch that stayed, if any, comes back so it can be deleted later.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
@@ -2307,7 +2330,8 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
 /// One delete, as the command and the batch (PROJ-071) both run it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_branch: Option<bool>) -> Result<Option<Kept>, String> {
-    if let Some(why) = removal_refused(&remove_check(git, project, path)?, force, stamp) {
+    let now = remove_check(git, project, path)?;
+    if let Some(why) = removal_refused(&now, force, stamp) {
         return Err(why);
     }
     // ORCH-058: a shell still sitting in the folder would keep Windows from deleting it, so its
@@ -2320,7 +2344,8 @@ pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::ter
     // FIX-2 (T-033-e review): what to keep is decided first, so the one `?` that can return early
     // runs before the watch ends; an early return after it would drop the handle below without
     // telling the page.
-    let keep = keep_branch.unwrap_or(keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path));
+    // T-613: with no choice made, a branch holding commits that no other branch and no remote has stays too.
+    let keep = keep_branch.unwrap_or(keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path) || !now.commits.is_empty());
     // T-033-e: the Source Control watch on this folder ends first and its folder handles are
     // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
     let watch = crate::scm::watch::unwatch_root(Path::new(path));
@@ -4732,6 +4757,63 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert!(remove_check(&git, &project, &repo.to_string_lossy()).is_err());
         remove_workspace(&git, &project, &inner.to_string_lossy(), true).unwrap();
         remove_workspace(&git, &project, &ws, true).unwrap();
+        drop(store);
+        for d in [profile, repo, place.root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn t613_commits_found_nowhere_else_are_named_and_keep_the_branch_unless_the_form_says_delete_it() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile613");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let repo = temp_repo("repo613");
+        let project = add_project(&git, &store.lock().unwrap(), &repo).unwrap();
+        let place = nested(&temp("ws613"));
+        let terminals = crate::terminal::Terminals::default();
+        let made = |name: &str| create_workspace(&git, &place, &project, name, None).unwrap().worktree;
+        let commit = |ws: &str, file: &str| {
+            fs::write(Path::new(ws).join(file), file).unwrap();
+            git_in(Path::new(ws), &["add", "."]);
+            git_in(Path::new(ws), &["commit", "-q", "-m", file]);
+        };
+        let exists = |b: &str| crate::git::run(&["show-ref", "--verify", "--quiet", &format!("refs/heads/{b}")], Some(&repo)).is_ok();
+        // nothing committed: nothing to lose, so the branch goes with the folder as before
+        let fresh = made("fresh");
+        let check = remove_check(&git, &project, &fresh.path).unwrap();
+        assert!(check.commits.is_empty(), "{check:?}");
+        assert_eq!(remove_one(&git, &store, &terminals, &project, &fresh.path, false, &check.stamp, None).unwrap(), None);
+        assert!(!exists(fresh.branch.as_deref().unwrap()));
+        // two commits on no other branch and never pushed: the check names them, newest first
+        let work = made("fix-login");
+        let branch = work.branch.clone().unwrap();
+        commit(&work.path, "one.txt");
+        commit(&work.path, "two.txt");
+        let check = remove_check(&git, &project, &work.path).unwrap();
+        assert_eq!(check.commits.len(), 2, "{check:?}");
+        assert!(check.commits[0].ends_with(" two.txt") && check.commits[1].ends_with(" one.txt"), "{check:?}");
+        // a commit another branch holds, or one already on a remote, is not lost
+        git_in(&repo, &["branch", "copy-of-one", &format!("{branch}~1")]);
+        assert_eq!(remove_check(&git, &project, &work.path).unwrap().commits.len(), 1);
+        git_in(&repo, &["update-ref", &format!("refs/remotes/origin/{branch}"), &format!("refs/heads/{branch}")]);
+        assert!(remove_check(&git, &project, &work.path).unwrap().commits.is_empty());
+        git_in(&repo, &["update-ref", "-d", &format!("refs/remotes/origin/{branch}")]);
+        git_in(&repo, &["branch", "-D", "copy-of-one"]);
+        // no choice made (the record's default, as the batch and the multi-select send): the folder
+        // goes, the branch stays with its commits and comes back for the kept-branch list
+        let check = remove_check(&git, &project, &work.path).unwrap();
+        let tip = crate::git::run(&["rev-parse", &format!("refs/heads/{branch}")], Some(&repo)).unwrap();
+        let kept = remove_one(&git, &store, &terminals, &project, &work.path, false, &check.stamp, None).unwrap();
+        assert_eq!(kept, Some(Kept { branch: branch.clone(), commit: tip }));
+        assert!(!Path::new(&work.path).exists() && exists(&branch), "the folder went, the branch stayed");
+        // the form's own choice to delete the branch still deletes it, commits and all
+        let other = made("throwaway");
+        commit(&other.path, "three.txt");
+        let check = remove_check(&git, &project, &other.path).unwrap();
+        assert_eq!(check.commits.len(), 1, "{check:?}");
+        assert_eq!(remove_one(&git, &store, &terminals, &project, &other.path, false, &check.stamp, Some(false)).unwrap(), None);
+        assert!(!exists(other.branch.as_deref().unwrap()));
         drop(store);
         for d in [profile, repo, place.root] {
             let _ = fs::remove_dir_all(d);

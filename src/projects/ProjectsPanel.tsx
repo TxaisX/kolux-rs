@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { projectDrop } from "../editor/desktopDrops";
 import CacheTimer from "./CacheTimer";
 import { dialogWhere, setupMode } from "../launch/launchOrder";
-import { asksBeforeDelete, blocker, deleteTarget, isTextField, pointerDelete, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, commitsNote, deleteTarget, isTextField, keepsAtFirst, pointerDelete, shownChanges, shownCommits, skipsQuestion, type RemoveCheck } from "./deleting";
 import ShortcodeInput from "./ShortcodeInput";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -1086,14 +1086,15 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   );
 
   // PROJ-070: look at the workspace first; the question shows what would be lost, and a clean
-  // one with the question switched off goes straight to deleting.
+  // one with the question switched off goes straight to deleting. T-613: commits found on no other
+  // branch and on no remote always ask, with Keep the branch ticked at first.
   const ask = async (projectId: string, path: string, branch: string) => {
     setBusy("checking");
     let asked = null;
     try {
       const check = await invoke<RemoveCheck>("workspace_remove_check", { projectId, path });
       const settings = await invoke<Record<string, unknown>>("get_settings");
-      asked = { projectId, path, branch, check, force: false };
+      asked = { projectId, path, branch, check, force: false, keep: keepsAtFirst(check) };
       if (!skipsQuestion(check, settings)) {
         setConfirm(asked);
         asked = null;
@@ -1137,7 +1138,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     } catch (err) {
       // refused: say why in the question, showing the workspace as it is now with the force box cleared
       const check = await invoke<RemoveCheck>("workspace_remove_check", { projectId: c.projectId, path: c.path }).catch(() => null);
-      if (check) setConfirm({ ...c, check, force: false, refusal: String(err) });
+      if (check) setConfirm({ ...c, check, force: false, keep: c.keep ?? keepsAtFirst(check), refusal: String(err) });
       else fail(err);
     } finally {
       setBusy("");
@@ -1180,7 +1181,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           return;
         }
         // After-list row 112: a branch Git kept because another workspace has it checked out joins the kept list too.
-        const kept = await invoke<KeptBranch | null>("workspace_remove", { projectId: p.id, path, force: false, stamp: check.stamp, keepBranch: false });
+        // T-613: no branch choice (null), so the workspace's own record decides and a branch holding commits found nowhere else stays.
+        const kept = await invoke<KeptBranch | null>("workspace_remove", { projectId: p.id, path, force: false, stamp: check.stamp, keepBranch: null });
         if (kept) setKept((old) => addKept(old, [{ ...kept, projectId: p.id }]));
         onRemoved(path);
       }
@@ -1901,6 +1903,17 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 {shownChanges(confirm.check).more > 0 && <li>and {shownChanges(confirm.check).more} more</li>}
               </ul>
             )}
+            {commitsNote(confirm.check) && (
+              <>
+                <span>{commitsNote(confirm.check)}</span>
+                <ul className="del-changes" aria-label="commits that would be lost">
+                  {shownCommits(confirm.check).lines.map((l) => (
+                    <li key={l}>{l}</li>
+                  ))}
+                  {shownCommits(confirm.check).more > 0 && <li>and {shownCommits(confirm.check).more} more</li>}
+                </ul>
+              </>
+            )}
             {confirm.refusal && (
               <span className="note error" role="alert">
                 {confirm.refusal}
@@ -2224,6 +2237,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             return p && w ? { projectId: p.id, name: worktreeLabel(w) } : undefined;
           }}
           onRemoved={onRemoved}
+          onKept={(items) => setKept((old) => addKept(old, items))}
           onLeft={setPicked}
           onReload={reload}
           say={say}
