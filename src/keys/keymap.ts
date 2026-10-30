@@ -4,7 +4,7 @@
 // A custom chord that collides with another binding in the same scope (or conflict group) is
 // dropped and the default stays, so an edit can never silently steal a key.
 import { actionById, actions, defaultsFor, sameAs, type Action, type Platform, type Scope } from "./actions";
-import { commandOf } from "./runCommand";
+import { answerCommand, commandOf } from "./runCommand";
 import { currentLayout, layoutKeyLabel } from "../terminal/keyLayout";
 import { doubleTapLabel, doubleTapSpelling, parseDoubleTap } from "./doubleTap";
 
@@ -302,7 +302,11 @@ function keyMatches(key: string, e: KeyLike): boolean {
 export function matchEvent(map: Keymap, e: KeyLike, scopes: Scope[]): Match | null {
   // T-611: a command picked in the palette answers its stand-in key event wherever its scope is live.
   const picked = commandOf(e);
-  if (picked) return scopes.includes(actionById.get(picked.id)?.scope as Scope) ? matchOf(picked.id, picked.index) : null;
+  if (picked) {
+    if (!scopes.includes(actionById.get(picked.id)?.scope as Scope)) return null;
+    answerCommand(picked);
+    return matchOf(picked.id, picked.index);
+  }
   for (const b of map.bindings.values()) {
     if (!scopes.includes(b.action.scope)) continue;
     for (const chord of b.chords) {

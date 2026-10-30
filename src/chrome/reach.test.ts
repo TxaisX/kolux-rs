@@ -11,7 +11,7 @@ import { resolve } from "../keys/keymap";
 /** Every way the palette shows a screen: its Commands rows (the commands SCREEN_OF names) and the screens' own rows. */
 function palette(): Set<string> {
   const reached = new Set<string>();
-  for (const r of commandRows(resolve(null, "win32"), [], (id) => SCREEN_OF[id] && reached.add(SCREEN_OF[id]))) r.run();
+  for (const r of commandRows(resolve(null, "win32"), [], undefined, (id) => SCREEN_OF[id] && reached.add(SCREEN_OF[id]))) r.run();
   for (const r of screenRows((s) => void reached.add(s))) r.run();
   return reached;
 }

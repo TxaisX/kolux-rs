@@ -3,7 +3,6 @@
 // three groups. Pure, tested on its own.
 
 import { paneState, type AgentState } from "../projects/rows";
-import { needsYou } from "../board/chip";
 
 export type Group = "needs" | "waiting" | "done";
 export type Source = { key: number; agent: string; title: string; branch: string | null; cwd: string | null; state: AgentState; interrupted: boolean; running: boolean; changed: number; finishedAt: number | null };
@@ -19,6 +18,10 @@ export const GROUPS: Array<{ id: Group; title: string }> = [
 export const DONE_LIMIT = 20;
 export const DONE_WINDOW_MS = 30 * 60_000;
 
+/** Prompts that ask for approval are permissions, the rest questions (STAT-050). A blocked agent (a limit or a
+ *  sign-in) is listed too, as on main (review of PR #16: whether it should is a question for Txais). */
+const NEEDS: Partial<Record<AgentState, string>> = { permission: "Permission", waiting: "Question", blocked: "Blocked" };
+
 /** T-608: one pane as the Inbox reads it: its one status (board/chip.ts paneStatus), else what its program
  *  says (an agent works until it ends). `stamp` is when its state last moved. */
 export function sourceOf(p: { key: number; agent: string; branch: string | null; cwd: string | null }, title: string, status: AgentState | undefined, running: boolean | undefined, stamp?: { at: number; interrupted: boolean }): Source {
@@ -29,9 +32,7 @@ export function sourceOf(p: { key: number; agent: string; branch: string | null;
 export function inboxItems(sources: Source[], now: number): Item[] {
   const item = (s: Source, group: Group, label: string, when: number): Item => ({ key: s.key, agent: s.agent, title: s.title, branch: s.branch, cwd: s.cwd, state: s.state, group, label, when, exited: group === "needs" && !s.running });
   const newest = (a: Item, b: Item) => b.when - a.when;
-  // Prompts that ask for approval are permissions, the rest questions (STAT-050); T-608: what needs you is
-  // the rule every surface reads, so a stop (blocked) is not listed here, as the Board shows it Stopped.
-  const needs = sources.filter((s) => needsYou(s.state)).map((s) => item(s, "needs", s.state === "permission" ? "Permission" : "Question", s.changed));
+  const needs = sources.filter((s) => NEEDS[s.state]).map((s) => item(s, "needs", NEEDS[s.state]!, s.changed));
   const waiting = sources.filter((s) => s.running && (s.state === "working" || s.state === "queued")).map((s) => item(s, "waiting", s.state === "queued" ? "Queued" : "Running", s.changed));
   // Interrupted sessions and anything older than 30 minutes stay out of done today.
   const done = sources
@@ -55,8 +56,10 @@ export function settle(keys: number[], selected: number | null): number | null {
 }
 
 /** T-035-b: what the detail says for a prompt whose terminal has exited; null when the terminal is alive. */
-export function exitNote(item: Pick<Item, "exited">): string | null {
+export function exitNote(item: Pick<Item, "exited" | "state">): string | null {
   if (!item.exited) return null;
+  // A stop (a limit or a sign-in) is not a prompt: it has no question to answer, only a reason to read.
+  if (item.state === "blocked") return "The agent stopped and its terminal has exited. Open its pane in Code to see why.";
   return "Its terminal has exited, so the prompt cannot be answered from here. Answer in Code to see it in the pane.";
 }
 

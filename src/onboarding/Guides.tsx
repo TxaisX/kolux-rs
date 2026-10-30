@@ -17,7 +17,7 @@ import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel,
 import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
 import { guideOpenChanged } from "./actions";
 import { MOVED, splitCredit } from "./moved";
-import { askHooks, HOOKS_LINE, recordHooks } from "./hooksOn";
+import { askHooks, HOOKS_LINE, hooksDefault, recordHooks } from "./hooksOn";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
@@ -518,8 +518,8 @@ export function HooksAskView({ on, onSwitch, onDone, dock = { right: 16, bottom:
 
 /** T-608: shows once no other dialog is open; Done records the switch. Until it is answered it asks again
  *  at the next launch, so nothing is installed for a profile that never saw the line. */
-function HooksAsk({ onDone }: { onDone: () => void }) {
-  const [on, setOn] = useState(true);
+function HooksAsk({ settings, onDone }: { settings: Record<string, unknown> | null; onDone: () => void }) {
+  const [on, setOn] = useState(() => hooksDefault(settings)); // review of PR #16: the saved answer, else on
   const [shown, setShown] = useState(false);
   const dock = useTipDock();
   useEffect(() => {
@@ -538,9 +538,10 @@ export default function Guides() {
   const [explore, setExplore] = useState(false);
   // T-608: "ask" shows the hooks line once; that launch shows no startup tip (one card per launch).
   const [hooksAsk, setHooksAsk] = useState<"wait" | "ask" | "done" | "no">("wait");
+  const hooksSettings = useRef<Record<string, unknown> | null>(null);
   useEffect(() => {
     Promise.all([invoke<unknown>("onboarding_get"), invoke<Record<string, unknown>>("get_settings")]).then(
-      ([onb, s]) => setHooksAsk(askHooks(s, onb !== null) ? "ask" : "no"),
+      ([onb, s]) => ((hooksSettings.current = s), setHooksAsk(askHooks(s, onb !== null) ? "ask" : "no")),
       () => setHooksAsk("no"),
     );
   }, []);
@@ -565,7 +566,7 @@ export default function Guides() {
         }}
       />
       {explore && <Explore onClose={() => setExplore(false)} />}
-      {hooksAsk === "ask" && <HooksAsk onDone={() => setHooksAsk("done")} />}
+      {hooksAsk === "ask" && <HooksAsk settings={hooksSettings.current} onDone={() => setHooksAsk("done")} />}
       {hooksAsk === "no" && <StartupTip />}
       <Tours />
       <StarPrompt />

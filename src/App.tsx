@@ -166,9 +166,9 @@ import FloorView from "./floor/FloorView";
 import SpaceView from "./space/SpaceView";
 import { nameSeats, nameUsage, towerRows, usageByAccount } from "./tower/tower";
 import { useTowerBridge } from "./tower/TowerWindow";
-import { LANES, chipOf, needsYou, paneAgent, paneStatus } from "./board/chip";
+import { LANES, chipOf, forget, needsAttention, paneAgent, paneStatus, promptReturned } from "./board/chip";
 import { reviewTab } from "./board/review";
-import { commandRows, windowCommand } from "./keys/commands";
+import { commandRows, forceReload, windowCommand } from "./keys/commands";
 import { SCREEN_OF, screenRows } from "./chrome/reach";
 import Ring from "./usage/Ring";
 import { capOn, codexOf, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
@@ -355,6 +355,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   }, [tabMenu]);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [liveIds, setLiveIds] = useState<Record<number, Identity>>({}); // TERM-058: terminal panes' running program, from the shell marks
+  const liveRef = useRef(liveIds);
+  liveRef.current = liveIds;
   const [guess, setGuess] = useState<Record<number, AgentState | null>>({}); // T-608: each pane's title guess, as its header shows it
   // T-608: the one status the Board, the Tower, the Inbox, the needs strip and the bell read (board/chip.ts).
   const agentOf = (p: Pane) => paneAgent(p, liveIds[p.key]); // ACCT-050: a hand-started agent counts, as its tab icon shows it
@@ -566,8 +568,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   });
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
-  // ux fix 2: one count of waiting panes feeds the bell and the window title.
-  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(panes.filter((p) => needsYou(statusOf(p))).map((p) => p.key)));
+  // ux fix 2: one count of waiting panes feeds the bell and the window title. Review of PR #16: a stop (blocked, interrupted) still counts, as on main.
+  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(panes.filter((p) => needsAttention(statusOf(p))).map((p) => p.key)));
   useEffect(() => {
     document.title = windowTitle(info, needing);
   }, [info, needing]);
@@ -967,7 +969,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               setSidebarOpen(true);
               setRenameRequest((n) => n + 1);
             },
-            reload: () => location.reload(),
+            // Review of PR #16: unsaved editor text is asked about first (native confirm), else it reloads at once.
+            reload: () => void forceReload(unsaved.current, (q) => window.confirm(q), () => location.reload()),
           })) break;
           // TERM-041: one unbound command per installed agent, `tab.newAgent.<id>`.
           const id = hit.id.startsWith("tab.newAgent.") ? hit.id.slice("tab.newAgent.".length) : null;
@@ -1645,7 +1648,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
     ...paletteRows(accountSwitcher.groups, switchAccount), // T-548: Switch Claude to ...
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
-    ...commandRows(keymap, installedIds), // T-611: every command, the unbound ones included, run as its shortcut runs
+    ...commandRows(keymap, installedIds, setToast), // T-611: every command, the unbound ones included, run as its shortcut runs
     ...screenRows((s) => (s === "skills" ? toggleSkills(screen, setScreen) : setScreen(s))), // T-610: Artifacts and Skills
     tabSearchCommand(() => openTabSearch()), // TERM-053
     { section: "Quick actions", label: "New session", run: () => addChooser() },
@@ -3106,7 +3109,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     keySettings={settings}
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
-                    onIdentity={(l) => setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }))}
+                    onIdentity={(l) => {
+                      // Review of PR #16: a hand-started agent quit and the prompt is back: its last word and guess go with it.
+                      if (promptReturned(p, liveRef.current[p.key], l)) {
+                        setHook((h) => forget(h, p.key));
+                        setGuess((g) => forget(g, p.key));
+                      }
+                      setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }));
+                    }}
                     onGuess={(g) => setGuess((m) => (m[p.key] === g ? m : { ...m, [p.key]: g }))}
                     onBell={() => noticed(p, BELL_NOTE.what, "", BELL_NOTE.gate)}
                     unread={unreadPanes.has(p.key)}

@@ -5,7 +5,7 @@
 import { expect, test } from "vitest";
 import { actions, actionById, sameAs } from "./actions";
 import { matchEvent, resolve, type KeyLike } from "./keymap";
-import { commandRows, renameTarget, windowCommand } from "./commands";
+import { commandRows, forceReload, renameTarget, windowCommand } from "./commands";
 import { runCommand } from "./runCommand";
 import { heldByTerminal } from "./terminalPolicy";
 import { SCREEN_OF } from "../chrome/reach";
@@ -61,7 +61,7 @@ test("T-611: the palette's Commands section lists every command, the unbound one
   const map = resolve(null, "win32");
   const ran: string[] = [];
   const all = actions.filter((a) => a.id.startsWith("tab.newAgent.")).map((a) => a.id.slice("tab.newAgent.".length));
-  const rows = commandRows(map, all, (id, index) => void ran.push(index === undefined ? id : `${id}#${index}`));
+  const rows = commandRows(map, all, undefined, (id, index) => void ran.push(index === undefined ? id : `${id}#${index}`));
   expect(new Set(rows.map((r) => r.section))).toEqual(new Set(["Commands"]));
   for (const r of rows) r.run();
   const ids = new Set(ran.map((x) => x.replace(/#\d$/, "")));
@@ -75,7 +75,7 @@ test("T-611: the palette's Commands section lists every command, the unbound one
   expect(ran).toContain("tab.selectByIndex#9");
   // TERM-041: a new-tab command per installed agent only; one that is not installed is not offered.
   ran.length = 0;
-  for (const r of commandRows(map, ["claude"], (id) => void ran.push(id))) r.run();
+  for (const r of commandRows(map, ["claude"], undefined, (id) => void ran.push(id))) r.run();
   expect(ran.filter((id) => id.startsWith("tab.newAgent."))).toEqual(["tab.newAgent.claude"]);
 });
 
@@ -126,4 +126,42 @@ test("T-611: Rename worktree from the palette on the Board with the sidebar coll
   // Every list is in and none holds the workspace in front, or nothing is in front: say so (and drop the request).
   expect(renameTarget("C:/code/gone", projects, { p1: [], p2: [row] }, same)).toBe("none");
   expect(renameTarget(null, projects, {}, same)).toBe("none");
+});
+
+test("review of PR #16: a command whose place is not open says so instead of doing nothing, and stays listed", () => {
+  const map = resolve({}, "win32");
+  const target = new EventTarget();
+  // Only the window's own listener is live: no browser pane, editor, explorer or Settings is open.
+  target.addEventListener("keydown", (e) => void matchEvent(map, e as unknown as KeyLike, ["global", "tabs"]));
+  const notes: string[] = [];
+  const now = { later: (f: () => void) => f(), target, event: () => new Event("keydown", { bubbles: true, cancelable: true }), unanswered: (t: string) => void notes.push(t) };
+  runCommand("browser.reload", undefined, { ...now, scope: "browser" });
+  runCommand("editor.find", undefined, { ...now, scope: "editor" });
+  runCommand("view.floor", undefined, { ...now, scope: "global" }); // the window took it: no note
+  expect(notes).toEqual(["Open a browser pane first.", "Open a file in an editor tab first."]);
+  // With a browser pane listening, the same command runs there and nothing is said.
+  target.addEventListener("keydown", (e) => void matchEvent(map, e as unknown as KeyLike, ["browser"]));
+  runCommand("browser.reload", undefined, { ...now, scope: "browser" });
+  expect(notes).toHaveLength(2);
+  // The palette passes the command's own scope and its note line; every command is still a row.
+  const said: string[] = [];
+  const rows = commandRows(map, [], (t) => void said.push(t));
+  expect(rows.some((r) => r.label === actionById.get("browser.reload")!.title)).toBe(true);
+});
+
+test("review of PR #16: Force Reload asks first when an editor holds unsaved changes, and reloads at once when none does", () => {
+  const asked: string[] = [];
+  let reloads = 0;
+  const reload = () => void reloads++;
+  // Nothing unsaved: no question, it reloads.
+  expect(forceReload([], (q) => (asked.push(q), false), reload)).toBe(true);
+  expect([asked.length, reloads]).toEqual([0, 1]);
+  // Unsaved text, the user says no: nothing reloads.
+  expect(forceReload(["notes.md"], (q) => (asked.push(q), false), reload)).toBe(false);
+  expect(asked).toEqual(["Reload Kolux? Unsaved changes in notes.md will be lost."]);
+  expect(reloads).toBe(1);
+  // The user says yes: it reloads.
+  expect(forceReload(["a.ts", "b.ts", "c.ts", "d.ts"], (q) => (asked.push(q), true), reload)).toBe(true);
+  expect(asked[1]).toBe("Reload Kolux? Unsaved changes in a.ts, b.ts, c.ts and 1 more will be lost.");
+  expect(reloads).toBe(2);
 });

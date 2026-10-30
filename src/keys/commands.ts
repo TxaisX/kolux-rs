@@ -2,14 +2,15 @@
 // Commands section lists every command in actions.ts, the 56 unbound ones included, and runs each through
 // the same code its shortcut runs (runCommand.ts). windowCommand is what the window's key switch does for
 // the commands it had no case for (evidence/product-ux-App.patch).
-import { actions } from "./actions";
+import { actionById, actions } from "./actions";
 import { labelOf, type Keymap } from "./keymap";
 import { runCommand } from "./runCommand";
 import type { PaletteItem } from "../projects/WorktreePalette";
 
 /** One palette row per command; the two 1 to 9 commands get a row per digit, and TERM-041's new-tab
  *  commands one per installed agent. The hint is the command's keys, when it has some. */
-export function commandRows(map: Keymap, installed: readonly string[], run: (id: string, index?: number) => void = runCommand): PaletteItem[] {
+/** `note` shows the line the palette says when no open place takes a command (review of PR #16: never silent). */
+export function commandRows(map: Keymap, installed: readonly string[], note?: (text: string) => void, run: (id: string, index?: number) => void = (id, index) => runCommand(id, index, { scope: actionById.get(id)?.scope, unanswered: note })): PaletteItem[] {
   return actions.flatMap((a): PaletteItem[] => {
     if (a.id.startsWith("tab.newAgent.") && !installed.includes(a.id.slice("tab.newAgent.".length))) return [];
     const keys = labelOf(map, a.id);
@@ -50,4 +51,18 @@ export function renameTarget<W extends { path: string }>(activeDir: string | nul
   const w = projects.flatMap((p) => lists[p.id] ?? []).find((x) => same(x.path, activeDir));
   if (w) return w;
   return projects.length > 0 && projects.every((p) => p.id in lists) ? "none" : "wait";
+}
+
+/** Review of PR #16 (APP-009): Force Reload throws away what the page holds, so with unsaved editor text it asks
+ *  first (`ask`, the native confirm) and reloads only on yes; with none it reloads at once. True when it reloaded. */
+export function forceReload(unsaved: readonly string[], ask: (question: string) => boolean, reload: () => void): boolean {
+  if (unsaved.length > 0 && !ask(reloadQuestion(unsaved))) return false;
+  reload();
+  return true;
+}
+
+/** The question Force Reload asks over unsaved text, naming up to three files. */
+export function reloadQuestion(unsaved: readonly string[]): string {
+  const names = unsaved.length > 3 ? `${unsaved.slice(0, 3).join(", ")} and ${unsaved.length - 3} more` : unsaved.join(", ");
+  return `Reload Kolux? Unsaved changes in ${names} will be lost.`;
 }

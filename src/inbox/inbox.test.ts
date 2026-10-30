@@ -13,9 +13,8 @@ test("two agents waiting and one finished are two needs-you items and one done-t
     ["waiting", 4, "Running"],
     ["done", 3, "Done"],
   ]);
-  // Prompts that ask for approval are permissions, the rest questions. T-608: a stop (blocked) is not a
-  // prompt and reads Stopped on the Board, so it is not listed under needs you either (one rule everywhere).
-  expect(inboxItems([src(1, "blocked")], now)).toEqual([]);
+  // Prompts that ask for approval are permissions, the rest questions; a blocked agent needs you too.
+  expect(inboxItems([src(1, "blocked")], now)[0]).toMatchObject({ group: "needs", label: "Blocked" });
 });
 
 test("done today leaves out the interrupted, anything older than 30 minutes, and everything past the 20 newest (STAT-050)", () => {
@@ -66,8 +65,11 @@ test("T-035-b: a question or permission whose terminal has exited stays in Needs
   expect(exitNote(items[0])).toMatch(/terminal has exited/);
 });
 
-test("FIX-1 / T-608: a blocked pane whose terminal exited is a stop, not a prompt, so it is not listed; an exited question says it cannot be answered", () => {
-  expect(inboxItems([src(1, "blocked", { running: false })], now)).toEqual([]);
+test("FIX-1: a blocked item whose terminal exited (a stop, not a prompt) gets its own sentence and never says a prompt cannot be answered", () => {
+  const [blocked] = inboxItems([src(1, "blocked", { running: false })], now);
+  expect(blocked).toMatchObject({ group: "needs", exited: true });
+  expect(exitNote(blocked)).toMatch(/stopped/);
+  expect(exitNote(blocked)).not.toMatch(/prompt/);
   const [asked] = inboxItems([src(2, "waiting", { running: false })], now);
   expect(exitNote(asked)).toMatch(/prompt cannot be answered/);
 });

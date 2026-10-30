@@ -5,7 +5,7 @@
 import type { AgentState } from "../projects/rows";
 import { stopLine, type StopInfo } from "../terminal/notify";
 import { IDLE, shownAgent, type Identity } from "../terminal/shellMarks";
-import { creditedLive, launchedAgent, type LaunchRecord } from "../status/credit";
+import { launchedAgent, type LaunchRecord } from "../status/credit";
 import type { Agent } from "../chrome/VendorMark";
 
 export type Lane = "needs" | "working" | "done" | "stopped" | "idle";
@@ -68,7 +68,25 @@ export function askLine(ask: string | undefined): string {
 /** T-608 (ACCT-050, DT-C11): the agent whose status a pane carries, the one its tab icon shows: its own agent,
  *  or in a plain terminal the agent running there now, from the shell marks (TERM-058). An agent started by hand
  *  is credited by its hooks on every surface, and forgotten when the prompt returns, so no last word lingers. */
-export const paneAgent = (p: LaunchRecord & { agent: Agent }, live: Identity | undefined): Agent => shownAgent(p.agent, creditedLive(launchedAgent(p), live ?? IDLE));
+/*  Review of PR #16: an agent Kolux launched with no vendor mark of its own (Gemini, Grok, Devin, Hermes, Pi...)
+ *  runs as agent "shell" plus its agentId; its launch record names it, so it is credited before the shell marks. */
+export const paneAgent = (p: LaunchRecord & { agent: Agent }, live: Identity | undefined): string => {
+  if (p.agent !== "shell") return p.agent;
+  return launchedAgent(p) ?? shownAgent(p.agent, live ?? IDLE);
+};
+
+/** Review of PR #16: the prompt came back in a plain terminal after a hand-started agent ran there. Its last hook
+ *  word and title guess then go with it, so the next agent started in that pane does not inherit a stale Needs you. */
+export function promptReturned(p: LaunchRecord & { agent: Agent }, before: Identity | undefined, now: Identity): boolean {
+  return p.agent === "shell" && launchedAgent(p) === null && Boolean(before?.agent) && !now.running && now.agent === null;
+}
+
+/** The map without one pane's entry; the same map when it has none. */
+export function forget<T>(m: Record<number, T>, key: number): Record<number, T> {
+  if (!(key in m)) return m;
+  const { [key]: _gone, ...rest } = m;
+  return rest;
+}
 
 export function paneStatus(agent: string, hook: AgentState | undefined, guess: AgentState | null | undefined, running: boolean | undefined): AgentState | undefined {
   if (agent === "shell") return undefined;
@@ -76,8 +94,13 @@ export function paneStatus(agent: string, hook: AgentState | undefined, guess: A
 }
 
 /** T-608: what needs you, the same on every surface: a permission or a question (STAT-050, VIEW-023, TERM-029).
- *  A stop (blocked, interrupted) reads Stopped, and the bell does not count it. */
+ *  A stop (blocked, interrupted) reads Stopped on the Board and the Tower; the bell and the Inbox still count
+ *  it, as on main (needsAttention below, inbox.ts NEEDS). */
 export const needsYou = (state: AgentState | undefined): boolean => state === "permission" || state === "waiting";
+
+/** Review of PR #16: what the bell counts, as on main (the pane header's attention tone): a prompt, and also a
+ *  stop (blocked: a limit or a sign-in; interrupted). Whether a stop should keep counting is a question for Txais. */
+export const needsAttention = (state: AgentState | undefined): boolean => needsYou(state) || state === "blocked" || state === "interrupted";
 
 /** The most urgent signal wins: an approval, then working, then done, then idle; with no evidence the line stays empty. */
 export function chipOf(s: Signal, now: number): Chip | null {

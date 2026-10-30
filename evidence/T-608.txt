@@ -155,3 +155,18 @@ The round-1 change took status away from an agent started by hand in a plain ter
     then the outside files were restored; `git apply --check` passes for all four patches on the branch.
 - Live (Windows): open a plain terminal, type `claude`, let it ask a permission -> Needs you on the Board, Tower, Inbox, needs strip,
   bell and the sidebar row; quit Claude -> back at the prompt it is on none of them.
+
+== Review of PR #16 (2026-10-30) ==
+1. Gemini (agent "shell" + agentId "gemini") with hook permission. BEFORE the paneAgent fix, pnpm exec vitest run src/board/paneStatus.test.ts:
+   × T-608 review: a Kolux-launched agent with no vendor mark (Gemini: agent shell plus agentId) asking a permission needs you on all five surfaces and the sidebar 7ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+- Expected [true, true, true, true, true]
++ Received [false, false, false, false, false]
+      Tests  1 failed | 9 passed (10)
+AFTER the fix (paneAgent credits launchedAgent(p) before the shell marks):
+      Tests  11 passed (11)
+   (11 = 10 before + the later prompt-return test.)
+2-7. Also from the review: the Inbox lists blocked and the bell counts blocked and interrupted, as on main; a palette
+   command whose place is not open says so (commands.test.ts); Force Reload asks over unsaved text (commands.test.ts);
+   the hooks card switch starts from hooksDefault(settings); a quit hand-started agent's hook word and guess are
+   cleared at the prompt (paneStatus.test.ts).

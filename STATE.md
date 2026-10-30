@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 718 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 4 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 714 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 8 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -34,6 +34,9 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
+- [product-ux] 2026-10-30 · Question (T-608): should a pane that is blocked (a limit or a sign-in) still count as
+  needing you, or only permissions and questions? Today the Inbox and the bell still count it, as before; the
+  Board and the Tower show it as Stopped.
 - [product-ux] 2026-10-30 · Question (T-608): when an agent's program has exited, the Board and Tower say "Stopped"
   but the Inbox lists it under "Done today", because the window does not keep the program's exit code. Should the
   Inbox say "Stopped" too? Until you answer, it stays as it is.
