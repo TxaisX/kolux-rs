@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { asksBeforeDelete, blocker, deleteTarget, isClean, isTextField, pointerDelete, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, commitsNote, deleteTarget, isClean, isTextField, keepsAtFirst, pointerDelete, shownChanges, shownCommits, skipsQuestion, type RemoveCheck } from "./deleting";
 
 const clean: RemoveCheck = { changes: [], locked: null, nested: [], stamp: "h|" };
 
@@ -25,6 +25,19 @@ test("at most five changes are listed, with a count of the rest", () => {
   const many = { ...clean, changes: ["1", "2", "3", "4", "5", "6", "7"] };
   expect(shownChanges(many)).toEqual({ lines: ["1", "2", "3", "4", "5"], more: 2 });
   expect(shownChanges(clean)).toEqual({ lines: [], more: 0 });
+});
+
+test("T-613: commits found on no other branch and no remote are named, keep the branch at first, and always ask", () => {
+  const three = { ...clean, commits: ["c3c3c3c fix step 3", "b2b2b2b fix step 2", "a1a1a1a fix step 1"] };
+  expect(skipsQuestion(three, { confirmWorkspaceDelete: false }), "the skip setting never covers them").toBe(false);
+  expect(isClean(three), "nothing uncommitted: they never count as changes to force away").toBe(true);
+  expect(commitsNote(three)).toBe("3 commits are on no other branch and were never pushed; deleting the branch loses them:");
+  expect(commitsNote({ ...clean, commits: ["a1a1a1a only"] })).toBe("1 commit is on no other branch and was never pushed; deleting the branch loses it:");
+  expect(commitsNote(clean)).toBeNull();
+  expect(shownCommits({ ...clean, commits: ["1", "2", "3", "4", "5", "6", "7"] })).toEqual({ lines: ["1", "2", "3", "4", "5"], more: 2 });
+  expect(shownCommits(clean)).toEqual({ lines: [], more: 0 });
+  expect(keepsAtFirst(three), "Keep the branch starts ticked").toBe(true);
+  expect(keepsAtFirst(clean), "otherwise the workspace's own record decides").toBeUndefined();
 });
 
 test("VIEW-048: the shortcut deletes the hovered workspace before the active one", () => {
