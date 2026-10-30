@@ -190,3 +190,14 @@ After (full suite: cargo test --tests --no-fail-fast -- --test-threads=3):
  cards_13: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
  hooks.rs suite (hooks::tests): 28 ok, 1 FAILED: hooks::tests::trust_entries_come_from_codex_listing, one of the 45
  known Linux-only failures (Windows path text C:\Users\t\.codex\hooks.json in the test; untouched by this lane).
+
+RE-RUN after merging origin/main 98a494a6 (PR #10, #11, #12) into the lane, full suite again:
+ test hooks::tests::t583_a_hook_is_answered_inside_its_limit_while_other_connections_send_nothing ... ok
+ test hooks::tests::t583_a_client_that_trickles_bytes_is_cut_off_at_the_deadline_not_held_forever ... ok
+ test hooks::tests::t583_a_huge_protected_command_still_being_checked_holds_up_no_other_pane ... ok
+ test hooks::tests::t583_a_protected_command_is_answered_from_the_last_settings_read_while_slow_work_holds_the_store ... ok
+ test hooks::tests::t583_a_protected_command_is_answered_while_an_agent_finished_automation_is_still_in_its_precheck ... ok
+ test hooks::tests::t583_an_endless_header_line_or_a_head_that_never_ends_is_no_request ... ok
+ cargo test --tests: 2689 passed, 46 failed = the 45 known Linux-only failures + activity::tests::proj051_stamps_last_across_restarts_and_one_folder_has_one_key (a timing flake outside this lane: alone it failed 2 of 5 runs)
+ status::tests 59 ok / 0 failed; hooks::tests 28 ok / 1 known; hooks::agent_hooks 132 ok / 2 known
+ clippy windows-gnu -D warnings: Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 22s (exit 0)

@@ -91,3 +91,7 @@ $ VITEST_MAX_WORKERS=2 pnpm exec vitest run   (full suite)
 Not applied at integration: the live-T-544.mjs back() change (read the chips before dismissFirstRun or any key or click;
 match panes by data-key). The lane gave it as a description, not an exact edit; it is a follow-up in STATE.md, and T-566
 stays open until it lands and the live Windows relaunch run passes.
+
+RE-RUN after merging origin/main 98a494a6: tsc -p . exit 0; full vitest:
+  Test Files  693 passed (693)
+       Tests  5075 passed (5075)

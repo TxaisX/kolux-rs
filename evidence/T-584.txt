@@ -81,3 +81,9 @@ After (full suite: cargo test --tests --no-fail-fast -- --test-threads=3):
  C:\Users\me\AppData\Roaming\..., which is not an absolute path on Linux ("the installed product"). Neither is a
  round trip and neither touches this lane's change. Every t_152 round-trip test (t_152_4 status line back exactly,
  t_152_6 both, t_152_b_4, t_152_3, t_152_5 both) passes.
+
+RE-RUN after merging origin/main 98a494a6 (PR #10, #11, #12) into the lane, full suite again:
+ test hooks::agent_hooks::tests::t584_a_file_with_an_empty_hook_list_installs_and_comes_back_byte_for_byte ... ok
+ cargo test --tests: 2689 passed, 46 failed = the 45 known Linux-only failures + activity::tests::proj051_stamps_last_across_restarts_and_one_folder_has_one_key (a timing flake outside this lane: alone it failed 2 of 5 runs)
+ status::tests 59 ok / 0 failed; hooks::tests 28 ok / 1 known; hooks::agent_hooks 132 ok / 2 known
+ clippy windows-gnu -D warnings: Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 22s (exit 0)

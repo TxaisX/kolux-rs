@@ -69,3 +69,7 @@ $ pnpm exec tsc -p .   -> exit 0 (no output)
 $ VITEST_MAX_WORKERS=2 pnpm exec vitest run   (full suite)
   Test Files  689 passed (689)
        Tests  5062 passed (5062)
+
+RE-RUN after merging origin/main 98a494a6: tsc -p . exit 0; full vitest:
+  Test Files  693 passed (693)
+       Tests  5075 passed (5075)
