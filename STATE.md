@@ -40,6 +40,9 @@ recorded default until told otherwise; nothing here blocks a pass.
   T-597 (round 1 review fixed): while a slow start waits, App hands out pane keys from 1_000_000 (applied from
   evidence/reliability-App.patch), so a wait tab never takes over a saved tab's running terminal;
   main.slowStart.test.ts tests 4 and 5 pass with it; check a start whose settings read takes over 1.5 s.
+- [reliability] 2026-10-30 · Open (T-597 follow-up, from the PR #8 review): if two slow starts happen in a row within one
+  run of the terminal service, a wait tab could reuse key 1000000 and attach to the previous run's leftover terminal. Fix
+  later: kill the terminals of unsaved wait tabs at quit.
 - [reliability] 2026-10-30 · Known flake: src/settings/__cards__/SET-006-link.test.ts "terminal-first" fails on the
   untouched base 025eda2 on the shared Linux machine (its until() waits about 400 ms for the Shortcuts page to load).
 - [reliability] 2026-10-30 · Follow-ups not built (need new Rust): (1) T-599: a crash_note(summary) command in

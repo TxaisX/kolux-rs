@@ -544,21 +544,28 @@ export default function AppearancePage() {
   // T-598 (F02-settings-update.3): the look as stored when the waiting change began. A save writes only the
   // fields that differ from it, so one another page saved meanwhile (the Terminal card's font size) stays.
   const base = useRef<Appearance | null>(null);
+  // Saves run one after another: each one diffs against the base the save before it left, so a change made
+  // while a slow save is still open is written too (100 -> 0 saving, back to 100: the 100 is sent), and saves
+  // never land out of order.
+  const chain = useRef<Promise<void>>(Promise.resolve());
   const flush = () => {
     window.clearTimeout(timer.current);
     const next = waiting.current;
     waiting.current = null;
-    const from = base.current;
-    if (!next || !from) return;
-    const changed = settingsDiff(writeAppearance({}, from), writeAppearance({}, next)).set;
-    if (Object.keys(changed).length === 0) return;
-    saveChanged({}, changed).then(
-      () => {
+    if (!next) return;
+    chain.current = chain.current.then(async () => {
+      const from = base.current;
+      if (!from) return;
+      const changed = settingsDiff(writeAppearance({}, from), writeAppearance({}, next)).set;
+      if (Object.keys(changed).length === 0) return;
+      try {
+        await saveChanged({}, changed);
         base.current = next;
         setError(null);
-      },
-      (e) => setError(String(e)), // the base stays, so the next change tries these fields again
-    );
+      } catch (e) {
+        setError(String(e)); // the base stays, so the next change tries these fields again
+      }
+    });
   };
   useLeaveSave(flush);
   // The page shows what is stored and follows saves made on any page or window, except while its own change waits.

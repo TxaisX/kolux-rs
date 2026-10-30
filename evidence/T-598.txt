@@ -77,3 +77,35 @@ Not changed here (outside this lane, from the audit): backend writers that save 
 broadcast (agent_creds.rs, projects.rs set_place, claude_key.rs, the `kolux agent hooks` CLI). The fixes above stop
 the pages writing back what those changed, but the pages still show the old value until the next broadcast or a
 reopen of Settings.
+
+--- review of PR #8 (2026-10-30), blocking race: AppearancePage moved `base` forward only after a save succeeded, so
+a second flush during a slow first save diffed against the old base (100 -> 0 saving, back to 100: "no change", disk kept
+0), and saves could land out of order. Fix: src/settings/AppearancePage.tsx flush() chains saves; each one diffs against
+the base the save before it left. Test added to src/settings/settingsSaves.test.ts: "a change made while the one before
+is still saving is written too" (the stand-in settings_patch can hold a save open; the first save is held across two changes).
+before the fix: VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run --reporter=verbose src/settings/settingsSaves.test.ts
+ ✓ src/settings/settingsSaves.test.ts > Git page: a commit-instructions text that fails to save stays in the field, the page says why, and the next try saves it 909ms
+ ✓ src/settings/settingsSaves.test.ts > Agents page: default arguments that fail to save stay in the field for another try 838ms
+ ✓ src/settings/settingsSaves.test.ts > Appearance page: a change writes only the field it changed, so a terminal size saved elsewhere meanwhile stays 842ms
+ ✓ src/settings/settingsSaves.test.ts > Appearance page: it follows a save made on another page, so a later change neither shows nor writes the old value 740ms
+ × src/settings/settingsSaves.test.ts > Appearance page: a change made while the one before is still saving is written too, so the last look is the one kept 887ms
+   → expected [ { set: { appTheme: 'teal' }, …(1) } ] to have a length of 2 but got 1
+ ✓ src/settings/settingsSaves.test.ts > Agents page: switching an agent off sends only that switch, so a hooks switch turned off elsewhere stays off 182ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  src/settings/settingsSaves.test.ts > Appearance page: a change made while the one before is still saving is written too, so the last look is the one kept
+AssertionError: expected [ { set: { appTheme: 'teal' }, …(1) } ] to have a length of 2 but got 1
+ Test Files  1 failed (1)
+      Tests  1 failed | 5 passed (6)
+after the fix (same command):
+ ✓ src/settings/settingsSaves.test.ts > Git page: a commit-instructions text that fails to save stays in the field, the page says why, and the next try saves it 1058ms
+ ✓ src/settings/settingsSaves.test.ts > Agents page: default arguments that fail to save stay in the field for another try 1162ms
+ ✓ src/settings/settingsSaves.test.ts > Appearance page: a change writes only the field it changed, so a terminal size saved elsewhere meanwhile stays 827ms
+ ✓ src/settings/settingsSaves.test.ts > Appearance page: it follows a save made on another page, so a later change neither shows nor writes the old value 774ms
+ ✓ src/settings/settingsSaves.test.ts > Appearance page: a change made while the one before is still saving is written too, so the last look is the one kept 958ms
+ ✓ src/settings/settingsSaves.test.ts > Agents page: switching an agent off sends only that switch, so a hooks switch turned off elsewhere stays off 192ms
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+every settings test (vitest run src/settings):
+ Test Files  82 passed (82)
+      Tests  400 passed (400)
+flock /tmp/kolux-node.lock pnpm exec tsc -p .: exit 0, no output

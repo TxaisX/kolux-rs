@@ -13,17 +13,21 @@ const h = vi.hoisted(() => ({
   refuse: null as string | null,
   agents: [] as unknown[],
   heard: {} as Record<string, ((e: { payload: unknown }) => void)[]>,
+  hold: null as Promise<void> | null, // while set, a save waits for it before it lands (a slow disk)
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args: Record<string, unknown> = {}) => {
     if (cmd === "get_settings") return Promise.resolve(JSON.parse(JSON.stringify(h.settings)));
     if (cmd === "settings_patch") {
       if (h.refuse) return Promise.reject(h.refuse);
-      const p = args as { set: Record<string, unknown>; remove: string[] };
-      h.patches.push(JSON.parse(JSON.stringify(p)));
-      Object.assign(h.settings, p.set);
-      for (const k of p.remove) delete h.settings[k];
-      return Promise.resolve(null);
+      const p = JSON.parse(JSON.stringify(args)) as { set: Record<string, unknown>; remove: string[] };
+      const land = () => {
+        h.patches.push(p);
+        Object.assign(h.settings, p.set);
+        for (const k of p.remove) delete h.settings[k];
+        return null;
+      };
+      return h.hold ? h.hold.then(land) : Promise.resolve(land());
     }
     if (cmd === "agent_list") return Promise.resolve(JSON.parse(JSON.stringify(h.agents)));
     if (cmd === "agent_start_line") return Promise.resolve({ args: [], program: null });
@@ -61,6 +65,7 @@ beforeEach(() => {
   h.refuse = null;
   h.agents = [];
   h.heard = {};
+  h.hold = null;
 });
 afterEach(async () => {
   await unmount();
@@ -147,6 +152,27 @@ test("Appearance page: it follows a save made on another page, so a later change
   await settle(300);
   expect(h.patches.flatMap((p) => Object.keys(p.set))).toEqual(["appTheme"]);
   expect(h.settings.terminalFontSize).toBe(16);
+});
+
+test("Appearance page: a change made while the one before is still saving is written too, so the last look is the one kept", async () => {
+  const c = await show(import("./AppearancePage"));
+  await until(() => !!swatch(c, "Teal"), "the colour themes");
+  const on = (n: FakeNode) => n.attrs.role === "radio" && !!n.attrs["aria-label"] && String(n.attrs["aria-checked"]) === "true";
+  const firstLabel = String(find(c, on)[0]?.attrs["aria-label"]); // the theme shown at first
+  expect(firstLabel).not.toBe("Teal");
+  let release = () => {};
+  h.hold = new Promise<void>((r) => (release = r)); // the first save stays open on a slow disk
+  await click(c, swatch(c, "Teal"));
+  await settle(300); // past the pause: the Teal save is sent and waits
+  await click(c, swatch(c, firstLabel)); // back to the first theme while Teal is still saving
+  await settle(300); // past the pause again
+  h.hold = null;
+  release();
+  await settle(150);
+  expect(h.patches).toHaveLength(2); // the second change is written, not lost as "no change" against the old base
+  expect(h.patches[0].set).toEqual({ appTheme: "teal" });
+  expect(h.settings.appTheme).not.toBe("teal");
+  expect(String(find(c, on)[0]?.attrs["aria-label"])).toBe(firstLabel);
 });
 
 // --- F02-settings-update.4 ---
