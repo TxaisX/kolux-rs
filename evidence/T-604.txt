@@ -560,3 +560,45 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2547 filtered out; f
 ===== cargo test --lib -- protected --test-threads=3
 test result: ok. 81 passed; 0 failed; 1 ignored; 0 measured; 2466 filtered out; finished in 130.58s
 windows-gnu cargo check and clippy -D warnings: Finished. (Only protected.rs changed; full cargo test not re-run.)
+
+ROUND 7 REVIEW OF PR #15 at 0eb7b18e (2026-10-30, integrator): folder changes the delete rule missed
+- Push-Location moves like pushd and Pop-Location makes the folder unknown, like popd.
+- A wrapper's own folder option is a cd for the program it runs only: env -C / -C<dir> / --chdir[=],
+  sudo -D / -D<dir> / --chdir[=] (after other sudo options too), cmd start /D / /D<dir>, wsl --cd.
+  program_at now skips start's /D value, so `start /D <folder> rd ..` is read as rd, not as the folder.
+- With CDPATH named anywhere in the command, or set in the hook's environment, a relative cd makes the
+  folder unknown, so a later recursive delete asks.
+`cd build && rm -rf *`, `cd home; rm -rf *` (no CDPATH), `env -C build rm -rf out`, `sudo -D build rm -rf out`,
+`Push-Location build; Remove-Item ...` and `start /D build rd /s /q out` still run.
+
+BEFORE (0eb7b18e with only the new test; the `sudo -u root -D ../..` case was added with the fix):
+===== before the fix: t604r12
+test protected::tests::t604r12_push_location_wrapper_folders_and_cdpath_move_the_delete ... FAILED
+thread 'protected::tests::t604r12_push_location_wrapper_folders_and_cdpath_move_the_delete' (14567) panicked at src/protected.rs:2998:9:
+[
+    "should ask (delete): \"Push-Location ..\\\\..; Remove-Item -Recurse -Force build\", got None",
+    "should ask (delete): \"Push-Location ../..; Remove-Item -Recurse -Force build\", got None",
+    "should ask (delete): \"Pop-Location; rm -rf build\", got None",
+    "should ask (delete): \"env -C ../.. rm -rf build\", got None",
+    "should ask (delete): \"env --chdir=../.. rm -rf build\", got None",
+    "should ask (delete): \"env --chdir ../.. rm -rf build\", got None",
+    "should ask (delete): \"env -C../.. rm -rf build\", got None",
+    "should ask (delete): \"sudo -D ../.. rm -rf build\", got None",
+    "should ask (delete): \"sudo --chdir=../.. rm -rf build\", got None",
+    "should ask (delete): \"sudo --chdir ../.. rm -rf build\", got None",
+    "should ask (delete): \"export CDPATH=/; cd home; rm -rf *\", got None",
+    "should ask (delete): \"CDPATH=/ cd home && rm -rf build\", got None",
+    "should ask on Windows (delete): \"start /D ..\\\\.. rd /s /q build\", got None",
+    "should ask on Windows (delete): \"start /D C:\\\\Users rd /s /q build\", got None",
+    "should ask on Windows (delete): \"start /DC:\\\\Users rd /s /q build\", got None",
+]
+    protected::tests::t604r12_push_location_wrapper_folders_and_cdpath_move_the_delete
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2548 filtered out; finished in 0.34s
+
+AFTER:
+===== after the fix: t604r12
+test protected::tests::t604r12_push_location_wrapper_folders_and_cdpath_move_the_delete ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2548 filtered out; finished in 0.00s
+===== cargo test --lib -- protected --test-threads=3
+test result: ok. 82 passed; 0 failed; 1 ignored; 0 measured; 2466 filtered out; finished in 127.69s
+windows-gnu cargo check and clippy -D warnings: Finished. (Only protected.rs changed; full cargo test not re-run.)

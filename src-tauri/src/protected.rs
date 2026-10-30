@@ -18,7 +18,9 @@
 //! cannot hide the rest of a command. Every word is read with its backslashes kept and with them
 //! dropped as bash does. A recursive delete asks outright when a target (or a cd before it) holds a
 //! backtick, a caret, a backslash before anything but a plain path character, or a drive-relative
-//! form (`unclear_target`): those escapes are read differently by each shell. A command over 256 KB (`LONG_COMMAND`) is asked about outright, unread,
+//! form (`unclear_target`): those escapes are read differently by each shell. A cd (also pushd,
+//! Set-Location, Push-Location, and a wrapper's folder option: env -C, sudo -D, start /D, wsl --cd)
+//! to such a folder, or to a relative one while CDPATH may apply, makes the folder unknown. A command over 256 KB (`LONG_COMMAND`) is asked about outright, unread,
 //! so the answer stays well inside the hook's 1.5 s on a slow machine.
 //!
 //! ponytail: the workspace is Claude's own hook `cwd` (a Kolux pane starts Claude in the worktree
@@ -124,13 +126,16 @@ fn recursive_delete(c: &Read, base: &Base) -> bool {
     // its own as well, so a delete runs only when both readings of each path are safe. Anywhere else
     // both readings are judged in full; unpaired chains are judged in full too.
     let windows = base.windows();
+    // T-604 (round 7 review of PR #15): with CDPATH named in the command or set for the hook, a
+    // relative cd may land anywhere, so it makes the folder unknown.
+    let cdpath = c.text.to_ascii_uppercase().contains("CDPATH") || std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
     let paired = windows.then(|| pair(&c.chains[1], &c.chains[2])).flatten();
     c.chains.iter().enumerate().any(|(i, chain)| {
         if i == 2 && paired.is_some() {
             return false;
         }
-        deletes_outside(chain.iter().map(Seg::program_words), base)
-    }) || paired.is_some_and(|chain| deletes_outside(chain.iter().map(Seg::program_words), base))
+        deletes_outside(chain.iter(), base, cdpath)
+    }) || paired.is_some_and(|chain| deletes_outside(chain.iter(), base, cdpath))
 }
 
 /// Whether a path lost its meaning in the `Bash` reading, so on a Windows base only its `Shell`
@@ -160,28 +165,31 @@ fn pair(shell: &[Seg], bash: &[Seg]) -> Option<Vec<Seg>> {
         .collect()
 }
 
-fn deletes_outside<'a>(chain: impl Iterator<Item = &'a [String]>, base: &Base) -> bool {
+fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, cdpath: bool) -> bool {
     let mut dir = base.cwd.clone().or_else(|| base.workspace.clone());
-    for seg in chain {
+    for full in chain {
+        let seg = full.program_words();
         let p = program(seg);
         let args: Vec<&str> = seg[1..].iter().map(String::as_str).collect();
+        // A wrapper's own folder option (env -C, sudo -D, start /D, wsl --cd) is a cd for the
+        // program it runs only (round 7 review of PR #15).
+        let here = match wrapper_folder(&full.words[..full.at]) {
+            Some(f) => cd_to(&f, dir.as_deref(), base, cdpath),
+            None => dir.clone(),
+        };
         match p.as_str() {
-            "cd" | "chdir" | "set-location" | "sl" | "pushd" => {
+            "cd" | "chdir" | "set-location" | "sl" | "pushd" | "push-location" => {
                 let target = args.iter().find(|a| !(a.starts_with('-') && a.len() > 1) && !a.eq_ignore_ascii_case("/d"));
                 dir = match target {
-                    // The same check as a folder part of a delete target (round 6 review of PR #15):
-                    // a wildcard, an escape or a drive-relative form makes the folder unknown.
-                    Some(t) if unclear_target(t) || t.contains(['*', '?', '[']) => None,
-                    None if p == "pushd" => None,
+                    None if matches!(p.as_str(), "pushd" | "push-location") => None,
                     None => base.home.clone(),
-                    Some(&"-") => None,
-                    Some(t) => locate(t, dir.as_deref(), base),
+                    Some(t) => cd_to(t, here.as_deref(), base, cdpath),
                 };
             }
-            "popd" => dir = None,
+            "popd" | "pop-location" => dir = None,
             "rm" | "rd" | "rmdir" | "del" | "erase" | "remove-item" | "ri" => {
                 if let Some(targets) = delete_targets(&p, &args) {
-                    if targets.is_empty() || targets.iter().any(|t| unclear_target(t) || risky(t, dir.as_deref(), base)) {
+                    if targets.is_empty() || targets.iter().any(|t| unclear_target(t) || risky(t, here.as_deref(), base)) {
                         return true;
                     }
                 }
@@ -190,6 +198,49 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a [String]>, base: &Base) -
         }
     }
     false
+}
+
+/// Where a cd to `t` from `dir` lands, or None when that cannot be told: the same check as a
+/// folder part of a delete target (round 6 review of PR #15: a wildcard, an escape or a
+/// drive-relative form), `-`, or a relative folder while CDPATH may apply (round 7).
+fn cd_to(t: &str, dir: Option<&str>, base: &Base, cdpath: bool) -> Option<String> {
+    if unclear_target(t) || t.contains(['*', '?', '[']) || t == "-" || (cdpath && !is_abs(t) && !t.starts_with('~')) {
+        return None;
+    }
+    locate(t, dir, base)
+}
+
+/// The folder a wrapper in `w` (the words before the program) tells the program to start in:
+/// env's -C / --chdir, sudo's -D / --chdir, cmd start's /D and wsl's --cd; the last one counts.
+fn wrapper_folder(w: &[String]) -> Option<String> {
+    let mut found = None;
+    let mut wrapper = String::new();
+    let mut i = 0;
+    while i < w.len() {
+        let o = w[i].as_str();
+        let next = || w.get(i + 1).cloned();
+        let value = match wrapper.as_str() {
+            "env" if o == "-C" || o == "--chdir" => next(),
+            "env" => o.strip_prefix("--chdir=").or_else(|| o.strip_prefix("-C").filter(|v| !v.is_empty())).map(String::from),
+            "sudo" if o == "-D" || o == "--chdir" => next(),
+            "sudo" => o.strip_prefix("--chdir=").or_else(|| o.strip_prefix("-D").filter(|v| !v.is_empty())).map(String::from),
+            "start" if o.eq_ignore_ascii_case("/d") => next(),
+            "start" if o.len() > 2 && o[..2].eq_ignore_ascii_case("/d") => Some(o[2..].to_string()),
+            "wsl" if o == "--cd" => next(),
+            _ => None,
+        };
+        if value.is_some() {
+            found = value;
+            i += if o.len() <= 2 || o == "--chdir" || o == "--cd" { 2 } else { 1 };
+            continue;
+        }
+        let name = program(&w[i..]);
+        if WRAPPERS.iter().any(|(n, _)| *n == name) {
+            wrapper = name;
+        }
+        i += 1;
+    }
+    found
 }
 
 /// The targets of a recursive delete, or None when the command is not recursive: rm's -r in any
@@ -754,6 +805,11 @@ fn program_at(w: &[String], mut step: impl FnMut(usize)) -> usize {
             continue;
         }
         while let Some(o) = w.get(k) {
+            if f == "start" && o.eq_ignore_ascii_case("/d") {
+                // cmd's `start /D folder`: the folder is not the program.
+                k = (k + 2).min(w.len());
+                continue;
+            }
             if (f == "start" && (o.is_empty() || o.starts_with('/'))) || (f == "wsl" && matches!(o.as_str(), "--" | "-e" | "--exec")) {
                 k += 1;
                 continue;
@@ -2947,6 +3003,54 @@ mod tests {
             if hit(c).is_some() {
                 missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
             }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 round 7 review of PR #15: Push-Location and Pop-Location move like pushd and popd; a
+    /// wrapper's own folder option (env -C, sudo -D, start /D, wsl --cd) is a cd for the program it
+    /// runs; and with CDPATH named in the command (or set for the hook), a relative cd is unknown.
+    #[test]
+    fn t604r12_push_location_wrapper_folders_and_cdpath_move_the_delete() {
+        let win = Base {
+            workspace: Some("C:\\Users\\me\\app".into()),
+            cwd: Some("C:\\Users\\me\\app".into()),
+            home: Some("C:\\Users\\me".into()),
+            temp: vec!["C:\\Users\\me\\AppData\\Local\\Temp".into()],
+        };
+        let w = |c: &str| check(c, &win, &json!({})).map(|r| r.id);
+        let mut missed: Vec<String> = Vec::new();
+        for c in [
+            "Push-Location ..\\..; Remove-Item -Recurse -Force build",
+            "Push-Location ../..; Remove-Item -Recurse -Force build",
+            "Pop-Location; rm -rf build",
+            "env -C ../.. rm -rf build",
+            "env --chdir=../.. rm -rf build",
+            "env --chdir ../.. rm -rf build",
+            "env -C../.. rm -rf build",
+            "sudo -D ../.. rm -rf build",
+            "sudo -u root -D ../.. rm -rf build",
+            "sudo --chdir=../.. rm -rf build",
+            "sudo --chdir ../.. rm -rf build",
+            "export CDPATH=/; cd home; rm -rf *",
+            "CDPATH=/ cd home && rm -rf build",
+        ] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["start /D ..\\.. rd /s /q build", "start /D C:\\Users rd /s /q build", "start /DC:\\Users rd /s /q build"] {
+            if w(c) != Some("delete") {
+                missed.push(format!("should ask on Windows (delete): {c:?}, got {:?}", w(c)));
+            }
+        }
+        for c in ["cd build && rm -rf *", "cd home; rm -rf *", "env -C build rm -rf out", "sudo -D build rm -rf out", "Push-Location build; Remove-Item -Recurse -Force out"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        if w("start /D build rd /s /q out").is_some() {
+            missed.push("should run on Windows: start /D build rd /s /q out".into());
         }
         assert!(missed.is_empty(), "{missed:#?}");
     }
