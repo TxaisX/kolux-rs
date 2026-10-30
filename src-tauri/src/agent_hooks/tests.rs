@@ -276,12 +276,42 @@ fn t167b_sleep_records_the_workspace_agents_before_clearing_their_rows_and_quit_
     saved::at_sleep(&store, &["T:/t167b/ws1".to_string()]);
     let record = |s: &crate::state::Store| saved::parse(s.get(saved::RESUMABLE_KEY).unwrap().as_deref(), now).into_iter().filter_map(|r| r.session_id).filter(|s| s.starts_with("t167b-")).collect::<Vec<_>>();
     assert_eq!(record(&store), ["t167b-s1"], "the sleeping workspace's working agent is recorded; its finished one is not; the other workspace is untouched");
-    let left: Vec<u32> = saved::agent_status_saved().into_iter().map(|r| r.row.pane_key).filter(|k| (71..=73).contains(k)).collect();
+    let left: Vec<u32> = saved::restored().into_iter().map(|r| r.row.pane_key).filter(|k| (71..=73).contains(k)).collect();
     assert_eq!(left, [73], "the sleeping rows are cleared after the record");
     saved::at_quit(&store);
     let mut both = record(&store);
     both.sort();
     assert_eq!(both, ["t167b-s1", "t167b-s3"], "quitting later offers both workspaces");
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- T-618 (F05-app-shell-launch.3): a closed tab's saved status never reaches a new tab given its number ----
+
+#[test]
+fn t618_rows_of_panes_the_window_did_not_bring_back_leave_the_restored_rows_and_the_save_for_good() {
+    let _turn = SAVED_ROWS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("kolux-t618-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let store = crate::state::Store::open(&dir).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    // Run 1: tab 91 asked a question and was closed; tab 92 kept working, and the layout kept only tab 92.
+    let rows = [Row { at: now - 1000, ..row(91, "waiting", 1, Some("t618-closed")) }, Row { at: now - 1000, ..row(92, "working", 1, Some("t618-kept")) }];
+    store.set(saved::SAVED_KEY, &saved::serialize(&rows)).unwrap();
+    saved::startup(&store, &dir);
+    let mine = || saved::restored().into_iter().map(|r| r.row.pane_key).filter(|k| (91..=92).contains(k)).collect::<Vec<_>>();
+    assert_eq!(mine(), [91, 92], "before the window says which panes came back, both rows wait");
+    // Run 2: the window came back with tab 92 only.
+    saved::keep_panes(&store, &[92]);
+    assert_eq!(mine(), [92], "the closed tab's row is no longer served");
+    let in_save = |s: &crate::state::Store| saved::parse(s.get(saved::SAVED_KEY).unwrap().as_deref(), now).into_iter().map(|r| r.pane_key).collect::<Vec<_>>();
+    assert_eq!(in_save(&store), [92], "nor kept in the save");
+    // The next start finds nothing for number 91, so a new tab given that number has nothing to wear.
+    saved::startup(&store, &dir);
+    assert_eq!(mine(), [92]);
+    saved::keep_panes(&store, &[92, 91]);
+    assert_eq!(mine(), [92], "a new tab 91 in a later layout gets no row back");
     drop(store);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -303,7 +333,7 @@ fn t167b_a_restored_row_is_unconfirmed_until_its_pane_reports_and_holds_nothing_
     let rows = [Row { at: now - 1000, hook_version: Some(0), ..row(81, "permission", 1, Some("t167b-u1")) }, Row { at: now - 1000, ..row(82, "working", 1, Some("t167b-u2")) }];
     store.set(saved::SAVED_KEY, &saved::serialize(&rows)).unwrap();
     saved::startup(&store, &dir);
-    let mine = || saved::agent_status_saved().into_iter().filter(|r| (81..=82).contains(&r.row.pane_key)).collect::<Vec<_>>();
+    let mine = || saved::restored().into_iter().filter(|r| (81..=82).contains(&r.row.pane_key)).collect::<Vec<_>>();
     let shown = mine();
     assert_eq!(shown.len(), 2);
     assert!(shown.iter().all(|r| r.unconfirmed), "a restored row never counts as confirmed");
@@ -1388,6 +1418,48 @@ fn t_152_b_4_a_claude_file_with_an_empty_hooks_object_installs_and_comes_back_by
         remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), text, "on then off gives back {text:?}");
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// T-584 (R02-hooks-status.4): another tool's uninstall often leaves an empty list under an event, e.g. "Stop": [].
+// An empty list holds no entries: the install goes ahead, and switching off gives the file back byte for byte.
+#[test]
+fn t584_a_file_with_an_empty_hook_list_installs_and_comes_back_byte_for_byte() {
+    let dir = temp("t584-empty-list");
+    let home = dir.join("home");
+    let user_hook = "{\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"notify.cmd\"\n          }\n        ]\n      }";
+    let texts = [
+        "{\"hooks\":{\"Stop\":[]}}".to_string(),
+        format!("{{\n  \"model\": \"opus\",\n  \"hooks\": {{\n    \"Stop\": [],\n    \"Notification\": [\n      {user_hook}\n    ],\n    \"PreToolUse\": []\n  }}\n}}\n"),
+        "{\r\n  \"hooks\": {\r\n    \"SessionStart\": [],\r\n    \"Stop\": []\r\n  }\r\n}\r\n".to_string(),
+    ];
+    for (i, text) in texts.iter().enumerate() {
+        let file = dir.join(format!("c{i}")).join("settings.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, text).unwrap();
+        install_claude_at(&home, &file).unwrap_or_else(|e| panic!("{text:?} did not install: {e}"));
+        assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed", "{text:?}");
+        let on: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        if i == 1 {
+            assert_eq!(on["model"], "opus");
+            assert_eq!(on["hooks"]["Notification"][0]["hooks"][0]["command"], "notify.cmd", "the user's own hook is kept");
+        }
+        remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), *text, "on then off gives back {text:?} byte for byte");
+        assert!(!remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap(), "nothing of Kolux's left");
+    }
+    // Codex's hooks.json is taken out the same way: its empty list comes back with the rest of the file.
+    let profile = dir.join("profile");
+    let managed = profile.join(crate::codex_accounts::FOLDER).join("t584");
+    let file = managed.join("hooks.json");
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    let text = "{\"hooks\":{\"Stop\":[]}}";
+    fs::create_dir_all(&managed).unwrap();
+    fs::write(&file, text).unwrap();
+    let mut v: Value = serde_json::from_str(text).unwrap();
+    assert!(write_codex_groups(&file, Some(text), &mut v, command).unwrap());
+    apply(&home, &profile, &Value::Null, "codex", Plan::Remove).unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), text, "Codex: on then off gives back {text:?} byte for byte");
     let _ = fs::remove_dir_all(&dir);
 }
 

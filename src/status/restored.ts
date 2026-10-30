@@ -7,7 +7,7 @@ import type { Crew } from "../terminal/status";
 import type { StopInfo } from "../terminal/notify";
 
 /** One row of `agent_status_saved` (saved.rs Restored). */
-export type SavedRow = { paneKey: number; agent: string; state: string; at: number; children?: Crew; unconfirmed: boolean; restart: boolean };
+export type SavedRow = { paneKey: number; agent: string; state: string; at: number; sessionId?: string; children?: Crew; unconfirmed: boolean; restart: boolean };
 
 export const RESTART_TEXT = "Restart this terminal: Kolux was updated and its status hooks are from the older version.";
 
@@ -26,11 +26,14 @@ export function shownState(state: string): AgentState | null {
   return state === "permission" ? "waiting" : (state as AgentState);
 }
 
-/** What to put on the panes that have loaded (`paneKeys`) and have no live reading yet (`live`). */
-export function restoration(rows: readonly SavedRow[], paneKeys: ReadonlySet<number>, live: ReadonlySet<number>): Restoration {
+/** What to put on the panes that have loaded (`paneKeys`) and have no live reading yet (`live`). T-618: pane numbers
+ *  are reused, so a row goes only to a pane that came back from the saved layout (`back`, each with the session it was
+ *  saved with) and, when the row names a session, carries that session; a new tab never wears a closed tab's status. */
+export function restoration(rows: readonly SavedRow[], paneKeys: ReadonlySet<number>, live: ReadonlySet<number>, back: ReadonlyMap<number, string | undefined>): Restoration {
   const out: Restoration = { hook: {}, stale: {}, crew: {}, turn: {} };
   for (const row of rows) {
     if (!row.unconfirmed || !paneKeys.has(row.paneKey) || live.has(row.paneKey)) continue;
+    if (!back.has(row.paneKey) || (row.sessionId !== undefined && back.get(row.paneKey) !== row.sessionId)) continue;
     if (row.restart) {
       out.hook[row.paneKey] = "blocked";
       out.turn[row.paneKey] = { stop: { cause: "error", detail: RESTART_TEXT } };

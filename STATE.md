@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 713 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 5 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 718 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -78,6 +78,38 @@ recorded default until told otherwise; nothing here blocks a pass.
   downloaded artifact; today the sign step runs in the build job, next to node_modules the build step's install scripts
   wrote. (2) scripts/license-check.mjs: anchor the MIT and BSD-2 patterns on the full licence text. (3)
   richCodeColourTime.test.ts: its 500 ms limit needs more headroom on CI runners.
+- [status-hooks] 2026-10-30 · Question (T-585): a helper agent whose stop is lost without an Esc, or a background helper
+  that stays silent from an Esc until the next prompt, can still keep a pane "working". Clearing those needs a signal Kolux
+  does not have yet (for example Claude's Stop event listing which helpers are still alive, which is not confirmed). Should
+  Kolux add a time-out guess, or leave it? Nothing changes until you say.
+- [status-hooks] 2026-10-30 · Open: live Windows checks. T-566: a relaunch run where every taken-back pane shows its restored
+  chip (needs the prover fix below first). T-583: an "agent finished" automation with a slow precheck while other panes'
+  status keeps moving and a protected command in another Claude pane still asks. T-584: switch hooks on with a real
+  settings.json holding "Stop": []. T-585: Esc a running sub-agent, send a new prompt, the pane ends Done. T-586: Ctrl+click
+  a link after Chinese text and emoji. T-618: a new tab that reuses a closed tab's number after a restart shows no status.
+- [status-hooks] 2026-10-30 · Follow-ups not built: (1) T-566: scripts/prove/live-T-544.mjs back() must read the restored
+  chips before dismissFirstRun or any other key or click reaches the window, and match panes by their data-key attribute
+  instead of their order (the lane gave it only as a description, not an exact edit, so it was not applied at integration).
+  (2) product-ux lane (T-612): a Tip card that closes on Escape must take the key on a window keydown listener in the
+  capture phase and stop it; otherwise the Escape reaches the focused terminal pane, clears its restored chip and sends ESC
+  to the program. (3) Optional, T-618: drop a closed tab's saved status row at the moment it closes (App.tsx dropPanes
+  already calls terminal_forget_history; a matching agent_hooks::saved forget needs one more command or a line in
+  terminal.rs). (4) Optional, T-583: make protected::mask in protected.rs cheaper on very large commands, so one huge
+  protected command's own reply stays under 1.5 s (it no longer holds up other panes). Done by lane/safety T-604: masking reads
+  only the shown 2,000 characters and a 2,048-character margin (mask_head); a 1 MB command is answered in at most
+  523 ms optimized (evidence/T-604.txt).
+- [status-hooks] 2026-10-30 · Follow-ups from the PR #13 review, not built: (1) refresh the hook line's settings snapshot on
+  every settings save (state.rs), so a protected rule changed while slow work holds the store applies at once, not from the
+  first hook after the store frees. (2) Keep each pane's order for near-simultaneous events: two hooks of one pane that
+  arrive together are stepped in the order their threads take the ORDER lock, not always the order they were sent.
+  (3) automations.rs still starts a bare thread per job with no cap; give it a cap and a Builder spawn as the hook line has.
+  (4) Found while fixing the review: protected_custom.rs Attempts::paused masks the whole command under the app-wide
+  attempts lock (STORE), so while one huge protected command is masked, every other pane's protected command (and any
+  prompt, which also takes that lock) waits for it: about 2 s in the hook tests. Mask before taking the lock. Not this
+  lane's file, so not changed here; T-583's "holds up no other pane" is true only until that mask starts. DONE 2026-10-30
+  (lane/safety, PR #15 review): the command is masked before the lock is taken and the list is copied under it and
+  masked after; the 1 MB pane now holds the lock about 8 µs (was 8 ms with the lane's 4 KB mask cap), test
+  protected_custom t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked; evidence/T-604.txt.
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
@@ -126,6 +158,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 ## Decisions made for Txais
 
 - 2026-10-30 · [safety] T-606 · AI writer agents (the commit-message button, the one-click flow, agent recipes, PR text, branch naming) run from an empty temp folder with Claude limited to user settings (`--setting-sources user`) and no project MCP (`--strict-mcp-config`). Custom commands and recipe templates still run in the workspace.
+- 2026-10-30 · [status-hooks] T-583 · The order of a pane's status events is kept by one app-wide lock held only around the status step, the emit and the after-queue; a protected-command reply is worked out per connection, outside that lock, so one slow hook never holds up another pane.
 - 2026-10-30 · [release-ci] T-588 · CI release signing acts only on the build this run's `--build-only` recorded, never on the newest output folder; a run on an already-released main ends with "nothing was built, nothing to sign".
 - 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
 - 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters is left untouched, and the installer log says to use Settings > CLI > Register (NSIS string limit). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
@@ -161,6 +194,15 @@ recorded default until told otherwise; nothing here blocks a pass.
   the branch) does not take branch_turn; take it there too.
 - 2026-10-30 · [workspaces] T-617 · Review of PR #10: src-tauri/src/files.rs:79 save copies left by a save through a
   dangling link are no longer cleared up; clear them again.
+
+- 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: a recursive rm of a symbolic link into the temp
+  folder is let through by the temp-folder exemption although it may point elsewhere; resolve the link (or ask) first.
+- 2026-10-30 · [safety] T-607 · Review of PR #15: browser_engine.rs frame_ok judges the dev server by its own origin
+  only; also refuse 127.0.0.1:1420 and [::1]:1420 in a development build.
+- 2026-10-30 · [safety] T-606 · Review of PR #15: the Cursor writer now gets --trust (it runs in the empty temp folder,
+  so it trusts nothing of the workspace); confirm that is wanted when Cursor's writer is checked live.
+- 2026-10-30 · [safety] T-606 · Review of PR #15: a writer installed as a non-npm .cmd/.bat script refuses a multi-line
+  prompt with a plain message (cmd.exe cannot take a line break); a typed or file hand-over would lift that.
 
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt
