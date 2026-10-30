@@ -13,13 +13,13 @@ Kolux RS uses them.
 ## What the old Kolux left on the PC
 
 - **Its code folders on G:\Dev.** The old repository, its scratch and workspace folders, and backup
-  copies of it. They are the folders named in the first three bullets of section 0 of `LOOP.md` (the
-  "NEVER open" list). This page does not repeat their names; the script reads them from `LOOP.md`.
-  Together with the rest below they take **about 408 GB**.
+  copies of it: 5 folders, named in the first three bullets of section 0 of `LOOP.md` (the
+  "NEVER open" list). This page does not repeat their names; the script reads them from `LOOP.md`
+  and prints them. Together they take **about 408 GB**.
 - **The installed app.** The old Kolux program itself, installed under your user's programs folder.
-- **Its agent hooks.** Small scripts the old app put in the `agent-hooks` folder inside `.kolux` in
-  your user folder (`~\.kolux\agent-hooks`). Claude Code and other agents may still be set up to run
-  them.
+- **Its agent hooks.** Small scripts (about 9 KB) the old app put in the `agent-hooks` folder inside
+  `.kolux` in your user folder (`~\.kolux\agent-hooks`). Claude Code, Codex and Kimi may still be set
+  up to run them.
 - **Your own settings and data** in `~\.kolux` and `%APPDATA%\kolux`. These are yours, not the old
   app's code, and Kolux RS still uses them (see below).
 
@@ -29,12 +29,17 @@ Kolux RS uses them.
 |---|---|
 | The old code folders on G:\Dev (repo, scratch, workspaces, backups) | The script, with `-Delete` |
 | The installed old app | Windows **Settings > Apps > Installed apps > Kolux > Uninstall** |
-| The old hook scripts in `~\.kolux\agent-hooks` | The script, with `-Delete` (only that one folder) |
+
+## Leave alone for now
+
+- **The `agent-hooks` folder in `~\.kolux`.** It holds the hook scripts for Claude Code, Codex and Kimi,
+  and agents may still be set up to call them; deleting it could make those agents print hook errors.
+  It is only about 9 KB, so it is not worth the risk. The script does not touch it.
 
 ## Must STAY
 
-- **`~\.kolux` and `%APPDATA%\kolux` as a whole** (except the agent-hooks folder above). Kolux RS's
-  importer reads them, and Kolux RS reads your shortcuts from `~\.kolux\keybindings.json`.
+- **`~\.kolux` and `%APPDATA%\kolux` as a whole.** Kolux RS's importer reads them, and Kolux RS reads
+  your shortcuts from `~\.kolux\keybindings.json`.
 - **Anything under `~\.kolux-rs`.** That is Kolux RS's own data, including its release signing key.
 - **Your vault notes** (Txais Brain).
 - **`G:\Temp\live-signin`.** Test account A for the live checks now lives there.
@@ -43,12 +48,9 @@ Kolux RS uses them.
 ## The order
 
 1. **Close the old Kolux and Kolux RS.** Nothing should be using these folders while they go.
-2. **Uninstall the old app** (Settings > Apps > Installed apps > Kolux > Uninstall). Do this first.
-   The old app's hooks may still be listed in Claude Code's settings file (`~\.claude\settings.json`).
-   If the hook scripts are deleted while those entries remain, every Claude session prints hook errors.
-   Uninstalling takes the entries out first. Kolux RS's own hooks live elsewhere and are not affected.
-   (The script checks this too: while Claude Code's settings still point at the old hooks folder, it
-   keeps that folder.) Make sure you uninstall the old Kolux, not Kolux RS, if both are listed.
+2. **Uninstall the old app** (Settings > Apps > Installed apps > Kolux > Uninstall). Make sure you
+   uninstall the old Kolux, not Kolux RS, if both are listed. Kolux RS's own hooks live elsewhere and
+   are not affected.
 3. **Sign test account A in at its new folder.** The live checks used to keep test account A inside
    one of the old scratch folders, which the script deletes. They now use
    `G:\Temp\live-signin\account-a` (or the folder in the `KOLUX_LIVE_ACCOUNT_A` setting, if you set
@@ -57,21 +59,34 @@ Kolux RS uses them.
    $env:CLAUDE_CONFIG_DIR = 'G:\Temp\live-signin\account-a'; claude
    ```
    then sign in with test account A and close it.
-4. **Run the reclaim script.** In PowerShell 7, from this repository's folder:
+4. **Get PowerShell 7 if you do not have it.** In any terminal run:
    ```
+   winget install --id Microsoft.PowerShell -e
+   ```
+5. **Look first.** Open PowerShell 7 (start menu: "PowerShell 7", or type `pwsh` in a terminal), go to
+   this repository's folder, and run the script without `-Delete`:
+   ```
+   cd G:\Dev\kolux-rs
    pwsh -NoProfile -File scripts\reclaim-old-kolux.ps1
    ```
-   This only lists the folders and their sizes; it deletes nothing. Check the list. Then run it again
-   with `-Delete`:
+   This only lists the 5 folders and their sizes; it deletes nothing. Check the list.
+6. **Check the backups folder by hand.** In the list, find the backups folder (the one whose name
+   ends in `backups`). Open it in File Explorer and move anything that is **not** a copy of the old
+   Kolux repository to another place (for example backups of other projects). Everything left in it
+   will be deleted.
+7. **Delete.** Run the script again with `-Delete`:
    ```
    pwsh -NoProfile -File scripts\reclaim-old-kolux.ps1 -Delete
    ```
    It asks you to type `DELETE` (capital letters). Anything else stops it. It then removes each folder
-   and prints how much space came back, about 408 GB in all.
+   and prints how much space came back, about 408 GB in all. If a folder could not be removed (for
+   example a file was still open), it says FAILED for that folder; close what uses it and run step 7
+   again.
 
-What the script will not do: it takes only the G:\Dev folders that `LOOP.md` section 0 lists, refuses
-anything outside G:\Dev or G:\Dev itself, refuses this repository, and from `.kolux` removes only the
-agent-hooks folder. Folders that are already gone are skipped.
+What the script will not do: it takes only the 5 G:\Dev folders that `LOOP.md` section 0 lists, and
+stops if that list has changed. It refuses anything outside G:\Dev, G:\Dev itself, this repository,
+and any folder that is a link to somewhere else. It does not touch your user folder. Folders that are
+already gone are skipped.
 
 ## The old GitHub repositories
 

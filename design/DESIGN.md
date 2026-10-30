@@ -2,7 +2,7 @@
 
 Source: three screenshots of the running Kolux window (user32 PrintWindow, flag 2), taken
 2026-10-08, 20 s apart. Pixels only; no code, CSS or assets of the old app were read.
-All hex values were sampled from the full window capture (removed 2026-10-30 at Txais's request; the measurements above stay).
+All hex values were sampled from the full window capture (removed 2026-10-30 at Txais's request; the measurements below stay).
 
 ## 0. How to read the numbers
 
@@ -10,8 +10,8 @@ All hex values were sampled from the full window capture (removed 2026-10-30 at 
   The raw capture is 1936 x 1048 because a maximized window's rect includes an 8 px
   off-screen frame (solid `#202020`) on every side. **All coordinates below are client
   coordinates**: subtract 8 from raw x and y. Client area = **1920 x 1032**.
-- The crops were cut from a capture of the client area alone (the two window-corner crops
-  came from the raw capture) (removed 2026-10-30 at Txais's request; the measurements above stay).
+- The crops (removed 2026-10-30 at Txais's request; the measurements in this file stay) were cut
+  from a capture of the client area alone; the two window-corner crops came from the raw capture.
 - "x 305..1105" means first and last pixel inclusive.
 - Text is rendered with Windows ClearType (sub-pixel colour fringes). Text hex values are the
   colour of fully covered stems; treat them as accurate to about plus or minus 4 per channel.
