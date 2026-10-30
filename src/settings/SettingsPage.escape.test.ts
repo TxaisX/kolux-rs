@@ -24,6 +24,13 @@ let doc: FakeDocument;
 let onWindow: Record<string, Listener[]>;
 let unmount: () => Promise<void> = async () => {};
 const realFocus = FakeNode.prototype.focus;
+/** Just enough of Element.matches for attribute selectors such as '[role="dialog"],[hidden]'. */
+function matches(n: FakeNode, sel: string) {
+  return sel.split(",").some((one) => {
+    const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(one.trim());
+    return !!m && n.nodeType === 1 && m[1] in n.attrs && (m[2] === undefined || n.attrs[m[1]] === m[2]);
+  });
+}
 beforeEach(() => {
   const dom = installDom();
   doc = dom.doc;
@@ -43,12 +50,21 @@ beforeEach(() => {
   FakeNode.prototype.focus = function (this: FakeNode) {
     doc.activeElement = this;
   };
+  FakeNode.prototype.closest = function (this: FakeNode, sel: string) {
+    for (let n: FakeNode | null = this; n; n = n.parentNode) if (matches(n, sel)) return n;
+    return null;
+  };
+  FakeNode.prototype.querySelectorAll = function (this: FakeNode, sel: string) {
+    return find(this, (n) => n !== this && matches(n, sel));
+  };
   h.agents = [];
 });
 afterEach(async () => {
   await unmount();
   unmount = async () => {};
   FakeNode.prototype.focus = realFocus;
+  delete FakeNode.prototype.closest;
+  delete FakeNode.prototype.querySelectorAll;
 });
 
 /** A key pressed where the keyboard is, sent as a browser sends it: capture listeners from the window
@@ -175,6 +191,59 @@ test("Escape in the xAI key dialog inside Settings closes only that dialog; the 
   expect(closed).not.toHaveBeenCalled();
   // The browser takes the keyboard off a field that is no longer drawn; the next Escape leaves Settings.
   doc.activeElement = doc.body;
+  await press("Escape");
+  expect(closed).toHaveBeenCalledTimes(1);
+});
+
+/** A dialog that, like the Usage Share card (ShareCard.tsx) and the Send feedback box (FeedbackDialog.tsx),
+ *  closes on Escape from a listener of its own and lets the Escape go on. It goes away at once, as the
+ *  browser's microtask checkpoint between listeners lets React take it off the page. */
+function looseDialog(parent: FakeNode, on: "window" | "self") {
+  const node = doc.createElement("div");
+  Object.assign(node.attrs, { role: "dialog", "aria-modal": "true" });
+  const field = doc.createElement("input");
+  node.appendChild(field);
+  parent.appendChild(node);
+  const close = (e: unknown) => (e as { key: string }).key === "Escape" && node.remove();
+  if (on === "window") onWindow.keydown.push({ fn: close, capture: false });
+  else node.addEventListener("keydown", close);
+  return { node, field, shown: () => !!node.parentNode };
+}
+
+test("Escape in a dialog inside Settings that does not stop it (the Share card) closes only that dialog", async () => {
+  terminal();
+  const closed = vi.fn();
+  const m = await open(closed);
+  const settings = find(m.container, (n) => n.attrs["aria-label"] === "Settings")[0];
+  const share = looseDialog(settings, "window");
+  await press("Escape"); // the keyboard is on the Settings root, as after a click on Share
+  expect(share.shown()).toBe(false);
+  expect(closed).not.toHaveBeenCalled();
+  await press("Escape");
+  expect(closed).toHaveBeenCalledTimes(1);
+});
+
+test("Escape in a dialog outside Settings with the keyboard in it (Send feedback) closes only that dialog", async () => {
+  terminal();
+  const closed = vi.fn();
+  await open(closed);
+  const box = looseDialog(doc.body, "self");
+  box.field.focus();
+  await press("Escape");
+  expect(box.shown()).toBe(false);
+  expect(closed).not.toHaveBeenCalled();
+  doc.activeElement = doc.body;
+  await press("Escape");
+  expect(closed).toHaveBeenCalledTimes(1);
+});
+
+test("a dialog of a pane under Settings (the shell ended) does not block Escape", async () => {
+  terminal();
+  const closed = vi.fn();
+  await open(closed);
+  const ended = doc.createElement("div");
+  Object.assign(ended.attrs, { role: "alertdialog", "aria-modal": "true" });
+  doc.body.appendChild(ended);
   await press("Escape");
   expect(closed).toHaveBeenCalledTimes(1);
 });
