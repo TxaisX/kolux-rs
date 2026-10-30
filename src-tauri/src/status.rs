@@ -441,9 +441,15 @@ impl Session {
         }
         match name {
             "UserPromptSubmit" => {
-                // T-585: a child silent since an Escape stopped the last turn went with that turn; its stop never comes.
+                // T-585: a child silent since an Escape stopped the last turn most likely went with that turn (its stop
+                // never comes), so it no longer keeps the pane working. It is set aside, not forgotten: a background
+                // helper or teammate the Esc did not stop comes back with its own next event (restore_parked).
                 let escaped = std::mem::take(&mut self.escaped);
-                self.children.retain(|c| c.state != "working" || !escaped.contains(&c.id));
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.children).into_iter().partition(|c| c.state == "working" && escaped.contains(&c.id));
+                self.children = kept;
+                self.parked.extend(gone.into_iter().map(|c| (c, false)));
+                let over = self.parked.len().saturating_sub(MAX_CHILDREN);
+                self.parked.drain(..over);
                 self.prompt = change.prompt.clone();
                 self.pending = None;
                 self.interrupted = false;
@@ -2378,6 +2384,17 @@ mod tests {
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
         state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a2","agent_type":"tester"}"#);
         assert_eq!(ids(&s), vec!["a2"]);
+        // Round 1 review: a1 was set aside, not lost. A background helper or teammate the Esc did not stop
+        // comes back with its own next event, so its later work and questions still show.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"review the branch"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"code-reviewer"}"#);
+        s.typed_cancel();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"just fix the typo"}"#);
+        assert!(s.children.is_empty() && parked_ids(&s) == ["a1"], "set aside, not deleted");
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a1","tool_name":"Bash","tool_use_id":"r9"}"#);
+        assert_eq!(ids(&s), vec!["a1"], "its own event brings it back onto the roster");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a1","tool_name":"Bash","tool_use_id":"r9"}"#), Some("permission"));
     }
 
     #[test]

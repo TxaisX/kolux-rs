@@ -57,3 +57,17 @@ LIMITS AND WHAT IS LEFT
   list naming live helpers, is not confirmed to list sub-agents). Question for Txais in the lane result.
 - Live proof on Windows: start a Claude task that spawns a sub-agent, press Esc while it runs, send a new prompt; when
   that turn ends the pane reads Done and the done notification fires.
+
+REVIEW ROUND 1 (2026-10-30)
+Required change: silent escaped helpers were deleted at the next prompt and could never come back (SubagentStart is the
+only way onto the roster), so a background helper or teammate the Esc did not stop lost its later "needs you".
+Fix: src-tauri/src/status.rs:443 (UserPromptSubmit arm): the escaped silent working children move to self.parked (flag
+false: not this turn's), bounded to MAX_CHILDREN the way the deny settle does; restore_parked brings one back on its own
+next event carrying its agent_id. The pane still reads done when the new turn ends (they are off the roster).
+Test: t585_a_helper_stopped_by_an_escape_with_its_turn_does_not_keep_later_turns_working gains a second scenario:
+after the prompt the roster is empty and parked == ["a1"]; a1's PreToolUse puts it back (ids == ["a1"]) and its
+PermissionRequest reads "permission".
+After: cargo check --all-targets: Finished (no warning in status.rs/hooks.rs/automations.rs/agent_hooks);
+cargo check --target x86_64-pc-windows-gnu --all-targets: Finished. cargo test is the integrator's (t585_).
+The earlier "LIMITS" line about a background helper silent until the next prompt now reads: it stops counting as working
+at that prompt but comes back on its next event.
