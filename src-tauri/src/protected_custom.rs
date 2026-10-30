@@ -363,6 +363,24 @@ pub struct Attempt {
     call: String,
 }
 
+impl Attempt {
+    /// A waiting attempt with every text field masked: the command's shown part and a margin after
+    /// it (T-604), the folder and the rule (a nameless rule shows its own pattern, and the folder is
+    /// free text too: neither may carry a secret into the list either).
+    fn masked(session: &str, call: &str, worktree: &str, raw: &str, rule: &str, time: u64) -> Attempt {
+        let masked = crate::protected::mask_head(raw, COMMAND_SHOWN + MASK_MARGIN);
+        let command = head(&masked, COMMAND_SHOWN).to_string();
+        let (worktree, rule) = (crate::protected::mask(worktree), crate::protected::mask(rule));
+        Attempt { time, worktree, command, rule, outcome: Outcome::Waiting, session: session.into(), call: call.into() }
+    }
+
+    /// The same attempt masked once more on the way out (the mask is idempotent).
+    fn shown(&self) -> Attempt {
+        let m = crate::protected::mask;
+        Attempt { command: m(&self.command), rule: m(&self.rule), worktree: m(&self.worktree), ..self.clone() }
+    }
+}
+
 /// The list, newest first, at most `ATTEMPTS` long.
 #[derive(Debug, Default)]
 pub struct Attempts(VecDeque<Attempt>);
@@ -371,14 +389,16 @@ impl Attempts {
     /// A command was paused: the raw text is masked before anything keeps it, and an earlier
     /// attempt of the same session still waiting is taken as refused. Only the shown part and a
     /// margin after it are masked (T-604), so the time this takes does not grow with the command.
+    #[cfg(test)]
     pub fn paused(&mut self, session: &str, call: &str, worktree: &str, raw: &str, rule: &str, time: u64) {
-        self.turn_ended(session);
-        let masked = crate::protected::mask_head(raw, COMMAND_SHOWN + MASK_MARGIN);
-        let command = head(&masked, COMMAND_SHOWN).to_string();
-        // A nameless rule shows its own pattern and the folder is free text too: neither may carry a
-        // secret into the list either.
-        let (worktree, rule) = (crate::protected::mask(worktree), crate::protected::mask(rule));
-        self.0.push_front(Attempt { time, worktree, command, rule, outcome: Outcome::Waiting, session: session.into(), call: call.into() });
+        self.keep(Attempt::masked(session, call, worktree, raw, rule, time));
+    }
+
+    /// Keeps an attempt already masked (`Attempt::masked`), so the app-wide lock is held only to
+    /// add it, never while a long command is masked (T-604 review of PR #15).
+    fn keep(&mut self, attempt: Attempt) {
+        self.turn_ended(&attempt.session);
+        self.0.push_front(attempt);
         self.0.truncate(ATTEMPTS);
     }
 
@@ -399,9 +419,9 @@ impl Attempts {
     /// What the Safety page is shown: every text field masked once more on the way out (the mask
     /// is idempotent, so a kept attempt reads the same), so nothing raw reaches the page even if a
     /// later writer skips `paused`.
+    #[cfg(test)]
     pub fn list(&self) -> Vec<Attempt> {
-        let m = crate::protected::mask;
-        self.0.iter().map(|a| Attempt { command: m(&a.command), rule: m(&a.rule), worktree: m(&a.worktree), ..a.clone() }).collect()
+        self.0.iter().map(Attempt::shown).collect()
     }
 
     pub fn clear(&mut self) {
@@ -411,8 +431,20 @@ impl Attempts {
 
 static STORE: LazyLock<Mutex<Attempts>> = LazyLock::new(Mutex::default);
 
+#[cfg(test)]
+thread_local! {
+    /// The longest this thread has held the attempts lock (tests only).
+    static HELD: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
 fn with_store<T>(f: impl FnOnce(&mut Attempts) -> T) -> T {
-    f(&mut STORE.lock().unwrap_or_else(|e| e.into_inner()))
+    let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(test)]
+    let t0 = std::time::Instant::now();
+    let out = f(&mut store);
+    #[cfg(test)]
+    HELD.with(|h| h.set(h.get().max(t0.elapsed())));
+    out
 }
 
 /// What the hook prints back for a Claude event, or None for no opinion (`{}`): the PreToolUse
@@ -434,7 +466,9 @@ pub fn listen(path: &str, body: &[u8], settings: &Value) -> Option<String> {
             let command = event.get("tool_input")?.get("command")?.as_str()?;
             let cwd = field("cwd");
             let rule = check(command, &crate::protected::Base::from_env(cwd), settings, cwd)?;
-            with_store(|s| s.paused(session, field("tool_use_id").unwrap_or(""), cwd.unwrap_or(""), command, &rule, crate::automations::now_ms()));
+            // Masked before the lock is taken: another pane's check never waits on this command.
+            let attempt = Attempt::masked(session, field("tool_use_id").unwrap_or(""), cwd.unwrap_or(""), command, &rule, crate::automations::now_ms());
+            with_store(|s| s.keep(attempt));
             Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": crate::protected::reason(&rule) } }).to_string())
         }
         "PostToolUse" | "PostToolUseFailure" => {
@@ -460,7 +494,8 @@ pub fn protected_rule_check(kind: Kind, pattern: String) -> Result<(), String> {
 /// The recent attempts, newest first, every command masked.
 #[tauri::command]
 pub fn protected_attempts() -> Vec<Attempt> {
-    with_store(|s| s.list())
+    // Copied under the lock, masked after it.
+    with_store(|s| s.0.clone()).iter().map(Attempt::shown).collect()
 }
 
 #[tauri::command]
@@ -572,6 +607,34 @@ mod tests {
         assert_eq!(kept.len(), 12);
         assert!(kept.iter().all(|a| a.command.chars().count() <= COMMAND_SHOWN));
         assert!(cfg!(debug_assertions) || slow.is_empty(), "over {bar_ms} ms: {slow:#?}");
+    }
+
+    /// T-604 review of PR #15 (status-hooks follow-up 4): a 1 MB protected command is masked
+    /// outside the app-wide attempts lock, so while it is being read and masked another pane's
+    /// protected command is answered at once, and the lock is only held to add the attempt.
+    #[test]
+    fn t604r5_a_second_panes_check_is_answered_while_a_1_mb_command_is_masked() {
+        let rules = json!({ RULES_FIELD: [{ "id": "pods", "name": "Pod deletes", "kind": "starts-with", "pattern": "kubectl delete" }] });
+        let event = |session: &str, command: String| {
+            json!({ "hook_event_name": "PreToolUse", "session_id": session, "tool_use_id": "t604r5", "cwd": "/home/me/t604r5", "tool_name": "Bash", "tool_input": { "command": command } }).to_string()
+        };
+        let big = event("t604r5-big", format!("{}\nkubectl delete pod web-1", "export API_TOKEN=abc123 PASSWORD=hunter2 ".repeat((1 << 20) / 42)));
+        let small = event("t604r5-small", "kubectl delete pod web-2".into());
+        let r = rules.clone();
+        let pane = std::thread::spawn(move || (listen("/claude", big.as_bytes(), &r).is_some(), HELD.with(|h| h.get())));
+        let mut slowest = std::time::Duration::ZERO;
+        let mut checks = 0;
+        while !pane.is_finished() || checks == 0 {
+            let t0 = std::time::Instant::now();
+            assert!(listen("/claude", small.as_bytes(), &rules).is_some(), "the second pane must ask");
+            slowest = slowest.max(t0.elapsed());
+            checks += 1;
+        }
+        let (asked, held) = pane.join().unwrap();
+        println!("TIME second pane: {checks} checks, slowest {slowest:?}; the 1 MB pane held the lock {held:?}");
+        assert!(asked, "the 1 MB command must ask");
+        assert!(held < std::time::Duration::from_millis(5), "the 1 MB pane held the attempts lock {held:?}");
+        assert!(slowest < std::time::Duration::from_millis(250), "a second pane waited {slowest:?}");
     }
 
     /// T-604: masking reads only the shown part of a command and a margin after it, and a secret

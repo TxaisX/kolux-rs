@@ -148,7 +148,8 @@ fn delete_targets(program: &str, args: &[&str]) -> Option<Vec<String>> {
             continue;
         }
         if let Some(rest) = a.strip_prefix("--") {
-            recursive |= rest == "recursive";
+            // Any unambiguous shortening: `--recu`, `--r`.
+            recursive |= !rest.is_empty() && "recursive".starts_with(rest);
             continue;
         }
         if a.len() > 1 && a.starts_with('-') {
@@ -164,7 +165,7 @@ fn delete_targets(program: &str, args: &[&str]) -> Option<Vec<String>> {
                 targets.extend(value.unwrap_or("").split(',').map(str::to_string));
             } else if name.len() >= 2 && ["include", "exclude", "filter", "credential"].iter().any(|s| s.starts_with(name.as_str())) {
                 i += usize::from(attached.is_none());
-            } else if "recurse".starts_with(name.as_str()) || (name.len() <= 4 && name.contains('r') && name.chars().all(|c| "rfvdi".contains(c))) {
+            } else if "recurse".starts_with(name.as_str()) || (name.contains('r') && name.chars().all(|c| "rfvdi".contains(c))) {
                 recursive = true;
             }
             continue;
@@ -361,6 +362,10 @@ fn collect(text: &str, depth: usize, r: Reading, out: &mut Vec<Seg>, open: &mut 
     }
     for part in split(&outer, r, open) {
         let words = words(&part);
+        if let Some(inner) = env_split(&words) {
+            collect(&inner, depth + 1, r, out, open);
+            continue;
+        }
         let at = program_at(&words, |_| {});
         if at == words.len() {
             continue;
@@ -409,14 +414,50 @@ fn shell_text(text: &str) -> String {
             None => {
                 let continued = matches!(c, b'\\' | b'`') && (next == Some(b'\n') || (next == Some(b'\r') && b.get(i + 2) == Some(&b'\n')));
                 if continued {
-                    out.push(b' ');
+                    // Bash joins `\` + line break to nothing (`--ha\<LF>rd` is `--hard`);
+                    // PowerShell's backtick leaves the words apart.
+                    if c == b'`' {
+                        out.push(b' ');
+                    }
                     i += if next == Some(b'\r') { 3 } else { 2 };
+                    continue;
+                }
+                if c == b'\\' && next.is_some_and(|n| !b"'\"`\\;&|()<>$# \t\r\n".contains(&n)) {
+                    // Bash drops a backslash before an ordinary character: `g\it` is `git`,
+                    // `--forc\e` is `--force`. One before a quote or a shell mark stays below.
+                    i += 1;
                     continue;
                 }
                 if let (b'\\' | b'`', Some(n)) = (c, next) {
                     // An escaped character is text: a quote opens nothing, a `#` starts no comment.
                     out.extend([c, plain(n)]);
                     i += 2;
+                    continue;
+                }
+                if c == b'$' && next == Some(b'\'') {
+                    // Bash's ANSI-C quote `$'..'`: a backslash escapes the next character, `\'`
+                    // included, so its quote cannot swallow what follows.
+                    out.extend(b"$'");
+                    i += 2;
+                    while i < b.len() && b[i] != b'\'' {
+                        if b[i] == b'\\' && i + 1 < b.len() {
+                            out.extend([b'\\', plain(b[i + 1])]);
+                            i += 2;
+                        } else {
+                            out.push(b[i]);
+                            i += 1;
+                        }
+                    }
+                    if i < b.len() {
+                        out.push(b'\'');
+                        i += 1;
+                    }
+                    continue;
+                }
+                if c == b'$' && (b[i..].starts_with(b"${IFS}") || (b[i..].starts_with(b"$IFS") && !b.get(i + 4).is_some_and(|x| x.is_ascii_alphanumeric() || *x == b'_'))) {
+                    // `$IFS` splits words as a space does.
+                    out.push(b' ');
+                    i += if b[i + 1] == b'{' { 6 } else { 4 };
                     continue;
                 }
                 if matches!(c, b'\'' | b'"') && i > 0 && b[i - 1] == b'@' && (next == Some(b'\n') || next == Some(b'\r')) {
@@ -689,6 +730,7 @@ fn inner_command(w: &[String]) -> Option<String> {
             args.get(i + 1).cloned()
         }
         "eval" | "iex" | "invoke-expression" => Some(args.join(" ")).filter(|s| !s.is_empty()),
+        "git" => git_alias(w),
         "cmd" => {
             let i = args.iter().position(|a| {
                 let s = a.trim_start_matches('/').to_ascii_lowercase();
@@ -729,6 +771,69 @@ fn inner_command(w: &[String]) -> Option<String> {
     }
 }
 
+/// A git command that runs an alias defined on its own command line (`git -c alias.p='push -f' p
+/// main`): `git` and the alias expanded in its place, or for a `!` alias the shell
+/// command it runs, with the remaining words after it. Alias names match case-blind, as git's do.
+fn git_alias(w: &[String]) -> Option<String> {
+    let mut aliases: Vec<(String, &str)> = Vec::new();
+    let mut i = 1;
+    while i < w.len() {
+        let a = w[i].as_str();
+        if !a.starts_with('-') {
+            break;
+        }
+        let takes_value = matches!(a, "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path" | "--super-prefix");
+        if a == "-c" {
+            if let Some((key, value)) = w.get(i + 1).and_then(|v| v.split_once('=')) {
+                if let Some(name) = key.to_ascii_lowercase().strip_prefix("alias.") {
+                    aliases.push((name.to_string(), value));
+                }
+            }
+        }
+        i += if takes_value { 2 } else { 1 };
+    }
+    let sub = w.get(i)?.to_ascii_lowercase();
+    let (_, value) = aliases.iter().rev().find(|(n, _)| *n == sub)?;
+    let rest = w[i + 1..].join(" ");
+    Some(match value.strip_prefix('!') {
+        Some(shell) => format!("{shell} {rest}"),
+        None => format!("git {value} {rest}"),
+    })
+}
+
+/// What `env -S` / `--split-string` is given to run, with the words after it, read as a command
+/// of its own (`env -S 'git push -f origin main'`), found at any wrapper step of `program_at`.
+fn env_split(words: &[String]) -> Option<String> {
+    let mut found = None;
+    program_at(words, |k| {
+        if found.is_some() || program(&words[k..]) != "env" {
+            return;
+        }
+        let mut j = k + 1;
+        while let Some(o) = words.get(j) {
+            let value = if o == "-S" || o == "--split-string" {
+                j += 1;
+                words.get(j).cloned()
+            } else if let Some(v) = o.strip_prefix("--split-string=") {
+                Some(v.to_string())
+            } else if o.starts_with("-S") {
+                Some(o[2..].to_string())
+            } else if matches!(o.as_str(), "-u" | "-C" | "--unset" | "--chdir") {
+                j += 2;
+                continue;
+            } else if o.starts_with('-') && o.len() > 1 {
+                j += 1;
+                continue;
+            } else {
+                break;
+            };
+            found = value.map(|v| std::iter::once(v).chain(words[j + 1..].iter().cloned()).collect::<Vec<_>>().join(" "));
+            break;
+        }
+    });
+    found
+}
+
 /// A PowerShell encoded command: base64 of UTF-16LE text.
 fn decode_ps(b64: &str) -> Option<String> {
     use base64::Engine;
@@ -763,12 +868,13 @@ fn force_push(c: &Read, _base: &Base) -> bool {
         let mut positional = 0;
         for a in args {
             if a.starts_with("--") {
-                match a.split_once('=').map_or(a.as_str(), |(k, _)| k) {
-                    "--force" | "--force-with-lease" | "--force-if-includes" | "--mirror" => force = true,
-                    "--delete" => delete = true,
-                    "--all" | "--branches" | "--tags" => all = true,
-                    _ => {}
-                }
+                // git takes any unambiguous shortening of a long option (`--del`, `--force-w`,
+                // `--mirr`); an ambiguous one is refused by git, so reading it as either asks safely.
+                let name = a.split_once('=').map_or(a.as_str(), |(k, _)| k).trim_start_matches('-');
+                let is = |full: &[&str]| !name.is_empty() && full.iter().any(|f| f.starts_with(name));
+                force |= is(&["force", "force-with-lease", "force-if-includes", "mirror"]);
+                delete |= is(&["delete"]);
+                all |= ["all", "branches", "tags"].contains(&name);
             } else if a.starts_with('-') && a.len() > 1 {
                 force |= a.contains('f');
                 delete |= a.contains('d');
@@ -827,11 +933,11 @@ fn git_args<'a>(seg: &'a [String], sub: &str) -> Option<&'a [String]> {
 fn discard(c: &Read, _base: &Base) -> bool {
     c.segments().any(|seg| {
         if let Some(args) = git_args(seg, "reset") {
-            return args.iter().any(|a| a == "--hard");
+            return args.iter().any(|a| a.len() > 2 && a.starts_with("--") && "hard".starts_with(&a[2..]));
         }
         if let Some(args) = git_args(seg, "clean") {
             let dry = args.iter().any(|a| a == "--dry-run" || (a.starts_with('-') && !a.starts_with("--") && a.contains('n')));
-            let force = args.iter().any(|a| a == "--force" || (a.starts_with('-') && !a.starts_with("--") && a.contains('f')));
+            let force = args.iter().any(|a| (a.len() > 2 && a.starts_with("--") && "force".starts_with(&a[2..])) || (a.starts_with('-') && !a.starts_with("--") && a.contains('f')));
             return force && !dry;
         }
         false
@@ -2481,6 +2587,91 @@ mod tests {
         ] {
             assert_eq!(hit(c), None, "runs: {c:?}");
         }
+    }
+
+    /// T-604 review of PR #15, blocking 1: a backslash at a line's end joins the next line with
+    /// nothing between them, as bash does (LF or CRLF); only PowerShell's backtick leaves a space.
+    #[test]
+    fn t604r1_a_backslash_line_join_joins_the_words_with_nothing_between() {
+        let mut missed: Vec<String> = Vec::new();
+        for (c, id) in [
+            ("git reset --ha\\\nrd", "discard"),
+            ("git push -f origin ma\\\nin", "force-push"),
+            ("git reset --ha\\\r\nrd", "discard"),
+            ("git push -f origin ma\\\r\nin", "force-push"),
+            ("git push `\n  --force origin main", "force-push"),
+        ] {
+            if hit(c) != Some(id) {
+                missed.push(format!("should ask ({id}): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 review of PR #15, blocking 2: outside quotes a backslash before an ordinary character
+    /// is dropped, as bash does, so `--forc\e` is `--force` and `g\it` is `git`.
+    #[test]
+    fn t604r2_a_backslash_before_an_ordinary_character_is_dropped() {
+        let mut missed: Vec<String> = Vec::new();
+        for (c, id) in [
+            ("git push --forc\\e origin main", "force-push"),
+            ("g\\it reset --hard", "discard"),
+            ("git re\\set --ha\\rd", "discard"),
+            ("bash -c 'g\\it reset --hard'", "discard"),
+        ] {
+            if hit(c) != Some(id) {
+                missed.push(format!("should ask ({id}): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["find . -name '*.tmp' -exec echo {} \\;", "echo a\\;git status"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 review of PR #15, blocking 3: bash's ANSI-C quote `$'..'` honours `\'`, so a stray
+    /// quote inside one cannot open a quote that hides the next command.
+    #[test]
+    fn t604r3_an_ansi_c_quote_honours_its_escaped_quote() {
+        let cases = [("echo $'\\'' ; git push -f origin main #'", Some("force-push")), ("printf $'it\\'s\\n'; git reset --hard", Some("discard")), ("echo $'a\\'b' && git status", None)];
+        let missed: Vec<String> = cases.iter().filter(|(c, want)| hit(c) != *want).map(|(c, want)| format!("{c:?}: want {want:?}, got {:?}", hit(c))).collect();
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 review of PR #15, should-fix: a `-c alias.X=..` that the command then runs, shortened
+    /// long options, any rm bundle holding r, `env -S`, and `$IFS` as a word break.
+    #[test]
+    fn t604r4_aliases_short_options_rm_bundles_env_split_and_ifs_cannot_hide_a_command() {
+        let mut missed: Vec<String> = Vec::new();
+        for (c, id) in [
+            ("git -c alias.p='push -f' p origin main", "force-push"),
+            ("git -c alias.x='!git reset --hard' x", "discard"),
+            ("git -c alias.X=reset x --hard", "discard"),
+            ("git reset --ha", "discard"),
+            ("git push --del origin main", "force-push"),
+            ("git push --force-w origin main", "force-push"),
+            ("git push --mirr origin", "force-push"),
+            ("rm --recu ~/Documents", "delete"),
+            ("rm -rrrrf ~/Documents", "delete"),
+            ("rm -fRv ~/Documents", "delete"),
+            ("env -S 'git push -f origin main'", "force-push"),
+            ("env --split-string='git reset --hard'", "discard"),
+            ("env -S'git reset --hard' ", "discard"),
+            ("git${IFS}reset${IFS}--hard", "discard"),
+            ("git$IFS'push' -f origin main", "force-push"),
+        ] {
+            if hit(c) != Some(id) {
+                missed.push(format!("should ask ({id}): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["git -c alias.st=status st", "git -c alias.p='push -f' status", "git push --follow-tags origin main", "env -S 'git status'", "echo \"${IFS}\"; git status"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
     }
 
     /// T-604: every rule's own examples still ask behind one to three harmless lines of the kinds

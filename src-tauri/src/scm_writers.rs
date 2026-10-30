@@ -591,12 +591,18 @@ struct Scratch(std::path::PathBuf);
 
 impl Scratch {
     fn new() -> Result<Scratch, String> {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        use std::hash::{BuildHasher, Hasher};
         for _ in 0..16 {
-            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!("kolux-writer-{}-{n}", std::process::id()));
-            // `create_dir`, not `create_dir_all`: a folder that is already there is never used.
-            match std::fs::create_dir(&dir) {
+            // A random name (std's per-hasher random keys), so no other user can guess it ahead.
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+            let dir = std::env::temp_dir().join(format!("kolux-writer-{:016x}", h.finish()));
+            let mut make = std::fs::DirBuilder::new();
+            // Only this user may look inside on Unix (Windows' temp folder is per user already).
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut make, 0o700);
+            // `create`, not `recursive`: a folder that is already there is never used.
+            match make.create(&dir) {
                 Ok(()) => return Ok(Scratch(dir)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(format!("Could not make a folder for the writer: {e}")),
