@@ -69,6 +69,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [release-ci] 2026-10-30 · Open: live proofs. APP-025 box 2 (a downloaded update installs and Kolux comes back), APP-059
   box 1 and APP-060 box 1 (a real release run) need the CI billing block lifted (X-proc.2) and the signing secrets; APP-043
   (Restart Kolux and both safe-graphics restarts come back) needs one check on the installed Windows build (T-592).
+- [release-ci] 2026-10-30 · Follow-ups from the PR #9 review, not built: (1) sign in a separate job from a
+  downloaded artifact; today the sign step runs in the build job, next to node_modules the build step's install scripts
+  wrote. (2) scripts/license-check.mjs: anchor the MIT and BSD-2 patterns on the full licence text. (3)
+  richCodeColourTime.test.ts: its 500 ms limit needs more headroom on CI runners.
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder

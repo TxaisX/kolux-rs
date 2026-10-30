@@ -409,6 +409,9 @@ fn restart_now(app: &AppHandle) -> Result<(), String> {
     if let Err(e) = update.install(&bytes) {
         // Failed straight away: stand the watchdog down, keep the app usable, give the real cause.
         updates.watchdog.stand_down();
+        // T-592: the before-exit hook may have handed off already; the app runs on, so its job takes
+        // its children back (APP-053).
+        crate::procs::take_back();
         if let Ok(store) = app.state::<Mutex<Store>>().lock() {
             let _ = store.set(care::KEY_ATTEMPT, "");
         }
@@ -569,6 +572,9 @@ mod tests {
         let src = include_str!("update.rs").replace("\r\n", "\n"); // a Windows checkout is CRLF
         let code = &src[..src.find("#[cfg(test)]").unwrap()];
         assert!(code.contains("|| crate::procs::hand_off(false)"), "the updater's before-exit hook hands off");
+        let failed = &code[code.find("if let Err(e) = update.install(&bytes)").unwrap()..];
+        let failed = &failed[..failed.find("return Err(cause);").unwrap()];
+        assert!(failed.contains("crate::procs::take_back();"), "an install that did not start takes the hand-off back");
         assert_eq!(code.matches("app.restart()").count(), code.matches("crate::procs::hand_off(true);\n    app.restart()").count(), "a restart that skips the hand-off dies with the job");
     }
 

@@ -160,3 +160,33 @@ Full suite: cargo test --tests --no-fail-fast -- --test-threads=3
 STILL PENDING: the live Windows check. On the installed build, Settings > Restart Kolux, Restart in safe
 graphics, and the choice to try hardware graphics again each bring Kolux back (APP-043); a downloaded update installs and
 Kolux comes back on the new version (APP-025 box 2, needs CI billing and the signing secrets).
+
+PR #9 REVIEW FIX 2026-10-30: a hand-off the app survives is taken back.
+If the updater's before-exit hook ran hand_off(false) but starting the installer then failed, the app kept
+running with silent breakaway still set, so everything it started afterwards escaped the job (APP-053).
+procs::take_back() clears the flag again (Job::keep_children on Windows; off Windows only the state flag)
+and is called in update.rs's install Err branch. app.restart() never returns, so no other path survives a hand-off.
+$ grep -n 'take_back' src-tauri/src/update.rs src-tauri/src/procs.rs
+  src-tauri/src/update.rs:414:        crate::procs::take_back();
+  src-tauri/src/update.rs:577:        assert!(failed.contains("crate::procs::take_back();"), "an install that did not start takes the hand-off back");
+  src-tauri/src/procs.rs:157:pub fn take_back() {
+  src-tauri/src/procs.rs:165:/// True between `hand_off` and `take_back`.
+  src-tauri/src/procs.rs:673:        take_back();
+  src-tauri/src/procs.rs:676:        take_back();
+$ cargo check --target x86_64-pc-windows-gnu --all-targets      -> Finished, 0 warnings, exit 0
+$ cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings      -> Finished, exit 0
+$ cargo test --lib -- procs:: update:: --test-threads=3
+  running 31 tests
+  test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 2474 filtered out; finished in 0.25s
+$ cargo test --lib -- procs:: t592 --test-threads=3
+  running 7 tests
+  test procs::tests::kill_tree_on_unix_ends_option_parsing_and_never_signals_everything ... ok
+  test procs::tests::t592_a_hand_off_the_app_survives_is_taken_back ... ok
+  test procs::tests::t592_a_restarted_copy_waits_only_for_the_copy_that_started_it ... ok
+  test procs::tests::term045_a_process_running_a_child_has_children_and_the_child_has_none ... ok
+  test update::tests::t592_the_installer_leaves_the_app_job_last_and_only_when_it_will_start ... ok
+  test procs::tests::orch058_kill_tree_ends_a_shell_and_the_program_it_started ... ok
+  test procs::tests::orch058_a_gone_pid_is_never_stuck_while_a_live_or_unknowable_one_is ... ok
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2498 filtered out; finished in 0.25s
+Windows-only, compiled not run here: t592_taking_the_hand_off_back_restores_the_app_job (flags back to
+KILL_ON_JOB_CLOSE | BREAKAWAY_OK).

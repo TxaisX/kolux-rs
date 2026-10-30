@@ -11,6 +11,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: CI only reads the repository.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   # A superseded pull request run is wasted minutes; a main run is never cancelled.

@@ -7,6 +7,7 @@
 //! however the app ends; one job per pane ends that pane's shell and everything it launched when
 //! the pane closes, and no other pane's.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -137,12 +138,34 @@ pub const RESTART_WAIT: Duration = Duration::from_secs(10);
 /// so the job's kill-on-close no longer takes it down; everything already running stays in the job
 /// and still ends with the app (APP-053). With `restart`, the new copy learns which copy to wait for.
 pub fn hand_off(restart: bool) {
+    HANDED_OFF.store(true, Ordering::SeqCst);
     if let Some(Some(app)) = APP.get() {
         let _ = app.job.0.let_children_leave();
     }
     if restart {
         std::env::set_var(RESTART_OF, std::process::id().to_string());
     }
+}
+
+/// Whether the app has handed off and not taken it back: what it starts now leaves the app job.
+static HANDED_OFF: AtomicBool = AtomicBool::new(false);
+
+/// T-592: the hand-off did not end the app after all (the installer did not start), so the app
+/// keeps running: the app job takes its children back, and everything the app starts from now on
+/// is a member again and ends with the app (APP-053). Clears what a restart hand-off left for the
+/// next copy too. Off Windows only the state flag changes.
+pub fn take_back() {
+    HANDED_OFF.store(false, Ordering::SeqCst);
+    if let Some(Some(app)) = APP.get() {
+        let _ = app.job.0.keep_children();
+    }
+    std::env::remove_var(RESTART_OF);
+}
+
+/// True between `hand_off` and `take_back`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn handed_off() -> bool {
+    HANDED_OFF.load(Ordering::SeqCst)
 }
 
 /// The copy a restart started this one from, as `RESTART_OF`'s value names it; never this process
@@ -306,7 +329,10 @@ mod imp {
         /// T-592: from now on what the job's members start is left out of the job (silent breakaway);
         /// the members stay in. Kolux's jobs carry flags only, so the other limits stay zero.
         pub fn let_children_leave(&self) -> Result<(), String> {
-            let flags = self.limit_flags()? | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+            self.set_flags(self.limit_flags()? | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)
+        }
+
+        fn set_flags(&self, flags: u32) -> Result<(), String> {
             // SAFETY: the handle is open; the struct is zeroed apart from the flags and passed with
             // its own length, as SetInformationJobObject requires.
             unsafe {
@@ -317,6 +343,11 @@ mod imp {
                 }
             }
             Ok(())
+        }
+
+        /// T-592: undoes `let_children_leave`: what the members start from now on is a member again.
+        pub fn keep_children(&self) -> Result<(), String> {
+            self.set_flags(self.limit_flags()? & !JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)
         }
 
         /// The job's limit flags, read back from the kernel.
@@ -411,6 +442,10 @@ mod imp {
         }
 
         pub fn let_children_leave(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn keep_children(&self) -> Result<(), String> {
             Ok(())
         }
     }
@@ -629,6 +664,19 @@ mod tests {
         assert_eq!(restarted_from(None, 7), None, "a normal start waits for nothing");
     }
 
+    /// T-592: a hand-off the app survives (the installer did not start) is taken back, so what the
+    /// app starts afterwards ends with it again (APP-053), and no restart marker is left behind.
+    #[test]
+    fn t592_a_hand_off_the_app_survives_is_taken_back() {
+        hand_off(false);
+        assert!(handed_off());
+        take_back();
+        assert!(!handed_off(), "the app's children are members again");
+        assert!(std::env::var(RESTART_OF).is_err());
+        take_back();
+        assert!(!handed_off(), "taking back twice is harmless");
+    }
+
     /// T-592: after the hand-off, a program a member of the app job starts is left out of the job
     /// (silent breakaway), so the update installer and a restarted copy outlive the app; the members
     /// stay in and still end with the job, and kill-on-close and breakaway OK are kept. A fresh job
@@ -652,5 +700,16 @@ mod tests {
         // the dead shell's id as its parent's (it ends by itself within ten seconds).
         assert_eq!(has_children(shell.id()), Some(true), "the program started after the hand-off outlives the job");
         let _ = shell.wait();
+    }
+
+    /// T-592: taking the hand-off back clears silent breakaway and keeps kill-on-close and breakaway OK.
+    #[cfg(windows)]
+    #[test]
+    fn t592_taking_the_hand_off_back_restores_the_app_job() {
+        use windows_sys::Win32::System::JobObjects::{JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
+        let job = Job::app().expect("a job of the app's kind is created");
+        job.0.let_children_leave().expect("hand off");
+        job.0.keep_children().expect("take back");
+        assert_eq!(job.0.limit_flags(), Ok(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK));
     }
 }
