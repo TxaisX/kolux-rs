@@ -9,6 +9,7 @@ import { defaultChoices, DEFAULT_EFFORT_KEY, DEFAULT_MODEL_KEY, seatDefault } fr
 import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
 import { Segmented } from "./GeneralPage";
 import { useSettings } from "./useSettings";
+import { settingsDiff } from "./saveChanged";
 import { GeneratedTitlesCard } from "../status/GeneratedTitlesCard";
 import { useDraft } from "./useDraft";
 import TeamsModeCard from "../launch/TeamsModeCard";
@@ -26,8 +27,8 @@ type StartLine = { args: string[]; program: string | null };
 const optionsOf = (s: Record<string, unknown>, id: string): Options => ((s[OPTIONS_FIELD] as Record<string, Options> | undefined)?.[id] ?? {}) as Options;
 
 /** A text field kept as a draft while typing and saved when it loses focus. */
-function Draft({ label, value, multi, placeholder, onSave }: { label: string; value: string; multi?: boolean; placeholder: string; onSave: (v: string) => void }) {
-  const { props: typing } = useDraft(value, (text) => Promise.resolve(onSave(text))); // SET-036: saves after a pause, on leaving, on page change
+function Draft({ label, value, multi, placeholder, onSave }: { label: string; value: string; multi?: boolean; placeholder: string; onSave: (v: string) => Promise<boolean> }) {
+  const { props: typing } = useDraft(value, onSave); // SET-036: saves after a pause, on leaving, on page change
   const props = { "aria-label": label, className: multi ? "field multi" : "field", placeholder, ...typing };
   return (
     <label className="agent-field">
@@ -87,7 +88,7 @@ export default function AgentsPage() {
   const { settings, error, save: write } = useSettings();
   const found = useContext(SearchFolds); // SET-007: a search that matches a launch line opens its fold
   const [written, setWritten] = useState(0);
-  const save = (patch: Record<string, unknown>) => write(patch).then(() => setWritten((n) => n + 1));
+  const save = (patch: Record<string, unknown>) => write(patch).then((ok) => (setWritten((n) => n + 1), ok));
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const teamsHost = useTeamsHost();
   const [looking, setLooking] = useState(false);
@@ -202,7 +203,8 @@ export default function AgentsPage() {
           return (
             <div key={a.id} className="agent-row" data-agent={a.id}>
               <label className="agent-on">
-                <input type="checkbox" role="switch" checked={on} onChange={(e) => void save(switchAgent(settings, a.id, e.target.checked)).then(() => invoke("agent_hooks_sync")).then(synced, syncFailed)} />
+                {/* T-598: only the keys the switch changes; the page's copy can be older than the disk */}
+                <input type="checkbox" role="switch" checked={on} onChange={(e) => void save(settingsDiff(settings, switchAgent(settings, a.id, e.target.checked)).set).then(() => invoke("agent_hooks_sync")).then(synced, syncFailed)} />
                 <span className="agent-name">{a.name}</span>
                 {a.id === def && on && <span className="conn-chip">default</span>}
               </label>

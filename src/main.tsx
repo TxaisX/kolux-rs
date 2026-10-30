@@ -9,9 +9,9 @@ import { stampLook } from "./settings/general";
 import { applyLanguage, LANGUAGE_FIELD } from "./language";
 import { registerBundledPacks } from "./i18n/packs";
 import { applyZoom, ZOOM_FIELD } from "./settings/zoom";
-import { followText } from "./terminal/text";
+import { applyText, followText } from "./terminal/text";
 import { installMenuWheel } from "./settings/menuWheel";
-import { LAYOUT_FIELD, restoreAsks, restoreLayout, stillThere } from "./terminal/layout";
+import { LAYOUT_FIELD, restoreAsks, restoreLayout, stillThere, type SavedLayout } from "./terminal/layout";
 import { sessionOrder } from "./sessions/restoreOrder";
 import "./styles.css";
 import TowerWindow from "./tower/TowerWindow";
@@ -34,25 +34,55 @@ async function start() {
   const loadApp = import("./App");
   // FIX-6 (council d2 AFTER 3): the load is awaited much later; a fast failure is already handled by then (the await below still throws).
   loadApp.catch(() => {});
-  const saved = await Promise.race([
-    invoke<Record<string, unknown>>("get_settings").catch(() => null),
-    new Promise<null>((r) => setTimeout(() => r(null), 1500)),
-  ]);
+  const reading = invoke<Record<string, unknown>>("get_settings").catch(() => null);
+  const saved = await Promise.race([reading, new Promise<null>((r) => setTimeout(() => r(null), 1500))]);
+  // SET-017 (T-210-c): the bundled language packs are known to the lookup (fetched only when their language is needed).
+  registerBundledPacks();
+  // SET-022 / SET-025: terminals open with the saved text settings and follow every save.
+  followText(saved);
+  const first = await settle(saved);
+  const { default: App } = await loadApp;
+  const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
+  // VIEW-107 (T-069-b): App is told whether the saved tabs are back, so a slow start saves no layout over
+  // them; T-597: the key gives a late restore a new App, whose tabs start from the saved layout.
+  const draw = (s: Settled, read: boolean) =>
+    root.render(
+      <React.StrictMode>
+        <ScreenBoundary>
+          <App key={String(read)} initial={s.initial} layout={s.layout} read={read} />
+        </ScreenBoundary>
+      </React.StrictMode>,
+    );
+  draw(first, saved !== null);
+  requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));
+  // T-597 (F05-app-shell-launch.2): a start that timed out keeps waiting; when the settings answer, the
+  // same steps run on them and the window is drawn again with the saved tabs back. A tab opened in the
+  // meantime closes then: it was never saved.
+  if (saved === null)
+    void reading
+      .then(async (late) => {
+        if (!late) return; // never read: the window stays as drawn, writing no layout
+        applyText(late);
+        draw(await settle(late), true);
+      })
+      .catch(() => {});
+}
+
+type Settled = { initial: Record<string, unknown>; layout: SavedLayout | null };
+
+/** What the window takes from the settings before it draws: the look, the language, the zoom and the
+ *  saved tabs (none when `saved` is null: the read timed out or failed). */
+async function settle(saved: Record<string, unknown> | null): Promise<Settled> {
   // SET-037 / T-418: the look and a missing mode are written down on the first start (New, Dark),
   // and only from settings really read: after the timeout (`saved` null) nothing is written.
   const stamped = saved && stampLook(saved);
   if (stamped) void saveChanged(saved, stamped).catch(() => {});
   if (saved) applyAppearance(readAppearance(stamped || saved));
-  // SET-017 (T-210-c): the bundled language packs are known to the lookup (fetched only when their language is needed).
-  registerBundledPacks();
   // SET-017: the saved language is in force before the first frame draws.
   applyLanguage(saved?.[LANGUAGE_FIELD]);
   // SET-019: and so is the saved interface zoom.
   applyZoom(saved?.[ZOOM_FIELD]);
-  // SET-022 / SET-025: terminals open with the saved text settings and follow every save.
-  followText(saved);
-  // PROJ-067: the saved tabs come back, less those whose folder is gone. VIEW-107 (T-069-b): App is
-  // told whether the settings answered, so a slow start saves no layout over the saved tabs.
+  // PROJ-067: the saved tabs come back, less those whose folder is gone.
   let layout = restoreLayout((stamped || saved || {})[LAYOUT_FIELD]);
   if (layout) {
     const dirs = [...new Set([...layout.panes.map((p) => p.cwd), layout.activeDir].filter((d): d is string => d !== null))];
@@ -71,15 +101,7 @@ async function start() {
       else p.resumed = false;
     }
   }
-  const { default: App } = await loadApp;
-  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-    <React.StrictMode>
-      <ScreenBoundary>
-        <App initial={stamped || saved || {}} layout={layout} read={saved !== null} />
-      </ScreenBoundary>
-    </React.StrictMode>,
-  );
-  requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));
+  return { initial: stamped || saved || {}, layout };
 }
 
 installMenuWheel(document);

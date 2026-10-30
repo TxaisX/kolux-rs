@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 682 / 731 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 1 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 704 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -34,6 +34,45 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
+- [reliability] 2026-10-30 · Open: live Windows checks on the installed build. T-565 (round 1 review fixed): Escape
+  in the Usage Share card or the Send feedback box closes only that box (SettingsPage.tsx:318-334, 7 tests in
+  SettingsPage.escape.test.ts); check Ctrl+, from a terminal then Escape, and Escape in Share and Send feedback.
+  T-597 (round 1 review fixed): while a slow start waits, App hands out pane keys from 1_000_000 (applied from
+  evidence/reliability-App.patch), so a wait tab never takes over a saved tab's running terminal;
+  main.slowStart.test.ts tests 4 and 5 pass with it; check a start whose settings read takes over 1.5 s.
+- [reliability] 2026-10-30 · Open (T-597 follow-up, from the PR #8 review): if two slow starts happen in a row within one
+  run of the terminal service, a wait tab could reuse key 1000000 and attach to the previous run's leftover terminal. Fix
+  later: kill the terminals of unsaved wait tabs at quit.
+- [reliability] 2026-10-30 · Known flake: src/settings/__cards__/SET-006-link.test.ts "terminal-first" fails on the
+  untouched base 025eda2 on the shared Linux machine (its until() waits about 400 ms for the Shortcuts page to load).
+- [reliability] 2026-10-30 · Follow-ups not built (need new Rust): (1) T-599: a crash_note(summary) command in
+  src-tauri/src/resources/recovery.rs that calls note_crash, registered in lib.rs and called from a componentDidCatch
+  in src/recovery/ScreenBoundary.tsx with crashText(error), so Help > Report Crash can show a crash nobody reported
+  before the reload. (2) T-598 audit: agent_creds.rs, projects.rs set_place, claude_key.rs and the `kolux agent hooks`
+  CLI should send the settings-saved broadcast after they write settings.
+- [editor] 2026-10-30 · Open: files with mixed CRLF/LF line endings. Today, when such a file first
+  opens, its LF lines show joined to the next line. Pick one: (a) show every line separately and save
+  the file exactly as it was; (b) show every line separately and convert the whole file to one line
+  ending on the next save. Nothing changes until you pick (T-603).
+- [updates] 2026-10-30 · Open: four steps make every installed copy update itself (DT-R39). (1) Create
+  the public repository TxaisX/kolux-rs-releases with a README (Claude's GitHub connection cannot create
+  repositories). (2) Give the Claude GitHub App access to it. (3) Lift the GitHub Actions billing block
+  (Settings > Billing and plans). (4) Add the repository secrets KOLUX_RELEASE_KEY (the text of
+  ~/.kolux-rs/release-signing/kolux-rs.key), KOLUX_RELEASE_PUBKEY (its .pub), KOLUX_RELEASE_KEY_PASSWORD
+  (when it has one) and KOLUX_RELEASES_TOKEN (a fine-grained token: contents read and write on
+  kolux-rs-releases only). Then the integrator runs the release job for v0.1.0 and v0.1.1 (T-622).
+- [release-ci] 2026-10-30 · Question (optional, X-proc.13): should CI fail on every new high-severity library advisory
+  (`pnpm audit --audit-level high` added to the ci.yml checks)? It is a one-line change, but it can turn builds red without
+  any code change. Not added; nothing changes until you say yes.
+- [release-ci] 2026-10-30 · Optional repository setting: protect the release job with a GitHub environment that needs a
+  reviewer's approval before it signs and publishes (GitHub repository Settings > Environments). Only you can set it.
+- [release-ci] 2026-10-30 · Open: live proofs. APP-025 box 2 (a downloaded update installs and Kolux comes back), APP-059
+  box 1 and APP-060 box 1 (a real release run) need the CI billing block lifted (X-proc.2) and the signing secrets; APP-043
+  (Restart Kolux and both safe-graphics restarts come back) needs one check on the installed Windows build (T-592).
+- [release-ci] 2026-10-30 · Follow-ups from the PR #9 review, not built: (1) sign in a separate job from a
+  downloaded artifact; today the sign step runs in the build job, next to node_modules the build step's install scripts
+  wrote. (2) scripts/license-check.mjs: anchor the MIT and BSD-2 patterns on the full licence text. (3)
+  richCodeColourTime.test.ts: its 500 ms limit needs more headroom on CI runners.
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
@@ -81,6 +120,13 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 ## Decisions made for Txais
 
+- 2026-10-30 · [release-ci] T-588 · CI release signing acts only on the build this run's `--build-only` recorded, never on the newest output folder; a run on an already-released main ends with "nothing was built, nothing to sign".
+- 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
+- 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters is left untouched, and the installer log says to use Settings > CLI > Register (NSIS string limit). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
+- 2026-10-30 · [editor] T-601 · A click on a collapsible section's heading (<summary>) keeps its normal action, so the section still opens. Mermaid's protected settings also cover fontFamily, altFontFamily and htmlLabels, so a diagram cannot change them. A note's inline style attributes are dropped.
+- 2026-10-30 · [editor] T-602 · A note whose table has a row holding more cells than its header opens in source view, with the banner saying why.
+- 2026-10-30 · [editor] T-603 · A reload switches a tab's line ending only when the new text uses one line ending throughout; text that mixes them keeps the tab's own. A second tab of an open file takes the first tab's line ending.
+- 2026-10-30 · [editor] T-317 · A followed log waits while another tab of the same file has unsaved edits.
 - 2026-10-12 · [release] T-105 · kolux-dev terminal list, show, create, split, rename, switch (focus) and close now work against the open window; new terminals stay in the background unless asked, close confirms each program stopped and leaves the caller's own terminal open, and terminal stop is a hidden alias (DT-R37).
 - 2026-10-12 · [release] T-104-a · A pane with no program starts the best shell that will run (PowerShell 7, Windows PowerShell, then the command prompt in UTF-8), the header names the one that started, panes no longer inherit Kolux's own build variables, and a folder that is gone, unplugged or a drive root (for agents) gets a message (DT-R36).
 - 2026-10-12 · [release] T-103-a · Terminals you are not looking at stay alive rather than being parked to save memory, so they come back exactly as left (DT-R35).

@@ -307,17 +307,35 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
   // USAGE 012: opening the Usage page counts as having tried the usage feature (Explore Kolux).
   useEffect(() => void (page === "usage" && markGuide("tried", "usage").catch(() => {})), [page]);
   useScrollTo(target?.section, page, n);
+  // T-565 (VIEW-009): Settings takes the keyboard when it opens and gives it back on close. Left in the
+  // terminal it covers, Escape went to the program and xterm stopped it before this listener.
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const back = document.activeElement as HTMLElement | null;
+    root.current?.focus();
+    return () => back?.focus();
+  }, []);
+  // An Escape that belongs to another dialog is that dialog's even when it lets the Escape go on (the
+  // Usage Share card, the Send feedback box): a shown modal inside Settings, or a dialog around the key.
+  // Not every modal on the page: the panes under Settings stay mounted with their own alertdialogs.
+  // Registered once, so it runs before the Share card's window listener, while that card is still drawn.
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      const modal = [...(root.current?.querySelectorAll('[aria-modal="true"]') ?? [])].some((d) => !d.closest("[hidden]"));
+      const owner = (e.target as Element | null)?.closest?.('[role="dialog"],[role="alertdialog"]');
+      if (modal || (owner && owner !== root.current)) return;
+      close.current();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose]);
+  }, []);
   const repo = page.startsWith("repo:") ? projects.find((p) => `repo:${p.id}` === page) : undefined;
   const title = repo ? repo.name : page in PAGES ? PAGES[page as keyof typeof PAGES] : "";
   return (
-    <div className="settings" role="dialog" aria-label="Settings">
+    <div ref={root} className="settings" role="dialog" aria-label="Settings" tabIndex={-1} style={{ outline: "none" }}>
       <nav className="settings-nav" aria-label="Settings pages">
         <div className="settings-title">Settings</div>
         <input

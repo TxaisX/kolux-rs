@@ -8,6 +8,19 @@ import { hoverControls, menuEdits, type Control, type Geo } from "./tableHover";
 
 const SIZE = 18;
 
+/** The cell menu closes on a press anywhere outside it (the menu stops its own presses) and on Escape.
+ *  Presses are read as pointerdown: Tauri's drag script stops the mousedown of a press on the top bar,
+ *  which is a drag region end to end (T-620), so a mousedown listener here would miss those presses. */
+export function watchMenuClose(win: Pick<Window, "addEventListener" | "removeEventListener">, close: () => void): () => void {
+  const esc = (e: KeyboardEvent) => e.key === "Escape" && close();
+  win.addEventListener("pointerdown", close);
+  win.addEventListener("keydown", esc);
+  return () => {
+    win.removeEventListener("pointerdown", close);
+    win.removeEventListener("keydown", esc);
+  };
+}
+
 /** A table's box and its row and column edges in screen pixels. */
 function geoOf(el: HTMLElement): Geo | null {
   const t = el as HTMLTableElement;
@@ -69,17 +82,7 @@ export default function TableControls({ editor }: { editor: LexicalEditor | null
     };
   }, [editor]);
 
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", esc);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", esc);
-    };
-  }, [menu]);
+  useEffect(() => (menu ? watchMenuClose(window, () => setMenu(null)) : undefined), [menu]);
 
   const run = (e: Parameters<typeof runTableEdit>[1]) => {
     if (editor) runTableEdit(editor, e);
@@ -101,7 +104,7 @@ export default function TableControls({ editor }: { editor: LexicalEditor | null
           </button>
         ))}
       {menu && (
-        <div className="table-ctx" role="menu" aria-label="Table" style={{ left: Math.min(menu.x, window.innerWidth - 170), top: Math.min(menu.y, window.innerHeight - 200) }} onMouseDown={(e) => (e.stopPropagation(), e.preventDefault())}>
+        <div className="table-ctx" role="menu" aria-label="Table" style={{ left: Math.min(menu.x, window.innerWidth - 170), top: Math.min(menu.y, window.innerHeight - 200) }} onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => (e.stopPropagation(), e.preventDefault())}>
           {menu.items.map((it) => (
             <button key={it.label} type="button" role="menuitem" className="table-ctx-item" disabled={it.disabled} onClick={() => run(it.edit)}>
               {it.label}
