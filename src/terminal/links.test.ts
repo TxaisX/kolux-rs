@@ -1,6 +1,8 @@
 // TERM-092 / TERM-093: links and file paths found in terminal text; wrapped rows joined; paths resolved.
 import { describe, expect, it } from "vitest";
-import { clickTarget, findLinks, fromFileUrl, hintFor, LINK_SCAN_CAP, linkFor, rangeOf, resolvePath, spanOf, type Row } from "./links";
+import { Terminal } from "@xterm/xterm";
+import { applyKoluxUnicode } from "../shell/unicodeWidth";
+import { clickTarget, findLinks, fromFileUrl, handlesOn, hintFor, LINK_SCAN_CAP, linkFor, linksIn, rangeOf, resolvePath, spanOf, type Range, type Row } from "./links";
 
 const targets = (s: string) => findLinks(s).map((f) => `${f.kind}:${f.target}${f.line !== undefined ? `@${f.line}` : ""}${f.column !== undefined ? `,${f.column}` : ""}`);
 
@@ -10,7 +12,7 @@ describe("TERM-095 link detection never freezes on huge lines", () => {
     const text = "x".repeat(cols - 20) + " https://a.b/in-a-huge-line";
     const rowCount = Math.ceil((1 << 20) / cols); // one logical line of 1 MB, wrapped
     let reads = 0;
-    const row = (y: number): Row | undefined => (y >= 0 && y < rowCount ? (reads++, { text, isWrapped: y > 0 }) : undefined);
+    const row = (y: number): Row | undefined => (y >= 0 && y < rowCount ? (reads++, { cells: text, wrapped: y > 0 }) : undefined);
     const t0 = performance.now();
     for (const y of [0, 1, 2500, rowCount - 1]) expect(findLinks(spanOf(row, y, cols).text)).toEqual([]);
     expect(performance.now() - t0).toBeLessThan(50);
@@ -34,11 +36,60 @@ describe("TERM-095 link detection never freezes on huge lines", () => {
   });
   it("a long line under the cap is still joined whole and scanned", () => {
     const cols = 80;
-    const rows: Row[] = Array.from({ length: 12 }, (_, i) => ({ text: i === 11 ? "end https://a.b/x" : "y".repeat(cols), isWrapped: i > 0 }));
+    const rows: Row[] = Array.from({ length: 12 }, (_, i) => ({ cells: i === 11 ? "end https://a.b/x" : "y".repeat(cols), wrapped: i > 0 }));
     const span = spanOf((y) => rows[y], 5, cols);
     expect(span.first).toBe(0);
     expect(findLinks(span.text).map((f) => f.target)).toEqual(["https://a.b/x"]);
     expect(spanOf((y) => rows[y], 5, cols, 10 * cols).text).toBe(""); // the same line past a smaller cap: no scan
+  });
+});
+
+describe("T-586 link click areas count screen cells, not string positions", () => {
+  /** A real xterm buffer, with Kolux's Unicode 16 widths (an emoji such as U+2705 and CJK take two cells), holding `text`. */
+  const screen = async (text: string, cols: number) => {
+    const term = new Terminal({ cols, rows: 6, allowProposedApi: true });
+    applyKoluxUnicode(term);
+    await new Promise<void>((done) => term.write(text, done));
+    return term;
+  };
+  /** What the cells under a range show, row after row: what an underline marks and a Ctrl+click hits. */
+  const under = (term: Terminal, r: Range) => {
+    let s = "";
+    for (let y = r.start.y; y <= r.end.y; y++) {
+      const l = term.buffer.active.getLine(y - 1)!;
+      const to = y === r.end.y ? r.end.x - 1 : term.cols - 1;
+      for (let x = y === r.start.y ? r.start.x - 1 : 0; x <= to; x++) s += l.getCell(x)?.getChars() ?? "";
+    }
+    return s;
+  };
+  const shown = (term: Terminal, y = 0) => linksIn(term.buffer.active, y, term.cols).map(({ f, range }) => [f.target, under(term, range)]);
+
+  it("a web link and a file path after a check mark and Chinese text sit on their own cells", async () => {
+    const term = await screen("\u2705 \u5df2\u5b8c\u6210 see https://example.com/pull/7 and src/a.ts:3", 80);
+    expect(shown(term)).toEqual([
+      ["https://example.com/pull/7", "https://example.com/pull/7"],
+      ["src/a.ts", "src/a.ts:3"],
+    ]);
+  });
+
+  it("an emoji sequence (a ZWJ family, a skin tone) before a link moves nothing", async () => {
+    const term = await screen("\u{1F469}\u200D\u{1F4BB} \u{1F44D}\u{1F3FD} https://a.example/x", 60);
+    expect(shown(term)).toEqual([["https://a.example/x", "https://a.example/x"]]);
+  });
+
+  it("a link wrapped after wide characters opens whole, with its cells on both rows", async () => {
+    // 11 wide characters fill 22 cells of a 40-cell row; the address runs over onto the next row.
+    const term = await screen("\u6211\u5df2\u7ecf\u521b\u5efa\u4e86\u62c9\u53d6\u8bf7\u6c42\uff1ahttps://github.com/o/r/pull/123", 40);
+    expect(term.buffer.active.getLine(1)?.isWrapped).toBe(true);
+    for (const y of [0, 1]) expect(shown(term, y), `asked for row ${y}`).toEqual([["https://github.com/o/r/pull/123", "https://github.com/o/r/pull/123"]]);
+  });
+
+  it("a term-N handle after a check mark is a link on its own cells", async () => {
+    const term = await screen("\u2705 \u4efb\u52a1 sent to term-3, then term-12.", 60);
+    expect(handlesOn(term.buffer.active, 0, term.cols).map(({ handle, range }) => [handle, under(term, range)])).toEqual([
+      ["term-3", "term-3"],
+      ["term-12", "term-12"],
+    ]);
   });
 });
 
@@ -53,18 +104,18 @@ describe("TERM-092 clickable web links", () => {
 
   it("a link wrapped over rows is read as one: the joined span, then cell ranges back", () => {
     const rows: Row[] = [
-      { text: "unrelated", isWrapped: false },
-      { text: "see https://example.com/", isWrapped: false },
-      { text: "very/long/path.html", isWrapped: true },
-      { text: "next", isWrapped: false },
+      { cells: "unrelated", wrapped: false },
+      { cells: "see https://example.com/", wrapped: false },
+      { cells: "very/long/path.html", wrapped: true },
+      { cells: "next", wrapped: false },
     ];
     const span = spanOf((y) => rows[y], 2, 24);
-    expect(span).toEqual({ first: 1, text: "see https://example.com/very/long/path.html" });
+    expect(span).toMatchObject({ first: 1, text: "see https://example.com/very/long/path.html" });
     const [f] = findLinks(span.text);
     expect(f.target).toBe("https://example.com/very/long/path.html");
-    expect(rangeOf(f.start, f.end, span.first, 24)).toEqual({ start: { x: 5, y: 2 }, end: { x: 19, y: 3 } });
+    expect(rangeOf(span, f.start, f.end, 24)).toEqual({ start: { x: 5, y: 2 }, end: { x: 19, y: 3 } });
     expect(spanOf((y) => rows[y], 1, 24).first).toBe(1); // asked for the first row: the same span
-    expect(spanOf((y) => rows[y], 3, 24)).toEqual({ first: 3, text: "next" });
+    expect(spanOf((y) => rows[y], 3, 24)).toMatchObject({ first: 3, text: "next" });
   });
 
   it("the click goes to the system browser unless Open-in-Kolux is on; Shift always means the browser; no modifier, no click", () => {
