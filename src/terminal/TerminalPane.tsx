@@ -323,7 +323,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   }, [flash]);
   // TERM-107: a restored pane wears a mark in its header until the first key or click in it; an agent
   // pane whose start line does not resume its conversation is marked as restored without resume.
-  const [restoredMark, setRestoredMark] = useState<string | null>(null);
+  // T-566: decided from the props at the first paint, not after the restore's first IPC answers.
+  const [restoredMark, setRestoredMark] = useState<string | null>(restored ? (resumed === false ? "restored without resume" : "restored") : null);
   // TERM-111: a shell that died (non-zero exit) stays with an overlay offering a restart in the same
   // pane; restart() re-runs the start line, or opens a plain shell, keeping the buffer.
   const [died, setDied] = useState<number | null>(null);
@@ -465,6 +466,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     applyKoluxUnicode(term); // T-308 / TERM-104: Unicode 16 widths and emoji sequences (xterm alone knows Unicode 6)
     term.open(el);
     termRef.current = term;
+    // TERM-107 (T-566): the first key or click from mount on clears the restored mark; no restore step runs first.
+    const pane = box.current;
+    const unmark = () => {
+      setRestoredMark(null);
+      unkey.dispose();
+      pane?.removeEventListener("mousedown", unmark);
+    };
+    const unkey = term.onKey(unmark);
+    pane?.addEventListener("mousedown", unmark);
     // T-325-c (CHAT-010/011): the chat reads the running turn's reply off this terminal.
     const unturn = number !== undefined ? registerTurnSource(number, xtermSource(term)) : () => {};
     // STAT-033: the title the program sets stands in for its state while no hook reports.
@@ -994,14 +1004,6 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         let keepInView = false;
         let replayedOld = false;
         if (restored) {
-          setRestoredMark(resumed === false ? "restored without resume" : "restored");
-          const unmark = () => {
-            setRestoredMark(null);
-            key.dispose();
-            box.current?.removeEventListener("mousedown", unmark);
-          };
-          const key = term.onKey(unmark);
-          box.current?.addEventListener("mousedown", unmark);
           // APP-052: read once the service linked, which first adds what a kept terminal printed with no window open.
           await tauriService.info().catch(() => null);
           if (!alive) return;
@@ -1228,6 +1230,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       window.removeEventListener("blur", blurLinks);
       el.removeEventListener("mousedown", claim, true);
       el.removeEventListener("contextmenu", menuClick, true);
+      pane?.removeEventListener("mousedown", unmark);
     };
   }, []);
 
@@ -1484,7 +1487,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   menuRef.current = openMenu;
 
   return (
-    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} data-dropping={dropping || undefined} style={{ ...(card?.column ? { gridColumn: card.column } : {}), ...(dropping ? { outline: "2px solid var(--line-focus)", outlineOffset: -2 } : {}) }}>
+    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} data-key={number} data-dropping={dropping || undefined} style={{ ...(card?.column ? { gridColumn: card.column } : {}), ...(dropping ? { outline: "2px solid var(--line-focus)", outlineOffset: -2 } : {}) }}>
       <header
         className="pane-head"
         onContextMenu={(e) => {
