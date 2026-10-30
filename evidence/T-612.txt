@@ -29,8 +29,8 @@ TESTS ADDED
 - src/onboarding/useWizard.test.ts (+2): no workspace -> Open a session closes setup as completed, Add Project opens, and the folder
   picked gets Claude, once; with a workspace -> the session starts there and setup closes as completed (a guard: it already passed).
   (mountWizard takes activeDir; the invoke stand-in records each close's outcome.)
-- src/onboarding/tipEscape.test.ts (1): Escape from outside the card closes the tip (prevented, stopped, capture phase); a modal's
-  Escape, a composition and other keys are left alone; the cleanup removes the listener.
+- src/onboarding/tipEscape.test.ts (1): Escape from outside the card closes the tip (capture phase, neither prevented nor stopped
+  since review round 1); a modal's Escape, a composition and other keys are left alone; the cleanup removes the listener.
 
 FAILING BEFORE
    × T-612: Open a session with no workspace yet closes setup as completed, opens Add Project, and starts the session in the folder picked, once 47ms
@@ -63,7 +63,46 @@ $ flock /tmp/kolux-node.lock pnpm exec tsc  -> exit 0 (App.tsx as on the branch)
 Scratch copy with all four patches: tsc -> exit 0; vitest run src/onboarding src/keys src/settings src/projects src/chrome src/board
 src/inbox src/tower src/plainWords.test.ts src/workspaces.test.ts -> Test Files 212 passed (212), Tests 1243 passed (1243)
 
+REVIEW ROUND 1 (Escape was being eaten)
+Problem: tipEscape called preventDefault + stopPropagation on every Escape while the Tip showed, unless an aria-modal dialog or an
+alertdialog was open. Settings (SettingsPage.tsx:320) and the palette (WorktreePalette.tsx:287) are role=dialog without aria-modal,
+so with the Tip up Escape no longer closed the palette, Settings or a right-click menu, and never reached a focused terminal (where,
+in Claude Code, Escape interrupts the agent).
+Fix: src/onboarding/Guides.tsx:389-404 tipEscape closes the tip and leaves the key alone (no preventDefault, no stopPropagation; the
+TipKey type lost those two methods). The aria-modal/alertdialog guard stays: with a question up, Escape is the question's and the Tip
+stays.
+Test changed first: src/onboarding/tipEscape.test.ts asserts the press that closes the tip is neither prevented nor stopped, and that
+the press while a modal is up is neither prevented nor stopped and leaves the tip open.
+Before the fix:
+- false
++ true
+
+ ❯ src/onboarding/tipEscape.test.ts:25:36
+     23|   const e = press(); // pressed in the terminal pane, not in the card
+     24|   expect(closed).toBe(1);
+     25|   expect(e.prevented || e.stopped).toBe(false); // the same press goes…
+       |                                    ^
+     26|   press({ isComposing: true });
+     27|   press({ key: "Enter" });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  15:29:57
+   Duration  2.23s (transform 1.63s, setup 0ms, import 2.07s, tests 9ms, environment 0ms)
+After the fix:
+$ VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run src/onboarding/tipEscape.test.ts src/onboarding/tipView.test.ts
+Test Files  2 passed (2)
+      Tests  5 passed (5)
+   Start at  15:30:07
+   Duration  3.10s (transform 4.18s, setup 0ms, import 5.70s, tests 65ms, environment 0ms)
+$ flock /tmp/kolux-node.lock pnpm exec tsc  -> no output, exit 0
+
 STILL OPEN / NEEDS A LIVE RUN
+- Live (review round 1): with a Tip up, open the palette and press Escape -> both the palette and the Tip close; focus a Claude Code
+  terminal mid-run and press Escape -> the Tip closes and Claude Code is interrupted as usual.
 - Live: a fresh profile, Continue on "Your work", Open a session -> Add Project opens; pick a folder -> Claude starts there. Then
   relaunch with a Tip showing and press Escape with a terminal focused -> the Tip closes (the T-544 prover's dismissFirstRun).
 - T-566's other two parts (the restored chip, data-key on panes) are not this task's.

@@ -386,21 +386,19 @@ function StartupTip() {
   return <TipDocked tip={tip} cli={cli} setup={setup} onSetup={() => setSetup(true)} onClose={close} />;
 }
 
-type TipKey = { key: string; isComposing: boolean; preventDefault(): void; stopPropagation(): void };
+type TipKey = { key: string; isComposing: boolean };
 
 /** T-612 (PLAN.md T-566, Tip part): Escape closes the tip wherever the keyboard is, since the card leaves the keyboard
- *  in the restored pane; a modal dialog's Escape stays its own. Listens in the capture phase, ahead of a focused
- *  terminal (as the wizard does, ONB-006). Returns the cleanup. */
+ *  in the restored pane; a modal dialog's Escape stays its own. Listens in the capture phase so a focused terminal
+ *  cannot swallow it first, but never takes the key: the same Escape still closes the palette, Settings or a menu and
+ *  still reaches the terminal program (in Claude Code it interrupts the agent). Returns the cleanup. */
 export function tipEscape(
   win: { addEventListener(t: "keydown", f: (e: TipKey) => void, capture: boolean): void; removeEventListener(t: "keydown", f: (e: TipKey) => void, capture: boolean): void },
   modalOpen: () => boolean,
   close: () => void,
 ): () => void {
   const key = (e: TipKey) => {
-    if (e.key !== "Escape" || e.isComposing || modalOpen()) return;
-    e.preventDefault();
-    e.stopPropagation();
-    close();
+    if (e.key === "Escape" && !e.isComposing && !modalOpen()) close();
   };
   win.addEventListener("keydown", key, true);
   return () => win.removeEventListener("keydown", key, true);
