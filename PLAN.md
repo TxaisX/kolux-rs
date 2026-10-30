@@ -502,11 +502,11 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [ ] T-592 · Downloaded updates install: the installer and the restarted copy outlive the app's kill-on-close job (R09-app-core-install.1; APP 025; live proof pending CI and signing) · release-ci lane
 
 ### cli lane
-- [ ] T-593 · Register finds kolux.exe and kolux.cmd in the installed bin folder; the setup guide's CLI step can complete (R01-cli.1; CLI 007) · cli lane
-- [ ] T-594 · The installer adds the bin folder to the user PATH and removes it on uninstall (CLI 007; live proof pending) · cli lane
-- [ ] T-595 · `kolux open` starts Kolux and its terminal service from a neutral folder, never the caller's (R01-cli.4, L2-rust-crates.2; CLI 011) · cli lane
-- [ ] T-596 · `kolux worktree list` lists what it can when one project folder is missing; an oversized --wait-submit is refused, not a crash (R01-cli.8, R01-cli.5) · cli lane
-- [ ] T-619 · Closing a busy terminal never freezes the other terminals: the service closes a pane's console outside its shared lock (R06-terminal-process.2) · cli lane
+- [x] T-593 · Register finds kolux.exe and kolux.cmd in the installed bin folder; the setup guide's CLI step can complete (R01-cli.1; CLI 007) · cli lane · DONE 2026-10-30 (lane/cli): evidence/T-593.txt
+- [ ] T-594 · The installer adds the bin folder to the user PATH and removes it on uninstall (CLI 007; live proof pending) · cli lane · code done 2026-10-30 (lane/cli), live proof pending: evidence/T-594.txt
+- [x] T-595 · `kolux open` starts Kolux and its terminal service from a neutral folder, never the caller's (R01-cli.4, L2-rust-crates.2; CLI 011) · cli lane · DONE 2026-10-30 (lane/cli): evidence/T-595.txt
+- [x] T-596 · `kolux worktree list` lists what it can when one project folder is missing; an oversized --wait-submit is refused, not a crash (R01-cli.8, R01-cli.5) · cli lane · DONE 2026-10-30 (lane/cli): evidence/T-596.txt
+- [x] T-619 · Closing a busy terminal never freezes the other terminals: the service closes a pane's console outside its shared lock (R06-terminal-process.2) · cli lane · DONE 2026-10-30 (lane/cli): evidence/T-619.txt
 
 ### reliability lane
 - [ ] T-597 · A slow start never wipes the saved tabs: layout saves wait for the restore, and a late settings answer restores the layout (F05-app-shell-launch.2) · reliability lane
