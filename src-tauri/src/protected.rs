@@ -257,12 +257,17 @@ fn unclear_target(t: &str) -> bool {
 }
 
 /// Whether deleting `target` must ask: unknown, outside the workspace, the workspace itself or
-/// its git folder; a temp location runs; a wildcard is judged by its folder.
+/// its git folder; a temp location runs; a wildcard (`*`, `?`, `[`) in the last part is judged by its
+/// folder, and one in a folder part always asks.
 fn risky(target: &str, dir: Option<&str>, base: &Base) -> bool {
+    const WILD: [char; 3] = ['*', '?', '['];
     let t = target.replace('\\', "/");
+    // T-604 (round 5 review of PR #15): a wildcard in a folder part cannot be judged as written
+    // (`.?` matches `..` on bash 5.1 and older), so it asks; one in the last part is judged by its folder.
     let t = match t.rsplit_once('/') {
-        Some((folder, last)) if last.contains(['*', '?']) => folder.to_string(),
-        _ if t.contains(['*', '?']) => ".".to_string(),
+        Some((folder, _)) if folder.contains(WILD) => return true,
+        Some((folder, last)) if last.contains(WILD) => folder.to_string(),
+        _ if t.contains(WILD) => ".".to_string(),
         _ => t,
     };
     let Some(path) = locate(&t, dir, base) else { return true };
@@ -2899,6 +2904,25 @@ mod tests {
             }
         }
         for c in ["rm -rf build", "rm -rf ./build/out", "rm -rf /tmp/cache"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 round 5 review of PR #15: a wildcard (`*`, `?` or `[`) in a folder part of a delete
+    /// target cannot be judged as written (`.?` is `..` on bash 5.1 and older), so the delete asks;
+    /// a wildcard in the last part is judged by its folder as before.
+    #[test]
+    fn t604r10_a_wildcard_in_a_folder_part_of_a_delete_target_asks() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["rm -rf .?/*", "rm -rf .[.]/*", "rm -rf build/*/../../..", "rm -rf a[b]/c"] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["rm -rf build/*", "rm -rf dist/*.o", "del /s /q dist\\*.o", "rm -rf build/[ab]*.log"] {
             if hit(c).is_some() {
                 missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
             }

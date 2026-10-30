@@ -506,3 +506,30 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2545 filtered out; f
 test result: ok. 145 passed; 0 failed; 1 ignored; 0 measured; 2400 filtered out; finished in 139.13s
 Full Linux cargo test --tests, lib: test result: FAILED. 2506 passed; 37 failed; 3 ignored; 0 measured; 0 filtered out; finished in 232.88s; every failure is on the 45-name baseline, none new.
 windows-gnu cargo check and clippy -D warnings: Finished.
+
+ROUND 5 REVIEW OF PR #15 at def018ea (2026-10-30, integrator): wildcards in a folder part
+risky() now treats `[` as a wildcard with `*` and `?`, and a recursive delete asks whenever a folder part
+of its target (any part but the last) holds one: `.?` matches `..` on bash 5.1 and older, so such a path
+cannot be judged as written. A wildcard in the last part is judged by its folder as before
+(`build/*`, `dist/*.o`, `dist\*.o`, `build/[ab]*.log` still run).
+
+BEFORE (def018ea with only the new test):
+===== before the fix: t604r10
+test protected::tests::t604r10_a_wildcard_in_a_folder_part_of_a_delete_target_asks ... FAILED
+thread 'protected::tests::t604r10_a_wildcard_in_a_folder_part_of_a_delete_target_asks' (12332) panicked at src/protected.rs:2925:9:
+[
+    "should ask (delete): \"rm -rf .?/*\", got None",
+    "should ask (delete): \"rm -rf .[.]/*\", got None",
+    "should ask (delete): \"rm -rf a[b]/c\", got None",
+]
+    protected::tests::t604r10_a_wildcard_in_a_folder_part_of_a_delete_target_asks
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2546 filtered out; finished in 0.21s
+
+AFTER:
+===== after the fix: t604r10
+test protected::tests::t604r10_a_wildcard_in_a_folder_part_of_a_delete_target_asks ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2546 filtered out; finished in 0.00s
+===== cargo test --lib -- protected --test-threads=3
+test result: ok. 80 passed; 0 failed; 1 ignored; 0 measured; 2466 filtered out; finished in 132.85s
+windows-gnu cargo check and clippy -D warnings: Finished. (Only protected.rs changed; the full cargo
+test was not re-run this round.)
