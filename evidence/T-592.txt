@@ -1,0 +1,93 @@
+T-592 · Downloaded updates install: the installer and the restarted copy outlive the app (R09-app-core-install.1; APP-025)
+lane/release-ci, 2026-10-30, Linux cloud sandbox with the x86_64-pc-windows-gnu cross target (compile proof only)
+
+WHAT WAS WRONG
+Since T-184 the app runs inside its own kill-on-close job (KILL_ON_JOB_CLOSE | BREAKAWAY_OK, no
+SILENT_BREAKAWAY_OK). The updater plugin (2.14.1 now, same code path as 2.13.3: updater.rs install_inner
+runs the before-exit hook, then ShellExecuteW, then exit(0)) starts the per-user NSIS installer from inside
+that job, so it dies the moment Kolux exits and nothing installs. app.restart() (tauri process.rs:74-89, a
+plain Command::spawn) puts the new copy in the same job, so "Restart Kolux" and both "safe graphics"
+restarts never come back; and a new copy that starts before the old one is gone finds the single-instance
+claim taken, forwards to the dying copy and exits (code 3).
+
+THE FIX, AND WHY THIS ONE
+Options weighed (from the task and the audit):
+ a) launch the installer and the relaunch ourselves with CREATE_BREAKAWAY_FROM_JOB: means re-doing the
+    plugin's install step (temp file, install-mode arguments, /UPDATE, /R, /ARGS escaping), about 40 lines
+    copied from plugin internals that already changed between 2.13 and 2.14;
+ b) give the app job SILENT_BREAKAWAY_OK for good and a job per child: every program started outside a
+    pane (git, helpers) would outlive a crash for the whole session unless each got its own job (APP-053).
+Chosen: b's flag, set only at the hand-off. procs::hand_off() adds SILENT_BREAKAWAY_OK to the app job
+right before the app hands over and exits. Membership is not changed retroactively: everything already
+running stays in the job and still ends with the app (APP-053 holds); only what is started from then on
+(the installer, the restarted copy) is left out. It is one flag and keeps the plugin's own install path.
+For the installer it runs as the last step of the updater's before-exit hook, after the package passed its
+check and the terminals ended, so a package that fails its check hands off nothing.
+
+WHAT CHANGED (files this lane owns)
+- src-tauri/src/procs.rs:126-166  RESTART_OF ("KOLUX_RESTART_OF"), RESTART_WAIT (10 s), hand_off(restart),
+  restarted_from(value, me) (pure: the pid to wait for, never itself or 0), wait_for_restarted_from()
+  (clears the variable; on Windows waits with the existing wait_gone for the old copy). ponytail comment:
+  a pid reused within the wait only makes the wait run out.
+- src-tauri/src/procs.rs:303-318  Windows Job::let_children_leave(): reads the flags back and adds
+  JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK; limit_flags() (:322) is no longer test-only. :412 the stand-in
+  for other systems does nothing (no jobs there).
+- src-tauri/src/update.rs:243  the updater's before-exit hook gets `|| crate::procs::hand_off(false)`.
+- src-tauri/src/update.rs:428-438  installer_hook(end_terminals, cleanup, hand_off): hand-off last.
+- src-tauri/src/update.rs:422-424  the macOS/Linux restart after an install hands off first.
+
+TESTS (written first)
+- procs.rs:619 t592_a_restarted_copy_waits_only_for_the_copy_that_started_it (all systems): "4242" and
+  " 4242\n" -> 4242; its own pid, "0", "-1", "kolux", no variable -> nothing to wait for.
+- procs.rs:635 t592_after_the_hand_off_what_a_member_starts_outlives_the_job (Windows): a fresh job of the
+  app's kind holds a cmd shell; after let_children_leave the flags read back KILL_ON_JOB_CLOSE |
+  BREAKAWAY_OK | SILENT_BREAKAWAY_OK and the shell is still a member; closing the job ends the shell
+  within 2 s while the ping the shell started after the hand-off runs on.
+- update.rs:561 t592_the_installer_leaves_the_app_job_last_and_only_when_it_will_start (all systems): a
+  package that fails its check hands off nothing; a good one runs terminals, clean-up, then leave the job,
+  in that order; the updater's hook hands off; every app.restart() in update.rs is preceded by
+  crate::procs::hand_off(true).
+- update.rs:524 the existing row-535 test now passes a third (no-op) closure.
+
+BEFORE (tests in place, implementation not yet written)
+$ CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check --all-targets
+error[E0425]: cannot find value `RESTART_WAIT` in this scope        --> src/procs.rs:567
+error[E0425]: cannot find function `restarted_from` in this scope   --> src/procs.rs:560..566 (7 times)
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied  --> src/update.rs:531
+error: could not compile `kolux-rs` (lib test) due to 11 previous errors        exit=101
+$ ... cargo check --target x86_64-pc-windows-gnu --all-targets
+  the same, plus
+error[E0599]: no method named `let_children_leave` found for struct `procs::imp::Job`  --> src/procs.rs:582
+error[E0061]: ... --> src/update.rs:531 and src/update.rs:559
+error: could not compile `kolux-rs` (lib test) due to 12 previous errors        exit=101
+
+AFTER
+$ ... cargo check --all-targets                                   (Linux)
+    Finished `dev` profile [unoptimized + debuginfo] target(s)   exit=0, no warning in procs.rs or update.rs
+$ ... cargo check --target x86_64-pc-windows-gnu --all-targets   (Windows compile proof)
+    Finished `dev` profile [unoptimized + debuginfo] target(s)   exit=0, no warnings at all
+Final re-run on the committed state (after dropping a constant-only assertion clippy could flag):
+    Linux:   Finished `dev` profile in 3m 22s, exit=0, 0 warnings in procs.rs/update.rs
+    Windows: Finished `dev` profile in 6m 24s, exit=0, no warnings
+$ flock /tmp/kolux-node.lock pnpm exec tsc   -> exit 0
+The Rust tests are not run here (lane rule: the integrator runs them centrally). The Windows behaviour
+test needs Windows (CI's rust job or the owner's PC).
+
+OUTSIDE THIS LANE (exact one-line changes for the integrator; until they land, Restart Kolux and the
+safe-graphics restarts still die with the job, and a fast restart can still lose the single-instance race)
+1. src-tauri/src/lifecycle.rs, fn claim_or_forward (line ~261), first statement, before `match claim(...)`:
+       crate::procs::wait_for_restarted_from(); // T-592: a restarted copy lets the old one finish exiting
+2. src-tauri/src/lifecycle.rs, fn app_restart (line ~644), immediately before `app.restart();`:
+       crate::procs::hand_off(true);
+3. src-tauri/src/resources/recovery.rs, fn graphics_restart_safe (line ~881) and fn graphics_choose
+   (line ~904), immediately before each `app.restart()`:
+       crate::procs::hand_off(true);
+The update path needs none of these: on Windows the installer is the hand-off (it relaunches the new
+version itself with /R after the old process is long gone).
+
+LIVE PROOF PENDING (CI and signing, APP-025)
+- Install v0.1.0, publish v0.1.1 through release.yml (needs CI billing, X-proc.2, and the signing and
+  release secrets, T-588), let it download, click Restart to update -> v0.1.1 runs (APP-025 box 2,
+  APP-029). Then the same with a plain quit (install on quit).
+- With the outside changes above: Settings > Restart Kolux and Restart in safe graphics come back
+  (APP-043).

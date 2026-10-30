@@ -240,7 +240,7 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
         .map_err(|e| e.to_string())?
         .pubkey(feed.pubkey)
         .timeout(CHECK_TIMEOUT)
-        .on_before_exit(installer_hook(move || end_for_installer(&ends), move || cleans.cleanup_before_exit()));
+        .on_before_exit(installer_hook(move || end_for_installer(&ends), move || cleans.cleanup_before_exit(), || crate::procs::hand_off(false)));
     builder = match route {
         crate::resources::app_proxy::Route::Default => builder,
         crate::resources::app_proxy::Route::Direct => builder.no_proxy(),
@@ -419,16 +419,21 @@ fn restart_now(app: &AppHandle) -> Result<(), String> {
         *updates.ready.lock().map_err(|e| e.to_string())? = Some((update, bytes));
         return Err(cause);
     }
+    // macOS and Linux: the new version is in place and this copy starts it (T-592: outside the job).
+    crate::procs::hand_off(true);
     app.restart();
 }
 
 /// The updater's last step before Windows starts the installer and this process exits (row 535):
 /// it runs after the installer file is written and checked, so the terminals end only then; the
-/// plugin's own clean-up, which this hook replaces, still runs after them.
-fn installer_hook(end_terminals: impl Fn() + Send + Sync + 'static, cleanup: impl Fn() + Send + Sync + 'static) -> impl Fn() + Send + Sync + 'static {
+/// plugin's own clean-up, which this hook replaces, still runs after them. T-592: last of all the
+/// app hands off, so the installer the plugin starts next leaves the app's kill-on-close job and
+/// outlives this process (it used to die with it, and nothing installed).
+fn installer_hook(end_terminals: impl Fn() + Send + Sync + 'static, cleanup: impl Fn() + Send + Sync + 'static, hand_off: impl Fn() + Send + Sync + 'static) -> impl Fn() + Send + Sync + 'static {
     move || {
         end_terminals();
         cleanup();
+        hand_off();
     }
 }
 
@@ -535,6 +540,7 @@ mod tests {
             move || {
                 c.fetch_add(1, Ordering::SeqCst);
             },
+            || {},
         );
         assert!(plugin_install(false, true, &hook).is_err());
         assert_eq!(ended.load(Ordering::SeqCst), 0, "a package that fails its check must not end the terminals");
@@ -545,6 +551,25 @@ mod tests {
         let src = include_str!("update.rs");
         let body = &src[src.find("fn restart_now").unwrap()..src.find("fn installer_hook").unwrap()];
         assert!(!body.contains(".kill_all()"), "restart_now ends the terminals before the installer is ready");
+    }
+
+    /// T-592 (R09-app-core-install.1): the app's kill-on-close job used to take the installer down with
+    /// the app. The installer now leaves the job last, after the terminals ended and the plugin cleaned
+    /// up, right before Windows starts it; a package that fails its check hands off nothing, so the app
+    /// keeps its job for everything it starts afterwards. Every restart in this file hands off first.
+    #[test]
+    fn t592_the_installer_leaves_the_app_job_last_and_only_when_it_will_start() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (a, b, c) = (order.clone(), order.clone(), order.clone());
+        let hook = installer_hook(move || a.lock().unwrap().push("terminals"), move || b.lock().unwrap().push("clean-up"), move || c.lock().unwrap().push("leave the job"));
+        assert!(plugin_install(false, true, &hook).is_err());
+        assert!(order.lock().unwrap().is_empty(), "a package that fails its check hands off nothing");
+        assert!(plugin_install(true, true, &hook).is_ok());
+        assert_eq!(*order.lock().unwrap(), ["terminals", "clean-up", "leave the job"]);
+        let src = include_str!("update.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(code.contains("|| crate::procs::hand_off(false)"), "the updater's before-exit hook hands off");
+        assert_eq!(code.matches("app.restart()").count(), code.matches("crate::procs::hand_off(true);\n    app.restart()").count(), "a restart that skips the hand-off dies with the job");
     }
 
     #[test]
