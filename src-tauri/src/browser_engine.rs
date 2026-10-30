@@ -2,9 +2,9 @@
 //! dependency since the coordinator's 2026-10-20 decision, pinned to the version wry builds).
 //!
 //! Glue only: every decision is a pure function elsewhere and tested there (certificates in
-//! browser_certs.rs). Nothing here runs in a unit test (a test binary that links the window
-//! toolkit does not load), so this file is proved live: see the LIVE PROOF PENDING steps in
-//! evidence/T-158.txt.
+//! browser_certs.rs), but for the frame rule (`frame_ok`, T-607), a pure function kept at the end
+//! of this file beside its tests. The glue itself runs in no unit test (it needs a live web view),
+//! so it is proved live: see the LIVE PROOF PENDING steps in evidence/T-158.txt and T-607.txt.
 //!
 //! - T-158 (BROW-024): every page answers the engine's server-certificate-error event with
 //!   `certs::on_engine`: allow for an approved local certificate, cancel for everything else,
@@ -23,9 +23,11 @@
 //!   refusal is told to its pane (PERMISSION_EVENT) with the permission named.
 //! - After-list 285 (BROW-040): a preview is denied every permission request, and its embedded
 //!   frames load only from its own folder (`preview::frame_may_load`, per frame start).
+//! - T-607 (L1-tauri.1, R07-browser.1): in every tab and sign-in popup a frame of Kolux's own
+//!   address, or of any address a tab may not go to, is cancelled at its start (`frame_ok`).
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{AppHandle, Webview};
+use tauri::{AppHandle, Url, Webview};
 
 #[cfg(windows)]
 mod imp {
@@ -76,22 +78,11 @@ mod imp {
         if unsafe { controller.add_AcceleratorKeyPressed(&keys, &mut key_token) }.is_ok() {
             holder::watch(id);
         }
+        // T-607 (L1-tauri.1): no frame of Kolux's own address in any tab, and while this tab shows a
+        // preview, frames only from the preview's own folder (after-list 285, BROW-040).
+        frames(controller, Some(id), crate::browser::APP.get().and_then(crate::browser::app_origin));
         // SAFETY: CoreWebView2 hands back the page's engine object.
         let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
-        // After-list 285 (BROW-040): while this tab shows a preview, an embedded frame may load
-        // only from the preview's own folder; `preview::frame_may_load` decides, per frame start.
-        let frames = NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
-            let Some(args) = args else { return Ok(()) };
-            // SAFETY: Uri writes a CoTaskMem string `take` frees; SetCancel only records the answer.
-            let uri = unsafe { take(|p| args.Uri(p)) };
-            if !preview::frame_may_load(id, &uri) {
-                unsafe { args.SetCancel(true) }?;
-            }
-            Ok(())
-        }));
-        let mut frame_token = 0i64;
-        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
-        let _ = unsafe { core.add_FrameNavigationStarting(&frames, &mut frame_token) };
         if let Ok(core14) = core.cast::<ICoreWebView2_14>() {
             let handler = ServerCertificateErrorDetectedEventHandler::create(Box::new(move |_sender, args| {
                 let Some(args) = args else { return Ok(()) };
@@ -114,6 +105,27 @@ mod imp {
             // SAFETY: the handler lives as long as the engine holds it; the token is written once.
             let _ = unsafe { core14.add_ServerCertificateErrorDetected(&handler, &mut token) };
         }
+    }
+
+    /// T-607 (L1-tauri.1, R07-browser.1): every frame a page in this view starts loading is checked
+    /// by `frame_ok` and cancelled when it fails, so no page can frame Kolux's own screen with its
+    /// command bridge; in tab `fenced` (a preview) the preview's own fence decides too
+    /// (`preview::frame_may_load`, after-list 285). `dev` is the dev server the app runs from.
+    pub fn frames(controller: &ICoreWebView2Controller, fenced: Option<u32>, dev: Option<tauri::Url>) {
+        // SAFETY: CoreWebView2 hands back the view's engine object.
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        let handler = NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            // SAFETY: Uri writes a CoTaskMem string `take` frees; SetCancel only records the answer.
+            let uri = unsafe { take(|p| args.Uri(p)) };
+            if !super::frame_ok(&uri, dev.as_ref()) || fenced.is_some_and(|id| !preview::frame_may_load(id, &uri)) {
+                unsafe { args.SetCancel(true) }?;
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_FrameNavigationStarting(&handler, &mut token) };
     }
 
     /// T-286-b (APP-040): hooks a view's process-failed event; each failure is read as far as the
@@ -441,6 +453,15 @@ pub fn popup_permissions(w: &tauri::WebviewWindow, tab: u32, app: AppHandle) {
     let _ = (w, tab, app);
 }
 
+/// T-607 (L1-tauri.1): a sign-in popup's frames follow the tabs' rule (`frame_ok`); `dev` is the dev
+/// server the app runs from.
+pub fn popup_frames(w: &tauri::WebviewWindow, dev: Option<Url>) {
+    #[cfg(windows)]
+    let _ = w.with_webview(move |pw| imp::frames(&pw.controller(), None, dev));
+    #[cfg(not(windows))]
+    let _ = (w, dev);
+}
+
 /// T-239-b (BROW-025): a popup follows the mode of its tab's profile. A popup opened straight onto
 /// a sign-in host already starts as Firefox (its builder sets that); this keeps every later hop
 /// right.
@@ -564,5 +585,89 @@ pub fn clear_certificate_allowances(app: &AppHandle) {
             #[cfg(not(windows))]
             let _ = v;
         }
+    }
+}
+
+/// T-607 (L1-tauri.1, R07-browser.1): whether a frame inside a browser tab or a sign-in popup may load
+/// `uri`. Never Kolux's own address: on Windows the engine hands every frame Tauri's command bridge,
+/// and Tauri grants a page at the app's own address every app command. So a frame goes only where a
+/// tab may (`allowed`: http and https, never a `*.localhost` host, where the app, its IPC and its
+/// custom schemes answer, nor the dev server the app runs from, `app`); of the rest, only the frames
+/// a page makes of its own text load (`about:blank`, `about:srcdoc`, `data:`, which carry no origin
+/// Tauri takes for its own) and a `blob:` of an allowed origin. Any other scheme, the app's own
+/// (`tauri:`, `ipc:`, `asset:`) among them, is refused.
+#[cfg_attr(not(windows), allow(dead_code))] // the frame hook is Windows-only
+pub fn frame_ok(uri: &str, app: Option<&Url>) -> bool {
+    let Ok(url) = Url::parse(uri) else { return false };
+    match url.scheme() {
+        "http" | "https" => super::allowed(&url, app).is_ok(),
+        "about" => matches!(url.path(), "blank" | "srcdoc"),
+        "data" => true,
+        "blob" => url.path().starts_with("null/") || Url::parse(url.path()).is_ok_and(|inner| matches!(inner.scheme(), "http" | "https") && super::allowed(&inner, app).is_ok()),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// T-607 (L1-tauri.1, R07-browser.1): a frame of Kolux's own address is refused in every tab and
+    /// sign-in popup (any `*.localhost` host, a custom scheme of the app's, the dev server it runs
+    /// from), and so is any other address a tab may not go to; an ordinary third-party frame, and a
+    /// frame a page makes of its own text, load.
+    #[test]
+    fn t607_a_frame_of_koluxs_own_address_is_refused_and_an_ordinary_frame_loads() {
+        let dev = Url::parse("http://localhost:1420/").unwrap();
+        for own in [
+            "http://tauri.localhost/",
+            "https://tauri.localhost/index.html",
+            "http://TAURI.LOCALHOST./",
+            "http://ipc.localhost/plugin%3Aevent%7Clisten",
+            "http://kolux-artifact.localhost/x",
+            "tauri://localhost/",
+            "ipc://localhost/cmd",
+            "asset://localhost/C%3A%2Fx",
+            "kolux-artifact://localhost/x",
+            "blob:http://tauri.localhost/0b3c-uuid",
+            "http://localhost:1420/",
+            "file:///C:/Users/me/.ssh/id_rsa",
+            "javascript:alert(1)",
+            "edge://settings",
+            "not an address",
+        ] {
+            assert!(!frame_ok(own, Some(&dev)), "refused: {own}");
+        }
+        for ok in [
+            "https://www.youtube.com/embed/x",
+            "https://accounts.google.com/o/oauth2/iframe",
+            "http://localhost:5173/",
+            "http://127.0.0.1:8080/",
+            "about:blank",
+            "about:srcdoc",
+            "data:text/html,<p>hi</p>",
+            "blob:https://example.com/0b3c-uuid",
+            "blob:null/0b3c-uuid",
+        ] {
+            assert!(frame_ok(ok, Some(&dev)), "loads: {ok}");
+        }
+        assert!(frame_ok("http://localhost:1420/", None), "a release build has no dev server: a user's own server on that port loads");
+    }
+
+    /// T-607: the rule is wired into every tab's frame hook (not only a preview's) and into every
+    /// sign-in popup. The hooks cannot run in a unit test (no web view), so the guard is that both
+    /// build paths call them.
+    #[test]
+    fn t607_every_tab_and_every_popup_hooks_the_frame_rule() {
+        let engine = include_str!("browser_engine.rs");
+        let attach = &engine[engine.find("pub fn attach(id: u32, controller").expect("imp::attach")..];
+        let attach = &attach[..attach.find("\n    }\n").unwrap()];
+        assert!(attach.contains("frames(controller, Some(id), "), "every tab hooks the frame rule");
+        let frames = &engine[engine.find("fn frames(").expect("imp::frames")..];
+        let frames = &frames[..frames.find("\n    }\n").unwrap()];
+        assert!(frames.contains("frame_ok(&uri, ") && frames.contains("SetCancel(true)"), "{frames}");
+        let popup = include_str!("browser_popup.rs");
+        let open = &popup[popup.find("pub fn open(").unwrap()..popup.find("pub fn close_for(").unwrap()];
+        assert!(open.contains("engine::popup_frames(&w, "), "every sign-in popup hooks the frame rule");
     }
 }
