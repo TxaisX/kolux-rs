@@ -55,8 +55,7 @@ trash = "5"
 # Already in the build through the updater; fetches CDN scripts for offline artifacts (SKILL-035).
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 unicode_names2 = "4.0.0"
-# SKILL-013: the collected Results page renders Markdown, and the README lists SHA-256 hashes (sha2 is already in the tree).
-pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# SKILL-013: the README lists SHA-256 hashes (sha2 is already in the tree).
 sha2 = "0.10"
 # T-156-b (SAFE-016): the user's own regular-expression rules, built with a size limit (already in the tree).
 regex = "1"
