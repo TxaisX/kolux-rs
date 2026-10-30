@@ -133,6 +133,14 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000; // no console flashes up behind the app
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    // GIT-070: on macOS and Linux git leads its own process group, so stopping a stalled read
+    // (procs::kill_tree's group signal) also ends the hooks, diff tools and pagers it started.
+    // Outside the terminal's foreground group a prompt would stop git (SIGTTIN): it fails at once.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0).env("GIT_TERMINAL_PROMPT", "0");
+    }
     // GIT-070: paths past Windows' old 260-character limit work (Git for Windows' own switch). Given
     // through the environment so the command line stays as written, and only when nothing else is
     // injecting config that way; a git older than 2.31 ignores it.
@@ -1597,7 +1605,7 @@ mod tests {
         let repo = base.join("r");
         fs::create_dir_all(&repo).unwrap();
         let g = |args: &[&str], dir: &Path| {
-            let out = { use std::os::windows::process::CommandExt; std::process::Command::new("git").args(args).current_dir(dir).creation_flags(0x0800_0000).output().unwrap() };
+            let out = command(args, Some(dir)).output().unwrap();
             assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         g(&["init", "-q", "-b", "main"], &repo);

@@ -474,3 +474,65 @@ Built only after day one (2026-10-15); none of these is on the cutline. Order: T
 - [ ] T-565 · T-544 follow-up (runs 2-4, 2026-10-28): Escape does not close Settings in the installed build (opened with Ctrl+, then a CDP Escape key; the Close button works); check the window keydown handler in SettingsPage.tsx and whether focus inside the page swallows it · look lane
 - [ ] T-566 · T-544 follow-up (run 4, 2026-10-28): after a relaunch a taken-back pane sometimes shows no "restored" chip though its output is back on screen (relaunch 2, pane 1; rounds 1 and 3 showed it); on that relaunch the Tip card's Close button also left a Tip open ten times running ("Not now" closes it); terminal panes carry no data-key, so a prover cannot match a pane to its saved key · core + look lanes
 - [ ] T-567 · T-544 follow-up: SUBAGENT-418 case D live re-prove on an installed build that has MERGE 425 · coordinator
+
+## 8. Path to an A, cycle 1 (2026-10-30; brief "Kolux RS: Audit and Path to an A", audit docs/research/repo-audit-2026-10-30.md)
+
+No new features. Each task names the audit finding it closes; done means its test failed before the change and passes after, with real output in `evidence/<task>.txt`. Lanes work on `lane/<name>` branches; the integrator ticks tasks on merge. Live Windows proofs stay open until CI runs again.
+
+### foundation (integrator)
+- [x] T-582 · Cloud proof foundation: on macOS and Linux `procs::kill_tree` ends option parsing (`kill -9 -- -<pid>`) and never signals pid 0, 1 or itself (audit item 18, R06-terminal-process.1, X-test.1); git children lead their own process group there so a stopped read takes its children; the Rust tests compile off Windows (git.rs:1600, X-proc.8); STAT 052's spinner test reads the CSS the same on CRLF and LF checkouts (X-proc.3); `scripts/test-env.ps1` / `.sh` make the scratch homes the integration tests require and CI's Rust job uses them (X-proc.4, X-test.2); the raw NUL byte in scm.rs is written as `\0` · acceptance: vitest green on Linux; the Rust unit tests run to the end on Linux; workflow-check OK; `cargo check --target x86_64-pc-windows-gnu --all-targets` clean · DONE 2026-10-30 (integrator, lane/foundation): evidence/T-582.txt
+
+- [ ] T-620 · Txais 2026-10-30: the whole top bar moves the window, not one spot: a press anywhere on the bar that is not a control drags it (double-click maximizes), while its buttons, search box and pop-up menus keep working · integrator
+
+### status-hooks lane
+- [ ] T-583 · The hook line never blocks: each hook connection on its own thread with a deadline and size cap; automation follow-up runs after the reply; the protected-command answer never waits on the main store lock (audit item 6; ponytail hooks.rs:707, automations.rs:1206/1005) · status-hooks lane
+- [ ] T-584 · Claude hooks install when settings.json holds an empty list for one of Kolux's events, e.g. "Stop": [] (R02-hooks-status.4) · status-hooks lane
+- [ ] T-585 · A helper agent whose stop never arrives does not keep its pane "working" after the turn ends (R02-hooks-status.2) · status-hooks lane
+- [ ] T-586 · Terminal link click areas count screen cells, not string positions, after CJK text and emoji (L3-terminal-editor-js.2; ponytail tabs.ts:51) · status-hooks lane
+- [ ] T-618 · A new tab never inherits a closed tab's saved status after a restart; saved rows are pruned when their tab closes (F05-app-shell-launch.3) · status-hooks lane
+
+### release-ci lane
+- [ ] T-587 · Releases publish: `release.mjs` defines `onGitHub` (DT-R11) and a test runs the real publish path with `gh` stubbed (X-proc.1; APP 059) · release-ci lane
+- [ ] T-588 · The release job pins third-party actions to commit SHAs, signs in its own step and gives the token only to `gh release` (X-proc.5; APP 059, APP 060) · release-ci lane
+- [ ] T-589 · Library upgrades that close known holes: mermaid 11.17.2, highlight.js 11.12.0, katex 0.16.47, DOMPurify 3.4.17, vitest 4.1.12, tauri-plugin-updater 2.14.1 (drop the three zip ignores), pulldown-cmark removed; the licence check reads licence files (L4-web-js-toolchain.1, L3-terminal-editor-js.1, L1-tauri.3) · release-ci lane
+- [ ] T-590 · The content policy forbids framing Kolux: frame-ancestors 'none' in tauri.conf.json and the Vite dev headers (L1-tauri.1, R07-browser.1, CSP part) · release-ci lane
+- [ ] T-591 · CI checks that every `invoke("name")` in src/ is a registered command, and a first-load bundle-size budget (brief Phase 1) · release-ci lane
+- [ ] T-592 · Downloaded updates install: the installer and the restarted copy outlive the app's kill-on-close job (R09-app-core-install.1; APP 025; live proof pending CI and signing) · release-ci lane
+
+### cli lane
+- [ ] T-593 · Register finds kolux.exe and kolux.cmd in the installed bin folder; the setup guide's CLI step can complete (R01-cli.1; CLI 007) · cli lane
+- [ ] T-594 · The installer adds the bin folder to the user PATH and removes it on uninstall (CLI 007; live proof pending) · cli lane
+- [ ] T-595 · `kolux open` starts Kolux and its terminal service from a neutral folder, never the caller's (R01-cli.4, L2-rust-crates.2; CLI 011) · cli lane
+- [ ] T-596 · `kolux worktree list` lists what it can when one project folder is missing; an oversized --wait-submit is refused, not a crash (R01-cli.8, R01-cli.5) · cli lane
+- [ ] T-619 · Closing a busy terminal never freezes the other terminals: the service closes a pane's console outside its shared lock (R06-terminal-process.2) · cli lane
+
+### reliability lane
+- [ ] T-597 · A slow start never wipes the saved tabs: layout saves wait for the restore, and a late settings answer restores the layout (F05-app-shell-launch.2) · reliability lane
+- [ ] T-598 · Settings keep what you typed when a save fails, and the Appearance and Agents pages write only what changed (F02-settings-update.2, .3, .4) · reliability lane
+- [ ] T-599 · The crash screen never reloads while a report is being written (F08-onboarding-look-misc.1) · reliability lane
+- [ ] T-600 · The update card never opens itself or takes the keyboard; a bare Enter never restarts from a card you did not open (F02-settings-update.1) · reliability lane
+
+### review-editor lane
+- [ ] T-601 · Notes, agent plans and chat never put live HTML into the window: notes forbid style, form and image-map content; plans and chat show raw HTML as text; mermaid's config cannot be changed from a note (F01-editor.1, L4-web-js-toolchain.2, .3, F06-tasks-chat.1) · review-editor lane
+- [ ] T-602 · The rich view never deletes table cell text (F01-editor.3) · review-editor lane
+- [ ] T-603 · The rich view keeps a note's line endings, and a file whose line endings change on disk is re-read correctly (F01-editor.2, .4) · review-editor lane
+
+### safety lane
+- [ ] T-604 · Protected rules fail closed: comments, heredocs, here-strings and escapes cannot hide a command; your own "starts with" rules see through env prefixes, sudo, npx, .exe paths and bash -c; masking a large command stays fast (R03-safety-accounts.1, .2, .3) · safety lane
+- [ ] T-605 · Opening prompts never pass through cmd.exe: npm-installed agents start their real program or get the prompt typed after start, and multi-line prompts arrive whole (L2-rust-crates.1, X-sec.1, R08-orch-auto-chat.2) · safety lane
+- [ ] T-606 · AI commit and pull-request writers run outside the workspace without the repository's own Claude settings (R05-git-scm.1, .3) · safety lane
+- [ ] T-607 · Browser tabs and sign-in pop-ups refuse frames of Kolux's own address (L1-tauri.1, R07-browser.1; live proof pending) · safety lane
+
+### product-ux lane
+- [ ] T-608 · Status hooks on with one line of consent, and the Board, Tower, Inbox, needs strip and bell read one status (brief Phase 0); lands after T-583 and T-604, because the audit asks for those fixes before hooks are on by default · product-ux lane
+- [ ] T-609 · "Review changes" from a Board Done card and an Inbox row; the sidebar changed-files count on by default (brief Phase 0); it wires existing screens into reach, as the brief's section 3 requires, and adds no new screen · product-ux lane
+- [ ] T-610 · No screen is unreachable: Floor, Space and Workspace Board wired or hidden; the two Boards no longer share a name (brief Phase 0) · product-ux lane
+- [ ] T-611 · A Commands section in the palette makes every action runnable; the five actions with no handler get one or go (brief Phase 0); it wires existing screens into reach, as the brief's section 3 requires, and adds no new screen · product-ux lane
+- [ ] T-612 · The first-run wizard always finishes after Continue on "Your work"; the Tip card's Close button closes it (F08-onboarding-look-misc.2; T-566 Tip part) · product-ux lane
+
+### workspaces lane
+- [ ] T-613 · Deleting a workspace never silently deletes unpushed commits: the question names them and the branch is kept by default (F04-projects-scm.1) · workspaces lane
+- [ ] T-614 · Removing workspaces never closes tabs opened in the meantime (F04-projects-scm.2) · workspaces lane
+- [ ] T-615 · "Discard N changes?" only discards in the workspace it was asked in (F04-projects-scm.3) · workspaces lane
+- [ ] T-616 · Renaming a file onto another file's name in different capitals is refused (R04-projects-files.1) · workspaces lane
+- [ ] T-617 · Saving through a link writes the real file and keeps the link (R04-projects-files.4) · workspaces lane

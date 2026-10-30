@@ -312,8 +312,21 @@ mod imp {
 
     /// The PTY child leads its own process group, so the group signal takes everything it started.
     pub fn kill_tree(pid: u32) {
-        let _ = std::process::Command::new("kill").args(["-9", &format!("-{pid}")]).output();
-        let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+        for args in kill_args(pid) {
+            let _ = std::process::Command::new("kill").args(&args).output();
+        }
+    }
+
+    /// The `kill` command lines for `pid`'s group, then `pid` itself. `--` ends option parsing:
+    /// without it procps-ng `kill` (Debian, Ubuntu) reads `-12345` as option digits and signals
+    /// `-1`, every process the caller may signal. Pids 0 and 1 and this process are never
+    /// signalled: group 0 is the caller's own and -1 is everything. Nor is a pid past `i32::MAX`:
+    /// `kill` casts it to `pid_t`, so it would wrap to a negative group or to -1.
+    pub(super) fn kill_args(pid: u32) -> Vec<[String; 3]> {
+        if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
+            return Vec::new();
+        }
+        vec![["-9".into(), "--".into(), format!("-{pid}")], ["-9".into(), "--".into(), pid.to_string()]]
     }
 
     /// No job objects here: the process-group kill in `kill_tree` is what ends a pane's tree.
@@ -359,6 +372,19 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(leaf, Some(false), "the sleeping child starts nothing");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn kill_tree_on_unix_ends_option_parsing_and_never_signals_everything() {
+        let line = |a: &[String; 3]| a.join(" ");
+        let lines: Vec<String> = imp::kill_args(12345).iter().map(line).collect();
+        assert_eq!(lines, ["-9 -- -12345", "-9 -- 12345"], "a group pid starting with 1 must not read as kill(-1)");
+        assert!(imp::kill_args(0).is_empty(), "group 0 is the caller's own");
+        assert!(imp::kill_args(1).is_empty(), "-1 is every process");
+        assert!(imp::kill_args(i32::MAX as u32 + 1).is_empty(), "pid_t wraps it to a negative group");
+        assert!(imp::kill_args(u32::MAX).is_empty(), "pid_t wraps it to -1");
+        assert!(imp::kill_args(std::process::id()).is_empty(), "never this process");
     }
 
     #[test]

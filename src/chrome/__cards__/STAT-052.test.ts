@@ -25,14 +25,16 @@ test("box 1: working, then waiting, then done each give a different glyph and di
 
 const nodeFs = (globalThis as unknown as { process: { getBuiltinModule(name: string): { readFileSync(p: URL, enc: string): string } } }).process.getBuiltinModule("node:fs");
 const rawCss = nodeFs.readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
-const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, "");
+// Line ends are normalised so the result is the same on a CRLF (Windows) and an LF (CI) checkout.
+const css = rawCss.replace(/\r\n/g, "\n").replace(/\/\*[\s\S]*?\*\//g, "");
 const reduced = [...css.matchAll(/@media \(prefers-reduced-motion: reduce\)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g)].map((m) => m[1]).join("\n");
 
 test("box 2: under reduced motion every .spin rule has its animation switched off; the working glyph and words are untouched", () => {
-  // Every rule that gives a spinner an animation, and the rules the reduce block turns off.
-  const animated = [...css.matchAll(/(?:^|\n)([^{}\n@][^{}]*\.spin[^{}]*)\{[^{}]*animation:(?!\s*none)[^;}]+/g)].map((m) => m[1].trim());
+  // Every rule that gives a spinner an animation, and the rules the reduce block turns off. Each selector
+  // must start its rule there, so `.statusbar .skill-item .spin { animation: none }` does not count for `.spin`.
+  const animated = [...css.matchAll(/(?:^|\n)([^{}\n@]*\.spin[^{}]*)\{[^{}]*animation:(?!\s*none)[^;}]+/g)].map((m) => m[1].trim());
   expect(animated).toEqual([".spin", ".statusbar .skill-item .spin"]);
-  for (const sel of animated) expect(reduced).toMatch(new RegExp(`${sel.replace(/[.]/g, "\\.")}\\s*\\{\\s*animation:\\s*none`));
+  for (const sel of animated) expect(reduced).toMatch(new RegExp(`(?:^|[{};\\n])\\s*${sel.replace(/[.]/g, "\\.")}\\s*\\{\\s*animation:\\s*none`));
   // 12 frames a second: one turn per second in 12 steps.
   expect(css).toMatch(/\.spin\s*\{\s*animation:\s*spin 1s steps\(12\) infinite/);
   // The spinner still draws (only the animation stops) and the state still reads as working.

@@ -1314,7 +1314,7 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&s
 
 /// GIT-017 (T-227-d): files with an unresolved conflict, by path. Their staged text is clash markers, so it never goes into a message prompt.
 pub fn conflicted_files(dir: &Path) -> Vec<String> {
-    run(&["diff", "--name-only", "--diff-filter=U", "-z"], Some(dir)).map(|t| t.split(' ').filter(|n| !n.is_empty()).map(String::from).collect()).unwrap_or_default()
+    run(&["diff", "--name-only", "--diff-filter=U", "-z"], Some(dir)).map(|t| t.split('\0').filter(|n| !n.is_empty()).map(String::from).collect()).unwrap_or_default()
 }
 
 /// GIT-017 (T-227-d): the note that opens the diff when conflicted files were left out of it.
