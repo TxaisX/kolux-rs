@@ -12,7 +12,7 @@ import { LinkNode } from "@lexical/link";
 import { CodeHighlightNode, CodeNode } from "@lexical/code";
 import { $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS, type Transformer } from "@lexical/markdown";
 import { mergeRegister } from "@lexical/utils";
-import { registerTable, TABLE, TABLE_NODES } from "./richTable";
+import { overfullRow, registerTable, TABLE, TABLE_NODES } from "./richTable";
 import { registerListKeys } from "./richFormat";
 import { registerRichKeys } from "./richKeys";
 import { registerCodeColour } from "./richCodeColour";
@@ -63,6 +63,9 @@ export function limitsOf(md: string): string[] {
   const hit = LIMITS.filter(([re]) => re.test(prose)).map(([, what]) => `it has ${what}`);
   // ~~~ fences and indented code would be reflowed into one line or lose their indent.
   if (looseCodeRows(md.split("\n")).some(Boolean)) hit.push("it has code blocks the rich view would reflow");
+  // T-602: a table row with more cells than its header would show, and keep, only the header's cells. The raw text is
+  // read (a code span can hold a pipe that splits a cell), so a table drawn inside a code fence also counts.
+  if (overfullRow(md)) hit.push("it has table rows with more cells than their header");
   return hit;
 }
 

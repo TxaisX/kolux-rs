@@ -149,8 +149,16 @@ test("SET-002 box 2: Moss, saturation to 0 -> every background and text token is
   await typeInto(c, sat(), "100");
   expect(vars).toMatchObject(moss);
   expect(grey(vars["--seg-active"])).toBe(false);
+  // T-598: the page writes only what changed. This drag ended where it began, so after the pause nothing is
+  // written: what is stored reads as the last drag position, and the 0 on the way was never saved.
+  await settle(300);
+  expect(h.patches).toEqual([]);
+  expect((await import("../../theme")).readAppearance(h.settings).saturation).toBe(100);
+  // A drag that ends elsewhere saves its last position once, after the pause.
+  await typeInto(c, sat(), "0");
+  await typeInto(c, sat(), "40");
   await until(() => h.patches.length > 0, "the save");
-  expect(h.patches[h.patches.length - 1].set).toMatchObject({ themeSaturation: 100 }); // the saved value is the last drag position
+  expect(h.patches).toEqual([{ set: { themeSaturation: 40 }, remove: [] }]); // the saved value is the last drag position
 });
 
 test("SET-002 box 3: saved saturation 500 is used as 160, a word as 100", async () => {

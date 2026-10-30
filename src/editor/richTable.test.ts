@@ -20,6 +20,7 @@ import {
   TABLE_NODES,
 } from "./richTable";
 import { roundTrip, unsupported } from "./markdown";
+import { richBlocker } from "./frontMatter";
 
 // EDIT-010 (T-234-b): tables in the rich view. The text of a table, its keys and its row and
 // column edits, on a headless editor.
@@ -108,6 +109,57 @@ describe("table text", () => {
     expect(roundTrip("# T\n\n" + T + "\n")).toContain("| 1 | 2 |");
     expect(unsupported("a | b is not a table\n\nnext\n")).toBeNull();
     expect(roundTrip("a | b is not a table\n")).toContain("a | b is not a table");
+  });
+});
+
+// T-602 (audit F01-editor.3): the rich view never deletes cell text. The auditor's three cases.
+describe("cell text is never lost", () => {
+  const typeInto = (ed: LexicalEditor, r: number, c: number, text: string) => {
+    caret(ed, r, c);
+    run(ed, () => {
+      const cell = $tableAt()!.cell;
+      cell.clear();
+      cell.append($createTextNode(text));
+    });
+  };
+
+  it("a | typed into a cell is saved escaped, so the cell keeps all its text and reopens whole", () => {
+    const ed = mk("| cmd | what |\n| --- | --- |\n| du | disk use |");
+    typeInto(ed, 1, 1, "lists files | sort");
+    const saved = out(ed);
+    expect(saved.split("\n")[2]).toBe("| du | lists files \\| sort |");
+    expect(splitRow(saved.split("\n")[2])).toEqual(["du", "lists files \\| sort"]);
+    expect(out(mk(saved))).toBe(saved);
+    // a pipe the file already escaped is not escaped twice; an escaped backslash before a typed pipe still ends in one
+    typeInto(ed, 1, 1, "a \\| b, c \\\\| d");
+    expect(out(ed).split("\n")[2]).toBe("| du | a \\| b, c \\\\\\| d |");
+    // a canonical row (a new one) escapes too
+    const fresh = mk("| a | b |\n| --- | --- |");
+    caret(fresh, 0, 0);
+    run(fresh, () => $addRow("below"));
+    typeInto(fresh, 1, 0, "x|y");
+    expect(out(fresh).split("\n")[2]).toBe("| x\\|y |  |");
+  });
+
+  it("a note whose table has a row with more cells than its header opens in source view, with the reason", () => {
+    const note = (row: string) => `# Commands\n\n| cmd | what |\n| --- | --- |\n${row}\n`;
+    expect(unsupported(note("| du | lists files | sort |"))).toBe("it has table rows with more cells than their header");
+    expect(richBlocker(note("| 1 | 2 | note: keep me |"), false)?.text).toBe("Showing source: the rich view cannot show this file because it has table rows with more cells than their header.");
+    // rows that fit, short rows and escaped pipes still open in the rich view
+    expect(unsupported(note("| du | lists files \\| sort |"))).toBeNull();
+    expect(unsupported(note("| du |"))).toBeNull();
+  });
+
+  it("editing a row that holds more cells than it shows keeps the row as the file has it instead of dropping the rest", () => {
+    const md = "| cmd | what |\n| --- | --- |\n| du | lists files | sort |";
+    const ed = mk(md);
+    typeInto(ed, 1, 0, "ls -la");
+    expect(out(ed)).toBe(md);
+    // a column added still reaches every row (the canonical line is written when the row shows all its cells)
+    const grown = mk("|a|b|\n|---|---|\n|1|2|");
+    caret(grown, 1, 0);
+    run(grown, () => $addColumn("right"));
+    expect(out(grown).split("\n")[2]).toBe("| 1 |  | 2 |");
   });
 });
 
