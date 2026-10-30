@@ -1,7 +1,10 @@
 // The 36 px top bar (DESIGN.md section 4): app mark, overflow, sidebar toggle, back/forward on
 // the left; the centred Agents / Board / Terminals switcher; panel toggle, search hint, bell,
 // usage pill and the window's own minimize / maximize / close on the right. The bar is the
-// window's drag region (the window has no OS title bar). The search box shows the palette chord
+// window's drag region (the window has no OS title bar): T-620, a press anywhere on it that is not a
+// control moves the window ("deep"); the switcher's frame and the pop-up menus drawn inside the bar opt
+// out ("false"), so a press that just misses a segment does not move the window and a click on a
+// menu's backdrop still closes it. The search box shows the palette chord
 // from the keymap (T-005), so an edit to ~/.kolux/keybindings.json changes the chips.
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -75,7 +78,7 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
   const layout = chromeLayout(classic, sidebarOpen, sidebarWidth);
 
   return (
-    <header className={layout.bar} data-tauri-drag-region>
+    <header className={layout.bar} data-tauri-drag-region="deep">
       <div className="topbar-left" style={layout.headerWidth === null ? undefined : { width: layout.headerWidth }}>
         {/* APP-009 / T-248-a: the Kolux mark opens the app menu (File, Edit, View, Window, Help). */}
         <button
@@ -93,9 +96,7 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
           <Mark />
         </button>
         {appName && (
-          <span className="app-name" data-tauri-drag-region>
-            Kolux
-          </span>
+          <span className="app-name">Kolux</span>
         )}
         <button
           className="ib dots"
@@ -111,8 +112,8 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
         </button>
         {menuAt && (
           <>
-            <div className="menu-backdrop" onClick={() => setMenuAt(null)} aria-hidden="true" />
-            <div className="menu" role="menu" aria-label="View" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
+            <div className="menu-backdrop" onClick={() => setMenuAt(null)} aria-hidden="true" data-tauri-drag-region="false" />
+            <div className="menu" role="menu" aria-label="View" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)} data-tauri-drag-region="false">
               <div className="menu-title">View</div>
               {VIEW_ITEMS.map((i, n) => (
                 <button key={i.id} role="menuitem" className="menu-item" autoFocus={n === 0} disabled={!onZoom} title={`${i.label} the focused terminal`} onClick={() => (setMenuAt(null), onZoom?.(i.how))}>
@@ -135,7 +136,7 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
       </div>
 
       {layout.switcher && (
-        <nav className="switcher" aria-label="Screen">
+        <nav className="switcher" aria-label="Screen" data-tauri-drag-region="false">
           {screens.map((s) => (
             <button key={s.id} aria-pressed={screen === s.id} onClick={() => onScreen(s.id)}>
               {s.label}

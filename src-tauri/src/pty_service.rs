@@ -164,6 +164,19 @@ impl Inner {
     }
 }
 
+/// T-619: `PtySession::resize` on the master and size keeper taken out of the service lock: the size
+/// is recorded under the master's own lock, so a restore cannot put an older one back, then applied.
+/// ponytail: this body is a copy of `PtySession::resize` (pty.rs), which needs `&PtySession` and so the
+/// service lock; upgrade: share one free function in pty.rs (not this lane's file) that both call.
+fn resize_outside(master: Option<super::window_ops::SharedMaster>, size: Option<Arc<super::window_ops::SizeKeeper>>, cols: u16, rows: u16) -> Result<(), String> {
+    let m = master.ok_or("session already closed")?;
+    let m = m.lock().map_err(|_| "pty lock poisoned".to_string())?;
+    if let Some(size) = &size {
+        size.set(cols, rows);
+    }
+    m.resize(portable_pty::PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())
+}
+
 /// The terminals and attached windows of one running service.
 #[derive(Clone, Default)]
 pub struct Service {
@@ -317,12 +330,28 @@ impl Service {
             "resize" => {
                 let cols = req["cols"].as_u64().and_then(|c| u16::try_from(c).ok()).ok_or("no cols")?;
                 let rows = req["rows"].as_u64().and_then(|r| u16::try_from(r).ok()).ok_or("no rows")?;
-                self.with_term(req, |t| t.session.resize(cols, rows)).map(|_| json!({}))
+                // T-619 (R06-terminal-process.2): resized after the lock is let go, since a resize can wait
+                // on the very output the pump needs this lock for (pty_window_ops.rs).
+                let (master, size) = self.with_term(req, |t| Ok((t.session.master.clone(), t.session.size.clone())))?;
+                resize_outside(master, size, cols, rows).map(|_| json!({}))
             }
-            "kill" => self.with_term(req, |t| {
-                t.session.kill();
+            "kill" => {
+                // T-619 (R06-terminal-process.2, Row 784 here too): the terminal leaves the service under
+                // the lock and is ended after it is let go, as on_exit and end_all do. Ending it runs
+                // ClosePseudoConsole, which can wait for its output to drain (Windows 10, Windows 11
+                // before 24H2), and draining needs this lock; its reader stops waiting for a pane too.
+                let id = req["id"].as_u64().and_then(|i| u32::try_from(i).ok()).ok_or("no terminal id")?;
+                let gone = {
+                    let mut g = self.lock();
+                    let t = g.terms.remove(&id).ok_or_else(|| format!("no terminal {id} in this service"))?;
+                    if let Some(f) = g.flows.remove(&id) {
+                        f.release();
+                    }
+                    t
+                };
+                drop(gone);
                 Ok(json!({}))
-            }),
+            }
             "stop" => {
                 self.lock().stopping = true;
                 Ok(json!({}))
@@ -702,12 +731,30 @@ pub fn ensure(dir: &Path, launch: impl FnOnce() -> Result<(), String>, limit: Du
     }
 }
 
+/// T-595 (CLI-011, R01-cli.4, L2-rust-crates.2): the folder a Kolux program started for the user works
+/// in: the program's own folder, never the caller's, so Windows can still delete or rename the folder
+/// `kolux open` ran in (a worktree) while Kolux and this service run, and a DLL planted there is never
+/// searched for. A relative program path (a test's KOLUX_APP_EXECUTABLE) keeps the caller's folder,
+/// since moving would change which file it names.
+pub fn start_dir(exe: &Path) -> Option<&Path> {
+    exe.parent().filter(|_| exe.is_absolute())
+}
+
+/// `exe FLAG identifier dir`, quiet, in the program's own folder.
+fn detached(exe: &Path, identifier: &str, dir: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(FLAG).arg(identifier).arg(dir);
+    if let Some(own) = start_dir(exe) {
+        cmd.current_dir(own);
+    }
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd
+}
+
 /// Starts `exe FLAG identifier dir` with no console and outside the window's process group, so
 /// closing the window or its terminal leaves it running.
 pub fn launch_detached(exe: &Path, identifier: &str, dir: &Path) -> Result<(), String> {
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg(FLAG).arg(identifier).arg(dir);
-    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let mut cmd = detached(exe, identifier, dir);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1173,6 +1220,98 @@ mod tests {
         assert!(read_endpoint(&dir).is_none());
         assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "no temporary file left behind");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// T-595 (CLI-011, R01-cli.4, L2-rust-crates.2): the service starts in its program's own folder, never
+    /// in the folder the app was started from, and still gets its data folder as an argument.
+    #[test]
+    fn cli011_the_service_starts_in_its_own_folder_not_the_callers() {
+        let exe = std::env::current_exe().unwrap();
+        let data = scratch("t595");
+        let cmd = detached(&exe, "id", &data);
+        assert_eq!(cmd.get_current_dir(), exe.parent());
+        assert_ne!(cmd.get_current_dir(), Some(std::env::current_dir().unwrap().as_path()), "the caller's folder");
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), [std::ffi::OsStr::new(FLAG), "id".as_ref(), data.as_os_str()]);
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    /// T-619: starts `list`, which needs the service lock, and says whether it answered within 2 s;
+    /// the caller joins the probe after it lets its stall go.
+    fn list_answers(service: &Service) -> (bool, std::thread::JoinHandle<()>) {
+        let (done_tx, done_rx) = mpsc::channel();
+        let prober = service.clone();
+        let probe = std::thread::spawn(move || {
+            let _ = prober.answer(&json!({ "op": "list" }));
+            let _ = done_tx.send(());
+        });
+        (done_rx.recv_timeout(Duration::from_secs(2)).is_ok(), probe)
+    }
+
+    /// T-619 (R06-terminal-process.2): the service's copy of terminal.rs's Row 784 tests. Closing a pane
+    /// whose teardown stalls (ClosePseudoConsole waiting for output to drain, on Windows 10 and Windows
+    /// 11 before 24H2) must not hold the lock every pane's output needs. A fake session whose input
+    /// stalls when it is closed stands in for the stalled console.
+    #[test]
+    fn row784_a_stalled_kill_does_not_hold_the_service_lock() {
+        struct StallsOnClose(mpsc::Sender<()>, Arc<(Mutex<bool>, std::sync::Condvar)>);
+        impl Write for StallsOnClose {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Drop for StallsOnClose {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+                let (open, cv) = &*self.1;
+                let guard = open.lock().unwrap();
+                let _ = cv.wait_timeout_while(guard, Duration::from_secs(10), |o| !*o);
+            }
+        }
+        let service = Service::default();
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let session = PtySession::fake(Box::new(StallsOnClose(entered_tx, Arc::clone(&gate))));
+        service.lock().terms.insert(1, Term { session, program: String::new(), cwd: String::new(), meta: Value::Null });
+        service.lock().flows.insert(1, Arc::new(Flow::default()));
+        let closer = service.clone();
+        let closing = std::thread::spawn(move || closer.answer(&json!({ "op": "kill", "id": 1 })));
+        let stalled = entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        let (free, probe) = list_answers(&service);
+        // Release the stall first, so a failing run still ends both threads.
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        assert_eq!(closing.join().unwrap(), Ok(json!({})));
+        probe.join().unwrap();
+        assert!(stalled, "the kill never reached the stalled teardown");
+        assert!(free, "list waited behind a stalled kill");
+        assert_eq!(service.answer(&json!({ "op": "list" })).unwrap()["terminals"], json!([]), "the killed terminal is off the list");
+        assert!(service.lock().flows.is_empty(), "its reader no longer waits for a pane");
+        assert!(service.answer(&json!({ "op": "kill", "id": 1 })).unwrap_err().contains("no terminal 1"));
+    }
+
+    /// T-619: a resize that has to wait on its terminal (ResizePseudoConsole can wait on the very output
+    /// the pump needs the service lock for) must not hold that lock either. The test holds the
+    /// terminal's own master lock, which is where a real resize waits.
+    #[test]
+    fn t619_a_resize_waiting_on_its_terminal_does_not_hold_the_service_lock() {
+        let service = Service::default();
+        let id = service.answer(&json!({ "op": "spawn", "cols": 80, "rows": 24 })).unwrap()["id"].as_u64().unwrap();
+        let master = service.lock().terms[&(id as u32)].session.master.clone().expect("a real terminal has a master");
+        let held = master.lock().unwrap();
+        let resizer = service.clone();
+        let resizing = std::thread::spawn(move || resizer.answer(&json!({ "op": "resize", "id": id, "cols": 100, "rows": 30 })));
+        // Give the resize time to reach the master lock and wait there.
+        std::thread::sleep(Duration::from_millis(200));
+        let (free, probe) = list_answers(&service);
+        drop(held);
+        assert_eq!(resizing.join().unwrap(), Ok(json!({})));
+        probe.join().unwrap();
+        assert!(free, "list waited behind a resize that waits on its terminal");
+        assert_eq!(master.lock().unwrap().get_size().unwrap().cols, 100, "the resize still happened");
+        service.end_all();
     }
     /// ux card 6: Windows takes about 2 s to refuse a dead loopback port, and a service killed with its window leaves its
     /// record behind; a record whose process is gone must read as "no service" at once.
