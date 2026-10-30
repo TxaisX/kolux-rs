@@ -169,7 +169,9 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a [String]>, base: &Base) -
             "cd" | "chdir" | "set-location" | "sl" | "pushd" => {
                 let target = args.iter().find(|a| !(a.starts_with('-') && a.len() > 1) && !a.eq_ignore_ascii_case("/d"));
                 dir = match target {
-                    Some(t) if unclear_target(t) => None,
+                    // The same check as a folder part of a delete target (round 6 review of PR #15):
+                    // a wildcard, an escape or a drive-relative form makes the folder unknown.
+                    Some(t) if unclear_target(t) || t.contains(['*', '?', '[']) => None,
                     None if p == "pushd" => None,
                     None => base.home.clone(),
                     Some(&"-") => None,
@@ -2923,6 +2925,25 @@ mod tests {
             }
         }
         for c in ["rm -rf build/*", "rm -rf dist/*.o", "del /s /q dist\\*.o", "rm -rf build/[ab]*.log"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 round 6 review of PR #15: a folder a cd, pushd or Set-Location moves to gets the same
+    /// check as a folder part of a delete target: a wildcard, an escape or a drive-relative form
+    /// makes it unknown, so a recursive delete after it asks.
+    #[test]
+    fn t604r11_a_cd_to_a_wildcard_or_escaped_folder_makes_a_later_delete_ask() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["cd .?; rm -rf *", "cd .[.] && rm -rf *", "pushd .* && rm -rf build", "Set-Location .? ; Remove-Item -Recurse -Force *"] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["cd build && rm -rf *", "cd src/app; rm -rf dist"] {
             if hit(c).is_some() {
                 missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
             }

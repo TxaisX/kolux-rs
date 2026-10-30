@@ -533,3 +533,30 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2546 filtered out; f
 test result: ok. 80 passed; 0 failed; 1 ignored; 0 measured; 2466 filtered out; finished in 132.85s
 windows-gnu cargo check and clippy -D warnings: Finished. (Only protected.rs changed; the full cargo
 test was not re-run this round.)
+
+ROUND 6 REVIEW OF PR #15 at 4a693e00 (2026-10-30, integrator): the folder a cd moves to
+A folder given to cd, chdir, pushd, Set-Location or sl gets the same check as a folder part of a delete
+target: a wildcard (`*`, `?`, `[`), an escape (backtick, caret, a backslash before anything but a plain path
+character) or a drive-relative form makes the folder unknown, so a later recursive delete asks.
+`cd build && rm -rf *` and `cd src/app; rm -rf dist` still run.
+
+BEFORE (4a693e00 with only the new test):
+===== before the fix: t604r11
+test protected::tests::t604r11_a_cd_to_a_wildcard_or_escaped_folder_makes_a_later_delete_ask ... FAILED
+thread 'protected::tests::t604r11_a_cd_to_a_wildcard_or_escaped_folder_makes_a_later_delete_ask' (13380) panicked at src/protected.rs:2949:9:
+[
+    "should ask (delete): \"cd .?; rm -rf *\", got None",
+    "should ask (delete): \"cd .[.] && rm -rf *\", got None",
+    "should ask (delete): \"pushd .* && rm -rf build\", got None",
+    "should ask (delete): \"Set-Location .? ; Remove-Item -Recurse -Force *\", got None",
+]
+    protected::tests::t604r11_a_cd_to_a_wildcard_or_escaped_folder_makes_a_later_delete_ask
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2547 filtered out; finished in 0.19s
+
+AFTER:
+===== after the fix: t604r11
+test protected::tests::t604r11_a_cd_to_a_wildcard_or_escaped_folder_makes_a_later_delete_ask ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2547 filtered out; finished in 0.00s
+===== cargo test --lib -- protected --test-threads=3
+test result: ok. 81 passed; 0 failed; 1 ignored; 0 measured; 2466 filtered out; finished in 130.58s
+windows-gnu cargo check and clippy -D warnings: Finished. (Only protected.rs changed; full cargo test not re-run.)
