@@ -328,7 +328,7 @@ Rules: clean-up before quitting has a short time limit so the restart is not hel
   clicking Restart to update again while the app is already getting ready to quit is ignored, so
   only one install runs.
 Acceptance:
-  - [ ] Normal update → the old process is gone within the deadline and the new version is running.
+  - [x] Normal update → the old process is gone within the deadline and the new version is running. (evidence/T-622.txt)
   - [ ] Refuse the elevation request → the app stays open and the message names a permission problem.
 Compat: —
 Source: D-19-029
