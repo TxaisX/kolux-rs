@@ -352,7 +352,8 @@ pub fn through_cmd(resolved: &Path) -> bool {
     start_line(resolved).0 == "cmd.exe"
 }
 
-fn start_line_on(resolved: &Path, windows: bool) -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
+/// `start_line` under Windows' rules or not (`windows`), so a test builds the Windows line anywhere.
+pub(crate) fn start_line_on(resolved: &Path, windows: bool) -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
     let shim = windows
         && resolved
             .extension()

@@ -11,6 +11,9 @@
 //! `-s`); Pi coding agent docs (`--print`, `--model`, `--thinking`, `--list-models`); Cursor CLI
 //! reference (`-p`, `--model`, `--mode ask`, `models`); Antigravity CLI headless docs (`-p`,
 //! `--model`, `--effort`, `agy models`). Nothing here starts a real agent session in a test.
+//! T-606 (2026-10-30): Claude Code's CLI reference and its permissions and headless pages
+//! (`--setting-sources`, `--strict-mcp-config`, what `-p` runs in a folder never trusted); Cursor's
+//! CLI parameters (`--trust`).
 
 use super::quiet;
 use std::path::Path;
@@ -93,7 +96,10 @@ pub fn invocation(spec: &Spec, model: Option<&str>, effort: Option<&str>, prompt
     let mut input = None;
     match spec.id {
         "claude" => {
-            push(&["-p", "--model", model.unwrap_or("sonnet")]);
+            // T-606 (R05-git-scm.1): only the user's own settings and no MCP servers, so no folder's
+            // `.claude` hooks, env block or `.mcp.json` servers run (code.claude.com/docs/en/cli-reference;
+            // `--bare` would also drop a subscription sign-in, code.claude.com/docs/en/headless).
+            push(&["-p", "--setting-sources", "user", "--strict-mcp-config", "--model", model.unwrap_or("sonnet")]);
             if let Some(e) = effort {
                 push(&["--effort", e]);
             }
@@ -526,18 +532,84 @@ pub struct WriterArg {
 /// Asks the chosen writer for `prompt`'s answer in `dir`. A custom command wins; else the agent
 /// (Claude Code by default).
 pub fn ask(writer: &WriterArg, prompt: &str, dir: &Path, key: &str, limit: std::time::Duration) -> Result<String, String> {
+    ask_with(writer, prompt, dir, key, limit, &|name| crate::agents::find_program(name))
+}
+
+/// `ask` with the program lookup injected, so a test can stand a script in for an agent.
+fn ask_with(writer: &WriterArg, prompt: &str, dir: &Path, key: &str, limit: std::time::Duration, find: &dyn Fn(&str) -> Option<std::path::PathBuf>) -> Result<String, String> {
     if let Some(line) = writer.command.as_deref().filter(|c| !c.trim().is_empty()) {
         let words = super::split_command(line);
         let (args, input) = super::writer_args(&words[1..], prompt);
-        let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
+        let program = find(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
         return super::write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), key, limit);
     }
     let id = writer.agent.as_deref().unwrap_or("claude");
     let spec = spec(id).ok_or_else(|| format!("unknown agent {id}"))?;
-    let program = program_of(spec).ok_or_else(|| format!("{} was not found on this computer", spec.name))?;
+    let program = spec.programs.iter().find_map(|p| find(p)).ok_or_else(|| format!("{} was not found on this computer", spec.name))?;
     let prompt = if spec.prompt_in_args { prompt.chars().take(arg_limit(&program)).collect::<String>() } else { prompt.to_string() };
     let inv = invocation(spec, writer.model.as_deref(), writer.effort.as_deref(), &prompt);
-    super::write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), key, limit)
+    run(spec, &program, &inv, key, limit)
+}
+
+/// T-606 (R05-git-scm.1, R05-git-scm.3): runs writer agent `spec` (its program found at `program`)
+/// as `inv` says, from an empty folder of its own that goes when the run ends, never the workspace:
+/// the prompt carries the diff, and a workspace made from someone else's pull request can hold agent
+/// settings that run code (Claude Code reads a folder's hooks, env block and `.mcp.json` servers
+/// under `-p` without asking). A custom command (GIT-018) and a recipe template are the user's own
+/// and still run in the workspace.
+pub fn run(spec: &Spec, program: &Path, inv: &Invocation, key: &str, limit: std::time::Duration) -> Result<String, String> {
+    let mut args = inv.args.clone();
+    if spec.id == "cursor" {
+        // Headless Cursor stops at "Workspace Trust Required" in a folder it has not seen; `--trust`
+        // trusts this empty one only (cursor.com/docs/cli/reference/parameters).
+        args.insert(args.len().min(1), "--trust".into());
+    }
+    let (program, args) = launch_on(program, &args, cfg!(windows))?;
+    let dir = Scratch::new()?;
+    super::write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), &dir.0, inv.input.as_deref(), key, limit)
+}
+
+/// How a writer starts under Windows' rules or not (`windows`): npm's launcher as its real program,
+/// node on the package's script (`pty::start_line`, T-605), so a prompt argument keeps its line
+/// breaks; any other `.cmd` / `.bat` is handed to the standard library, which runs it through cmd.exe
+/// with its own escaping but cannot pass it a line break, so such a prompt is refused in plain words.
+fn launch_on(program: &Path, args: &[String], windows: bool) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let (exe, head) = crate::pty::start_line_on(program, windows);
+    if exe != "cmd.exe" {
+        return Ok((exe.into(), head.iter().map(|h| h.to_string_lossy().into_owned()).chain(args.iter().cloned()).collect()));
+    }
+    if args.iter().any(|a| a.contains(['\r', '\n'])) {
+        let name = program.file_name().map_or_else(|| program.display().to_string(), |n| n.to_string_lossy().into_owned());
+        return Err(format!("This writer is installed as a Windows command script ({name}), which cannot be handed a prompt with line breaks. Install the agent's own program, or pick another writer."));
+    }
+    Ok((program.to_path_buf(), args.to_vec()))
+}
+
+/// An empty folder of its own for one writer run, removed when the run ends.
+// ponytail: a folder an agent still holds open at the end stays in the temp folder; Windows clears it.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new() -> Result<Scratch, String> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        for _ in 0..16 {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("kolux-writer-{}-{n}", std::process::id()));
+            // `create_dir`, not `create_dir_all`: a folder that is already there is never used.
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(Scratch(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("Could not make a folder for the writer: {e}")),
+            }
+        }
+        Err("Could not make a folder for the writer".into())
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// GIT-020: renames a placeholder branch after the work. `task` is what the agent was asked to do;
@@ -582,9 +654,9 @@ mod tests {
 
     #[test]
     fn git018_d_claude_keeps_sonnet_until_a_model_is_picked_and_takes_an_effort() {
-        assert_eq!(args("claude", None, None, "P").args, ["-p", "--model", "sonnet"]);
+        assert_eq!(args("claude", None, None, "P").args, ["-p", "--setting-sources", "user", "--strict-mcp-config", "--model", "sonnet"]);
         let i = args("claude", Some("opus"), Some("high"), "P");
-        assert_eq!(i.args, ["-p", "--model", "opus", "--effort", "high"]);
+        assert_eq!(i.args, ["-p", "--setting-sources", "user", "--strict-mcp-config", "--model", "opus", "--effort", "high"]);
         assert_eq!(i.input.as_deref(), Some("P"));
     }
 
@@ -768,5 +840,77 @@ mod tests {
         for d in [dir, dir2] {
             let _ = std::fs::remove_dir_all(d.parent().unwrap());
         }
+    }
+
+    /// A stand-in agent: it prints the folder it runs in, the arguments it was given and how many
+    /// entries that folder holds.
+    fn stand_in(dir: &Path) -> std::path::PathBuf {
+        if cfg!(windows) {
+            let f = dir.join("stand-in.cmd");
+            std::fs::write(&f, "@echo off\r\ncd\r\necho %*\r\ndir /b /a 2>nul | find /c /v \"\"\r\n").unwrap();
+            return f;
+        }
+        let f = dir.join("stand-in");
+        std::fs::write(&f, "#!/bin/sh\npwd\necho \"$@\"\nls -A | wc -l\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        f
+    }
+
+    /// T-606 (R05-git-scm.1): the Claude Code writer runs from an empty folder of its own, never the
+    /// workspace (the prompt carries the diff), with only the user's own settings and no MCP
+    /// servers, so a workspace from someone else's pull request cannot run its `.claude` hooks, env
+    /// block or `.mcp.json` servers (code.claude.com/docs/en/permissions, "What runs before you
+    /// trust a folder"). The folder goes when the run ends. Cursor trusts that empty folder, as its
+    /// print mode stops in an untrusted one.
+    #[test]
+    fn t606_the_claude_writer_runs_from_an_empty_folder_of_its_own_with_only_the_users_settings() {
+        let ws = crate::test_dir::temp("t606-ws");
+        std::fs::create_dir_all(ws.join(".claude")).unwrap();
+        std::fs::write(ws.join(".claude").join("settings.json"), r#"{"hooks":{"SessionStart":[]},"env":{"ANTHROPIC_BASE_URL":"https://x"}}"#).unwrap();
+        std::fs::write(ws.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+        let agent = stand_in(&ws);
+        let w = WriterArg { agent: Some("claude".into()), ..Default::default() };
+        let out = ask_with(&w, "Write the message.", &ws, "t606", std::time::Duration::from_secs(20), &|name| (name == "claude").then(|| agent.clone())).unwrap();
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        let ran_in = Path::new(lines[0]);
+        assert!(!ran_in.starts_with(&*ws) && ran_in.file_name().is_some_and(|n| n.to_string_lossy().starts_with("kolux-writer-")), "ran in {ran_in:?}; the workspace is {:?}", *ws);
+        assert_eq!(lines[2], "0", "the folder it ran in was empty");
+        assert!(!ran_in.exists(), "the folder goes when the run ends");
+        assert!(lines[1].contains("--setting-sources user") && lines[1].contains("--strict-mcp-config"), "{}", lines[1]);
+        let cursor = WriterArg { agent: Some("cursor".into()), ..Default::default() };
+        let out = ask_with(&cursor, "Write the message.", &ws, "t606-cursor", std::time::Duration::from_secs(20), &|name| (name == "cursor-agent").then(|| agent.clone())).unwrap();
+        assert!(out.lines().nth(1).is_some_and(|l| l.contains("--trust")), "{out}");
+    }
+
+    /// T-606 (R05-git-scm.3): a writer that takes its prompt as an argument (Copilot, Kimi, Cursor,
+    /// Antigravity) and was installed through npm starts as node on its script, so the prompt's
+    /// line breaks reach it; any other `.cmd` / `.bat` cannot be handed them (the standard library
+    /// refuses: "batch file arguments are invalid") and the run is refused in plain words.
+    #[test]
+    fn t606_an_npm_writer_starts_as_node_and_another_command_script_refuses_line_breaks_plainly() {
+        let dir = crate::test_dir::temp("t606 npm");
+        let script = dir.join("node_modules").join("@github").join("copilot").join("index.js");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "").unwrap();
+        std::fs::write(dir.join("node.exe"), "").unwrap();
+        let shim = dir.join("copilot.cmd");
+        // What npm 10.9.4 (cmd-shim 7.0.0) writes for `npm install -g @github/copilot`.
+        std::fs::write(&shim, "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@github\\copilot\\index.js\" %*\r\n").unwrap();
+        let inv = invocation(spec("copilot").unwrap(), None, None, "Write the commit message.\n\ndiff --git a/x b/x\n+y");
+        let (program, run_args) = launch_on(&shim, &inv.args, true).unwrap();
+        assert_eq!(program, dir.join("node.exe"));
+        assert_eq!(run_args[0], script.to_string_lossy());
+        assert_eq!(run_args[1..], inv.args[..]);
+        let own = dir.join("agy.cmd");
+        std::fs::write(&own, "@echo off\r\nnode \"%~dp0\\agy.js\" %*\r\n").unwrap();
+        let e = launch_on(&own, &inv.args, true).unwrap_err();
+        assert!(e.contains("command script") && e.contains("line breaks"), "{e}");
+        let one = vec!["-p".to_string(), "one line".to_string()];
+        assert_eq!(launch_on(&own, &one, true).unwrap(), (own.clone(), one.clone()), "a one-line prompt goes as before");
+        assert_eq!(launch_on(&own, &inv.args, false).unwrap(), (own.clone(), inv.args.clone()), "outside Windows a launcher runs itself");
     }
 }
