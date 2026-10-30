@@ -1,0 +1,59 @@
+T-585 (status-hooks lane, 2026-10-30): a helper agent whose stop never arrives does not keep its pane "working" forever
+=====================================================================================================================
+Audit R02-hooks-status.2 (src-tauri/src/status.rs:257). Cards STAT-026, STAT-028.
+
+THE PROBLEM
+Esc while Claude runs a helper agent (a sub-agent) stops the turn and the helper, and Claude sends neither the
+helper's SubagentStop nor the lead's Stop. Kolux refuses to conclude that Esc while a child works (STAT-028), and a
+child left the roster only by its own SubagentStop, a session boundary, its terminal ending or a deny. So the stopped
+helper stayed "working" on the roster, resolved() kept answering "working" after every later turn's Stop, no done
+notification came and keep-awake held, until /clear, a resume or closing the terminal.
+
+WHAT IS CLEARED, AND WHY NOT AT EVERY STOP
+The task text suggested clearing the roster when the lead's turn stops or a new prompt starts. Clearing it at the
+lead's Stop would break STAT-026's ticked P0 box "The lead ends its turn while a subagent still works -> the lead shows
+working until the child finishes" (and its tests in status.rs, e.g.
+the_lead_stays_working_while_a_child_works_and_a_teammate_waiting_raises_needs_you and
+a_child_stop_announces_its_own_reply_and_a_gone_child_never_returns), and clearing every working child at a new prompt
+would drop a teammate or background helper still at work, whose later permission questions would then never raise
+"needs you" (STAT-026: a child already cleared away never comes back). So only what the Esc stopped is cleared: the
+children that were working when that Esc was refused and have not been heard from since, at the next prompt.
+
+WHAT CHANGED (src-tauri/src/status.rs)
+- :206-209 Session.escaped: the children working when an Escape could not be concluded.
+- :542-555 mark_cancel: when the cancel is refused while the lead works, the working children are noted there.
+- :303-306 fold: any event carrying a child's agent_id (its tool events, its own start or stop) takes it off that note:
+  the Esc did not stop it.
+- :444-446 UserPromptSubmit: the noted children still "working" leave the roster before the new turn begins.
+STAT-028 is unchanged: the Esc itself still concludes nothing while a child works.
+
+TESTS ADDED (src-tauri/src/status.rs, mod tests, :2362 on)
+1. t585_a_helper_stopped_by_an_escape_with_its_turn_does_not_keep_later_turns_working: prompt, helper a1 starts and
+   reads a file, Esc (still working: STAT-028), next prompt: a1 is off the roster, the turn's Stop reads done; a later
+   helper of a later turn is shown as before.
+2. t585_a_helper_heard_from_after_the_escape_or_outliving_its_lead_stays: a helper that reports after the Esc is kept
+   at the next prompt; with no Esc, a helper that outlives the lead's Stop keeps the pane working across a new prompt
+   and the next Stop (STAT-026 box 1).
+
+Before the fix: both tests compile against the old code (they use only existing calls); test 1 fails there at
+"the helper stopped with the old turn is off the roster" (s.children still holds a1, working) and the Stop that
+follows reads "working", not "done". Test 2 passes before and after (it guards what must not change).
+$ cargo check --all-targets   (tests added, fix not yet)
+ Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 29s   (exit 0)
+cargo test is not run in the lanes; the integrator runs it.
+
+After the fix:
+$ CARGO_TARGET_DIR=... CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check --all-targets
+ Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 20s   (exit 0; no warning in status.rs, hooks.rs, automations.rs, agent_hooks/)
+$ ... cargo check --target x86_64-pc-windows-gnu --all-targets
+   Compiling kolux-rs v0.1.0 (/home/user/kolux-lanes/status-hooks/src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 54s   (no errors, no warnings)
+
+NEEDS THE INTEGRATOR: cargo test t585_ and the rest of status.rs's tests (p80/p81 Esc and deny tests among them).
+
+LIMITS AND WHAT IS LEFT
+- A helper whose stop is lost some other way (no Esc), or a background helper silent from an Esc until the next prompt,
+  is not covered: clearing those needs a signal Kolux does not have (the audit's idea, Claude's Stop background_tasks
+  list naming live helpers, is not confirmed to list sub-agents). Question for Txais in the lane result.
+- Live proof on Windows: start a Claude task that spawns a sub-agent, press Esc while it runs, send a new prompt; when
+  that turn ends the pane reads Done and the done notification fires.
