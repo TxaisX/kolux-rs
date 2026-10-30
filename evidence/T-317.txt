@@ -95,3 +95,48 @@ LIVE PROOF PENDING (Windows)
  2. In a terminal: Add-Content logs\a.log "line 2" (a few times): each line shows in the tab within a second, scrolled to the end.
  3. Write a half line ([IO.File]::AppendAllText("logs\a.log", "half")): nothing shows until a newline follows.
  4. Clear-Content logs\a.log: the tab empties and starts again from the top.
+
+REVIEW ROUND 1 (2026-10-30, lane/review-editor): Follow log never lays the file over unsaved edits (EDIT-003).
+PROBLEM (reviewer): a followed tab and a plain tab of the same .log share one buffer (EDIT-001); the follow tick put the disk
+  copy in with replaceAll without asking whether the buffer held unsaved edits, and the followed tab is read-only, so the disk
+  check (which raises the banner) never runs for it. Choosing Follow log on a .log with unsaved edits in another tab, or typing
+  in that tab while the log grows, silently dropped the edits and marked the tab clean.
+CHANGED
+ - src/editor/logFollow.ts:12-27 the tick EditorPane runs each second is now followTick(last, io) (FollowIo: stamp, read, dirty,
+   shown, show), the same shape as the disk check's checkOnce(path, io) in diskChange.ts, so a test drives the real tick. It
+   waits while the buffer holds unsaved edits: checked before the read (:21) and again after it (:23, typing can start while
+   the read is out, as checkOnce does), and it keeps `last`, so the next second tries again instead of skipping that change.
+ - src/editor/EditorPane.tsx:670-709 the follow effect passes the real calls (file_stamps, file_read, isDirty, textOf, and
+   replaceAll plus the scroll-to-end) and stores what followTick returns; a tick that ends after the tab went away changes
+   nothing (show checks alive), as before.
+ While it waits the followed tab shows the shared buffer (the unsaved text, EDIT-001) and does not move; the plain tab, once in
+ front, raises the disk banner (Reload or Keep my edits), and once the edits are saved or reloaded the follow goes on.
+TESTS ADDED src/editor/logFollow.test.ts (views built as EditorPane builds them, the real buffers.ts, the real followTick):
+ 1. :61 Follow log on a .log whose plain tab has an unsaved line: the line survives the first tick and two ticks after the log
+    grows, nothing is read meanwhile and the stamp is not taken; after Keep mine writes the edits, a line appended to the log
+    shows in both tabs and the tab is clean.
+ 2. :87 a key typed in the plain tab while the log is being read is kept (the after-read check).
+BEFORE THE FIX (followTick moved out of EditorPane first with no change in behaviour, then the tests run;
+vitest run src/editor/logFollow.test.ts):
+   × T-317 (EDIT-003): Follow log never replaces unsaved edits in a plain tab of the same log; it waits, then follows again once they are saved
+   × T-317 (EDIT-003): typing that starts while the followed log is being read is kept too
+   AssertionError: expected [ 'line 1\nline 2\n', …(2) ] to deeply equal [ …(3) ]
+     -   "MY NOTE: keep this\nline 1\nline 2\n" (both tabs), true      <- expected
+     +   "line 1\nline 2\n" (both tabs), false                         <- received: the typed line is gone, the tab "clean"
+   AssertionError: expected [ 'one\ntwo\n', false, '2' ] to deeply equal [ 'typed one\n', true, '1' ]
+        Tests  2 failed | 3 passed (5)
+   (the reviewer's probe follow-dirty.mts showed the same: plain tab dirty true before, "line 1\nline 2\n" and dirty false after)
+AFTER THE FIX
+ - vitest run src/editor/logFollow.test.ts src/editor/explorerBar.test.ts src/editor/explorerView.test.ts src/editor/Explorer.test.ts:
+   ✓ T-317 (EDIT-003): Follow log never replaces unsaved edits in a plain tab of the same log; it waits, then follows again once they are saved
+   ✓ T-317 (EDIT-003): typing that starts while the followed log is being read is kept too
+    Test Files  4 passed (4)
+         Tests  30 passed (30)
+ - pnpm exec tsc: exit 0.
+EDIT-026 ACCEPTANCE (unchanged): both boxes (lines appended show within a second; an emptied log reloads from the start) still
+ NEED A LIVE RUN; the rules behind them (followStep, followTick) are unit-tested.
+LIVE PROOF PENDING (Windows), added to steps 1-4 above
+ 5. Open logs\a.log as a plain tab, type a line and do not save; right-click a.log > Follow log: the typed line is still there in
+    both tabs (the plain tab shows unsaved). Add-Content logs\a.log "line 9": the followed tab does not change. Bring the plain
+    tab forward: the disk banner shows; click Reload: both tabs show the file with line 9, and the next Add-Content line shows
+    in the followed tab within a second.

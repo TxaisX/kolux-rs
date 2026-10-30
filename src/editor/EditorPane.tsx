@@ -43,7 +43,7 @@ import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";
 import { isUntitled, needsName } from "./untitled";
 import { seedSources, seedText } from "./searchSeed";
-import { followStep } from "./logFollow";
+import { followTick, type FollowIo } from "./logFollow";
 import { offersPreview, previewHtml } from "./htmlPreview";
 import DiffPane from "./DiffPane"; // EDIT-056: the Changes view (DiffPane imports this file back; both only use each other when rendering)
 import { drawn, underRoot, VIEW_LABEL, viewsFor, type View } from "./viewSwitch";
@@ -667,29 +667,33 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
     if (focused && !hidden) seedSources.focus(id);
   }, [focused, hidden, id]);
 
-  // EDIT-026: a followed log reads the file once a second while its tab shows, and only when it changed.
+  // EDIT-026: a followed log reads the file once a second while its tab shows, and only when it changed; it waits while
+  // another tab of the file holds unsaved edits (T-317, followTick).
   // ponytail: reads the whole file each time it changes; a tail-only read if logs of hundreds of MB matter.
   useEffect(() => {
     if (!follow || !ready || hidden) return;
     let alive = true;
     let last = "";
     let busy = false;
-    const tick = async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        const st = JSON.stringify(await invoke("file_stamps", { paths: [path] }));
-        if (!alive || st === last) return;
-        const disk = await invoke<string>("file_read", { path });
+    const io: FollowIo = {
+      stamp: async () => JSON.stringify(await invoke("file_stamps", { paths: [path] })),
+      read: () => invoke<string>("file_read", { path }),
+      dirty: () => isDirty(path),
+      shown: () => textOf(path) ?? "",
+      show: (next) => {
         if (!alive) return;
-        last = st;
-        const next = followStep(textOf(path) ?? "", disk);
-        if (!next) return;
         const cm = view.current;
         const d = cm?.scrollDOM;
         const atEnd = !d || next.reset || d.scrollHeight - d.scrollTop - d.clientHeight < 40;
         replaceAll(path, next.text);
         if (cm && atEnd) cm.dispatch({ effects: EditorView.scrollIntoView(cm.state.doc.length) });
+      },
+    };
+    const tick = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        last = await followTick(last, io);
       } catch {
         // a read that failed is tried again on the next second
       } finally {
