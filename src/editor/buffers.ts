@@ -9,10 +9,15 @@ import { isolateHistory } from "@codemirror/commands";
 export const synced = Annotation.define<boolean>();
 
 // A file with Windows line ends is shown and saved with them. The editor splits text on its separator only, so
-// T-603: the separator sits in a compartment that a reload with other line ends switches (replaceAll), and text the
-// rich view or the notebook view hands the editor gets the editor's own line breaks (withLineBreaks).
+// T-603: the separator sits in a compartment that a reload using other line ends throughout switches (replaceAll), and
+// text the rich view or the notebook view hands the editor gets the editor's own line breaks (withLineBreaks).
 const lineEnds = new Compartment();
 const lineEndOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
+/** T-603: the one line end `text` uses throughout, or null when it has none or mixes CRLF with bare LF. */
+const soleLineEnd = (text: string): string | null => {
+  const crlf = text.includes("\r\n");
+  return crlf === /(^|[^\r])\n/.test(text) ? null : crlf ? "\r\n" : "\n";
+};
 /** The line separator of an editor showing `text` (EditorPane, DiffPane). */
 export const lineEndsFor = (text: string): Extension => lineEnds.of(EditorState.lineSeparator.of(lineEndOf(text)));
 /** T-603 (F01-editor.2): a change worked out on doc.toString() (lines joined with \n), its line breaks as `state` splits them. */
@@ -62,14 +67,17 @@ function buf(path: string): Buffer {
 }
 const tell = (b: Buffer) => b.listeners.forEach((f) => f());
 
-/** The text a newly attached view should show: a twin's current text, else what was read. */
+/** The text a newly attached view should show: a twin's current text, else what was read. T-603: the twin's lines and
+ *  separator too, as a change relayed between views that split the text differently does not fit (a twin that kept LF
+ *  through a mixed reload, while the at-open rule gives the mixed file CRLF). */
 export function attach(path: string, view: View, disk: string): void {
   const b = buf(path);
   if (b.views.size === 0) b.disk = disk;
   const twin = [...b.views][0];
   b.views.add(view);
-  if (twin && twin.state.sliceDoc() !== view.state.sliceDoc()) {
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: twin.state.sliceDoc() }, annotations: synced.of(true) });
+  if (twin && (twin.state.lineBreak !== view.state.lineBreak || twin.state.sliceDoc() !== view.state.sliceDoc())) {
+    const end = twin.state.lineBreak;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: twin.state.doc }, effects: view.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations: synced.of(true) });
   }
   tell(b);
 }
@@ -121,16 +129,21 @@ export async function save(path: string, write: (text: string, loadedHash?: stri
 
 /** Text Kolux puts in itself (a reload): every view shows it and none is unsaved. `undoable`
  *  (EDIT-003's Reload) makes it one step of its own in each view's undo history, so Ctrl+Z or the
- *  toast's Undo brings the edits back. T-603 (F01-editor.4): text with other line ends than the view
- *  shows switches the view's separator, and goes in already split into lines (the transaction splits
- *  a string on the separator it starts with). */
+ *  toast's Undo brings the edits back. T-603 (F01-editor.4): text that uses one line end throughout,
+ *  other than the view's, switches the view's separator; text that mixes CRLF with bare LF, or has no
+ *  line end, keeps the view's own (switching would merge each line of the other kind into its
+ *  neighbour). It goes in already split into lines (the transaction splits a string on the separator
+ *  it starts with). */
 export function replaceAll(path: string, text: string, undoable = false): void {
   const b = buf(path);
   b.disk = text;
   const annotations = undoable ? [synced.of(true), isolateHistory.of("full")] : synced.of(true);
-  const end = lineEndOf(text);
-  const insert = Text.of(text.split(end));
-  for (const v of b.views) if (v.state.sliceDoc() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert }, effects: v.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations });
+  const sole = soleLineEnd(text);
+  for (const v of b.views) {
+    if (v.state.sliceDoc() === text) continue;
+    const end = sole ?? v.state.lineBreak;
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: Text.of(text.split(end)) }, effects: v.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations });
+  }
   tell(b);
 }
 
