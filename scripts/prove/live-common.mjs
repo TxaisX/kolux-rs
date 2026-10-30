@@ -15,7 +15,8 @@ import { createApp, sleep, waitFor } from "../evidence/app-launch.mjs";
 
 export { sleep, waitFor };
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
-export const ACCOUNT_A = "G:/Dev/kolux-scratch/live-signin/account-a";
+// Test account A lives outside the old-app folders (X-proc.6); set KOLUX_LIVE_ACCOUNT_A to use another folder.
+export const ACCOUNT_A = process.env.KOLUX_LIVE_ACCOUNT_A || "G:/Temp/live-signin/account-a";
 export const BASE = "G:/Temp/live-v15";
 export const LOGS = "G:/Temp/live-v15-logs";
 export const CLAUDE = 'section.pane[data-agent*="claude"]';
