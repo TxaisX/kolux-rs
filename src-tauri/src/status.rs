@@ -203,6 +203,10 @@ pub struct Session {
     /// Children a deny settle took off the roster, oldest first; true = set aside this turn. Their own
     /// events bring them back at any time, the interrupt's undo only this turn's; a new prompt keeps them.
     parked: Vec<(Child, bool)>,
+    /// T-585: the children that were working when an Escape could not be concluded (STAT-028: never while a child
+    /// works). Esc stops the turn and its helpers, and Claude sends neither stop; one not heard from since is cleared
+    /// at the next prompt, so it cannot keep later turns working.
+    escaped: Vec<String>,
     /// Every tool the lead and the sub-agents started this turn, newest last (VIEW-025 b5).
     started: Vec<Started>,
     /// Hash of the input of the tool the lead's `pending` waits on.
@@ -296,6 +300,10 @@ impl Session {
         let name = event.get("hook_event_name")?.as_str()?;
         self.signal();
         self.agent = Some(agent);
+        // T-585: a child heard from after an Escape was not stopped by it.
+        if let Some(id) = str_of(event, "agent_id") {
+            self.escaped.retain(|e| e != id);
+        }
         // A sub-agent starting or starting a tool inside a cancel's grace proves the turn went on.
         if self.cancelled && self.child_alive(agent, name, event) {
             self.drop_cancel();
@@ -433,6 +441,15 @@ impl Session {
         }
         match name {
             "UserPromptSubmit" => {
+                // T-585: a child silent since an Escape stopped the last turn most likely went with that turn (its stop
+                // never comes), so it no longer keeps the pane working. It is set aside, not forgotten: a background
+                // helper or teammate the Esc did not stop comes back with its own next event (restore_parked).
+                let escaped = std::mem::take(&mut self.escaped);
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.children).into_iter().partition(|c| c.state == "working" && escaped.contains(&c.id));
+                self.children = kept;
+                self.parked.extend(gone.into_iter().map(|c| (c, false)));
+                let over = self.parked.len().saturating_sub(MAX_CHILDREN);
+                self.parked.drain(..over);
                 self.prompt = change.prompt.clone();
                 self.pending = None;
                 self.interrupted = false;
@@ -529,12 +546,16 @@ impl Session {
 
     /// `deny`: a Claude Deny's Esc interrupts the whole turn, so it is marked while children work too.
     fn mark_cancel(&mut self, deny: bool) {
-        if self.own == Some("working") && !self.background && (deny || !self.children.iter().any(|c| c.state == "working")) {
+        let busy: Vec<String> = self.children.iter().filter(|c| c.state == "working").map(|c| c.id.clone()).collect();
+        if self.own == Some("working") && !self.background && (deny || busy.is_empty()) {
             self.cancelled = true;
             self.deny = deny;
             self.cancelled_at = now_ms();
             self.killed.clone_from(&self.tools);
             self.denied.clear();
+        } else if self.own == Some("working") {
+            // T-585: refused because children work; those not heard from again went with the turn.
+            self.escaped = busy;
         }
     }
 
@@ -2342,5 +2363,57 @@ mod tests {
         assert!(s.answerable());
         assert_eq!(s.answer_state(), "working");
         assert!(!s.answerable());
+    }
+
+    // ---- T-585 (R02-hooks-status.2): a helper agent whose stop never arrives ----
+
+    #[test]
+    fn t585_a_helper_stopped_by_an_escape_with_its_turn_does_not_keep_later_turns_working() {
+        // Esc while Claude runs a helper stops both, and Claude sends neither the helper's stop nor the lead's.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"review the branch"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"code-reviewer"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a1","tool_name":"Read","tool_use_id":"r1"}"#);
+        s.typed_cancel();
+        assert_eq!(s.resolved(), "working", "STAT-028: nothing is concluded while a child works");
+        // The next prompt starts a new turn without the helper, and when that turn ends the pane reads done.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"just fix the typo"}"#), Some("working"));
+        assert!(s.children.is_empty(), "the helper stopped with the old turn is off the roster");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"fixed"}"#), Some("done"));
+        // A later turn with a helper of its own is shown as before.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a2","agent_type":"tester"}"#);
+        assert_eq!(ids(&s), vec!["a2"]);
+        // Round 1 review: a1 was set aside, not lost. A background helper or teammate the Esc did not stop
+        // comes back with its own next event, so its later work and questions still show.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"review the branch"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"code-reviewer"}"#);
+        s.typed_cancel();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"just fix the typo"}"#);
+        assert!(s.children.is_empty() && parked_ids(&s) == ["a1"], "set aside, not deleted");
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a1","tool_name":"Bash","tool_use_id":"r9"}"#);
+        assert_eq!(ids(&s), vec!["a1"], "its own event brings it back onto the roster");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a1","tool_name":"Bash","tool_use_id":"r9"}"#), Some("permission"));
+    }
+
+    #[test]
+    fn t585_a_helper_heard_from_after_the_escape_or_outliving_its_lead_stays() {
+        // The helper reports after the Esc: the Esc did not stop it, so the next prompt keeps it.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"review"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"w"}"#);
+        s.typed_cancel();
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a1","tool_name":"Read","tool_use_id":"r2"}"#);
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"and then"}"#);
+        assert_eq!(ids(&s), vec!["a1"]);
+        // STAT-026 box 1: with no Esc, a helper that outlives the lead's turn keeps the pane working, a new prompt included.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"b","agent_type":"w"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("working"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"next"}"#), Some("working"));
+        assert_eq!(ids(&s), vec!["b"]);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("working"), "b still works");
     }
 }

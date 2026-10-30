@@ -64,10 +64,12 @@ test("box 2: typing a key, pressing Cancel and reopening the same dialog shows a
   expect(find(tree, (e) => e.type === "input").props.value).toBe("");
   expect(find(tree, (e) => e.type === "button" && e.props.type === "submit").props.disabled).toBe(true);
   expect(everyString(tree).some((s) => s.includes(KEY))).toBe(false);
-  // Escape cancels the same way.
+  // Escape cancels the same way, and stops there so Settings under the dialog stays open (T-565).
   find(tree, (e) => e.type === "input").props.onChange({ target: { value: KEY } });
   tree = page.render();
-  find(tree, (e) => e.props.onKeyDown).props.onKeyDown({ key: "Escape" });
+  const stop = vi.fn();
+  find(tree, (e) => e.props.onKeyDown).props.onKeyDown({ key: "Escape", stopPropagation: stop });
+  expect(stop).toHaveBeenCalledTimes(1);
   tree = page.render({ ...props, open: true });
   expect(find(tree, (e) => e.type === "input").props.value).toBe("");
 });

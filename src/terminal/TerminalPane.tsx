@@ -66,7 +66,7 @@ import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
 import { INPUT_SOURCE_ACTION, KittyKeyboard, latinControl } from "./kittyKeys";
 import { heldByTerminal } from "../keys/terminalPolicy";
 import { answeredElsewhere } from "../chat/ask";
-import { allowed, clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, safeLinks, spanOf, type Found } from "./links";
+import { allowed, clickTarget, handlesOn, hintFor, linkFor, linksIn, resolvePath, rowOf, safeLinks, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
 import { findIn, linesOf, nearestFrom, placeMatches, searchLater, segments, stepIndex, type BufRow, type FindOptions, type Match, type Runner } from "./find";
@@ -77,7 +77,6 @@ import { copyOnSelect } from "../shell/inputExtras";
 import { askLink, linkState } from "../shell/linkAsk";
 import { applyKoluxUnicode } from "../shell/unicodeWidth";
 import { afterLigatures, importLigatures } from "../shell/ligatures";
-import { handlesIn } from "./tabs";
 import { markShell, runningOf, shellInAgentPane } from "./remove";
 import { registerTurnSource, xtermSource } from "./turnRead";
 
@@ -323,7 +322,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   }, [flash]);
   // TERM-107: a restored pane wears a mark in its header until the first key or click in it; an agent
   // pane whose start line does not resume its conversation is marked as restored without resume.
-  const [restoredMark, setRestoredMark] = useState<string | null>(null);
+  // T-566: decided from the props at the first paint, not after the restore's first IPC answers.
+  const [restoredMark, setRestoredMark] = useState<string | null>(restored ? (resumed === false ? "restored without resume" : "restored") : null);
   // TERM-111: a shell that died (non-zero exit) stays with an overlay offering a restart in the same
   // pane; restart() re-runs the start line, or opens a plain shell, keeping the buffer.
   const [died, setDied] = useState<number | null>(null);
@@ -465,6 +465,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     applyKoluxUnicode(term); // T-308 / TERM-104: Unicode 16 widths and emoji sequences (xterm alone knows Unicode 6)
     term.open(el);
     termRef.current = term;
+    // TERM-107 (T-566): the first key or click from mount on clears the restored mark; no restore step runs first.
+    const pane = box.current;
+    const unmark = () => {
+      setRestoredMark(null);
+      unkey.dispose();
+      pane?.removeEventListener("mousedown", unmark);
+    };
+    const unkey = term.onKey(unmark);
+    pane?.addEventListener("mousedown", unmark);
     // T-325-c (CHAT-010/011): the chat reads the running turn's reply off this terminal.
     const unturn = number !== undefined ? registerTurnSource(number, xtermSource(term)) : () => {};
     // STAT-033: the title the program sets stands in for its state while no hook reports.
@@ -489,13 +498,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // TERM-096: a printed handle of an open terminal (term-N) is a link that opens its pane.
     term.registerLinkProvider({
       provideLinks(y, done) {
-        const links = safeLinks(() => {
-          const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-          return handlesIn(text).flatMap(({ start, end, handle }) => {
+        const links = safeLinks(() =>
+          handlesOn(term.buffer.active, y - 1, term.cols).flatMap(({ handle, range }) => {
             const go = handleRef.current?.(handle);
-            return go ? [{ range: { start: { x: start + 1, y }, end: { x: end, y } }, text: handle, activate: go }] : [];
-          });
-        });
+            return go ? [{ range, text: handle, activate: go }] : [];
+          }),
+        );
         done(links.length > 0 ? links : undefined);
       },
     });
@@ -540,21 +548,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       term.element?.querySelector(".xterm-screen")?.dispatchEvent(new MouseEvent("mouseleave"));
     };
     window.addEventListener("blur", blurLinks);
-    const linksOn = (y: number) => {
-      const cols = term.cols;
-      const row = (i: number) => {
-        const l = term.buffer.active.getLine(i);
-        return l ? { text: l.translateToString(false), isWrapped: l.isWrapped } : undefined;
-      };
-      const span = spanOf(row, y - 1, cols);
-      return findLinks(span.text).map((f) => ({
-        range: rangeOf(f.start, f.end, span.first, cols),
+    const linksOn = (y: number) =>
+      linksIn(term.buffer.active, y - 1, term.cols).map(({ f, range }) => ({
+        range,
         text: f.target,
         activate: (e: MouseEvent) => openFound(f, e),
         hover: () => ((hot = f), setLinkHint(hintOf(f))),
         leave: () => ((hot = null), setLinkHint(null)),
       }));
-    };
     term.registerLinkProvider({
       provideLinks(y, done) {
         // ACCT-061: a scan that trips over unusual output leaves this row without links; the pane keeps working.
@@ -994,14 +995,6 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         let keepInView = false;
         let replayedOld = false;
         if (restored) {
-          setRestoredMark(resumed === false ? "restored without resume" : "restored");
-          const unmark = () => {
-            setRestoredMark(null);
-            key.dispose();
-            box.current?.removeEventListener("mousedown", unmark);
-          };
-          const key = term.onKey(unmark);
-          box.current?.addEventListener("mousedown", unmark);
           // APP-052: read once the service linked, which first adds what a kept terminal printed with no window open.
           await tauriService.info().catch(() => null);
           if (!alive) return;
@@ -1228,6 +1221,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       window.removeEventListener("blur", blurLinks);
       el.removeEventListener("mousedown", claim, true);
       el.removeEventListener("contextmenu", menuClick, true);
+      pane?.removeEventListener("mousedown", unmark);
     };
   }, []);
 
@@ -1300,27 +1294,13 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     const top = term.buffer.active.viewportY;
     if (m.row < top || m.row >= top + term.rows) term.scrollToLine(Math.max(0, m.row - Math.floor(term.rows / 2)));
   };
-  // Every row of the buffer as cells: a row of plain ASCII as its string (one cell per character), any
-  // other row cell by cell so wide characters keep their two cells.
+  // Every row of the buffer as cells (links.ts rowOf: wide characters keep their two cells).
   const bufferLines = (term: Terminal) => {
     const buf = term.buffer.active;
     const rows: BufRow[] = [];
     for (let y = 0; y < buf.length; y++) {
       const l = buf.getLine(y);
-      if (!l) {
-        rows.push({ wrapped: false, cells: "" });
-        continue;
-      }
-      const s = l.translateToString(false);
-      if (s.length === term.cols && /^[ -~]*$/.test(s)) rows.push({ wrapped: l.isWrapped, cells: s });
-      else {
-        const cells = [];
-        for (let x = 0; x < term.cols; x++) {
-          const c = l.getCell(x);
-          cells.push({ chars: c?.getChars() ?? "", width: c?.getWidth() ?? 1 });
-        }
-        rows.push({ wrapped: l.isWrapped, cells });
-      }
+      rows.push(l ? { wrapped: l.isWrapped, cells: rowOf(l, term.cols) } : { wrapped: false, cells: "" });
     }
     return linesOf(rows, term.cols);
   };
@@ -1484,7 +1464,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   menuRef.current = openMenu;
 
   return (
-    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} data-dropping={dropping || undefined} style={{ ...(card?.column ? { gridColumn: card.column } : {}), ...(dropping ? { outline: "2px solid var(--line-focus)", outlineOffset: -2 } : {}) }}>
+    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} data-key={number} data-dropping={dropping || undefined} style={{ ...(card?.column ? { gridColumn: card.column } : {}), ...(dropping ? { outline: "2px solid var(--line-focus)", outlineOffset: -2 } : {}) }}>
       <header
         className="pane-head"
         onContextMenu={(e) => {

@@ -68,11 +68,20 @@ pub(crate) fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// EDIT-046: the all-or-nothing save. `put` fills a temporary file beside `path`; the file is
 /// flushed to disk and only then moved over `path`. Any failure removes the temporary file and
 /// leaves `path` exactly as it was. A copy left by an app that died mid-save is cleared the next
-/// time that file is saved.
+/// time that file is saved. T-617: a `path` that is a link is saved through: the file it leads to
+/// gets the new text the same way (the temporary file beside it) and the link stays a link.
 fn replace_with(path: &Path, private: bool, put: impl FnOnce(&mut fs::File) -> std::io::Result<()>) -> Result<(), String> {
     static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let name = path.file_name().ok_or_else(|| format!("{} is not a file path", path.display()))?;
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    // A rename over the link would replace the link itself (CLAUDE.md -> AGENTS.md would split in two).
+    // ponytail: the link is read again here, after the fence looked at it; a program that swaps it in
+    // between is followed (it could write there itself); hand the fenced target down if that matters.
+    let real = if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        fs::canonicalize(path).map_err(|e| format!("could not save {}: {e}", path.display()))?
+    } else {
+        path.to_path_buf()
+    };
+    let name = real.file_name().ok_or_else(|| format!("{} is not a file path", path.display()))?;
+    let dir = real.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let prefix = format!(".{}.kolux-save-", name.to_string_lossy());
     clear_stale_copies(dir, &prefix);
     let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -93,10 +102,10 @@ fn replace_with(path: &Path, private: bool, put: impl FnOnce(&mut fs::File) -> s
     put(&mut f).and_then(|_| f.flush()).and_then(|_| f.sync_all()).map_err(fail)?;
     drop(f);
     #[cfg(unix)]
-    if let Ok(meta) = fs::metadata(path) {
+    if let Ok(meta) = fs::metadata(&real) {
         let _ = fs::set_permissions(&temp, meta.permissions());
     }
-    fs::rename(&temp, path).map_err(fail)?;
+    fs::rename(&temp, &real).map_err(fail)?;
     #[cfg(unix)]
     if let Ok(d) = fs::File::open(dir) {
         let _ = d.sync_all(); // the swap itself reaches the disk
@@ -1113,6 +1122,37 @@ mod tests {
         write_text(&f, "two, longer").unwrap();
         assert_eq!(fs::read_to_string(&f).unwrap(), "two, longer");
         assert_eq!(entries(&d), vec!["new.txt".to_string()]);
+    }
+
+    #[test]
+    fn t617_saving_through_a_link_writes_the_real_file_and_keeps_the_link() {
+        let d = temp_dir("t617");
+        fs::write(d.join("AGENTS.md"), "old rules\n").unwrap();
+        fs::create_dir(d.join("docs")).unwrap();
+        // CLAUDE.md -> AGENTS.md beside it, and docs/rules.md -> ../AGENTS.md: relative links, as repositories keep them.
+        let links = [(d.join("CLAUDE.md"), PathBuf::from("AGENTS.md")), (d.join("docs").join("rules.md"), Path::new("..").join("AGENTS.md"))];
+        for (link, to) in &links {
+            #[cfg(unix)]
+            let made = std::os::unix::fs::symlink(to, link);
+            #[cfg(windows)]
+            let made = std::os::windows::fs::symlink_file(to, link);
+            if let Err(e) = made {
+                println!("t617 NOT exercised: this system would not make a file link ({e}); on Windows that takes Developer Mode or an administrator");
+                return;
+            }
+        }
+        let mut loaded = String::from("old rules\n");
+        for (i, (link, to)) in links.iter().enumerate() {
+            let text = format!("rules, take {i}\n");
+            write_checked(link, &text, Some(&text_hash(loaded.as_bytes()))).unwrap();
+            assert!(link_exists(link), "{} is still a link", link.display());
+            assert_eq!(&fs::read_link(link).unwrap(), to, "and it still leads where it did");
+            assert_eq!(fs::read_to_string(d.join("AGENTS.md")).unwrap(), text, "the real file has the new text");
+            loaded = text;
+        }
+        // no save copy is left behind, beside a link or beside the real file
+        assert_eq!(entries(&d), vec!["AGENTS.md".to_string(), "CLAUDE.md".to_string(), "docs".to_string()]);
+        assert_eq!(entries(&d.join("docs")), vec!["rules.md".to_string()]);
     }
 
     #[test]

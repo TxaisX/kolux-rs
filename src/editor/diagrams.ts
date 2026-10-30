@@ -48,6 +48,11 @@ export function mermaidConfig(dark: boolean) {
     securityLevel: "strict" as const, // mermaid itself escapes labels and refuses click handlers
     htmlLabels: false,
     flowchart: { htmlLabels: false },
+    // T-601: a diagram that fails leaves no error picture (with its styles) in the app's own page.
+    suppressErrorRendering: true,
+    // T-601: what a diagram's own %%{init}%% or front matter may not set. mermaid's own five, plus the theme and the
+    // font names, which reach the CSS mermaid puts into the app's page while it draws, and HTML labels.
+    secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges", "theme", "themeVariables", "themeCSS", "fontFamily", "altFontFamily", "htmlLabels"],
     theme: dark ? ("dark" as const) : ("neutral" as const),
     themeVariables: dark
       ? { background: "transparent", primaryColor: "#2b3a55", primaryTextColor: "#e6e9ef", primaryBorderColor: "#6b86b8", lineColor: "#9aa7bf", secondaryColor: "#3a2f4f", tertiaryColor: "#243030", fontFamily: "system-ui, sans-serif" }

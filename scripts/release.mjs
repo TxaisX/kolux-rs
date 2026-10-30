@@ -1,12 +1,14 @@
 // APP-059: the release job. Builds main in a checkout kept only for releases, one build at a time,
-// gives it the next patch version, signs the installer, smoke-tests the result and publishes the
+// gives it the next patch version, smoke-tests the result, signs the installer and publishes the
 // installer, its signature and the update manifest (latest.json) with notes listing the shipped
 // commits. `pnpm ship --main` starts it in the background; it can also be run by hand.
 //
 //   pnpm release [--dry-run] [--no-publish] [--repo <url>]
 //
 //   --dry-run      print the version, the notes and the steps; build and publish nothing
-//   --no-publish   build, sign and smoke-test, then stop (the files stay in <checkout>-out)
+//   --no-publish   build, smoke-test and sign, then stop (the files stay in <checkout>-out)
+//   --build-only   build and smoke-test, then stop before signing (release.yml's build step, T-588)
+//   --finish       sign the build --build-only recorded in <checkout>-out, then publish it (release.yml's next step)
 //
 // Environment: KOLUX_RELEASE_CHECKOUT  the build checkout (default ~/.kolux-rs/release-checkout)
 //              KOLUX_RELEASE_KEY       the signing key file, its public half beside it as .pub
@@ -14,6 +16,7 @@
 //              KOLUX_RELEASE_KEY_PASSWORD  the key's password, when it has one
 //              KOLUX_RELEASE_PUBLISH_DIR   publish into this folder instead of GitHub (rehearsal)
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +87,28 @@ export function smokeMigration(cli, root) {
 export const installerName = (version) => `Kolux RS_${version}_x64-setup.exe`;
 export const downloadUrl = (version) => `https://github.com/${FEED_REPO}/releases/download/v${version}/${encodeURIComponent(installerName(version))}`;
 export const isGitHub = (repo) => /^(https:\/\/github\.com\/|git@github\.com:)/.test(repo ?? "");
+/** DT-R11: gh runs only for a GitHub origin or inside GitHub Actions, whose release.yml builds from a local path. */
+export const onGitHub = (repo, env) => isGitHub(repo) || env.GITHUB_ACTIONS === "true";
+
+/** T-588: the check `tauri build` made when it signed, and the updater repeats before it installs: the
+ *  signature (minisign, base64, as tauri signer writes it) is the release key's, covers these bytes,
+ *  and its signed comment names this version (requireSignedVersion). Throws the reason otherwise. */
+export function verifySignature(data, signature, pubkey, version) {
+  const box = (b64) => Buffer.from(b64.trim(), "base64").toString("utf8").split(/\r?\n/);
+  const pk = Buffer.from(box(pubkey)[1] ?? "", "base64"); // "Ed", key id (8 bytes), public key (32)
+  const [, line = "", comment = "", global = ""] = box(signature);
+  const sig = Buffer.from(line, "base64"); // "ED" (the file is hashed first), key id, signature (64)
+  const trusted = comment.replace(/^trusted comment: /, "");
+  const fail = (why) => {
+    throw new Error(`release signature: ${why}; installed copies would refuse this update`);
+  };
+  if (pk.length !== 42 || sig.length !== 74 || sig.subarray(0, 2).toString() !== "ED") fail("not a minisign signature and key");
+  if (!sig.subarray(2, 10).equals(pk.subarray(2, 10))) fail("made with another key than the public key the app carries");
+  const key = crypto.createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: pk.subarray(10).toString("base64url") } });
+  if (!crypto.verify(null, crypto.createHash("blake2b512").update(data).digest(), key, sig.subarray(10))) fail("does not cover this installer");
+  if (!crypto.verify(null, Buffer.concat([sig.subarray(10), Buffer.from(trusted)]), key, Buffer.from(global, "base64"))) fail("its trusted comment was altered");
+  if (!trusted.split("\t").includes(`version:${version}`)) fail(`not bound to version ${version}`);
+}
 
 /** Picks the newest `v<x.y.z>` folder of a rehearsal publish folder. */
 export function newestTag(names) {
@@ -142,27 +167,42 @@ export const unlock = (dir) => fs.rmSync(dir + ".lock", { force: true });
 
 const say = (...a) => console.log(new Date().toISOString(), ...a);
 
+// T-588 (X-proc.5): who holds which secret. The build (pnpm install, the CLI's cargo build, tauri build:
+// every dependency's install and build scripts) and the packaged CLI get none; the gh release calls get
+// the token; tauri signer alone gets the private key and its password.
+const TOKENS = /^(GH|GITHUB|GH_ENTERPRISE|GITHUB_ENTERPRISE)_TOKEN$/i;
+const KEYS = /^(KOLUX_RELEASE_KEY(_PASSWORD)?|TAURI(_SIGNING)?_PRIVATE_KEY(_PATH|_PASSWORD)?)$/i;
+const without = (env, ...secrets) => Object.fromEntries(Object.entries(env).filter(([k]) => !secrets.some((s) => s.test(k))));
+const buildEnv = (env) => without(env, TOKENS, KEYS);
+const ghEnv = (env) => without(env, KEYS);
+
+/** Runs a program and returns what it printed; a failure throws. buildOnce and finish take another runner in tests. */
 function sh(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: "utf8", shell: opts.shell ?? false, cwd: opts.cwd, env: opts.env ?? process.env, maxBuffer: 1 << 28 });
+  // pnpm and cargo are .cmd shims on Windows (opts.shim), which only start through the shell; every
+  // argument here is ours. One command string, so node does not warn about unescaped arguments.
+  const shell = !!opts.shim && process.platform === "win32";
+  if (shell) [cmd, args] = [[cmd, ...args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" "), []];
+  const r = spawnSync(cmd, args, { encoding: "utf8", shell, cwd: opts.cwd, env: opts.env ?? process.env, maxBuffer: 1 << 28 });
   if (opts.echo) process.stdout.write((r.stdout || "") + (r.stderr || ""));
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed (exit ${r.status ?? r.error?.message}):\n${(r.stderr || r.stdout || "").trim().slice(-2000)}`);
   return (r.stdout || "").trim();
 }
 const git = (dir, ...args) => sh("git", ["-C", dir, ...args]);
-// pnpm and cargo are .cmd shims on Windows, which only start through the shell; every argument here is ours.
-// One command string, so node does not warn about unescaped arguments.
-const tool = (cmd, args, opts) => (process.platform === "win32" ? sh([cmd, ...args].join(" "), [], { ...opts, shell: true }) : sh(cmd, args, opts));
 
-function latestRelease(env, repo) {
+function latestRelease(env, repo, exec) {
   if (env.KOLUX_RELEASE_PUBLISH_DIR) {
     const pub = path.resolve(env.KOLUX_RELEASE_PUBLISH_DIR);
     const tag = fs.existsSync(pub) ? newestTag(fs.readdirSync(pub)) : null;
     return tag ? { tag, body: fs.readFileSync(path.join(pub, tag, "notes.md"), "utf8") } : null;
   }
   if (!onGitHub(repo, env)) return null;
-  const r = spawnSync("gh", ["release", "view", "--repo", FEED_REPO, "--json", "tagName,body"], { encoding: "utf8" });
-  if (r.status !== 0) return null; // no release yet
-  const j = JSON.parse(r.stdout);
+  let out;
+  try {
+    out = exec("gh", ["release", "view", "--repo", FEED_REPO, "--json", "tagName,body"], { env: ghEnv(env) });
+  } catch {
+    return null; // no release yet
+  }
+  const j = JSON.parse(out);
   return { tag: j.tagName, body: j.body };
 }
 
@@ -173,8 +213,9 @@ function setVersion(dir, version) {
   edit("src-tauri/Cargo.toml", (s) => s.replace(/^version = "[^"]*"/m, `version = "${version}"`));
 }
 
-export function buildOnce(o, env = process.env) {
+export function buildOnce(o, env = process.env, exec = sh) {
   const dir = checkoutDir(env);
+  if (o.buildOnly) fs.rmSync(pendingFile(env), { force: true }); // --finish acts only on what this run builds
   // 1. The checkout kept only for releases, at the newest main.
   if (!fs.existsSync(path.join(dir, ".git"))) {
     if (!o.repo) throw new Error(`no build checkout at ${dir} and no --repo to clone it from`);
@@ -186,7 +227,7 @@ export function buildOnce(o, env = process.env) {
   }
   const repo = o.repo || git(dir, "remote", "get-url", "origin");
   const sha = git(dir, "rev-parse", "origin/main");
-  const latest = latestRelease(env, repo);
+  const latest = latestRelease(env, repo, exec);
   if (latest && markerOf(latest.body) === sha) {
     say(`main ${sha.slice(0, 7)} was already released as ${latest.tag}; nothing to do`);
     return null;
@@ -205,76 +246,115 @@ export function buildOnce(o, env = process.env) {
   say(`release ${version} from main ${sha.slice(0, 7)} (project ${projectVersion}, newest release ${latest?.tag ?? "none"})`);
   console.log(notes);
   if (o.dryRun) {
-    say(`dry run: would set version ${version}, run pnpm install and pnpm tauri build --bundles nsis signed with ${keyFile(env)}, smoke-test, then publish ${installerName(version)}, its .sig and latest.json to ${env.KOLUX_RELEASE_PUBLISH_DIR ? path.resolve(env.KOLUX_RELEASE_PUBLISH_DIR) : FEED_REPO}`);
+    say(`dry run: would set version ${version}, run pnpm install and pnpm tauri build --bundles nsis with no secret in reach, smoke-test, sign with tauri signer and ${keyFile(env)}, then publish ${installerName(version)}, its .sig and latest.json to ${env.KOLUX_RELEASE_PUBLISH_DIR ? path.resolve(env.KOLUX_RELEASE_PUBLISH_DIR) : FEED_REPO}`);
     return { version, sha, notes, dryRun: true };
   }
 
-  // 3. Build and sign.
+  // 3. Build. It needs only the key's public half, which the app carries; the private half is checked
+  // up front unless a later step brings it (--build-only).
   const key = keyFile(env);
-  if (!fs.existsSync(key) || !fs.existsSync(key + ".pub")) throw new Error(`no signing key at ${key} (and ${key}.pub). Make one once with: pnpm tauri signer generate -w "${key}"`);
+  if (!fs.existsSync(key + ".pub") || (!o.buildOnly && !fs.existsSync(key))) throw new Error(`no signing key at ${key} (and ${key}.pub). Make one once with: pnpm tauri signer generate -w "${key}"`);
   const pubkey = fs.readFileSync(key + ".pub", "utf8").trim();
   setVersion(dir, version);
   const conf = path.join(dir, "src-tauri", "release.conf.json");
   const target = path.resolve(env.CARGO_TARGET_DIR || path.join(dir, "src-tauri", "target"), "release");
-  // The bundler checks the signature it makes against the configured public key. CLI-006: the
-  // installer carries the command line and its kolux.cmd shim in a bin folder of the install.
+  // CLI-006: the installer carries the command line and its kolux.cmd shim in a bin folder of the install.
   const resources = { [path.join(dir, "src-tauri", "cli", "kolux.cmd").replaceAll("\\", "/")]: "bin/kolux.cmd", [path.join(target, "kolux.exe").replaceAll("\\", "/")]: "bin/kolux.exe" };
-  fs.writeFileSync(conf, JSON.stringify({ bundle: { createUpdaterArtifacts: true, resources }, plugins: { updater: { pubkey } } }));
-  const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: fs.readFileSync(key, "utf8"), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.KOLUX_RELEASE_KEY_PASSWORD ?? "", KOLUX_RS_RELEASE_PUBKEY: pubkey };
+  fs.writeFileSync(conf, JSON.stringify({ bundle: { resources }, plugins: { updater: { pubkey } } }));
+  const benv = { ...buildEnv(env), KOLUX_RS_RELEASE_PUBKEY: pubkey };
   say("installing packages");
-  tool("pnpm", ["install", "--frozen-lockfile"], { cwd: dir, env: benv });
+  exec("pnpm", ["install", "--frozen-lockfile"], { cwd: dir, env: benv, shim: true });
   say("building the command line, then the Windows installer that carries it");
-  tool("cargo", ["build", "--release", "--features", "release-cli", "--bin", "kolux"], { cwd: path.join(dir, "src-tauri"), env: benv });
-  tool("pnpm", ["tauri", "build", "--bundles", "nsis", "--config", `"${conf}"`], { cwd: dir, env: benv, echo: true });
+  exec("cargo", ["build", "--release", "--features", "release-cli", "--bin", "kolux"], { cwd: path.join(dir, "src-tauri"), env: benv, shim: true });
+  exec("pnpm", ["tauri", "build", "--bundles", "nsis", "--config", conf], { cwd: dir, env: benv, echo: true, shim: true });
 
-  // 4. Smoke test: the files are there, and the CLI, the app and the manifest agree on the version.
+  // 4. Smoke test: the installer is there, and the CLI and the app agree on the version.
   const exe = path.join(target, "bundle", "nsis", installerName(version));
   if (!fs.existsSync(exe) || fs.statSync(exe).size < 1 << 20) throw new Error(`smoke test: no installer at ${exe}`);
-  const signature = fs.existsSync(exe + ".sig") ? fs.readFileSync(exe + ".sig", "utf8").trim() : "";
-  if (!signature) throw new Error(`smoke test: the installer has no signature (${exe}.sig)`);
-  const kolux = (words, env) => sh(path.join(target, "kolux.exe"), words, env ? { env: { ...process.env, ...env } } : {});
+  const kolux = (words, extra) => exec(path.join(target, "kolux.exe"), words, { env: { ...buildEnv(env), ...extra } });
   smokeCli(kolux, version);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kolux-migrate-smoke-"));
   try { smokeMigration(kolux, scratch); } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
   const appVersion = JSON.parse(fs.readFileSync(path.join(dir, "src-tauri", "tauri.conf.json"), "utf8")).version;
   if (appVersion !== version) throw new Error(`smoke test: the app says ${appVersion}, the release is ${version}`);
   const out = path.join(dir + "-out", `v${version}`);
+  fs.rmSync(out, { recursive: true, force: true }); // never a signature or manifest left from an earlier try
   fs.mkdirSync(out, { recursive: true });
   fs.copyFileSync(exe, path.join(out, installerName(version)));
-  fs.copyFileSync(exe + ".sig", path.join(out, installerName(version) + ".sig"));
-  const m = manifest(version, notes, signature, downloadUrl(version));
-  fs.writeFileSync(path.join(out, "latest.json"), JSON.stringify(m, null, 2));
   fs.writeFileSync(path.join(out, "notes.md"), notes);
-  say(`smoke test passed: installer, signature, kolux --version, --help and the old-profile migration, and the manifest all say ${version}`);
+  say(`smoke test passed: the installer, kolux --version, --help and the old-profile migration all say ${version}`);
+  if (o.buildOnly) {
+    fs.writeFileSync(pendingFile(env), `v${version}\n`);
+    say(`built ${version}, not signed; release.mjs --finish signs and publishes it (the files are in ${out})`);
+    return { version, sha, notes, out, signed: false };
+  }
+  return finish(o, env, exec, out);
+}
+
+/** T-588: the note --build-only leaves in <checkout>-out naming the build it made, and removes when it
+ *  built nothing (APP-059's skip); --finish signs that build and no other. */
+const pendingFile = (env) => path.join(checkoutDir(env) + "-out", "pending");
+function pendingBuild(env) {
+  const f = pendingFile(env);
+  return fs.existsSync(f) ? path.join(path.dirname(f), fs.readFileSync(f, "utf8").trim()) : null;
+}
+
+/** 5-6. Signs a build (its folder in <checkout>-out), checks the signature, writes the update manifest
+ *  and publishes the installer, its signature and the manifest. */
+export function finish(o, env, exec, out) {
+  const version = path.basename(out).slice(1);
+  const exe = path.join(out, installerName(version));
+  const notes = fs.readFileSync(path.join(out, "notes.md"), "utf8");
+  const sha = markerOf(notes);
+
+  // 5. Sign. The locked tauri CLI starts straight from the checkout's node_modules (no package manager
+  // in between, so nothing else sees the key); --app-version binds the version (requireSignedVersion).
+  const key = keyFile(env);
+  if (!fs.existsSync(key)) throw new Error(`no signing key at ${key}`);
+  const tauri = path.join(checkoutDir(env), "node_modules", "@tauri-apps", "cli", "tauri.js");
+  const senv = { ...buildEnv(env), TAURI_SIGNING_PRIVATE_KEY: fs.readFileSync(key, "utf8").trim(), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.KOLUX_RELEASE_KEY_PASSWORD ?? "" };
+  exec(process.execPath, [tauri, "signer", "sign", "--app-version", version, exe], { env: senv });
+  const signature = fs.readFileSync(exe + ".sig", "utf8").trim();
+  verifySignature(fs.readFileSync(exe), signature, fs.readFileSync(key + ".pub", "utf8"), version);
+  fs.writeFileSync(path.join(out, "latest.json"), JSON.stringify(manifest(version, notes, signature, downloadUrl(version)), null, 2));
+  say(`signed ${version}; the signature checks out against the public key the app carries`);
   if (o.noPublish) {
     say(`built ${version}, not published; the files are in ${out}`);
     return { version, sha, notes, out, published: false };
   }
 
-  // 5. Publish: the installer, its signature and the manifest.
+  // 6. Publish: the installer, its signature and the manifest.
   if (env.KOLUX_RELEASE_PUBLISH_DIR) {
     const pub = path.resolve(env.KOLUX_RELEASE_PUBLISH_DIR);
     fs.cpSync(out, path.join(pub, `v${version}`), { recursive: true });
     fs.copyFileSync(path.join(out, "latest.json"), path.join(pub, "latest.json"));
     say(`published ${version} to the folder ${pub}`);
   } else {
+    const repo = o.repo || git(checkoutDir(env), "remote", "get-url", "origin");
     if (!onGitHub(repo, env)) throw new Error(`the source repository ${repo} is not on GitHub, so nothing is published; set KOLUX_RELEASE_PUBLISH_DIR to rehearse`);
     // APP-031: the manifest goes up last, so a release is never announced before its installer is there.
     const files = [installerName(version), installerName(version) + ".sig"].map((f) => path.join(out, f));
-    sh("gh", ["release", "create", `v${version}`, "--repo", FEED_REPO, "--title", `Kolux RS ${version}`, "--notes-file", path.join(out, "notes.md"), ...files]);
-    sh("gh", ["release", "upload", `v${version}`, "--repo", FEED_REPO, path.join(out, "latest.json")]);
+    exec("gh", ["release", "create", `v${version}`, "--repo", FEED_REPO, "--title", `Kolux RS ${version}`, "--notes-file", path.join(out, "notes.md"), ...files], { env: ghEnv(env) });
+    exec("gh", ["release", "upload", `v${version}`, "--repo", FEED_REPO, path.join(out, "latest.json")], { env: ghEnv(env) });
     say(`published ${version} to ${FEED_REPO}`);
   }
   return { version, sha, notes, out, published: true };
 }
 
-export function run(o, env = process.env) {
+export function run(o, env = process.env, exec = sh) {
   const dir = checkoutDir(env);
-  if (o.dryRun) return void buildOnce(o, env);
+  if (o.dryRun) return void buildOnce(o, env, exec);
+  if (o.finish) {
+    // release.yml's step after --build-only; the build already ran, or there was nothing to build
+    const out = pendingBuild(env);
+    if (!out) return void say("nothing was built, nothing to sign");
+    finish(o, env, exec, out);
+    return void fs.rmSync(pendingFile(env), { force: true }); // signed and handed on: a second --finish does nothing
+  }
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   if (acquire(dir) === "queued") return void say("a release build is running; one more build from the newest main is queued after it");
   try {
-    do buildOnce(o, env);
+    do buildOnce(o, env, exec);
     while (takeQueued(dir) && (say("a ship landed during the build; building again from the newest main"), true));
   } finally {
     unlock(dir);
@@ -283,7 +363,7 @@ export function run(o, env = process.env) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const a = process.argv.slice(2);
-  const o = { dryRun: a.includes("--dry-run"), noPublish: a.includes("--no-publish"), repo: a.includes("--repo") ? a[a.indexOf("--repo") + 1] : null };
+  const o = { dryRun: a.includes("--dry-run"), noPublish: a.includes("--no-publish"), buildOnly: a.includes("--build-only"), finish: a.includes("--finish"), repo: a.includes("--repo") ? a[a.indexOf("--repo") + 1] : null };
   try {
     run(o);
   } catch (e) {

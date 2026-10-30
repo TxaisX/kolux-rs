@@ -339,10 +339,42 @@ pub fn unconfirmed_rows() -> Vec<Row> {
     RESTORED.lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|r| !confirmed.contains(&r.pane_key)).cloned().collect()
 }
 
-/// The rows the previous run left (STAT-030), for the panes to show unconfirmed (T-167-b).
-#[tauri::command]
-pub fn agent_status_saved() -> Vec<Restored> {
+/// T-618: the previous run's rows whose pane the window did not bring back from its saved layout go for good. Their tab
+/// was closed, and pane numbers are reused, so a tab opened later under the same number must never wear that status.
+/// While no live event has rewritten the save from this run's rows, the save (still the restored rows) loses them too;
+/// the caller holds the store, which `note` also takes before it writes, so the last write is always the newer one.
+pub fn keep_panes(store: &crate::state::Store, keep: &[u32]) {
+    let rows = {
+        let mut restored = RESTORED.lock().unwrap_or_else(|p| p.into_inner());
+        let before = restored.len();
+        restored.retain(|r| keep.contains(&r.pane_key));
+        if restored.len() == before {
+            return;
+        }
+        restored.clone()
+    };
+    if LIVE.lock().unwrap_or_else(|p| p.into_inner()).as_ref().is_none_or(HashMap::is_empty) {
+        if let Err(e) = store.set(SAVED_KEY, &serialize(&rows)) {
+            eprintln!("kolux-rs: the agents' status could not be saved: {e}");
+        }
+    }
+}
+
+/// The rows the previous run left (STAT-030), as the panes show them: unconfirmed (T-167-b).
+pub fn restored() -> Vec<Restored> {
     unconfirmed_rows().into_iter().map(|row| Restored { restart: outdated(row.hook_version, crate::hooks::HOOK_VERSION), unconfirmed: true, row }).collect()
+}
+
+/// The window's read of `restored`; `keep` names the panes it brought back from its saved layout (T-618), and every
+/// other row is dropped first. Without it (no layout read yet) nothing is dropped.
+#[tauri::command]
+pub fn agent_status_saved(store: tauri::State<'_, Mutex<crate::state::Store>>, keep: Option<Vec<u32>>) -> Vec<Restored> {
+    if let Some(keep) = keep {
+        if let Ok(store) = store.lock() {
+            keep_panes(&store, &keep);
+        }
+    }
+    restored()
 }
 
 /// The agents recorded for resuming at the last quit (STAT-037; the offer itself is T-066).

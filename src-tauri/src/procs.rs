@@ -7,6 +7,7 @@
 //! however the app ends; one job per pane ends that pane's shell and everything it launched when
 //! the pane closes, and no other pane's.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -57,7 +58,8 @@ impl Job {
 
     /// The app-wide job: "kill on close" plus "breakaway OK", so a program started with
     /// CREATE_BREAKAWAY_FROM_JOB (only the terminal service, APP-052) can leave it; every other
-    /// child stays a member and still goes down with the app (APP-053).
+    /// child stays a member and still goes down with the app (APP-053), until the app hands off to
+    /// the update installer or a restarted copy (`hand_off`, T-592).
     fn app() -> Result<Job, String> {
         imp::Job::new(true).map(Job)
     }
@@ -124,11 +126,73 @@ pub fn pane_job(child: &dyn portable_pty::Child) -> Option<Job> {
     Some(job)
 }
 
+/// T-592 (R09-app-core-install.1): the variable a restarting copy leaves for the copy it starts,
+/// holding its own pid.
+pub const RESTART_OF: &str = "KOLUX_RESTART_OF";
+/// How long a restarted copy waits for the old one to be gone before it starts anyway.
+pub const RESTART_WAIT: Duration = Duration::from_secs(10);
+
+/// T-592: the app hands off to a program that must outlive it: the update installer (the updater
+/// plugin starts it through the shell, so no breakaway flag can be passed), or the copy a restart
+/// starts. Whatever the app starts from now on is left out of the app-wide job (silent breakaway),
+/// so the job's kill-on-close no longer takes it down; everything already running stays in the job
+/// and still ends with the app (APP-053). With `restart`, the new copy learns which copy to wait for.
+pub fn hand_off(restart: bool) {
+    HANDED_OFF.store(true, Ordering::SeqCst);
+    if let Some(Some(app)) = APP.get() {
+        let _ = app.job.0.let_children_leave();
+    }
+    if restart {
+        std::env::set_var(RESTART_OF, std::process::id().to_string());
+    }
+}
+
+/// Whether the app has handed off and not taken it back: what it starts now leaves the app job.
+static HANDED_OFF: AtomicBool = AtomicBool::new(false);
+
+/// T-592: the hand-off did not end the app after all (the installer did not start), so the app
+/// keeps running: the app job takes its children back, and everything the app starts from now on
+/// is a member again and ends with the app (APP-053). Clears what a restart hand-off left for the
+/// next copy too. Off Windows only the state flag changes.
+pub fn take_back() {
+    HANDED_OFF.store(false, Ordering::SeqCst);
+    if let Some(Some(app)) = APP.get() {
+        let _ = app.job.0.keep_children();
+    }
+    std::env::remove_var(RESTART_OF);
+}
+
+/// True between `hand_off` and `take_back`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn handed_off() -> bool {
+    HANDED_OFF.load(Ordering::SeqCst)
+}
+
+/// The copy a restart started this one from, as `RESTART_OF`'s value names it; never this process
+/// itself, nor pid 0.
+pub fn restarted_from(value: Option<&str>, me: u32) -> Option<u32> {
+    value?.trim().parse().ok().filter(|&pid| pid != me && pid != 0)
+}
+
+/// T-592: first thing at start, before the single-instance claim. A copy started by a restart waits
+/// (up to RESTART_WAIT) for the copy that started it to be gone; otherwise the claim finds the old
+/// copy still holding it, forwards to it as a second launch and exits. Only Windows holds that claim,
+/// so only Windows waits. The variable is cleared either way, so nothing this copy starts sees it.
+// ponytail: a pid reused by a new process within the wait reads as the old copy; the wait then runs
+// out and the start goes on as before. Compare creation times if that ever shows up.
+pub fn wait_for_restarted_from() {
+    let from = restarted_from(std::env::var(RESTART_OF).ok().as_deref(), std::process::id());
+    std::env::remove_var(RESTART_OF);
+    if let Some(pid) = from.filter(|_| cfg!(windows)) {
+        wait_gone(&[pid], RESTART_WAIT);
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
-    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
+    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
     // ponytail: parent ids only; Windows keeps a dead parent's id on its orphans, so a reused pid
@@ -262,8 +326,31 @@ mod imp {
             })
         }
 
+        /// T-592: from now on what the job's members start is left out of the job (silent breakaway);
+        /// the members stay in. Kolux's jobs carry flags only, so the other limits stay zero.
+        pub fn let_children_leave(&self) -> Result<(), String> {
+            self.set_flags(self.limit_flags()? | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)
+        }
+
+        fn set_flags(&self, flags: u32) -> Result<(), String> {
+            // SAFETY: the handle is open; the struct is zeroed apart from the flags and passed with
+            // its own length, as SetInformationJobObject requires.
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = flags;
+                if SetInformationJobObject(self.0, JobObjectExtendedLimitInformation, &info as *const _ as *const std::ffi::c_void, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32) == 0 {
+                    return Err(last_error("SetInformationJobObject"));
+                }
+            }
+            Ok(())
+        }
+
+        /// T-592: undoes `let_children_leave`: what the members start from now on is a member again.
+        pub fn keep_children(&self) -> Result<(), String> {
+            self.set_flags(self.limit_flags()? & !JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)
+        }
+
         /// The job's limit flags, read back from the kernel.
-        #[cfg(test)]
         pub fn limit_flags(&self) -> Result<u32, String> {
             use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
             // SAFETY: the handle is open; the struct is zeroed and passed with its own length.
@@ -320,9 +407,10 @@ mod imp {
     /// The `kill` command lines for `pid`'s group, then `pid` itself. `--` ends option parsing:
     /// without it procps-ng `kill` (Debian, Ubuntu) reads `-12345` as option digits and signals
     /// `-1`, every process the caller may signal. Pids 0 and 1 and this process are never
-    /// signalled: group 0 is the caller's own and -1 is everything.
+    /// signalled: group 0 is the caller's own and -1 is everything. Nor is a pid past `i32::MAX`:
+    /// `kill` casts it to `pid_t`, so it would wrap to a negative group or to -1.
     pub(super) fn kill_args(pid: u32) -> Vec<[String; 3]> {
-        if pid <= 1 || pid == std::process::id() {
+        if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
             return Vec::new();
         }
         vec![["-9".into(), "--".into(), format!("-{pid}")], ["-9".into(), "--".into(), pid.to_string()]]
@@ -351,6 +439,14 @@ mod imp {
         #[cfg_attr(not(test), allow(dead_code))]
         pub fn holds_pid(&self, _pid: u32) -> Result<bool, String> {
             Ok(false)
+        }
+
+        pub fn let_children_leave(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn keep_children(&self) -> Result<(), String> {
+            Ok(())
         }
     }
 }
@@ -381,6 +477,8 @@ mod tests {
         assert_eq!(lines, ["-9 -- -12345", "-9 -- 12345"], "a group pid starting with 1 must not read as kill(-1)");
         assert!(imp::kill_args(0).is_empty(), "group 0 is the caller's own");
         assert!(imp::kill_args(1).is_empty(), "-1 is every process");
+        assert!(imp::kill_args(i32::MAX as u32 + 1).is_empty(), "pid_t wraps it to a negative group");
+        assert!(imp::kill_args(u32::MAX).is_empty(), "pid_t wraps it to -1");
         assert!(imp::kill_args(std::process::id()).is_empty(), "never this process");
     }
 
@@ -551,5 +649,67 @@ mod tests {
         assert_eq!(app, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK, "app job: kill on close + breakaway OK");
         assert_eq!(app & JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, 0, "children without the flag stay members");
         assert_eq!(pane, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, "pane job: kill on close only, no breakaway");
+    }
+
+    /// T-592 (R09-app-core-install.1): a copy started by a restart waits for the copy that started it,
+    /// named by RESTART_OF, and never for itself, pid 0 or a value that is not a pid.
+    #[test]
+    fn t592_a_restarted_copy_waits_only_for_the_copy_that_started_it() {
+        assert_eq!(restarted_from(Some("4242"), 7), Some(4242));
+        assert_eq!(restarted_from(Some(" 4242\n"), 7), Some(4242));
+        assert_eq!(restarted_from(Some("7"), 7), None, "never this process itself");
+        assert_eq!(restarted_from(Some("0"), 7), None);
+        assert_eq!(restarted_from(Some("-1"), 7), None);
+        assert_eq!(restarted_from(Some("kolux"), 7), None);
+        assert_eq!(restarted_from(None, 7), None, "a normal start waits for nothing");
+    }
+
+    /// T-592: a hand-off the app survives (the installer did not start) is taken back, so what the
+    /// app starts afterwards ends with it again (APP-053), and no restart marker is left behind.
+    #[test]
+    fn t592_a_hand_off_the_app_survives_is_taken_back() {
+        hand_off(false);
+        assert!(handed_off());
+        take_back();
+        assert!(!handed_off(), "the app's children are members again");
+        assert!(std::env::var(RESTART_OF).is_err());
+        take_back();
+        assert!(!handed_off(), "taking back twice is harmless");
+    }
+
+    /// T-592: after the hand-off, a program a member of the app job starts is left out of the job
+    /// (silent breakaway), so the update installer and a restarted copy outlive the app; the members
+    /// stay in and still end with the job, and kill-on-close and breakaway OK are kept. A fresh job
+    /// of the app's kind, not the harness's own (t184 puts the test process in that one).
+    #[cfg(windows)]
+    #[test]
+    fn t592_after_the_hand_off_what_a_member_starts_outlives_the_job() {
+        use windows_sys::Win32::System::JobObjects::{JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK};
+        let job = Job::app().expect("a job of the app's kind is created");
+        // The shell runs a short ping, then starts a second one: that one is started after the hand-off.
+        let mut shell = std::process::Command::new("cmd.exe").args(["/c", "ping -n 2 127.0.0.1 >nul & ping -n 10 127.0.0.1 >nul"]).spawn().expect("cmd starts");
+        job.assign_pid(shell.id()).expect("the shell is put in the job");
+        job.0.let_children_leave().expect("the job lets what its members start leave it");
+        assert_eq!(job.0.limit_flags(), Ok(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK));
+        assert_eq!(job.holds_pid(shell.id()), Ok(true), "a member stays in the job");
+        assert!(has_child_within_20s(shell.id()), "the shell started its first ping");
+        std::thread::sleep(Duration::from_secs(3)); // the first ping ends after about a second; the second has started
+        drop(job);
+        gone_within_2s(shell.id()).expect("the shell, a member, ends with the job");
+        // A second ping left in the job would have gone with it; one started outside runs on, keeping
+        // the dead shell's id as its parent's (it ends by itself within ten seconds).
+        assert_eq!(has_children(shell.id()), Some(true), "the program started after the hand-off outlives the job");
+        let _ = shell.wait();
+    }
+
+    /// T-592: taking the hand-off back clears silent breakaway and keeps kill-on-close and breakaway OK.
+    #[cfg(windows)]
+    #[test]
+    fn t592_taking_the_hand_off_back_restores_the_app_job() {
+        use windows_sys::Win32::System::JobObjects::{JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
+        let job = Job::app().expect("a job of the app's kind is created");
+        job.0.let_children_leave().expect("hand off");
+        job.0.keep_children().expect("take back");
+        assert_eq!(job.0.limit_flags(), Ok(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK));
     }
 }

@@ -1,6 +1,7 @@
 // T-302-b: the small pieces ProjectsPanel mounts (see projectsGlue.ts for the rules, and the patch for where they sit).
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
+import type { KeptBranch, KeptItem } from "../projects/cleanup";
 import type { RemoveCheck } from "../projects/deleting";
 import { outsideLines, outsideTitle } from "../projects/outsideCard";
 import type { Worktree } from "../projects/model";
@@ -77,13 +78,17 @@ export function PickedBar({
   picked,
   find,
   onRemoved,
+  onKept = () => {},
   onLeft,
   onReload,
   say,
 }: {
   picked: string[];
   find: (path: string) => { projectId: string; name: string } | undefined;
-  onRemoved: (path: string) => void;
+  /** T-614: every workspace that went, in one call. */
+  onRemoved: (paths: string[]) => void;
+  /** PROJ-073: the branches that stayed, for the one review list. */
+  onKept?: (items: KeptItem[]) => void;
   onLeft: (left: string[]) => void;
   onReload: () => Promise<unknown> | void;
   say: Say;
@@ -112,22 +117,26 @@ export function PickedBar({
   const remove = async () => {
     if (!asked) return;
     setBusy(true);
-    let gone = 0;
+    const gone: string[] = [];
+    const kept: KeptItem[] = [];
     try {
       for (const s of planRemoval(asked.q, asked.items)) {
-        await invoke("workspace_remove", { projectId: s.projectId, path: s.path, force: s.force, stamp: s.stamp, keepBranch: false });
+        // T-613: no branch choice (null), so the workspace's own record decides and a branch holding commits found nowhere else stays.
+        const k = await invoke<KeptBranch | null>("workspace_remove", { projectId: s.projectId, path: s.path, force: s.force, stamp: s.stamp, keepBranch: null });
+        if (k) kept.push({ ...k, projectId: s.projectId });
         void invoke("editor_drafts_drop", { worktree: s.path }).catch(() => undefined);
-        onRemoved(s.path);
-        gone++;
+        gone.push(s.path);
       }
-      say("ok", `removed ${gone} workspace${gone === 1 ? "" : "s"} and their folders`);
+      say("ok", `removed ${gone.length} workspace${gone.length === 1 ? "" : "s"} and their folders`);
       onLeft(selectionAfterDelete(asked.q, picked));
       setAsked(null);
     } catch (err) {
-      say("warn", `${gone} removed, then: ${String(err)}`);
-      onLeft(picked.filter((p) => !asked.q.removable.slice(0, gone).includes(p)));
+      say("warn", `${gone.length} removed, then: ${String(err)}`);
+      onLeft(picked.filter((p) => !asked.q.removable.slice(0, gone.length).includes(p)));
       setAsked(null);
     } finally {
+      if (gone.length > 0) onRemoved(gone); // T-614: once, so the window closes their tabs in one go
+      if (kept.length > 0) onKept(kept);
       setBusy(false);
       await onReload();
     }

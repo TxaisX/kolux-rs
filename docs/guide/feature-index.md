@@ -168,7 +168,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-073-e | Your own save no longer sets off the changed-on-disk banner, and the banner leaves once the file matches again. | [Files and browser](files-and-browser.md) |
 | T-076 | `kolux status` says whether the app is running, not running, left behind (stale) or still loading. | [Command line](command-line.md) |
 | T-076-b | kolux status answers within about 2.5 seconds and says busy while Kolux handles another request. | [Command line](command-line.md) |
-| T-076-c | `kolux status` says what Kolux is busy with and for how long; a busy time of many minutes may mean it is stuck. Sending a prompt to a busy agent says "queued" and exits 0; `--wait-submit` needs 1 or more. | [Command line](command-line.md) |
+| T-076-c | `kolux status` says what Kolux is busy with and for how long; a busy time of many minutes may mean it is stuck. Sending a prompt to a busy agent says "queued" and exits 0; `--wait-submit` takes 1 to 300. | [Command line](command-line.md) |
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 

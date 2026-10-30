@@ -498,19 +498,24 @@ pub fn on_finish(app: &tauri::AppHandle, pane_key: u32, terminal: Option<u32>, s
     let Some(cwd) = pane.cwd else { return };
     let agent = pane.agent.unwrap_or("The agent");
     let line = format!("Event: {agent} finished its work in {}", folder_name(&cwd));
-    let outcome = launch_for(app, |l| {
-        let own = {
-            let store = l.store.lock().map_err(|e| e.to_string())?;
-            own_pane(&load(&store, RUNS_KEY)?, terminal, pane_key)
-        };
-        if own {
-            return Ok(Vec::new());
+    // T-583: the runs start on a thread of their own (a precheck may take minutes), so the caller (the hooks'
+    // after-reply queue, the window's in-band status) goes on; which panes finished was decided above, in order.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let outcome = launch_for(&app, |l| {
+            let own = {
+                let store = l.store.lock().map_err(|e| e.to_string())?;
+                own_pane(&load(&store, RUNS_KEY)?, terminal, pane_key)
+            };
+            if own {
+                return Ok(Vec::new());
+            }
+            on_event(l, "agent-finished", &cwd, &line, now_ms() as i64)
+        });
+        if let Err(e) = outcome {
+            eprintln!("automations event: {e}");
         }
-        on_event(l, "agent-finished", &cwd, &line, now_ms() as i64)
     });
-    if let Err(e) = outcome {
-        eprintln!("automations event: {e}");
-    }
 }
 
 /// A run that never started, logged so the gap shows (AUTO-007, AUTO-022). AUTO-012: when the
@@ -839,7 +844,9 @@ pub fn settle(store: &Store, now: u64) -> Result<Vec<String>, String> {
 }
 
 /// The app's side of the hooks above: the store is locked, the change saved, and the Automations
-/// page told when a run moved.
+/// page told when a run moved. T-583: what a finished run keeps (the pane's text, then up to 8 MB of
+/// transcript) is read on a thread of its own, so no caller (the hook line, the window's in-band
+/// status, a terminal's exit) waits on it.
 pub fn follow(app: &tauri::AppHandle, f: impl FnOnce(&Store) -> Result<Option<String>, String>) {
     use tauri::{Emitter, Manager};
     let Some(state) = app.try_state::<Mutex<Store>>() else { return };
@@ -849,9 +856,13 @@ pub fn follow(app: &tauri::AppHandle, f: impl FnOnce(&Store) -> Result<Option<St
     };
     match moved {
         Ok(Some(id)) => {
-            keep_screen(app, &state, &id);
-            keep_said(&state, &id);
-            drop(app.emit(EVENT, json!({ "runId": id })))
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let Some(state) = app.try_state::<Mutex<Store>>() else { return };
+                keep_screen(&app, &state, &id);
+                keep_said(&state, &id);
+                drop(app.emit(EVENT, json!({ "runId": id })))
+            });
         }
         Ok(None) => {}
         Err(e) => eprintln!("automation run tracking: {e}"),
@@ -1002,8 +1013,6 @@ fn transcript_path(run: &Value) -> Option<std::path::PathBuf> {
 
 /// The run that just moved, if it is over, saves what its agent said when the transcript can be
 /// found and read. Runs after the pane's text was kept, which it then replaces.
-// ponytail: reads the transcript (at most its newest 8 MB) on the thread that moved the run; a
-// worker thread if that ever shows as a stall.
 fn keep_said(state: &Mutex<Store>, run_id: &str) {
     let run = state
         .lock()
@@ -1204,7 +1213,8 @@ fn run_with(l: &Launch, id: &str, trigger: &str, event: Option<&str>) -> Result<
         };
         let limit = std::time::Duration::from_secs(auto["precheckTimeoutSeconds"].as_u64().unwrap_or(PRECHECK_SECONDS[0]));
         // ponytail: the clock runs automations one after another, so a slow precheck holds up the
-        // next due run by up to its limit; give each run its own thread if that ever matters.
+        // next due run by up to its limit; give each run its own thread if that ever matters. An
+        // agent-finished run already has its own (T-583), off the hook line.
         if let Some(fields) = run_precheck(check, Path::new(&dir), limit) {
             let store = l.store.lock().map_err(|e| e.to_string())?;
             reschedule(&store, id, now_ms() as i64)?;

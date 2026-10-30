@@ -328,8 +328,10 @@ pub fn workspace_times(store: &Store) -> BTreeMap<String, u64> {
 pub fn touch(store: &Store, path: &str) -> Result<(), String> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let mut map = workspace_times(store);
-    let at = map.entry(key(path)).or_insert(0);
-    *at = (*at + 1).max(now); // two stamps in one millisecond still order
+    // Newer than every stamp, not just this key's: a touch in the same millisecond as another
+    // workspace's still sorts above it.
+    let top = map.values().copied().max().unwrap_or(0);
+    map.insert(key(path), (top + 1).max(now));
     store.set(WORKSPACE_KEY, &serde_json::to_string(&map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 

@@ -23,7 +23,9 @@ const saveInTurn = inTurn((patch: Record<string, unknown>) =>
 );
 
 /** The saved settings for a Settings page, and `save(patch)`, which merges into what is on disk
- * and settles once it is written. The page follows saves made in any window (SET-035). */
+ * and settles true once it is written, or false when it failed: the page then shows why and takes
+ * back what is stored (T-598: a draft field keeps its typed text). The page follows saves made in
+ * any window (SET-035). */
 export function useSettings() {
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -42,16 +44,18 @@ export function useSettings() {
       void off.then((f) => f());
     };
   }, []);
-  const save = (patch: Record<string, unknown>) => {
+  const save = (patch: Record<string, unknown>): Promise<boolean> => {
     setError(null);
     race.current.change(patch);
     setSettings((s) => s && { ...s, ...patch });
     return saveInTurn(patch)
-      .then((stored) => setSettings((s) => s && adoptStored(s, stored, patch)))
+      .then((stored) => (setSettings((s) => s && adoptStored(s, stored, patch)), true))
       .catch((e) => {
         setError(String(e));
         // A failed save puts back only its own keys; what other saves stored stays.
-        return invoke<Record<string, unknown>>("get_settings").then((stored) => setSettings((s) => s && adoptStored(s, stored, patch)), () => {});
+        return invoke<Record<string, unknown>>("get_settings")
+          .then((stored) => setSettings((s) => s && adoptStored(s, stored, patch)), () => {})
+          .then(() => false);
       });
   };
   return { settings, error, save };
