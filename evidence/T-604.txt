@@ -472,3 +472,37 @@ Optimized timing of the 250 KB commands (probe, opt-level 3, two runs): slowest 
 then substitutions 74/63, ansi_c 73/60, ifs 59/51 ms. The debug TIME lines above only have to finish.
 Full Linux cargo test --tests, lib: test result: FAILED. 2505 passed; 37 failed; 3 ignored; 0 measured; 0 filtered out; finished in 226.28s; every failure is on the 45-name baseline, none new.
 windows-gnu cargo check and clippy -D warnings: Finished.
+
+ROUND 4 REVIEW OF PR #15 at 89fd9afe (2026-10-30, integrator): unclear delete targets fail closed
+RULE (protected.rs unclear_target, also in the module notes): a recursive delete asks outright, in every
+reading, when a target word (or the folder a cd before it moves to) holds a PowerShell backtick, a cmd
+caret, a backslash before anything but a plain path character (allowed after a backslash: a letter or
+digit, `_`, `-`, `%`, `*`, `?`, or the end of the word), or a drive-relative form (`C:` with no separator
+after it, or `C\:`). No new reading was added. A cd to such a folder makes the folder unknown, so a
+relative delete after it asks. Cost: a plain Windows path with a dot folder after a backslash
+(`C:\Users\me\.cache`) now asks too.
+
+BEFORE (89fd9afe with only the new test): five cases slipped through. The PowerShell backtick command
+already asked (the backtick reads as a substitution, so the target is unknown) and stays as a guard.
+===== before the fix: t604r9
+test protected::tests::t604r9_a_delete_target_with_escapes_or_a_drive_relative_form_asks ... 
+thread 'protected::tests::t604r9_a_delete_target_with_escapes_or_a_drive_relative_form_asks' (21561) panicked at src/protected.rs:2889:9:
+[
+    "should ask on Windows (delete): \"rd /s /q .^.\\\\.^.\", got None",
+    "should ask on Windows (delete): \"rm -rf C\\\\:\", got None",
+    "should ask on Windows (delete): \"rm -rf build\\\\.\\\\.\", got None",
+    "should ask on Windows (delete): \"cd .^.\\\\.^. && rd /s /q build\", got None",
+    "should ask (delete): \"rm -rf build^\", got None",
+]
+FAILED
+    protected::tests::t604r9_a_delete_target_with_escapes_or_a_drive_relative_form_asks
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2545 filtered out; finished in 0.22s
+
+AFTER:
+===== after the fix: t604r9
+test protected::tests::t604r9_a_delete_target_with_escapes_or_a_drive_relative_form_asks ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2545 filtered out; finished in 0.00s
+===== cargo test --lib -- protected sendonce automations --test-threads=3
+test result: ok. 145 passed; 0 failed; 1 ignored; 0 measured; 2400 filtered out; finished in 139.13s
+Full Linux cargo test --tests, lib: test result: FAILED. 2506 passed; 37 failed; 3 ignored; 0 measured; 0 filtered out; finished in 232.88s; every failure is on the 45-name baseline, none new.
+windows-gnu cargo check and clippy -D warnings: Finished.

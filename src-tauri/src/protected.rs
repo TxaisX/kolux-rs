@@ -16,7 +16,9 @@
 //! (comments, heredoc and here-string bodies, escaped quotes, continued lines), and with quotes
 //! ignored when a quote never closed; a rule asks when any reading trips it, so a stray quote
 //! cannot hide the rest of a command. Every word is read with its backslashes kept and with them
-//! dropped as bash does. A command over 256 KB (`LONG_COMMAND`) is asked about outright, unread,
+//! dropped as bash does. A recursive delete asks outright when a target (or a cd before it) holds a
+//! backtick, a caret, a backslash before anything but a plain path character, or a drive-relative
+//! form (`unclear_target`): those escapes are read differently by each shell. A command over 256 KB (`LONG_COMMAND`) is asked about outright, unread,
 //! so the answer stays well inside the hook's 1.5 s on a slow machine.
 //!
 //! ponytail: the workspace is Claude's own hook `cwd` (a Kolux pane starts Claude in the worktree
@@ -167,6 +169,7 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a [String]>, base: &Base) -
             "cd" | "chdir" | "set-location" | "sl" | "pushd" => {
                 let target = args.iter().find(|a| !(a.starts_with('-') && a.len() > 1) && !a.eq_ignore_ascii_case("/d"));
                 dir = match target {
+                    Some(t) if unclear_target(t) => None,
                     None if p == "pushd" => None,
                     None => base.home.clone(),
                     Some(&"-") => None,
@@ -176,7 +179,7 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a [String]>, base: &Base) -
             "popd" => dir = None,
             "rm" | "rd" | "rmdir" | "del" | "erase" | "remove-item" | "ri" => {
                 if let Some(targets) = delete_targets(&p, &args) {
-                    if targets.is_empty() || targets.iter().any(|t| risky(t, dir.as_deref(), base)) {
+                    if targets.is_empty() || targets.iter().any(|t| unclear_target(t) || risky(t, dir.as_deref(), base)) {
                         return true;
                     }
                 }
@@ -237,6 +240,20 @@ fn delete_targets(program: &str, args: &[&str]) -> Option<Vec<String>> {
         targets.push(a.to_string());
     }
     recursive.then_some(targets)
+}
+
+/// T-604 (round 4 review of PR #15): a delete target, or a folder a cd moves to, that no reading
+/// can be sure of, so a recursive delete of it asks whatever its path reads as. It holds a
+/// PowerShell backtick or a cmd caret (escapes no reading drops), a backslash before anything but a
+/// plain path character (a letter or digit, `_`, `-`, `%`, a wildcard, or the end of the word:
+/// `C:\Users\me`, `dist\*.o` and `build\out_1` read plainly, while `\.\.` or `\:` may be bash
+/// escapes), or a drive-relative form (`C:` with no separator after it, or `C\:`).
+fn unclear_target(t: &str) -> bool {
+    let b = t.as_bytes();
+    let escaped = t.contains(['`', '^'])
+        || t.char_indices().any(|(i, c)| c == '\\' && t[i + 1..].chars().next().is_some_and(|n| !(n.is_alphanumeric() || matches!(n, '_' | '-' | '%' | '*' | '?'))));
+    let drive_relative = b.len() >= 2 && b[0].is_ascii_alphabetic() && ((b[1] == b':' && !matches!(b.get(2), Some(b'/' | b'\\'))) || (b[1] == b'\\' && b.get(2) == Some(&b':')));
+    escaped || drive_relative
 }
 
 /// Whether deleting `target` must ask: unknown, outside the workspace, the workspace itself or
@@ -2835,6 +2852,58 @@ mod tests {
         assert!(ms < 50.0, "asked in {ms:.0} ms");
         assert_eq!(check(&format!("echo {}", "a".repeat(256 * 1024 - 5)), &base(), &json!({})).map(|r| r.id), None);
         assert_eq!(check(&long, &base(), &json!({ ASK_FIELD: false })).map(|r| r.id), None);
+    }
+
+    /// T-604 round 4 review of PR #15: a recursive delete whose target holds a backtick, a caret, a
+    /// backslash before anything but a plain path character, or a drive-relative form asks, whatever
+    /// any reading makes of it; plain Windows paths still run.
+    #[test]
+    fn t604r9_a_delete_target_with_escapes_or_a_drive_relative_form_asks() {
+        let win = Base {
+            workspace: Some("C:\\Users\\me\\app".into()),
+            cwd: Some("C:\\Users\\me\\app".into()),
+            home: Some("C:\\Users\\me".into()),
+            temp: vec!["C:\\Users\\me\\AppData\\Local\\Temp".into()],
+        };
+        let w = |c: &str| check(c, &win, &json!({})).map(|r| r.id);
+        let mut missed: Vec<String> = Vec::new();
+        for c in [
+            "Remove-Item -Recurse -Force .`.\\.`.",
+            "rd /s /q .^.\\.^.",
+            "rm -rf C\\:",
+            "rm -rf C:",
+            "rd /s /q C:build",
+            "rm -rf build\\.\\.",
+            "cd .^.\\.^. && rd /s /q build",
+        ] {
+            if w(c) != Some("delete") {
+                missed.push(format!("should ask on Windows (delete): {c:?}, got {:?}", w(c)));
+            }
+        }
+        for c in [
+            "rd /s /q C:\\Users\\me\\AppData\\Local\\Temp\\other",
+            "del /s /q dist\\*.o",
+            "rm -rf C:\\Users\\me\\app\\build",
+            "Remove-Item -Recurse -Force .\\build\\out",
+            "rd /s /q build\\out_1\\x-2",
+            "rm -rf ..\\app\\build",
+            "rd /s /q \"C:\\Users\\me\\app\\My Build\"",
+        ] {
+            if w(c).is_some() {
+                missed.push(format!("should run on Windows: {c:?}, got {:?}", w(c)));
+            }
+        }
+        for c in ["rm -rf C\\:", "rm -rf build^", "rm -rf b`uild"] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["rm -rf build", "rm -rf ./build/out", "rm -rf /tmp/cache"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
     }
 
     /// T-604: every rule's own examples still ask behind one to three harmless lines of the kinds
