@@ -63,3 +63,9 @@ STILL OPEN
   pane; hover underlines and Ctrl+click land on the right cells; a URL wrapped after Chinese text opens whole.
 - TERM-092's box "A URL wrapped over two lines opens as one complete address" is proved here for the cell mapping only;
   the click itself needs the live run.
+
+INTEGRATION RUN (2026-10-30, integrator, merge of origin/main 4ca81af3 into lane/status-hooks)
+$ pnpm exec tsc -p .   -> exit 0 (no output)
+$ VITEST_MAX_WORKERS=2 pnpm exec vitest run   (full suite)
+  Test Files  689 passed (689)
+       Tests  5062 passed (5062)

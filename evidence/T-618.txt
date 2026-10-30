@@ -73,3 +73,16 @@ STILL OPEN
   terminal_forget_history for each closed key; a matching saved.rs forget would need a new command or a line in
   terminal.rs). Not needed for the restart case above; it would only matter for a key reused after a window reload in the
   same run by a tab that never reports, whose row has no session id.
+
+INTEGRATION RUN (2026-10-30, integrator, merge of origin/main 4ca81af3 into lane/status-hooks; Linux, scripts/test-env.sh)
+Before the fix, run for real: saved.rs as before T-618 (cddf3fc0^), tests kept; cargo check --lib --tests:
+ error[E0425]: cannot find function `restored` in module `saved`    --> src/agent_hooks/tests.rs:279:33
+ error[E0425]: cannot find function `restored` in module `saved`    --> src/agent_hooks/tests.rs:303:26
+ error[E0425]: cannot find function `keep_panes` in module `saved`    --> src/agent_hooks/tests.rs:306:12
+ error[E0425]: cannot find function `keep_panes` in module `saved`    --> src/agent_hooks/tests.rs:313:12
+ error[E0425]: cannot find function `restored` in module `saved`    --> src/agent_hooks/tests.rs:336:26
+After (full suite: cargo test --tests --no-fail-fast -- --test-threads=3):
+ test hooks::agent_hooks::tests::t618_rows_of_panes_the_window_did_not_bring_back_leave_the_restored_rows_and_the_save_for_good ... ok
+Full vitest at integration (VITEST_MAX_WORKERS=2 pnpm exec vitest run):
+  Test Files  689 passed (689)
+       Tests  5062 passed (5062)

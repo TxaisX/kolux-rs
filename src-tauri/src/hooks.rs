@@ -627,7 +627,8 @@ fn limits_of(store: &crate::state::Store, dir: Option<&str>) -> Vec<Limit> {
 /// T-583: what a hook's answer leaves for after its reply: the work that may wait on the store or start an automation.
 enum After {
     /// A status the hooks reported, with the request that carried it (shared with the reply, never copied).
-    Status(Arc<Request>, crate::status::Status),
+    /// Boxed: a Status is several times the size of a Usage (clippy::large_enum_variant).
+    Status(Arc<Request>, Box<crate::status::Status>),
     /// A status-line report (STAT-040, USAGE-021): its figures go to the store and the window.
     Usage(Usage),
 }
@@ -718,7 +719,7 @@ fn handle(stream: &TcpStream, accepted: Instant, line: &Line) {
                 let (code, status) = answer(&req, &line.token);
                 if let Some(status) = status {
                     (line.raise)(&status);
-                    (line.after)(After::Status(Arc::clone(&req), status));
+                    (line.after)(After::Status(Arc::clone(&req), Box::new(status)));
                 }
                 code
             };

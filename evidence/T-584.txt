@@ -46,3 +46,38 @@ $ ... cargo check --target x86_64-pc-windows-gnu --all-targets
 
 NEEDS THE INTEGRATOR: cargo test t584_ plus the existing t_152* install/removal tests (byte-for-byte round trips).
 STILL OPEN: a live switch-on with a real Claude settings.json holding "Stop": [] on Windows.
+
+INTEGRATION RUN (2026-10-30, integrator, merge of origin/main 4ca81af3 into lane/status-hooks; Linux, scripts/test-env.sh)
+Before the fix, run for real: the lane's tests kept, agent_hooks::without_empty_lists made to return its input unchanged
+(the old comparison); cargo test --lib -- t583_ t584_ t585_:
+ test hooks::agent_hooks::tests::t584_a_file_with_an_empty_hook_list_installs_and_comes_back_byte_for_byte ... FAILED
+ thread 'hooks::agent_hooks::tests::t584_a_file_with_an_empty_hook_list_installs_and_comes_back_byte_for_byte' (13721) panicked at src/agent_hooks/tests.rs:1440:60:
+ "{\"hooks\":{\"Stop\":[]}}" did not install: /tmp/krs-scratch.8859b3347807/tmp/kolux-rs-agent-hooks-t584-empty-list-13720/c0/settings.json: the install would change more than Kolux's entries; hooks not installed
+After (full suite: cargo test --tests --no-fail-fast -- --test-threads=3):
+ test hooks::agent_hooks::tests::t584_a_file_with_an_empty_hook_list_installs_and_comes_back_byte_for_byte ... ok
+ test hooks::agent_hooks::tests::t_152_1_a_debug_build_writes_agent_settings_only_inside_the_temp_folder ... ok
+ test hooks::agent_hooks::tests::t_152_2_the_first_write_keeps_a_hashed_copy_and_a_failed_copy_stops_the_install ... ok
+ test hooks::agent_hooks::tests::t_152_3_only_kolux_entries_change_and_invalid_json_is_refused ... ok
+ test hooks::agent_hooks::tests::t_152_4_a_failed_install_after_the_status_line_save_leaves_his_line_for_the_next_off ... FAILED
+ test hooks::agent_hooks::tests::t_152_4_the_users_status_line_still_runs_and_comes_back_exactly ... ok
+ test hooks::agent_hooks::tests::t_152_5_a_file_changed_since_it_was_read_is_never_overwritten ... ok
+ test hooks::agent_hooks::tests::t_152_5_an_install_on_a_file_changed_since_the_start_fails_and_writes_nothing ... ok
+ test hooks::agent_hooks::tests::t_152_6_a_codex_hooks_file_with_empty_hooks_comes_back_byte_for_byte ... ok
+ test hooks::agent_hooks::tests::t_152_6_switching_off_gives_back_the_file_byte_for_byte_and_codex_is_not_written ... ok
+ test hooks::agent_hooks::tests::t_152_b_2_a_scratch_settings_folder_needs_the_marker_not_only_the_temp_folder ... ok
+ test hooks::agent_hooks::tests::t_152_b_2_test_dev_and_lane_runs_are_fenced_and_the_identifier_matches_the_app ... ok
+ test hooks::agent_hooks::tests::t_152_b_3_a_failed_record_write_leaves_no_copy_the_next_install_trusts ... ok
+ test hooks::agent_hooks::tests::t_152_b_3_the_kept_copy_is_checked_against_its_record_on_every_install ... ok
+ test hooks::agent_hooks::tests::t_152_b_4_a_claude_file_with_an_empty_hooks_object_installs_and_comes_back_byte_for_byte ... ok
+ test hooks::agent_hooks::tests::t_152_b_5_a_save_between_read_and_write_is_merged_once_and_a_second_one_fails ... ok
+ test hooks::agent_hooks::tests::t_152_c_1_two_settings_files_in_one_home_keep_their_own_slot_and_record ... ok
+ test hooks::agent_hooks::tests::t_152_c_3_on_with_two_saves_fails_whole_with_the_error_in_the_reply_and_off_retries_once ... ok
+ test hooks::agent_hooks::tests::t_152_c_4_a_hooked_file_without_its_copy_is_refused_and_nothing_is_written ... ok
+ test hooks::agent_hooks::tests::t_152_c_5_a_temp_folder_too_wide_for_scratch_is_refused_and_lane_variables_fence ... FAILED
+ test hooks::agent_hooks::tests::t_152_gate_installing_stays_off_with_the_default_settings ... ok
+ The two t_152 FAILED lines are on the list of 45 known Linux-only failures and fail the same way on main: t_152_4 makes
+ settings.json read-only to force a failed install, but this machine runs the tests as root, which writes read-only files
+ ("called `Result::unwrap_err()` on an `Ok` value"); t_152_c_5 checks fenced_by with the Windows path
+ C:\Users\me\AppData\Roaming\..., which is not an absolute path on Linux ("the installed product"). Neither is a
+ round trip and neither touches this lane's change. Every t_152 round-trip test (t_152_4 status line back exactly,
+ t_152_6 both, t_152_b_4, t_152_3, t_152_5 both) passes.

@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 704 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 709 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 5 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -73,6 +73,24 @@ recorded default until told otherwise; nothing here blocks a pass.
   downloaded artifact; today the sign step runs in the build job, next to node_modules the build step's install scripts
   wrote. (2) scripts/license-check.mjs: anchor the MIT and BSD-2 patterns on the full licence text. (3)
   richCodeColourTime.test.ts: its 500 ms limit needs more headroom on CI runners.
+- [status-hooks] 2026-10-30 · Question (T-585): a helper agent whose stop is lost without an Esc, or a background helper
+  that stays silent from an Esc until the next prompt, can still keep a pane "working". Clearing those needs a signal Kolux
+  does not have yet (for example Claude's Stop event listing which helpers are still alive, which is not confirmed). Should
+  Kolux add a time-out guess, or leave it? Nothing changes until you say.
+- [status-hooks] 2026-10-30 · Open: live Windows checks. T-566: a relaunch run where every taken-back pane shows its restored
+  chip (needs the prover fix below first). T-583: an "agent finished" automation with a slow precheck while other panes'
+  status keeps moving and a protected command in another Claude pane still asks. T-584: switch hooks on with a real
+  settings.json holding "Stop": []. T-585: Esc a running sub-agent, send a new prompt, the pane ends Done. T-586: Ctrl+click
+  a link after Chinese text and emoji. T-618: a new tab that reuses a closed tab's number after a restart shows no status.
+- [status-hooks] 2026-10-30 · Follow-ups not built: (1) T-566: scripts/prove/live-T-544.mjs back() must read the restored
+  chips before dismissFirstRun or any other key or click reaches the window, and match panes by their data-key attribute
+  instead of their order (the lane gave it only as a description, not an exact edit, so it was not applied at integration).
+  (2) product-ux lane (T-612): a Tip card that closes on Escape must take the key on a window keydown listener in the
+  capture phase and stop it; otherwise the Escape reaches the focused terminal pane, clears its restored chip and sends ESC
+  to the program. (3) Optional, T-618: drop a closed tab's saved status row at the moment it closes (App.tsx dropPanes
+  already calls terminal_forget_history; a matching agent_hooks::saved forget needs one more command or a line in
+  terminal.rs). (4) Optional, T-583: make protected::mask in protected.rs cheaper on very large commands, so one huge
+  protected command's own reply stays under 1.5 s (it no longer holds up other panes).
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
@@ -120,6 +138,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 ## Decisions made for Txais
 
+- 2026-10-30 · [status-hooks] T-583 · The order of a pane's status events is kept by one app-wide lock held only around the status step, the emit and the after-queue; a protected-command reply is worked out per connection, outside that lock, so one slow hook never holds up another pane.
 - 2026-10-30 · [release-ci] T-588 · CI release signing acts only on the build this run's `--build-only` recorded, never on the newest output folder; a run on an already-released main ends with "nothing was built, nothing to sign".
 - 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
 - 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters is left untouched, and the installer log says to use Settings > CLI > Register (NSIS string limit). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.

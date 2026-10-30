@@ -82,3 +82,12 @@ STILL OPEN / OUTSIDE THIS LANE
    take the key on window keydown in the capture phase and stop it, or the same Escape still reaches the pane.
 3. Live Windows run: relaunch three times with a Tip card open on one of them, chips read before any key: every
    restored pane shows its chip, and the panes' data-key values match the saved layout keys.
+
+INTEGRATION RUN (2026-10-30, integrator, merge of origin/main 4ca81af3 into lane/status-hooks)
+$ pnpm exec tsc -p .   -> exit 0 (no output)
+$ VITEST_MAX_WORKERS=2 pnpm exec vitest run   (full suite)
+  Test Files  689 passed (689)
+       Tests  5062 passed (5062)
+Not applied at integration: the live-T-544.mjs back() change (read the chips before dismissFirstRun or any key or click;
+match panes by data-key). The lane gave it as a description, not an exact edit; it is a follow-up in STATE.md, and T-566
+stays open until it lands and the live Windows relaunch run passes.
