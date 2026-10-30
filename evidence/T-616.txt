@@ -17,7 +17,7 @@ TESTS ADDED (src-tauri/src/fsops.rs tests)
 - t616_renaming_onto_another_files_name_in_other_capitals_is_refused: a.txt and b.txt; rename a.txt to "B.txt".
   On a file system that ignores letter case (detected at run time: B.txt "exists") the rename must be refused and
   both files keep their text; on a case-keeping disk (Linux) B.txt is a new name and b.txt is untouched. This is
-  the test that fails before the fix on the Windows CI job (NTFS) and on macOS: MoveFileExW replaced b.txt.
+  the test that fails before the fix on a live Windows run (NTFS) and on macOS: MoveFileExW replaced b.txt.
 - t616_a_case_only_rename_of_one_file_or_folder_still_works: notes.md -> NOTES.md and src -> Src; the folder then
   lists exactly "NOTES.md" and "Src", the text intact.
 - t616_the_identity_check_tells_one_entry_from_another (the Linux stand-in for a case-insensitive lookup): a hard
@@ -45,7 +45,7 @@ AFTER THE FIX
   proves the fix only where letter case is ignored: the Windows Rust CI job (or macOS).
 
 STILL OPEN
-- Proof on a case-insensitive disk: the Windows CI job (or a live Windows run: Explorer, rename notes.md to README.md
+- Proof on a case-insensitive disk: a live Windows run (Explorer: rename notes.md to README.md
   next to readme.md -> "README.md already exists here", readme.md unchanged; rename notes.md to NOTES.md -> works).
 - ReFS / Dev Drive and FAT/exFAT are covered by the code paths above but not run anywhere yet.
 
@@ -56,7 +56,7 @@ the compile error quoted above):
     test fsops::tests::t616_renaming_onto_another_files_name_in_other_capitals_is_refused ... ok
     test fsops::tests::t616_a_case_only_rename_of_one_file_or_folder_still_works ... ok
   Both pass on the old code here as expected: this Linux disk keeps letter case apart, so the clash never happens.
-  The clash test can only go red on a case-insensitive disk (Windows CI or macOS); still open, see above.
+  The clash test can only go red on a case-insensitive disk (a live Windows run or macOS); still open, see above.
 
 AFTER, real:
   (src-tauri) . ../scripts/test-env.sh; CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 cargo test --tests --no-fail-fast -- --test-threads=3

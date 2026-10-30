@@ -259,6 +259,7 @@ pub fn forward_to(dir: &Path) -> Forwarded {
 /// Called first thing in setup, before any window exists: the first copy keeps its claim in the
 /// app's managed state; a second launch forwards and ends with `DUPLICATE_EXIT`.
 pub fn claim_or_forward<R: tauri::Runtime>(app: &tauri::App<R>) {
+    crate::procs::wait_for_restarted_from(); // T-592: a restarted copy lets the old one finish exiting
     match claim(&app.config().identifier) {
         Claim::First(instance) => {
             app.manage(instance);
@@ -641,6 +642,7 @@ pub fn app_restart(app: tauri::AppHandle, unsaved: Option<usize>) -> Result<(), 
     save_point(&app, unsaved.unwrap_or(0))?;
     final_save::begin();
     app.state::<Terminals>().kill_all();
+    crate::procs::hand_off(true);
     app.restart();
 }
 
