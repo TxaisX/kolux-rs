@@ -74,7 +74,9 @@ a menu, or the switcher's frame. Presses every 6 px along three rows of the 1280
   The View menu and the account menu, each opened with a real click (after): backdrop and list carry
   "false"; a press on the menu's title or on its backdrop does not drag, and the backdrop click closes
   the menu. With the backdrop's "false" removed, the same press does start a drag.
-  Every control, clicked for real on a fresh page, does its job and never drags (before and after alike):
+  Every control, clicked for real on a fresh page, never drags, and each does its job except Tower,
+  whose centre is covered by Show Source Control, which takes the click (T-621, below); before and
+  after alike:
     Kolux mark -> menu_popup · Menu -> the View menu opens · sidebar -> onToggleSidebar · Back -> onBack
     · Forward -> onForward · Agents, Board, Terminals -> onScreen · Automations -> onToggle · Show
     Source Control -> onToggleRight · Search -> onSearch · Inbox -> onScreen inbox · account pill -> its

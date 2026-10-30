@@ -7,6 +7,7 @@
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { type FakeDocument, type FakeNode, click, find, installDom, mount, settle } from "../tasks/fakeDom";
+import { publishClaude } from "../usage/plan";
 
 vi.mock("@tauri-apps/api/core", () => ({
   // One managed Claude account, so the account switcher draws its pill (and its menu) inside the bar.
@@ -15,18 +16,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ isMaximized: () => Promise.resolve(false), onResized: () => Promise.resolve(() => {}) }) }));
-vi.mock("../usage/UsagePill", () => ({ default: () => null }));
+// The usage pill as the bar draws it (its own button around a figure), without the pills' background reads.
+vi.mock("../usage/UsagePill", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../usage/UsagePill")>();
+  const { createElement: h } = await import("react");
+  return { ...real, default: ({ hidden }: { hidden: boolean }) => h(real.UsagePillView, { hidden, onOpen: () => {} }, h("span", null, "Claude 60% left")) };
+});
 
 const DRAG = "data-tauri-drag-region";
+const XHTML = "http://www.w3.org/1999/xhtml";
 // drag.js: these block a drag unless they carry the attribute themselves.
 const TAGS = new Set(["a", "button", "input", "select", "textarea", "label", "summary"]);
 const ROLES = new Set(["button", "link", "menuitem", "tab", "checkbox", "radio", "switch", "option"]);
 const clickable = (n: FakeNode) =>
   TAGS.has(n.localName) || (n.attrs.contenteditable !== undefined && n.attrs.contenteditable !== "false") || (n.attrs.tabindex !== undefined && n.attrs.tabindex !== "-1") || ROLES.has(n.attrs.role ?? "");
 
-/** drag.js isDragRegion for a press on `target`: walk up, the first rule that applies decides. */
+/** drag.js isDragRegion for a press on `target`: walk up past anything that is not an HTML element (an
+ *  icon's SVG), and the first rule that applies decides. */
 function drags(target: FakeNode): boolean {
   for (let el: FakeNode | null = target; el; el = el.parentNode) {
+    if (el.nodeType !== 1 || el.namespaceURI !== XHTML) continue;
     const attr = el.attrs?.[DRAG];
     if (clickable(el) && attr === undefined) return false;
     if (attr === undefined) continue;
@@ -63,6 +72,8 @@ let doc: FakeDocument;
 let unmount: () => Promise<void> = async () => {};
 beforeEach(() => {
   ({ doc } = installDom());
+  // A weekly Claude figure and Claude installed (barProps), so the bar draws its usage pill.
+  publishClaude([{ kind: "seven_day", usedPercent: 40, resetsAt: null }]);
 });
 afterEach(async () => {
   await unmount();
@@ -95,6 +106,8 @@ for (const classic of [false, true]) {
     const { header } = await mountBar(classic);
     expect(header.attrs[DRAG]).toBe("deep");
     expect(find(header, handled).length, "React's handlers are readable from the nodes").toBeGreaterThan(8);
+    const pills = find(header, (n) => n.localName === "button" && (n.attrs.class === "usage" || n.attrs.class === "acct-switch") && n.attrs.hidden === undefined);
+    expect(pills.length, "the usage pill and the account pill are drawn").toBe(2);
     const { used, bare, usedThatDrag, bareThatDoNot } = audit(header);
     expect(used.length).toBeGreaterThan(20);
     expect(bare.length).toBeGreaterThan(2);
