@@ -1,0 +1,81 @@
+T-610 · No screen is unreachable: Floor, Space and Workspace Board wired or hidden; the two Boards no longer share a name
+lane/product-ux · 2026-10-30 · brief "Path to an A" Phase 0
+
+(Committed after T-611, whose palette Commands section is how Floor, Space, Inbox, Tower and the workspace board are reached.)
+
+DECISION PER SCREEN (each works by its unit tests and is in a spec card the plan built)
+- Floor (VIEW-013, P2; T-260/-b/-d): WIRED into the palette (its command view.floor, "Show Floor"). Not into the top-bar
+  switcher: DT-08 says palette and View menu, no sidebar item, and VIEW-002 (P0) fixes the switcher's cycle at Agents, Board,
+  Terminals, Tower ("the order follows the labels in the top-bar switch"); a fifth label would break that box.
+- Space (VIEW-014 / PROJ-083, P1; T-218, T-146-e): WIRED into the palette (view.space, "Show Space"), same reason.
+- Workspace board (PROJ-085 / VIEW-027, P1; T-142): WIRED into the palette (workspace.openBoard) and RENAMED: the command reads
+  "Show Workspace Statuses" and the dialog "Workspace statuses" (PROJ-084 calls the lanes the workspace statuses), so the top
+  bar's Board (VIEW-001, P0) is the only Board. The id workspace.openBoard stays (COMPAT 4.5, PROJ-085).
+- Artifacts and Skills (sidebar buttons only until now): palette rows "Show Artifacts" and "Show Skills".
+- Nothing hidden: no screen failed the "works and planned" test, so no dead path was left to remove.
+
+WHAT CHANGED
+- src/chrome/TopBar.tsx:21-25 SCREEN_IDS, the Screen union as a list (the type is derived from it, so a test can walk it).
+- src/chrome/reach.ts (new): SCREEN_OF, the commands that show a screen (view.inbox/tower/floor/space); screenRows, the palette
+  rows for Artifacts and Skills.
+- src/keys/actions.ts:81 workspace.openBoard's title "Show Workspace Statuses"; src/board/WorkspaceBoard.tsx heading and labels.
+- src/keys/commands.test.ts: handled() also counts SCREEN_OF (the window's key switch reads it once the App patch is in).
+- evidence/product-ux-App.patch (integrator): the four view.inbox/tower/floor/space cases become one SCREEN_OF read in the key
+  switch's default (a shortcut and its palette row toggle the screen with Terminals as before; dashboard.toggle arrives as
+  view.tower); paletteItems gets ...screenRows(...) (Skills through toggleSkills, as the sidebar button).
+- evidence/product-ux-settings.patch (outside change): src/settings/shortcutRows.test.ts:113 names the command by its new title.
+
+TESTS ADDED (src/chrome/reach.test.ts, 3 tests): every SCREEN_IDS entry is in the switcher or reached from the palette (Commands
+rows through SCREEN_OF, and screenRows); Floor and Space by their own commands, the switcher keeps VIEW-002's four; the workspace
+board's command no longer says Board while the switcher's Board keeps its name.
+
+FAILING BEFORE
+1) The same reachability over the code before this change (throwaway, deleted after; the palette as T-611 left it):
+   × T-610: every Screen id is reachable from the switcher or the palette 15ms
+   × T-610: the workspace board is no longer a second Board 2ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+AssertionError: expected [ 'artifacts', 'skills' ] to deeply equal []
++ Received
++ [
++   "artifacts",
++   "skills",
++ ]
+AssertionError: expected 'Toggle Workspace Board' not to match /board/i
++ Received:
+      Tests  2 failed (2)
+   (Before T-611, Floor, Space and the Inbox's and Tower's commands were not in the palette either: only an unbound shortcut reached
+   Floor and Space, and only an unbound one the workspace board.)
+2) The new test file before the code: 
+ FAIL  src/chrome/reach.test.ts [ src/chrome/reach.test.ts ]
+Error: Cannot find module './reach' imported from /home/user/kolux-lanes/product-ux/src/chrome/reach.test.ts
+      Tests  no tests
+
+AFTER THE FIX
+$ VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run --reporter=verbose src/chrome/reach.test.ts src/keys/commands.test.ts
+(then src/keys src/chrome src/board src/skills src/floor src/space)
+ ✓ src/chrome/reach.test.ts > T-610: every Screen id is reachable from the switcher or the palette 4ms
+ ✓ src/chrome/reach.test.ts > T-610: Floor and Space are reached by their own commands, so the palette shows them; the switcher keeps VIEW-002's four 1ms
+ ✓ src/chrome/reach.test.ts > T-610: the workspace board is reached by its command and is no longer a second Board 0ms
+ ✓ src/keys/commands.test.ts > T-611: every action id in actions.ts has a handler 24ms
+ ✓ src/keys/commands.test.ts > T-611: the five the audit found, Force Reload and Hard Reload each do something (or are gone) 2ms
+ ✓ src/keys/commands.test.ts > T-611: a chord bound to an old id runs the command it stands for 2ms
+ ✓ src/keys/commands.test.ts > T-611: the palette's Commands section lists every command, the unbound ones included, with its keys when it has some 5ms
+ ✓ src/keys/commands.test.ts > T-611: a command picked in the palette runs the same code its shortcut runs, where the keyboard is 1ms
+ ✓ src/keys/commands.test.ts > T-611: with Terminal first, a command picked in the palette is never left to the terminal program 0ms
+ Test Files  2 passed (2)
+      Tests  9 passed (9)
+ Test Files  46 passed (46)
+      Tests  266 passed (266)
+$ flock /tmp/kolux-node.lock pnpm exec tsc   -> exit 0 (App.tsx as on the branch)
+Scratch copy with evidence/product-ux-App.patch, -TerminalPane.patch, -ProjectsPanel.patch and -settings.patch applied:
+$ tsc -p tsconfig.json -> exit 0
+$ vitest run src/keys src/settings src/projects src/chrome src/floating src/browser src/board src/inbox src/tower src/onboarding
+  src/skills src/terminal/shellKeys.test.ts src/floor src/space -> Test Files 257 passed (257), Tests 1581 passed (1581)
+On the branch alone, src/settings/shortcutRows.test.ts has 3 failing assertions (the Shortcuts count, the Hard Reload row and this
+title) until evidence/product-ux-settings.patch is applied.
+
+STILL OPEN / NEEDS A LIVE RUN
+- Live: palette -> "Show Floor", "Show Space", "Show Workspace Statuses", "Show Artifacts", "Show Skills" each open their page.
+- COMPAT.md 4.3's title column for workspace.openBoard ("Toggle Workspace Board" -> "Show Workspace Statuses"); the guide pages
+  that say "workspace board" (docs/guide, not this lane's).
+- DT-08 also asks for a View menu entry for Floor (menu.rs, not this lane's); the palette reach is in.

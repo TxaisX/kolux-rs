@@ -2,7 +2,7 @@
 // built from what the window already knows about its panes; and the arrow-key walk over the
 // three groups. Pure, tested on its own.
 
-import type { AgentState } from "../projects/rows";
+import { paneState, type AgentState } from "../projects/rows";
 
 export type Group = "needs" | "waiting" | "done";
 export type Source = { key: number; agent: string; title: string; branch: string | null; cwd: string | null; state: AgentState; interrupted: boolean; running: boolean; changed: number; finishedAt: number | null };
@@ -18,8 +18,16 @@ export const GROUPS: Array<{ id: Group; title: string }> = [
 export const DONE_LIMIT = 20;
 export const DONE_WINDOW_MS = 30 * 60_000;
 
-/** Prompts that ask for approval are permissions, the rest questions (STAT-050). */
+/** Prompts that ask for approval are permissions, the rest questions (STAT-050). A blocked agent (a limit or a
+ *  sign-in) is listed too, as on main (review of PR #16: whether it should is a question for Txais). */
 const NEEDS: Partial<Record<AgentState, string>> = { permission: "Permission", waiting: "Question", blocked: "Blocked" };
+
+/** T-608: one pane as the Inbox reads it: its one status (board/chip.ts paneStatus), else what its program
+ *  says (an agent works until it ends). `stamp` is when its state last moved. */
+export function sourceOf(p: { key: number; agent: string; branch: string | null; cwd: string | null }, title: string, status: AgentState | undefined, running: boolean | undefined, stamp?: { at: number; interrupted: boolean }): Source {
+  const state = status ?? paneState(p.agent, running);
+  return { key: p.key, agent: p.agent, title, branch: p.branch, cwd: p.cwd, state, interrupted: stamp?.interrupted ?? false, running: running !== false, changed: stamp?.at ?? 0, finishedAt: state === "done" ? (stamp?.at ?? null) : null };
+}
 
 export function inboxItems(sources: Source[], now: number): Item[] {
   const item = (s: Source, group: Group, label: string, when: number): Item => ({ key: s.key, agent: s.agent, title: s.title, branch: s.branch, cwd: s.cwd, state: s.state, group, label, when, exited: group === "needs" && !s.running });

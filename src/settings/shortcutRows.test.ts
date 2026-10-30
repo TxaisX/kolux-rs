@@ -96,7 +96,7 @@ test("SET-019 (T-246-c): the interface zoom has its own keys, apart from the ter
 // AFTER row 382 (T-164-b): a command nothing runs yet is not offered as a row to rebind.
 test("commands with no handler yet are not listed, wired ones still are", () => {
   const ids = rows().map((r) => r.id);
-  expect(ids).not.toContain("browser.hardReload");
+  expect(ids).toContain("browser.hardReload"); // T-611: it runs as Reload (keys/actions.ts sameAs)
   expect(ids).toContain("browser.grabElement"); // T-240: the browser pane runs it
   expect(ids).toContain("browser.find");
   expect(ids).toContain("editor.replace");
@@ -110,7 +110,7 @@ test("SET-010 box 1: a custom chord on a default's chord flags both rows Conflic
   const by = (id: string) => all.find((r) => r.id === id)!;
   expect(by("workspace.openBoard").badges).toEqual(["Modified", "Conflicts"]);
   expect(by(holder.id).badges).toContain("Conflicts");
-  expect(by(holder.id).hint).toContain("Ctrl+P is also used by Toggle Workspace Board");
+  expect(by(holder.id).hint).toContain("Ctrl+P is also used by Show Workspace Statuses"); // T-610: the workspace board's new name
   expect(ids(filterRows(all, "conflicting", "")).sort()).toEqual(["workspace.openBoard", holder.id].sort());
   // The custom binding still wins the chord (yieldToUser).
   expect(by("workspace.openBoard").chords).toEqual(["Mod+P"]);

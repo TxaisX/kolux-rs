@@ -11,9 +11,11 @@ import type { Agent } from "../chrome/VendorMark";
 import { programWord } from "../launch/PlusMenu";
 import { folderName } from "../projects/model";
 import { emptyStatus, type Status } from "../scm/model";
+import { canReview } from "../board/review";
 
 type Entry = { state: string; prompt?: string; started: number; interrupted: boolean };
-type Props = { items: Item[]; now: number; onOpen: (key: number) => void };
+/** `onReview` (T-609): Review changes on a done row opens that worktree's All Changes (board/review.ts). */
+type Props = { items: Item[]; now: number; onOpen: (key: number) => void; onReview?: (key: number) => void };
 
 /** "just now", "3m ago", "1h ago". */
 function ago(when: number, now: number): string {
@@ -23,7 +25,7 @@ function ago(when: number, now: number): string {
   return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
 }
 
-export default function InboxView({ items, now, onOpen }: Props) {
+export default function InboxView({ items, now, onOpen, onReview }: Props) {
   const [selected, setSelected] = useState<number | null>(null);
   const keys = items.map((i) => i.key);
   const current = settle(keys, selected);
@@ -68,7 +70,7 @@ export default function InboxView({ items, now, onOpen }: Props) {
           );
         })}
       </div>
-      {item ? <Detail item={item} onOpen={() => onOpen(item.key)} /> : <div className="detail empty">{items.length === 0 ? "Sessions show up here as they ask, run and finish." : "Pick a row, or press Down."}</div>}
+      {item ? <Detail item={item} onOpen={() => onOpen(item.key)} onReview={onReview && (() => onReview(item.key))} /> : <div className="detail empty">{items.length === 0 ? "Sessions show up here as they ask, run and finish." : "Pick a row, or press Down."}</div>}
     </div>
   );
 }
@@ -76,14 +78,31 @@ export default function InboxView({ items, now, onOpen }: Props) {
 // EDIT-041 (T-035-c): a prompt read off the pane's screen, with the answers it takes on the spot.
 type Readable = { prompt: { kind: string; text: string; options: string[] }; choices: { label: string; keys: string }[] };
 
-function Detail({ item, onOpen }: { item: Item; onOpen: () => void }) {
+/** The detail's buttons: Open (or Answer) in Code, and T-609's Review changes on a done row with a workspace.
+ *  A plain render helper (no hooks), drawn inline so the detail stays one tree. */
+export function detailActions({ item, onOpen, onReview }: { item: Item; onOpen: () => void; onReview?: () => void }) {
+  return (
+    <div className="actions">
+      <button className="btn primary" onClick={onOpen} title="Go to the tab and pane where this agent runs (Enter)">
+        {openLabel(item)}
+      </button>
+      {canReview(item.group) && item.cwd && onReview && (
+        <button className="btn" onClick={onReview} title="Read every file this agent changed, in All Changes">
+          Review changes
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Detail({ item, onOpen, onReview }: { item: Item; onOpen: () => void; onReview?: () => void }) {
   const [scm, setScm] = useState<Status | null>(null);
   const [last, setLast] = useState<Entry | null>(null);
   const [readable, setReadable] = useState<Readable | null>(null);
   const [note, setNote] = useState<string | null>(null);
   // T-035-c: a question or permission whose terminal is alive is read off its screen; when the
   // menu's keys are sure, the detail offers its options here, else only Answer in Code.
-  const canRead = item.group === "needs" && !item.exited && item.state !== "blocked";
+  const canRead = item.group === "needs" && !item.exited;
   useEffect(() => {
     setReadable(null);
     setNote(null);
@@ -144,11 +163,7 @@ function Detail({ item, onOpen }: { item: Item; onOpen: () => void }) {
         </div>
       )}
       {note && <p className="exited">{note}</p>}
-      <div className="actions">
-        <button className="btn primary" onClick={onOpen} title="Go to the tab and pane where this agent runs (Enter)">
-          {openLabel(item)}
-        </button>
-      </div>
+      {detailActions({ item, onOpen, onReview })}
     </div>
   );
 }

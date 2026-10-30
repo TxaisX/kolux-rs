@@ -17,6 +17,7 @@ import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel,
 import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
 import { guideOpenChanged } from "./actions";
 import { MOVED, splitCredit } from "./moved";
+import { askHooks, HOOKS_LINE, hooksDefault, recordHooks } from "./hooksOn";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
@@ -375,9 +376,32 @@ function StartupTip() {
       window.clearTimeout(timer);
     };
   }, []);
-  if (!tip) return null;
   const close = () => (setTip(null), setSetup(false));
+  // T-612: Escape closes the tip from wherever the keyboard is (the card never takes it).
+  useEffect(() => {
+    if (!tip) return;
+    return tipEscape(window as unknown as Parameters<typeof tipEscape>[0], () => document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"]') !== null, close);
+  }, [tip]);
+  if (!tip) return null;
   return <TipDocked tip={tip} cli={cli} setup={setup} onSetup={() => setSetup(true)} onClose={close} />;
+}
+
+type TipKey = { key: string; isComposing: boolean };
+
+/** T-612 (PLAN.md T-566, Tip part): Escape closes the tip wherever the keyboard is, since the card leaves the keyboard
+ *  in the restored pane; a modal dialog's Escape stays its own. Listens in the capture phase so a focused terminal
+ *  cannot swallow it first, but never takes the key: the same Escape still closes the palette, Settings or a menu and
+ *  still reaches the terminal program (in Claude Code it interrupts the agent). Returns the cleanup. */
+export function tipEscape(
+  win: { addEventListener(t: "keydown", f: (e: TipKey) => void, capture: boolean): void; removeEventListener(t: "keydown", f: (e: TipKey) => void, capture: boolean): void },
+  modalOpen: () => boolean,
+  close: () => void,
+): () => void {
+  const key = (e: TipKey) => {
+    if (e.key === "Escape" && !e.isComposing && !modalOpen()) close();
+  };
+  win.addEventListener("keydown", key, true);
+  return () => win.removeEventListener("keydown", key, true);
 }
 
 function TipDocked(props: Omit<Parameters<typeof TipView>[0], "dock">) {
@@ -417,7 +441,7 @@ function useTipDock(): CSSProperties {
 export function TipView({ tip, cli, setup, onSetup, onClose: close, dock = { right: 16, bottom: 40 } }: { tip: TipId; cli: CliStatus | null; setup: boolean; onSetup: () => void; onClose: () => void; dock?: CSSProperties }) {
   return (
     <div className="tip-dock" style={dock} data-docked={dock.left !== undefined ? "" : undefined}>
-      <div className="tip-card" role="dialog" aria-modal="false" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
+      <div className="tip-card" role="dialog" aria-modal="false" aria-label="Tip">
         <span className="tip-badge">Tip</span>
         {tip !== "cli" && tip !== "palette" ? (
           <>
@@ -471,10 +495,56 @@ export function TipView({ tip, cli, setup, onSetup, onClose: close, dock = { rig
   );
 }
 
+/** T-608: the one line of consent for a profile that never answered it, outside the first-run wizard. */
+export function HooksAskView({ on, onSwitch, onDone, dock = { right: 16, bottom: 40 } }: { on: boolean; onSwitch: (on: boolean) => void; onDone: () => void; dock?: CSSProperties }) {
+  return (
+    <div className="tip-dock" style={dock} data-docked={dock.left !== undefined ? "" : undefined}>
+      <div className="tip-card" role="dialog" aria-modal="false" aria-label="Agent status hooks">
+        <span className="tip-badge">Status</span>
+        <label className="onb-ping">
+          <input type="checkbox" role="switch" checked={on} onChange={(e) => onSwitch(e.target.checked)} />
+          <span>{HOOKS_LINE}</span>
+        </label>
+        <div className="btn-row">
+          <span className="spacer" />
+          <button className="btn primary" onClick={onDone}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** T-608: shows once no other dialog is open; Done records the switch. Until it is answered it asks again
+ *  at the next launch, so nothing is installed for a profile that never saw the line. */
+function HooksAsk({ settings, onDone }: { settings: Record<string, unknown> | null; onDone: () => void }) {
+  const [on, setOn] = useState(() => hooksDefault(settings)); // review of PR #16: the saved answer, else on
+  const [shown, setShown] = useState(false);
+  const dock = useTipDock();
+  useEffect(() => {
+    let timer = 0;
+    const show = () => (document.querySelector("[role=dialog]") ? (timer = window.setTimeout(show, 1000)) : setShown(true));
+    show();
+    return () => window.clearTimeout(timer);
+  }, []);
+  if (!shown) return null;
+  return <HooksAskView on={on} onSwitch={setOn} dock={dock} onDone={() => (void recordHooks(on).catch(() => {}), onDone())} />;
+}
+
 /** The window's guides: one mount line in App.tsx. */
 export default function Guides() {
   const [guide, setGuide] = useState<{ open: boolean; ask: StepId | null }>({ open: false, ask: null });
   const [explore, setExplore] = useState(false);
+  // T-608: "ask" shows the hooks line once; that launch shows no startup tip (one card per launch).
+  const [hooksAsk, setHooksAsk] = useState<"wait" | "ask" | "done" | "no">("wait");
+  const hooksSettings = useRef<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    Promise.all([invoke<unknown>("onboarding_get"), invoke<Record<string, unknown>>("get_settings")]).then(
+      ([onb, s]) => ((hooksSettings.current = s), setHooksAsk(askHooks(s, onb !== null) ? "ask" : "no")),
+      () => setHooksAsk("no"),
+    );
+  }, []);
   useEffect(() => {
     const g = (e: Event) => setGuide({ open: true, ask: (e as CustomEvent<StepId | null>).detail });
     const x = () => setExplore(true);
@@ -496,7 +566,8 @@ export default function Guides() {
         }}
       />
       {explore && <Explore onClose={() => setExplore(false)} />}
-      <StartupTip />
+      {hooksAsk === "ask" && <HooksAsk settings={hooksSettings.current} onDone={() => setHooksAsk("done")} />}
+      {hooksAsk === "no" && <StartupTip />}
       <Tours />
       <StarPrompt />
     </>

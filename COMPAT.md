@@ -829,7 +829,7 @@ Txais's file today: version 1; empty all-platforms, darwin and linux sections; a
 
 Windows default shows every chord the action answers to. "Ships unbound" means no default on any platform; 51 actions ship unbound, including `sessions.add`, `sessions.remove` and all 35 per-agent new-tab actions. Six more have a macOS default but none on Windows; their Windows cell says so.
 
-Two rows are not carried, see `DECISIONS.md`: `tab.newSimulator` (the mobile emulator went with remote and hosts) and `tab.openQuickCommandsMenu` (the quick commands menu was cut). They stay in this table only so an old keybindings file that names them still loads: the rebuild registers neither id and wires no shortcut for either, so each is an unknown id, warned about and ignored, as `voice.dictation` is. The counts above include them.
+Three rows are not carried, see `DECISIONS.md`: `tab.newSimulator` (the mobile emulator went with remote and hosts), `tab.openQuickCommandsMenu` (the quick commands menu was cut) and `sidebar.ports.toggle` (deleted 2026-10-30 by T-611, DT-C53: its Ports tab went with remote hosts, VIEW-079). They stay in this table only so an old keybindings file that names them still loads: the rebuild registers none of these ids and wires no shortcut for any, so each is an unknown id, warned about and ignored, as `voice.dictation` is. The 129 count above includes them.
 
 | Action id | Title | Windows default | Ships unbound |
 |---|---|---|---|
@@ -842,7 +842,7 @@ Two rows are not carried, see `DECISIONS.md`: `tab.newSimulator` (the mobile emu
 | `workspace.create` | Create worktree | Mod+N, Mod+Shift+N | no |
 | `workspace.rename` | Rename worktree | none on Windows (macOS: Mod+Alt+R) | no |
 | `workspace.delete` | Delete Workspace | Mod+Shift+Backspace | no |
-| `workspace.openBoard` | Toggle Workspace Board | none | yes |
+| `workspace.openBoard` | Show Workspace Statuses (was "Toggle Workspace Board"; renamed by T-610, the id is unchanged) | none | yes |
 | `dashboard.toggle` | Toggle Agent Dashboard | none | yes |
 | `workspace.selectByIndex` | Select Workspace 1–9 | Mod+1 | no |
 | `view.tasks` | Open Tasks | none | yes |
@@ -852,7 +852,7 @@ Two rows are not carried, see `DECISIONS.md`: `tab.newSimulator` (the mobile emu
 | `sidebar.search.toggle` | Show Search | Mod+Shift+F | no |
 | `sidebar.sourceControl.toggle` | Show Source Control | Mod+Shift+G | no |
 | `sidebar.checks.toggle` | Show Checks | none | yes |
-| `sidebar.ports.toggle` | Show Ports | none on Windows (macOS: Mod+Shift+I) | no |
+| `sidebar.ports.toggle` (not carried since T-611, see `DECISIONS.md` DT-C53) | Show Ports | none on Windows (macOS: Mod+Shift+I) | no |
 | `sidebar.sleepingWorkspaces.toggle` | Toggle Sleeping Workspaces | none | yes |
 | `sidebar.focusWorktreeList` | Focus worktree list | Mod+Shift+0 | no |
 | `floatingTerminal.toggle` | Toggle Floating Terminal | Mod+Alt+A | no |
@@ -985,7 +985,7 @@ Each card below keeps the action ids named here, with the defaults of 4.3, so a 
 | PROJ-057, VIEW-037 | `worktree.palette`. |
 | PROJ-059 | `workspace.rename`. |
 | PROJ-070 | `workspace.delete`. |
-| PROJ-085 | `workspace.openBoard`, shipped unbound. |
+| PROJ-085 | `workspace.openBoard`, shipped unbound. Its title is "Show Workspace Statuses" since T-610 (was "Toggle Workspace Board"); the id is kept. |
 | SESS-008, TERM-002, VIEW-036 | `sessions.add` and `sessions.remove`, both shipped unbound. |
 | SESS-011 | `workspace.create`, `tab.newTerminal`, and `tab.newAgent` for the default agent plus one id per agent formed by adding a dot and the agent's stable id from section 6 (for example `tab.newAgent.claude`). |
 | TERM-006 | `terminal.splitRight` and `terminal.splitDown`. |
@@ -1026,7 +1026,7 @@ Each card below keeps the action ids named here, with the defaults of 4.3, so a 
 | VIEW-060, EDIT-034 | `fileExplorer.undo`, `fileExplorer.redo`, `fileExplorer.copyPath`, `fileExplorer.copyRelativePath` and `fileExplorer.delete`. |
 | VIEW-061 | `sidebar.search.toggle`. |
 | VIEW-072, GIT-041 | `sourceControl.sendReviewNotes`, shipped unbound. |
-| VIEW-079 | `sidebar.ports.toggle`, bound on macOS only. |
+| VIEW-079 | `sidebar.ports.toggle`, bound on macOS only. Deleted by T-611 (DT-C53): the rebuild no longer registers it, so a keybindings file naming it gets the unknown-id warning and the binding is ignored. |
 | GIT-001 | `sidebar.sourceControl.toggle`, Mod+Shift+G. |
 | GIT-029 | `sidebar.checks.toggle`, shipped unbound. |
 | GIT-037, EDIT-027 | `editor.nextChange` (F7) and `editor.previousChange` (Shift+F7). |

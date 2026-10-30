@@ -11,6 +11,8 @@ import CodexCard from "../settings/CodexCard";
 import GrokCard from "../settings/GrokCard";
 import { t } from "../i18n/lookup";
 import { chordFires, escapeLeaves, leaveKey, milestone, SCREENS } from "./firstRun";
+import { HOOKS_LINE, hooksDefault, recordHooks, recordsHooks } from "./hooksOn";
+import { useSettings } from "../settings/useSettings";
 
 const inWizard = (t: EventTarget | null) => t instanceof Element && t.closest(".onb") !== null;
 
@@ -24,8 +26,11 @@ type ViewProps = {
   /** Some AI counts as connected (ONB-003). */
   connected: boolean;
   ping: boolean;
+  /** T-608: the status hooks switch beside the one line of consent (on until the user turns it off). */
+  hooks: boolean;
   cards?: ReactNode;
   onPing: (on: boolean) => void;
+  onHooks: (on: boolean) => void;
   onBack: () => void;
   onMain: () => void;
   onSecondary: () => void;
@@ -77,7 +82,16 @@ export function WizardView(p: ViewProps) {
               ))}
             </div>
           )}
-          {p.at === 1 && p.cards}
+          {p.at === 1 && (
+            <>
+              {p.cards}
+              {/* T-608: the one line of consent; moving on from this screen records the switch. */}
+              <label className="onb-ping">
+                <input type="checkbox" role="switch" checked={p.hooks} onChange={(e) => p.onHooks(e.target.checked)} />
+                <span>{HOOKS_LINE}</span>
+              </label>
+            </>
+          )}
           {p.at === 2 && (
             <div className="onb-work">
               <button className="btn onb-folder" onClick={p.onPickFolder}>
@@ -144,6 +158,10 @@ export default function Wizard(props: Props) {
   // ONB-006: Escape, a click on the dimmed app or the corner close asks first; one question at a time.
   const [leaving, setLeaving] = useState(false);
   const connected = Object.values(on).some(Boolean);
+  // T-608: what the hooks switch shows is what moving on records, so the two never differ.
+  const { settings } = useSettings();
+  const [hooks, setHooks] = useState<boolean | null>(null);
+  const hooksNow = hooks ?? hooksDefault(settings);
   // ONB-003 / ONB-011: the Connect cards first reporting a connected AI is the first-AI milestone.
   useEffect(() => {
     if (connected) void milestone("aiConnected");
@@ -151,6 +169,8 @@ export default function Wizard(props: Props) {
   const go = (to: number) => {
     // The stored step is the last screen finished (onboarding.rs); a failed save keeps the wizard going.
     if (to > at) invoke("onboarding_step", { step: to - 1 }).catch(() => {});
+    // T-608: a failed record leaves the choice unsaved, so the one-time card asks again (nothing is installed).
+    if (recordsHooks(at, to)) void recordHooks(hooksNow).catch(() => {});
     setAt(to);
   };
   const main = () => [() => go(1), () => go(2), () => go(3), () => props.onSession()][at]();
@@ -181,8 +201,10 @@ export default function Wizard(props: Props) {
       at={at}
       connected={connected}
       ping={props.ping}
+      hooks={hooksNow}
       cards={<ConnectGrid cards={cards} />}
       onPing={props.onPing}
+      onHooks={setHooks}
       onBack={() => go(at - 1)}
       onMain={main}
       onSecondary={secondary}
