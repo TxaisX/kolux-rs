@@ -1,0 +1,58 @@
+T-594 evidence, 2026-10-30, lane cli (worktree /home/user/kolux-lanes/cli, branch lane/cli)
+The installer puts kolux on PATH: <install>\bin goes on the user PATH at install and comes off at uninstall.
+Brief Phase 1 ("kolux.exe + kolux.cmd are installed and on PATH") and CLI-007.
+
+--- what changed
+src-tauri/installer-hooks.nsh (whole file; the T-574/T-578 DetailPrint line is kept)
+  :13-14   KOLUX_STRLEN_MAX = NSIS_MAX_STRLEN - 1 (the longest string NSIS holds).
+  :16-33   KOLUX_PATH_NAME: finds the PATH value's own name in HKCU\Environment (Path, PATH, ...) by
+           enumerating, like cli_register's Registry::name(); "" when the user has no PATH variable.
+  :35-65   KOLUX_PATH_CUT: split on ';', drop the entries that are $INSTDIR\bin or $INSTDIR\bin\ (any case),
+           join the rest back: the same rule as cli_register.rs path_without. Empty entries and order kept.
+  :93-158  KOLUX_PATH_ADD (inserted by NSIS_HOOK_POSTINSTALL, :196-199): only when $INSTDIR\bin\kolux.exe exists; only if missing;
+           trailing ';' trimmed then ";<install>\bin" appended (path_with); written with WriteRegExpandStr so the
+           variable stays REG_EXPAND_SZ under its own name (a missing PATH is created as "Path"); read back and
+           reported only when the entry is really there; WM_SETTINGCHANGE "Environment" broadcast (2 s, as
+           cli_register.rs). A PATH NSIS cannot read whole, or one that would pass 1023 characters, is never
+           written: the log says Settings > CLI > Register adds kolux (ponytail comment with the upgrade path).
+  :160-194 KOLUX_PATH_REMOVE (inserted by NSIS_HOOK_POSTUNINSTALL, :201-203, after the files are gone, so a cancelled uninstall keeps
+           PATH): removes exactly the <install>\bin entries, writes, reads back, broadcasts. Entries spelled any
+           other way (%VARIABLES%, quotes) are the user's own and are never touched.
+  Every register the hooks use ($R0-$R9) is pushed and popped, so the template's own values survive.
+evidence/T-594-hooks-check.nsi   wrapper that includes the hooks file the way Tauri's template does
+evidence/T-594-path-model.mjs    line-for-line model of the cut/append steps checked against cli_register's rules
+
+--- test first: the wrapper compiled against the base commit's hooks file (025eda2), before the change
+$ makensis -WX -V1 -DOUT=<scratch>/base.exe <scratch>/base-wrapper.nsi      (wrapper pointed at 025eda2's file)
+!insertmacro: macro named "NSIS_HOOK_POSTUNINSTALL" not found!
+Error in script ".../base-wrapper.nsi" on line 29 -- aborting creation process
+base exit 1        (and `grep -c Environment` on the old file: 0, nothing touched PATH)
+
+--- after the change (makensis 3.09 from Ubuntu's nsis package; NSIS_MAX_STRLEN=1024, as Tauri's NSIS)
+$ makensis -WX -V3 -DOUT=<scratch>/hooks-check.exe evidence/T-594-hooks-check.nsi
+Processed 1 file, writing output (x86-unicode):
+Install: 1 page (64 bytes), 1 section (4120 bytes), 142 instructions (3976 bytes), 62 strings (1978 bytes), 1 language table (194 bytes).
+Uninstall: 1 page (128 bytes), 1 section (4120 bytes), 114 instructions (3192 bytes), 54 strings (1592 bytes), 1 language table (194 bytes).
+with headers exit 0   (-WX: warnings are errors, and there were none)
+$ makensis -WX -V3 -DALONE=1 -DOUT=<scratch>/hooks-alone.exe evidence/T-594-hooks-check.nsi
+alone exit 0          (the file stands on its own: it includes LogicLib.nsh and WinMessages.nsh itself)
+Sanity: a copy with one instruction misspelled (IntOpX) fails: "Error in macro KOLUX_PATH_CUT on macroline 12",
+so makensis really parses the macro bodies.
+$ node evidence/T-594-path-model.mjs
+ok: 27381 PATH values; NSIS cut == path_without, append == path_with (non-blank), read-back and removal hold
+  (a copy of the model with one deliberate slip in the first-entry rule fails: exit 1)
+
+What this does NOT prove: the installer was not run (no Windows here, and wine was not installed: the shared
+disk had 2.8 GB free). The model checks the algorithm, not NSIS's own string instructions.
+
+--- still needs a live Windows run (the card box stays open until then)
+1. Build the installer (pnpm tauri build --bundles nsis with release.conf.json, i.e. scripts/release.mjs),
+   install, open a NEW terminal: `kolux --version` works; `reg query HKCU\Environment /v Path` shows
+   <install>\bin once, type REG_EXPAND_SZ; the installer's details list "Added ... to your PATH".
+2. Install again over it: PATH unchanged (no second entry).
+3. Uninstall: the entry is gone, every other entry and the type unchanged; a new terminal no longer finds kolux.
+4. With a user PATH over ~1000 characters: PATH is left exactly as it was and the log says so.
+
+--- note for Txais (not blocking)
+An update reruns the installer, so if someone removed kolux in Settings > CLI, the next update puts it back
+on PATH (the task says: add it on install when missing). If that should stay removed, it needs a choice.
