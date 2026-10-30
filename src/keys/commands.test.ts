@@ -8,6 +8,7 @@ import { matchEvent, resolve, type KeyLike } from "./keymap";
 import { commandRows, windowCommand } from "./commands";
 import { runCommand } from "./runCommand";
 import { heldByTerminal } from "./terminalPolicy";
+import { SCREEN_OF } from "../chrome/reach";
 
 /** Every source file of the window, as text (tests left out). */
 const SOURCES = import.meta.glob(["../**/*.ts", "../**/*.tsx", "!../**/*.test.ts"], { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -21,11 +22,12 @@ function spies() {
   return { did, calls: { toggleRight: (tab: string) => void did.push(`right:${tab}`), renameWorkspace: () => void did.push("rename"), reload: () => void did.push("reload") } };
 }
 
-/** A command has a handler when the window's or a pane's key code names it, windowCommand runs it, it is
- *  another command under an old id (sameAs), or it is one of the per-agent new-tab commands App.tsx runs by prefix. */
+/** A command has a handler when the window's or a pane's key code names it, windowCommand runs it, it shows a
+ *  screen (T-610: the window's key switch reads chrome/reach.ts SCREEN_OF), it is another command under an old id
+ *  (sameAs), or it is one of the per-agent new-tab commands App.tsx runs by prefix. */
 function handled(id: string): boolean {
   if (sameAs[id]) return handled(sameAs[id]);
-  if (windowCommand(id, spies().calls)) return true;
+  if (windowCommand(id, spies().calls) || SCREEN_OF[id]) return true;
   if (id.startsWith("tab.newAgent.")) return SOURCES["../App.tsx"].includes(`hit.id.startsWith("tab.newAgent.")`);
   return named(id);
 }

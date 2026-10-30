@@ -18,8 +18,10 @@ import { useSettings } from "../settings/useSettings";
 import { readStatusBar, usagePills } from "./statusItems";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
-/** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
-export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox" | "tower" | "floor" | "skills" | "space";
+/** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view).
+ *  T-610: every one is reached from the switcher or the palette (chrome/reach.ts, reach.test.ts). */
+export const SCREEN_IDS = ["agents", "board", "terminals", "artifacts", "inbox", "tower", "floor", "skills", "space"] as const;
+export type Screen = (typeof SCREEN_IDS)[number];
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },

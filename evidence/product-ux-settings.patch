@@ -23,3 +23,12 @@
    expect(ids).toContain("browser.grabElement"); // T-240: the browser pane runs it
    expect(ids).toContain("browser.find");
    expect(ids).toContain("editor.replace");
+@@ -110,7 +110,7 @@
+   const by = (id: string) => all.find((r) => r.id === id)!;
+   expect(by("workspace.openBoard").badges).toEqual(["Modified", "Conflicts"]);
+   expect(by(holder.id).badges).toContain("Conflicts");
+-  expect(by(holder.id).hint).toContain("Ctrl+P is also used by Toggle Workspace Board");
++  expect(by(holder.id).hint).toContain("Ctrl+P is also used by Show Workspace Statuses"); // T-610: the workspace board's new name
+   expect(ids(filterRows(all, "conflicting", "")).sort()).toEqual(["workspace.openBoard", holder.id].sort());
+   // The custom binding still wins the chord (yieldToUser).
+   expect(by("workspace.openBoard").chords).toEqual(["Mod+P"]);

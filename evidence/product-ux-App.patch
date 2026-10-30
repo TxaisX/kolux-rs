@@ -1,8 +1,8 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 0d542cef..0e026f4d 100644
+index 0d542cef..93203c10 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -161,13 +161,15 @@ import { Bell, Globe, Pin, Spinner, StatusGlyph } from "./chrome/icons";
+@@ -161,13 +161,16 @@ import { Bell, Globe, Pin, Spinner, StatusGlyph } from "./chrome/icons";
  import Tip from "./chrome/Tip";
  import InboxView from "./inbox/InboxView";
  import { inboxOverlay, onClose, onRunning, type Kept } from "./inbox/exitedPrompt";
@@ -17,10 +17,11 @@ index 0d542cef..0e026f4d 100644
 +import { LANES, chipOf, needsYou, paneStatus } from "./board/chip";
 +import { reviewTab } from "./board/review";
 +import { commandRows, windowCommand } from "./keys/commands";
++import { SCREEN_OF, screenRows } from "./chrome/reach";
  import Ring from "./usage/Ring";
  import { capOn, codexOf, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
  import { useAccountSwitcher } from "./switcher/AccountSwitcher";
-@@ -353,6 +355,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -353,6 +356,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    }, [tabMenu]);
    const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
    const [liveIds, setLiveIds] = useState<Record<number, Identity>>({}); // TERM-058: terminal panes' running program, from the shell marks
@@ -30,7 +31,7 @@ index 0d542cef..0e026f4d 100644
    const [allAgents, setAgents] = useState<AgentInfo[]>([]);
    const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
    const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
-@@ -370,6 +375,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -370,6 +376,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    const [picking, setPicking] = useState<"file" | "markdown" | "change" | "template" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
    const defaultId = defaultAgentId(settings);
    const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
@@ -38,7 +39,7 @@ index 0d542cef..0e026f4d 100644
    const { projects, setProjects, owner, setOwner, names, setNames, refresh, setRefresh, deleteRequest, setDeleteRequest, recentDirs, activeRef, createRequest, setCreateRequest, standIns, setStandIns, createName, setCreateName, hist, setHist } = useWorkspaces(activeDir);
    const [stacked, setStacked] = useState<Record<string, boolean>>(layout?.stacked ?? {}); // TERM-006: a single pane split down makes a stacked pair
    const { palette, setPalette, notice, setNotice, toast, setToast } = useChrome();
-@@ -557,7 +563,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -557,7 +564,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    // SESS-004: the default agent is a settings key; the plus menu lists it first.
    const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
    // ux fix 2: one count of waiting panes feeds the bell and the window title.
@@ -47,10 +48,42 @@ index 0d542cef..0e026f4d 100644
    useEffect(() => {
      document.title = windowTitle(info, needing);
    }, [info, needing]);
-@@ -955,6 +961,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -733,12 +740,6 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         case "workspace.openBoard":
+           setBoardOpen((o) => !o);
+           break;
+-        case "view.inbox":
+-          setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
+-          break;
+-        case "view.tower":
+-          setScreen((s) => (s === "tower" ? "terminals" : "tower"));
+-          break;
+         case "account.switchClaude":
+         case "account.switchCodex": {
+           // T-548: one key moves new panes to the provider's next account (wrapping through System default).
+@@ -748,12 +749,6 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           switchAccount(group.provider, to);
+           break;
+         }
+-        case "view.floor":
+-          setScreen((s) => (s === "floor" ? "terminals" : "floor"));
+-          break;
+-        case "view.space":
+-          setScreen((s) => (s === "space" ? "terminals" : "space"));
+-          break;
+         case "view.code":
+           leavePage();
+           break;
+@@ -955,6 +950,22 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
            equalizePanes();
            break;
          default: {
++          // T-610: a command that shows a screen (chrome/reach.ts) toggles it with Terminals.
++          const to = SCREEN_OF[hit.id];
++          if (to) {
++            setScreen((s) => (s === to ? "terminals" : to));
++            break;
++          }
 +          // T-611: the commands this switch had no case for (keys/commands.ts).
 +          if (windowCommand(hit.id, {
 +            toggleRight: (tab) => (terminals && right.open && right.tab === tab ? saveRight({ open: false }) : showRight(tab)),
@@ -64,15 +97,16 @@ index 0d542cef..0e026f4d 100644
            // TERM-041: one unbound command per installed agent, `tab.newAgent.<id>`.
            const id = hit.id.startsWith("tab.newAgent.") ? hit.id.slice("tab.newAgent.".length) : null;
            const a = id ? agents.find((x) => x.id === id && x.installed) : undefined;
-@@ -1630,6 +1646,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1630,6 +1641,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
      ...paletteRows(accountSwitcher.groups, switchAccount), // T-548: Switch Claude to ...
      { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
 +    ...commandRows(keymap, installedIds), // T-611: every command, the unbound ones included, run as its shortcut runs
++    ...screenRows((s) => (s === "skills" ? toggleSkills(screen, setScreen) : setScreen(s))), // T-610: Artifacts and Skills
      tabSearchCommand(() => openTabSearch()), // TERM-053
      { section: "Quick actions", label: "New session", run: () => addChooser() },
      // VIEW-042: actions on the worktree in front, not runnable while none is open
-@@ -2034,11 +2051,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2034,11 +2047,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    }, [timed]);
    const sources: Source[] = panes
      .filter((p) => !p.kind && !p.seats)
@@ -85,7 +119,7 @@ index 0d542cef..0e026f4d 100644
    // T-035-b: the Inbox sees an exited pane's open prompt; a restart, a closed pane or a fresh hook state drops it.
    const inboxSeen = inboxOverlay(sources, exitedPrompt.current, hook);
    exitedPrompt.current = inboxSeen.kept;
-@@ -2077,13 +2090,25 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2077,13 +2086,25 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      setFocused(key);
      setReveal((n) => n + 1);
    };
@@ -112,7 +146,7 @@ index 0d542cef..0e026f4d 100644
    const rowStates: Record<string, RowInfo> = {};
    const workingIn = workingByDir(panes, hook, running, liveIds); // STAT-036: working agents per workspace
    const cacheFor = cacheMinutes(settings); // SET-059
-@@ -2155,7 +2180,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2155,7 +2176,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      window.dispatchEvent(new Event(DIVIDER_DONE));
    };
    // TERM-029: this grid's sessions waiting on a permission or a question, in grid order.
@@ -121,7 +155,7 @@ index 0d542cef..0e026f4d 100644
    const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
    // VIEW-015 / VIEW-021: the Agents rail groups sessions under the saved (switched-on, installed)
    // agents; the shown session is the remembered pick, else the first agent's newest; + adds a
-@@ -2183,11 +2208,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2183,11 +2204,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      setFocused(key);
    };
    // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
@@ -135,7 +169,7 @@ index 0d542cef..0e026f4d 100644
    // T-546-c: the Tower's own window shows the same seats and usage; a row clicked there opens the pane here.
    // T-548 FIX-1: the figures are worked out on account ids, then the Tower is shown the names the switcher shows.
    const towerUsage = useMemo(() => nameUsage(usageByAccount(towerNow, plan, accountSwitcher.active), (agent, id) => switcherLabel(accountSwitcher.groups, agent, id)), [towerNow, plan, accountSwitcher.active, accountSwitcher.groups]);
-@@ -2630,6 +2655,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2630,6 +2651,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
              createRequest={createRequest}
              createName={createName}
              deleteRequest={deleteRequest}
@@ -143,7 +177,7 @@ index 0d542cef..0e026f4d 100644
              onStartIn={startIn}
              onAdded={projectAdded}
              artifactsOn={screen === "artifacts"}
-@@ -2783,7 +2809,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2783,7 +2805,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
              </>
            )}
            {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
@@ -152,7 +186,7 @@ index 0d542cef..0e026f4d 100644
            {screen === "agents" && <AgentsChat open={{ onOpenFile: (path, line, column) => openFile(path, line, column), onOpenLink: openInBrowser, inKolux: linksOpenInKolux(settings), onReview: (k, plan, cut) => setReviewing({ key: k, plan, cut }) }} taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
                  setAgentSel(key);
                  setFocused(key);
-@@ -2806,10 +2832,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2806,10 +2828,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
            {terminals && page === null && waiting.length > 0 && (
              <div className="needs-strip" role="list" aria-label="Sessions that need you">
                {waiting.map((p) => (
@@ -165,7 +199,7 @@ index 0d542cef..0e026f4d 100644
                  </button>
                ))}
              </div>
-@@ -3033,7 +3059,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -3033,7 +3055,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                      onOpenLink={openInBrowser}
                      linksOpenInKolux={settings.linksOpenInKolux === true}
                      gpu={gpuOn(settings)}
@@ -174,7 +208,7 @@ index 0d542cef..0e026f4d 100644
                      cwd={p.cwd}
                      branch={p.branch}
                      agent={p.agent}
-@@ -3079,6 +3105,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -3079,6 +3101,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                      crew={crew[p.key]}
                      onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                      onIdentity={(l) => setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }))}
