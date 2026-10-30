@@ -38,6 +38,13 @@ export function followClick(e: MouseEvent, page: HTMLElement, note: string, root
   return true;
 }
 
+/** T-601: any other click in a note's page does nothing the page would do on its own (follow a link or an image map,
+ * send a form); only a collapsible section's summary still opens and closes it. */
+export function inertClick(e: MouseEvent): void {
+  const t = e.target as Element | null;
+  if (!t?.closest?.("summary") || t.closest("a")) e.preventDefault();
+}
+
 /** EDIT-014: the toast for a link to a file that is not there (null when it exists). `stamps` is file_stamps: null = gone. */
 export async function missingFileToast(path: string, stamps: (paths: string[]) => Promise<unknown[]>): Promise<string | null> {
   try {
