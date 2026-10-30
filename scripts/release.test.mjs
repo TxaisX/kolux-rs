@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { acquire, buildOnce, downloadUrl, finish, installerName, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, smokeMigration, takeQueued, unlock, verifySignature, FEED_REPO, STALE_MS } from "./release.mjs";
+import { acquire, buildOnce, downloadUrl, installerName, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, run, smokeCli, smokeMigration, takeQueued, unlock, verifySignature, FEED_REPO, STALE_MS } from "./release.mjs";
 import { decide, WAIT_MS } from "./ci-gate.mjs";
 import { checkPromises, checkWorkflow } from "./workflow-check.mjs";
 import { parseArgs } from "./ship.mjs";
@@ -247,9 +247,30 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
       expect(t.calls.map((c) => c.name)).not.toContain("tauri signer");
       expect(t.gh().map((c) => c.args[1])).toEqual(["view"]);
       fs.writeFileSync(s.key, privateKey);
-      expect(finish({}, s.env, t.exec)).toMatchObject({ version: "0.1.8", published: true, out: built.out });
+      fs.mkdirSync(path.join(s.checkout + "-out", "v0.1.9"), { recursive: true }); // a newer-named folder from some other run is never picked
+      run({ finish: true }, s.env, t.exec);
       expect(t.gh().map((c) => c.args[1])).toEqual(["view", "create", "upload"]);
+      expect(t.gh()[1].args[2]).toBe("v0.1.8");
+      run({ finish: true }, s.env, t.exec); // a second --finish finds nothing pending
+      expect(t.gh()).toHaveLength(3);
       expect(fs.readdirSync(built.out).sort()).toEqual([installerName("0.1.8"), installerName("0.1.8") + ".sig", "latest.json", "notes.md"]);
+    } finally {
+      s.done();
+    }
+  });
+
+  // T-588 review: APP-059 skips a main that was already released. In CI's two steps the skip must
+  // carry through --finish, which signs only what this --build-only built, never an older folder.
+  it("in CI's two steps, an already-released main builds nothing, and --finish then signs and publishes nothing", () => {
+    const s = scratch();
+    try {
+      const sha = git(s.origin, "rev-parse", "HEAD");
+      const t = tools(s.checkout, { tagName: "v0.1.3", body: notesBody(["Agents start faster"], sha) });
+      fs.mkdirSync(path.join(s.checkout + "-out", "v0.1.3"), { recursive: true }); // a build an earlier run published
+      expect(() => run({ repo: s.origin, buildOnly: true }, s.env, t.exec)).not.toThrow();
+      expect(() => run({ finish: true }, s.env, t.exec)).not.toThrow();
+      expect(t.calls.map((c) => c.name)).toEqual(["gh"]);
+      expect(t.gh().map((c) => c.args[1])).toEqual(["view"]);
     } finally {
       s.done();
     }

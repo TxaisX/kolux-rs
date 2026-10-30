@@ -8,7 +8,7 @@
 //   --dry-run      print the version, the notes and the steps; build and publish nothing
 //   --no-publish   build, smoke-test and sign, then stop (the files stay in <checkout>-out)
 //   --build-only   build and smoke-test, then stop before signing (release.yml's build step, T-588)
-//   --finish       sign the newest build in <checkout>-out, then publish it (release.yml's next step)
+//   --finish       sign the build --build-only recorded in <checkout>-out, then publish it (release.yml's next step)
 //
 // Environment: KOLUX_RELEASE_CHECKOUT  the build checkout (default ~/.kolux-rs/release-checkout)
 //              KOLUX_RELEASE_KEY       the signing key file, its public half beside it as .pub
@@ -215,6 +215,7 @@ function setVersion(dir, version) {
 
 export function buildOnce(o, env = process.env, exec = sh) {
   const dir = checkoutDir(env);
+  if (o.buildOnly) fs.rmSync(pendingFile(env), { force: true }); // --finish acts only on what this run builds
   // 1. The checkout kept only for releases, at the newest main.
   if (!fs.existsSync(path.join(dir, ".git"))) {
     if (!o.repo) throw new Error(`no build checkout at ${dir} and no --repo to clone it from`);
@@ -283,23 +284,24 @@ export function buildOnce(o, env = process.env, exec = sh) {
   fs.writeFileSync(path.join(out, "notes.md"), notes);
   say(`smoke test passed: the installer, kolux --version, --help and the old-profile migration all say ${version}`);
   if (o.buildOnly) {
+    fs.writeFileSync(pendingFile(env), `v${version}\n`);
     say(`built ${version}, not signed; release.mjs --finish signs and publishes it (the files are in ${out})`);
     return { version, sha, notes, out, signed: false };
   }
   return finish(o, env, exec, out);
 }
 
-/** The newest build in <checkout>-out: what --build-only left for --finish. */
-function newestBuild(env) {
-  const root = checkoutDir(env) + "-out";
-  const tag = fs.existsSync(root) ? newestTag(fs.readdirSync(root)) : null;
-  if (!tag) throw new Error(`no build to finish in ${root}; run release.mjs --build-only first`);
-  return path.join(root, tag);
+/** T-588: the note --build-only leaves in <checkout>-out naming the build it made, and removes when it
+ *  built nothing (APP-059's skip); --finish signs that build and no other. */
+const pendingFile = (env) => path.join(checkoutDir(env) + "-out", "pending");
+function pendingBuild(env) {
+  const f = pendingFile(env);
+  return fs.existsSync(f) ? path.join(path.dirname(f), fs.readFileSync(f, "utf8").trim()) : null;
 }
 
 /** 5-6. Signs a build (its folder in <checkout>-out), checks the signature, writes the update manifest
  *  and publishes the installer, its signature and the manifest. */
-export function finish(o, env = process.env, exec = sh, out = newestBuild(env)) {
+export function finish(o, env, exec, out) {
   const version = path.basename(out).slice(1);
   const exe = path.join(out, installerName(version));
   const notes = fs.readFileSync(path.join(out, "notes.md"), "utf8");
@@ -339,14 +341,20 @@ export function finish(o, env = process.env, exec = sh, out = newestBuild(env)) 
   return { version, sha, notes, out, published: true };
 }
 
-export function run(o, env = process.env) {
+export function run(o, env = process.env, exec = sh) {
   const dir = checkoutDir(env);
-  if (o.dryRun) return void buildOnce(o, env);
-  if (o.finish) return void finish(o, env); // release.yml's step after --build-only; the build already ran
+  if (o.dryRun) return void buildOnce(o, env, exec);
+  if (o.finish) {
+    // release.yml's step after --build-only; the build already ran, or there was nothing to build
+    const out = pendingBuild(env);
+    if (!out) return void say("nothing was built, nothing to sign");
+    finish(o, env, exec, out);
+    return void fs.rmSync(pendingFile(env), { force: true }); // signed and handed on: a second --finish does nothing
+  }
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   if (acquire(dir) === "queued") return void say("a release build is running; one more build from the newest main is queued after it");
   try {
-    do buildOnce(o, env);
+    do buildOnce(o, env, exec);
     while (takeQueued(dir) && (say("a ship landed during the build; building again from the newest main"), true));
   } finally {
     unlock(dir);

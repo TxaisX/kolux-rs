@@ -71,7 +71,7 @@ $ node scripts/workflow-check.mjs
 workflow-check: 2 workflows, 0 problem(s)
 workflow-check: OK
 $ KOLUX_RELEASE_CHECKOUT=<empty scratch> node scripts/release.mjs --finish
-... release failed: no build to finish in <scratch>-out; run release.mjs --build-only first     (exit 1)
+(round 1, superseded below) release failed: no build to finish in <scratch>-out ... (exit 1)
 
 PROBES THAT SHAPED THE DESIGN (this sandbox)
 - tauri-cli 2.12.1 strings: "A public key has been found, but no private key. Make sure to set
@@ -91,3 +91,76 @@ STILL OPEN (needs CI and Txais)
   run pnpm. A packageManager pin in package.json (X-proc.14) would close that; not done here.
 - The release job could also use a GitHub environment with a required reviewer (the audit's suggestion);
   that is a repository setting for Txais, not a file change.
+
+REVIEW ROUND 1 FIX: an already-released main no longer fails the release run
+Problem (reviewer): with two steps, APP-059's skip ("main was already released; nothing to do") made
+--build-only exit 0 with no build, then --finish threw "no build to finish" (exit 1). --finish also
+signed the newest v* folder in <checkout>-out, which on a local machine can be an already-published one.
+Fix (the reviewer's first option, a record of what was built):
+- scripts/release.mjs:218 --build-only removes <checkout>-out/pending before it starts (so a skip or a
+  failed build leaves none); :287 writes it ("v<version>") after the smoke test passes.
+- scripts/release.mjs:294-301 pendingFile/pendingBuild replace newestBuild; finish() takes the folder
+  explicitly (no default).
+- scripts/release.mjs:344-353 run(o, env, exec): --finish with nothing pending says "nothing was built,
+  nothing to sign" and exits 0; otherwise signs exactly the recorded folder, then removes the record
+  (a second --finish does nothing). run takes the injected runner like buildOnce (test seam only).
+- release.yml unchanged: both steps still run; the skip now ends both with exit 0.
+Tests (scripts/release.test.mjs):
+- new "in CI's two steps, an already-released main builds nothing, and --finish then signs and publishes
+  nothing": an old published v0.1.3 folder sits in <checkout>-out; run --build-only then run --finish;
+  no throw, the only call is gh release view (no create, no upload, no signer).
+- the existing two-step test now goes through run({finish:true}), puts a newer-named v0.1.9 folder beside
+  the build and checks that v0.1.8 (the recorded one) is the release created, and that a second --finish
+  publishes nothing.
+Failing output before the fix (new test, old run/finish; only the run() exec seam added):
+
+ RUN  v4.1.12 /home/user/kolux-lanes/release-ci
+
+stdout | scripts/release.test.mjs > release job publishing to GitHub, with gh stubbed (APP-059, DT-R11) > in CI's two steps, an already-released main builds nothing, and --finish then signs and publishes nothing
+2026-10-30T15:45:30.069Z cloning /tmp/krs-release-MIZXX3/origin into /tmp/krs-release-MIZXX3/checkout
+2026-10-30T15:45:30.093Z main f452508 was already released as v0.1.3; nothing to do
+
+ ❯ scripts/release.test.mjs (25 tests | 1 failed) 4440ms
+     × in CI's two steps, an already-released main builds nothing, and --finish then signs and publishes nothing 315ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  scripts/release.test.mjs > release job publishing to GitHub, with gh stubbed (APP-059, DT-R11) > in CI's two steps, an already-released main builds nothing, and --finish then signs and publishes nothing
+AssertionError: expected [Function] to not throw an error but 'Error: ENOENT: no such file or direct…' was thrown
+
+- Expected:
+undefined
+
++ Received:
+"Error: ENOENT: no such file or directory, open '/tmp/krs-release-MIZXX3/checkout-out/v0.1.3/notes.md'"
+
+ ❯ scripts/release.test.mjs:267:62
+    265|       fs.mkdirSync(path.join(s.checkout + "-out", "v0.1.3"), { recursi…
+    266|       expect(() => run({ repo: s.origin, buildOnly: true }, s.env, t.e…
+    267|       expect(() => run({ finish: true }, s.env, t.exec)).not.toThrow();
+       |                                                              ^
+    268|       expect(t.calls.map((c) => c.name)).toEqual(["gh"]);
+    269|       expect(t.gh().map((c) => c.args[1])).toEqual(["view"]);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 24 passed (25)
+   Start at  15:45:26
+   Duration  4.80s (transform 147ms, setup 0ms, import 210ms, tests 4.44s, environment 0ms)
+
+
+After the fix:
+$ flock /tmp/kolux-node.lock pnpm exec vitest run scripts/release.test.mjs
+ Test Files  1 passed (1)
+      Tests  25 passed (25)
+$ pnpm exec vitest run scripts/ship.test.mjs          -> Tests 4 passed (4)
+$ pnpm exec vitest run src/update/__cards__/APP-058-060.test.ts -> Tests 6 passed (6)
+$ node scripts/workflow-check.mjs
+workflow-check: 2 workflows, 0 problem(s)
+workflow-check: OK
+$ KOLUX_RELEASE_CHECKOUT=<empty scratch> node scripts/release.mjs --finish
+2026-10-30T15:47:13.258Z nothing was built, nothing to sign
+exit 0
+$ flock /tmp/kolux-node.lock pnpm exec tsc   -> exit 0, no output
