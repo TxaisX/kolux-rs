@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 685 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 689 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -88,6 +88,8 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 ## Decisions made for Txais
 
+- 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
+- 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters is left untouched, and the installer log says to use Settings > CLI > Register (NSIS string limit). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
 - 2026-10-12 · [release] T-105 · kolux-dev terminal list, show, create, split, rename, switch (focus) and close now work against the open window; new terminals stay in the background unless asked, close confirms each program stopped and leaves the caller's own terminal open, and terminal stop is a hidden alias (DT-R37).
 - 2026-10-12 · [release] T-104-a · A pane with no program starts the best shell that will run (PowerShell 7, Windows PowerShell, then the command prompt in UTF-8), the header names the one that started, panes no longer inherit Kolux's own build variables, and a folder that is gone, unplugged or a drive root (for agents) gets a message (DT-R36).
 - 2026-10-12 · [release] T-103-a · Terminals you are not looking at stay alive rather than being parked to save memory, so they come back exactly as left (DT-R35).
