@@ -85,7 +85,8 @@ export function smokeMigration(cli, root) {
 }
 
 export const installerName = (version) => `Kolux RS_${version}_x64-setup.exe`;
-export const downloadUrl = (version) => `https://github.com/${FEED_REPO}/releases/download/v${version}/${encodeURIComponent(installerName(version))}`;
+// GitHub stores an uploaded asset with each space turned into a dot, so the link names it that way.
+export const downloadUrl = (version) => `https://github.com/${FEED_REPO}/releases/download/v${version}/${installerName(version).replaceAll(" ", ".")}`;
 export const isGitHub = (repo) => /^(https:\/\/github\.com\/|git@github\.com:)/.test(repo ?? "");
 /** DT-R11: gh runs only for a GitHub origin or inside GitHub Actions, whose release.yml builds from a local path. */
 export const onGitHub = (repo, env) => isGitHub(repo) || env.GITHUB_ACTIONS === "true";
