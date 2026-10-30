@@ -58,6 +58,11 @@ jobs:
       - run: node scripts/license-check.mjs
       - run: node scripts/plan-check.mjs
       - run: node scripts/workflow-check.mjs
+      # T-591: every invoke("name") in src/ is a command lib.rs registers, and the JavaScript the
+      # window loads at start stays under its ceiling.
+      - run: node scripts/invoke-contract.mjs
+      - run: pnpm exec vite build
+      - run: node scripts/bundle-budget.mjs
 
   rust:
     name: Rust tests, lints and dependencies
