@@ -1146,7 +1146,16 @@ fn launch_app() -> Result<(), Fail> {
             }
         }
     };
-    let mut cmd = std::process::Command::new(&exe);
+    app_command(&exe).spawn().map(drop).map_err(|e| Fail::new("launch_failed", format!("could not start Kolux from {}: {e}", exe.display())))
+}
+
+/// The app's command line for `launch_app`. T-595 (CLI-011, R01-cli.4): it runs in the app's own
+/// folder (`service::start_dir`), never in the caller's.
+fn app_command(exe: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(exe);
+    if let Some(own) = crate::pty::service::start_dir(exe) {
+        cmd.current_dir(own);
+    }
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
@@ -1154,7 +1163,7 @@ fn launch_app() -> Result<(), Fail> {
         // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: closing this terminal or Ctrl+C here leaves the app running.
         cmd.creation_flags(0x0000_0008 | 0x0000_0200);
     }
-    cmd.spawn().map(drop).map_err(|e| Fail::new("launch_failed", format!("could not start Kolux from {}: {e}", exe.display())))
+    cmd
 }
 
 fn request_id() -> String {
@@ -6816,6 +6825,19 @@ mod tests {
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T-595 (CLI-011, R01-cli.4): `kolux open` run inside a worktree starts the app in the app's own
+    /// folder, so Windows can still delete or rename that worktree and nothing planted there is loaded.
+    #[test]
+    fn cli011_open_starts_the_app_in_its_own_folder_not_the_callers() {
+        let app = std::env::temp_dir().join("kolux-t595-app").join(if cfg!(windows) { "kolux-rs.exe" } else { "kolux-rs" });
+        let cmd = app_command(&app);
+        assert_eq!(cmd.get_current_dir(), app.parent());
+        assert_ne!(cmd.get_current_dir(), Some(std::env::current_dir().unwrap().as_path()), "the caller's folder");
+        assert_eq!(cmd.get_args().count(), 0);
+        // A relative program (a test's KOLUX_APP_EXECUTABLE) keeps the caller's folder: moving would change the file it names.
+        assert_eq!(app_command(Path::new("kolux-rs")).get_current_dir(), None);
     }
 
     /// CLI-012: the four states of `kolux status`, met at the real edges: no startup file, a file

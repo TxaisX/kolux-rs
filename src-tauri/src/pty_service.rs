@@ -702,12 +702,30 @@ pub fn ensure(dir: &Path, launch: impl FnOnce() -> Result<(), String>, limit: Du
     }
 }
 
+/// T-595 (CLI-011, R01-cli.4, L2-rust-crates.2): the folder a Kolux program started for the user works
+/// in: the program's own folder, never the caller's, so Windows can still delete or rename the folder
+/// `kolux open` ran in (a worktree) while Kolux and this service run, and a DLL planted there is never
+/// searched for. A relative program path (a test's KOLUX_APP_EXECUTABLE) keeps the caller's folder,
+/// since moving would change which file it names.
+pub fn start_dir(exe: &Path) -> Option<&Path> {
+    exe.parent().filter(|_| exe.is_absolute())
+}
+
+/// `exe FLAG identifier dir`, quiet, in the program's own folder.
+fn detached(exe: &Path, identifier: &str, dir: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(FLAG).arg(identifier).arg(dir);
+    if let Some(own) = start_dir(exe) {
+        cmd.current_dir(own);
+    }
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd
+}
+
 /// Starts `exe FLAG identifier dir` with no console and outside the window's process group, so
 /// closing the window or its terminal leaves it running.
 pub fn launch_detached(exe: &Path, identifier: &str, dir: &Path) -> Result<(), String> {
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg(FLAG).arg(identifier).arg(dir);
-    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let mut cmd = detached(exe, identifier, dir);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1173,6 +1191,19 @@ mod tests {
         assert!(read_endpoint(&dir).is_none());
         assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "no temporary file left behind");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// T-595 (CLI-011, R01-cli.4, L2-rust-crates.2): the service starts in its program's own folder, never
+    /// in the folder the app was started from, and still gets its data folder as an argument.
+    #[test]
+    fn cli011_the_service_starts_in_its_own_folder_not_the_callers() {
+        let exe = std::env::current_exe().unwrap();
+        let data = scratch("t595");
+        let cmd = detached(&exe, "id", &data);
+        assert_eq!(cmd.get_current_dir(), exe.parent());
+        assert_ne!(cmd.get_current_dir(), Some(std::env::current_dir().unwrap().as_path()), "the caller's folder");
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), [std::ffi::OsStr::new(FLAG), "id".as_ref(), data.as_os_str()]);
+        let _ = std::fs::remove_dir_all(data);
     }
     /// ux card 6: Windows takes about 2 s to refuse a dead loopback port, and a service killed with its window leaves its
     /// record behind; a record whose process is gone must read as "no service" at once.
