@@ -228,3 +228,51 @@ describe("status bar item (VIEW-100)", () => {
     expect(barItem(s.phase)).toMatchObject({ tone: "error", text: "Update failed" });
   });
 });
+
+describe("T-600: the card never opens itself or takes the user's place (F02-settings-update.1)", () => {
+  const quiet = (s: CardState, v: string) =>
+    run(s, { type: "checkStart", requested: false }, { type: "checkDone", requested: false, found: info(v) }, { type: "downloadStart", info: info(v) }, { type: "ready", info: info(v) });
+
+  it("rule 1: background checks and download errors may show the card but never mark it as the user's (requested)", () => {
+    let s = run(initialCard(null, true), { type: "checkStart", requested: false }, { type: "checkDone", requested: false, found: info("0.2.0") }, { type: "downloadStart", info: info("0.2.0") });
+    expect(s.requested).toBe(false);
+    s = run(s, { type: "downloadFailed", info: info("0.2.0"), message: "error sending request", offline: false });
+    expect(s).toMatchObject({ shown: true, collapsed: false, requested: false }); // download errors bring the card up (APP-026)
+    expect(run(s, { type: "downloadFailed", info: info("0.2.0"), message: "update:refused|Kolux RS refused this update: signed by Mallory.", offline: false })).toMatchObject({ shown: true, requested: false });
+    expect(run(s, { type: "downloadFailed", info: info("0.2.0"), message: "update:compat|error sending request", offline: false })).toMatchObject({ shown: true, requested: false });
+    // A quiet check after the user's own is not the user's either.
+    s = run(initialCard(null, true), { type: "checkStart", requested: true }, { type: "checkDone", requested: true, found: info("0.2.0") }, { type: "checkStart", requested: false });
+    expect(s.requested).toBe(false);
+    // ... and its failure shows no error on the card the user left open (APP-024).
+    s = run(s, { type: "checkFailed", requested: false, message: "no answer", offline: true });
+    expect(s.phase.kind).toBe("available");
+  });
+
+  it("rule 2: collapsing clears requested; the user's own expand or status-bar click gives it back", () => {
+    let s = run(initialCard(null, true), { type: "checkStart", requested: true }, { type: "checkDone", requested: true, found: info("0.2.0") });
+    expect(s.requested).toBe(true);
+    s = run(s, { type: "collapse" });
+    expect(s).toMatchObject({ collapsed: true, requested: false });
+    s = run(s, { type: "expand" });
+    expect(s).toMatchObject({ collapsed: false, requested: true });
+    s = run(s, { type: "collapse" }, { type: "show" });
+    expect(s).toMatchObject({ collapsed: false, requested: true });
+  });
+
+  it("rule 3: background checks never re-expand a collapsed card (APP-026), for the same version or a newer one", () => {
+    // The user's own check got 0.2.0 ready; they collapse the card; the half-hourly check finds 0.2.0 again, then 0.3.0.
+    let s = run(initialCard(null, true), { type: "checkStart", requested: true }, { type: "checkDone", requested: true, found: info("0.2.0") }, { type: "downloadStart", info: info("0.2.0") }, { type: "ready", info: info("0.2.0") }, { type: "collapse" });
+    s = quiet(s, "0.2.0");
+    expect(s).toMatchObject({ shown: true, collapsed: true, requested: false });
+    s = quiet(s, "0.3.0");
+    expect(s).toMatchObject({ shown: true, collapsed: true, requested: false });
+    // A background download fails, so the card comes up; collapsed, the quiet checks that follow leave it collapsed.
+    let t = run(initialCard(null, true), { type: "checkDone", requested: false, found: info("0.2.0") }, { type: "downloadStart", info: info("0.2.0") }, { type: "downloadFailed", info: info("0.2.0"), message: "error sending request", offline: true }, { type: "collapse" });
+    t = quiet(t, "0.2.0");
+    expect(t).toMatchObject({ shown: true, collapsed: true, requested: false });
+    expect(t.phase.kind).toBe("ready");
+    // The user's own check still reopens it.
+    t = run(t, { type: "checkStart", requested: true });
+    expect(t).toMatchObject({ collapsed: false, requested: true });
+  });
+});

@@ -39,6 +39,9 @@ export default function UpdateCenter() {
   const downloading = useRef<string | null>(null);
   const cardEl = useRef<HTMLDivElement | null>(null);
   const recheck = useRef(0);
+  // T-600: counts the user's own clicks that open the card (Check for updates, the status-bar item, the
+  // card's expand); only a new one moves the keyboard to the card.
+  const [clicks, clicked] = useReducer((n: number) => n + 1, 0);
 
   const download = (info: UpdateInfo) => {
     // A requested check that finds the update already downloading shows that download.
@@ -73,6 +76,7 @@ export default function UpdateCenter() {
   const check = () => {
     const st = status.current;
     if (!st) return;
+    clicked(); // the user's click: the card that comes up takes the keyboard
     dispatch({ type: "checkStart", requested: true });
     if (!st.enabled || !schedule.current) {
       dispatch({ type: "checkFailed", requested: true, message: st.reason ?? "Updates are off in this copy.", offline: false, next: "Install Kolux RS from its releases page to get updates." });
@@ -139,7 +143,7 @@ export default function UpdateCenter() {
     window.dispatchEvent(new Event(BAR_EVENT));
   }, [s.phase]);
   useEffect(() => {
-    const onShow = () => dispatch({ type: "show" });
+    const onShow = () => (clicked(), dispatch({ type: "show" }));
     window.addEventListener(SHOW_EVENT, onShow);
     return () => window.removeEventListener(SHOW_EVENT, onShow);
   }, []);
@@ -165,10 +169,12 @@ export default function UpdateCenter() {
     }
   }, [s.tipDone]);
 
-  // The card takes the keyboard when it opens on the user's click, so Escape and Enter reach it.
+  // The card takes the keyboard when it opens on the user's click, so Escape and Enter reach it. T-600: only
+  // then, once that click has drawn it; a change of phase, a quiet check or a download error never takes it.
   useEffect(() => {
-    if (s.shown && !s.collapsed && s.requested) cardEl.current?.focus();
-  }, [s.shown, s.collapsed, s.requested, s.phase.kind]);
+    if (clicks) cardEl.current?.focus();
+  }, [clicks]);
+  const expand = () => (clicked(), dispatch({ type: "expand" }));
 
   // On success the app ends here and the installer takes over; a failure means nothing is ready any more.
   // T-199 (APP-029): an installer that cannot start leaves the app open with the real reason.
@@ -241,17 +247,18 @@ export default function UpdateCenter() {
                 dispatch({ type: "collapse" });
               } else if (e.key === "Enter" && e.target === e.currentTarget) {
                 e.preventDefault();
-                act();
+                // T-600: Restart ends every agent, so a bare Enter runs it only on a card the user opened.
+                if (action !== "restart" || s.requested) act();
               }
             }}
           >
-            <div className="upd-head" onClick={() => s.collapsed && dispatch({ type: "expand" })}>
+            <div className="upd-head" onClick={() => s.collapsed && expand()}>
               <span className="upd-icon">
                 {p.kind === "checking" || p.kind === "downloading" ? <Spinner size={13} /> : p.kind === "upToDate" || p.kind === "ready" ? <CheckCircle size={13} /> : <Refresh size={13} />}
               </span>
               <span className="upd-title">{title}</span>
               {pct !== null && <span className="upd-pct">{pct}%</span>}
-              <button className="ib" title={s.collapsed ? "Expand" : "Collapse (Esc)"} onClick={(e) => (e.stopPropagation(), dispatch({ type: s.collapsed ? "expand" : "collapse" }))}>
+              <button className="ib" title={s.collapsed ? "Expand" : "Collapse (Esc)"} onClick={(e) => (e.stopPropagation(), s.collapsed ? expand() : dispatch({ type: "collapse" }))}>
                 {s.collapsed ? "▴" : "▾"}
               </button>
               <button className="ib" title="Dismiss" onClick={(e) => (e.stopPropagation(), dispatch({ type: "dismiss" }))}>
