@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { acquire, downloadUrl, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, smokeMigration, takeQueued, unlock, STALE_MS } from "./release.mjs";
+import { acquire, buildOnce, downloadUrl, installerName, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, smokeMigration, takeQueued, unlock, FEED_REPO, STALE_MS } from "./release.mjs";
 import { decide, WAIT_MS } from "./ci-gate.mjs";
 import { checkPromises, checkWorkflow } from "./workflow-check.mjs";
 import { parseArgs } from "./ship.mjs";
@@ -89,6 +90,103 @@ describe("packaged old-profile migration smoke test (APP-061)", () => {
     expect(() => smokeMigration(fake(["uiLook"]), root)).toThrow(/carried \["uiLook"\]/);
     expect(() => smokeMigration(fake(["uiLook", "language", "githubToken"]), root)).toThrow(/more than the allow-list/);
     fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// T-587 (X-proc.1): the real publish path, not the rehearsal folder every other test uses. git builds
+// from a scratch main; `run` stands in for gh, pnpm, cargo and the packaged CLI, and logs each call
+// with the environment it was given. Nothing reaches GitHub and nothing is compiled.
+describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", () => {
+  const git = (dir, ...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" }).trim();
+  function scratch() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "krs-release-"));
+    const origin = path.join(root, "origin");
+    fs.mkdirSync(path.join(origin, "src-tauri"), { recursive: true });
+    fs.writeFileSync(path.join(origin, "package.json"), '{ "version": "0.1.0" }\n');
+    fs.writeFileSync(path.join(origin, "src-tauri", "tauri.conf.json"), '{ "version": "0.1.0" }\n');
+    fs.writeFileSync(path.join(origin, "src-tauri", "Cargo.toml"), '[package]\nversion = "0.1.0"\n');
+    git(root, "init", "-q", "-b", "main", origin);
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "Terminals keep their place");
+    fs.writeFileSync(path.join(origin, "README.md"), "x\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "Agents start faster");
+    const key = path.join(root, "signing", "kolux-rs.key");
+    fs.mkdirSync(path.dirname(key));
+    fs.writeFileSync(key, "private half");
+    fs.writeFileSync(key + ".pub", "public half");
+    const env = { ...process.env, KOLUX_RELEASE_CHECKOUT: path.join(root, "checkout"), KOLUX_RELEASE_KEY: key, KOLUX_RELEASE_KEY_PASSWORD: "key-password", GH_TOKEN: "release-token", GITHUB_ACTIONS: "true" };
+    for (const k of ["KOLUX_RELEASE_PUBLISH_DIR", "CARGO_TARGET_DIR"]) delete env[k];
+    return { root, origin, env, checkout: env.KOLUX_RELEASE_CHECKOUT, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  }
+  // gh answers with `latest` (null: no release yet); the bundler leaves a signed installer; the packaged
+  // CLI passes its smoke test.
+  function tools(checkout, latest) {
+    const calls = [];
+    const version = () => JSON.parse(fs.readFileSync(path.join(checkout, "src-tauri", "tauri.conf.json"), "utf8")).version;
+    const run = (cmd, args, opts = {}) => {
+      const name = path.basename(cmd);
+      calls.push({ name, args, env: opts.env ?? process.env });
+      if (name === "gh" && args[1] === "view") {
+        if (!latest) throw new Error("gh: release not found");
+        return JSON.stringify(latest);
+      }
+      if (name === "pnpm" && args[0] === "tauri" && args[1] === "build") {
+        const exe = path.join(checkout, "src-tauri", "target", "release", "bundle", "nsis", installerName(version()));
+        fs.mkdirSync(path.dirname(exe), { recursive: true });
+        fs.writeFileSync(exe, Buffer.alloc((1 << 20) + 1));
+        fs.writeFileSync(exe + ".sig", "c2lnbmF0dXJl");
+      }
+      if (name === "kolux.exe") {
+        if (args[0] === "--version") return version();
+        if (args[0] === "--help") return "kolux --version\nkolux worktree create --name <name>";
+        return JSON.stringify({ success: true, result: { added: ["uiLook", "language"] } });
+      }
+      return "";
+    };
+    return { calls, run, gh: () => calls.filter((c) => c.name === "gh") };
+  }
+
+  it("inside GitHub Actions, from the local checkout release.yml passes, it asks gh for the newest release and publishes the next", () => {
+    const s = scratch();
+    try {
+      const t = tools(s.checkout, { tagName: "v0.1.7", body: "- Older\n\n<!-- kolux-rs-source: 1234567 -->\n" });
+      const r = buildOnce({ repo: s.origin }, s.env, t.run);
+      expect(r).toMatchObject({ version: "0.1.8", published: true });
+      expect(r.notes).toMatch(/^- Agents start faster\n- Terminals keep their place\n/);
+      expect(t.gh().map((c) => c.args.slice(0, 2).join(" "))).toEqual(["release view", "release create", "release upload"]);
+      const [, create, upload] = t.gh().map((c) => c.args);
+      expect(create.slice(2, 5)).toEqual(["v0.1.8", "--repo", FEED_REPO]);
+      expect(create.slice(-2).map((f) => path.basename(f))).toEqual([installerName("0.1.8"), installerName("0.1.8") + ".sig"]);
+      expect(path.basename(upload.at(-1))).toBe("latest.json"); // APP-031: the manifest goes up last
+    } finally {
+      s.done();
+    }
+  });
+
+  it("skips a main that was already released, building nothing", () => {
+    const s = scratch();
+    try {
+      const sha = git(s.origin, "rev-parse", "HEAD");
+      const t = tools(s.checkout, { tagName: "v0.1.3", body: notesBody(["Agents start faster"], sha) });
+      expect(buildOnce({ repo: s.origin }, s.env, t.run)).toBeNull();
+      expect(t.calls.map((c) => c.name)).toEqual(["gh"]);
+    } finally {
+      s.done();
+    }
+  });
+
+  it("never asks GitHub, and refuses to publish, from a repository that is neither on GitHub nor in GitHub Actions", () => {
+    const s = scratch();
+    try {
+      delete s.env.GITHUB_ACTIONS;
+      const t = tools(s.checkout, { tagName: "v0.1.7", body: "" });
+      expect(buildOnce({ repo: s.origin, dryRun: true }, s.env, t.run)).toMatchObject({ version: "0.1.1", dryRun: true });
+      expect(() => buildOnce({ repo: s.origin }, s.env, t.run)).toThrow(/is not on GitHub, so nothing is published/);
+      expect(t.gh()).toEqual([]);
+    } finally {
+      s.done();
+    }
   });
 });
 

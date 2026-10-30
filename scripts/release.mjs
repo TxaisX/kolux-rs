@@ -84,6 +84,8 @@ export function smokeMigration(cli, root) {
 export const installerName = (version) => `Kolux RS_${version}_x64-setup.exe`;
 export const downloadUrl = (version) => `https://github.com/${FEED_REPO}/releases/download/v${version}/${encodeURIComponent(installerName(version))}`;
 export const isGitHub = (repo) => /^(https:\/\/github\.com\/|git@github\.com:)/.test(repo ?? "");
+/** DT-R11: gh runs only for a GitHub origin or inside GitHub Actions, whose release.yml builds from a local path. */
+export const onGitHub = (repo, env) => isGitHub(repo) || env.GITHUB_ACTIONS === "true";
 
 /** Picks the newest `v<x.y.z>` folder of a rehearsal publish folder. */
 export function newestTag(names) {
@@ -142,27 +144,33 @@ export const unlock = (dir) => fs.rmSync(dir + ".lock", { force: true });
 
 const say = (...a) => console.log(new Date().toISOString(), ...a);
 
+/** Runs a program and returns what it printed; a failure throws. buildOnce takes another runner in tests. */
 function sh(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: "utf8", shell: opts.shell ?? false, cwd: opts.cwd, env: opts.env ?? process.env, maxBuffer: 1 << 28 });
+  // pnpm and cargo are .cmd shims on Windows (opts.shim), which only start through the shell; every
+  // argument here is ours. One command string, so node does not warn about unescaped arguments.
+  const shell = !!opts.shim && process.platform === "win32";
+  if (shell) [cmd, args] = [[cmd, ...args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" "), []];
+  const r = spawnSync(cmd, args, { encoding: "utf8", shell, cwd: opts.cwd, env: opts.env ?? process.env, maxBuffer: 1 << 28 });
   if (opts.echo) process.stdout.write((r.stdout || "") + (r.stderr || ""));
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed (exit ${r.status ?? r.error?.message}):\n${(r.stderr || r.stdout || "").trim().slice(-2000)}`);
   return (r.stdout || "").trim();
 }
 const git = (dir, ...args) => sh("git", ["-C", dir, ...args]);
-// pnpm and cargo are .cmd shims on Windows, which only start through the shell; every argument here is ours.
-// One command string, so node does not warn about unescaped arguments.
-const tool = (cmd, args, opts) => (process.platform === "win32" ? sh([cmd, ...args].join(" "), [], { ...opts, shell: true }) : sh(cmd, args, opts));
 
-function latestRelease(env, repo) {
+function latestRelease(env, repo, run) {
   if (env.KOLUX_RELEASE_PUBLISH_DIR) {
     const pub = path.resolve(env.KOLUX_RELEASE_PUBLISH_DIR);
     const tag = fs.existsSync(pub) ? newestTag(fs.readdirSync(pub)) : null;
     return tag ? { tag, body: fs.readFileSync(path.join(pub, tag, "notes.md"), "utf8") } : null;
   }
   if (!onGitHub(repo, env)) return null;
-  const r = spawnSync("gh", ["release", "view", "--repo", FEED_REPO, "--json", "tagName,body"], { encoding: "utf8" });
-  if (r.status !== 0) return null; // no release yet
-  const j = JSON.parse(r.stdout);
+  let out;
+  try {
+    out = run("gh", ["release", "view", "--repo", FEED_REPO, "--json", "tagName,body"], { env });
+  } catch {
+    return null; // no release yet
+  }
+  const j = JSON.parse(out);
   return { tag: j.tagName, body: j.body };
 }
 
@@ -173,7 +181,7 @@ function setVersion(dir, version) {
   edit("src-tauri/Cargo.toml", (s) => s.replace(/^version = "[^"]*"/m, `version = "${version}"`));
 }
 
-export function buildOnce(o, env = process.env) {
+export function buildOnce(o, env = process.env, run = sh) {
   const dir = checkoutDir(env);
   // 1. The checkout kept only for releases, at the newest main.
   if (!fs.existsSync(path.join(dir, ".git"))) {
@@ -186,7 +194,7 @@ export function buildOnce(o, env = process.env) {
   }
   const repo = o.repo || git(dir, "remote", "get-url", "origin");
   const sha = git(dir, "rev-parse", "origin/main");
-  const latest = latestRelease(env, repo);
+  const latest = latestRelease(env, repo, run);
   if (latest && markerOf(latest.body) === sha) {
     say(`main ${sha.slice(0, 7)} was already released as ${latest.tag}; nothing to do`);
     return null;
@@ -222,17 +230,17 @@ export function buildOnce(o, env = process.env) {
   fs.writeFileSync(conf, JSON.stringify({ bundle: { createUpdaterArtifacts: true, resources }, plugins: { updater: { pubkey } } }));
   const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: fs.readFileSync(key, "utf8"), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.KOLUX_RELEASE_KEY_PASSWORD ?? "", KOLUX_RS_RELEASE_PUBKEY: pubkey };
   say("installing packages");
-  tool("pnpm", ["install", "--frozen-lockfile"], { cwd: dir, env: benv });
+  run("pnpm", ["install", "--frozen-lockfile"], { cwd: dir, env: benv, shim: true });
   say("building the command line, then the Windows installer that carries it");
-  tool("cargo", ["build", "--release", "--features", "release-cli", "--bin", "kolux"], { cwd: path.join(dir, "src-tauri"), env: benv });
-  tool("pnpm", ["tauri", "build", "--bundles", "nsis", "--config", `"${conf}"`], { cwd: dir, env: benv, echo: true });
+  run("cargo", ["build", "--release", "--features", "release-cli", "--bin", "kolux"], { cwd: path.join(dir, "src-tauri"), env: benv, shim: true });
+  run("pnpm", ["tauri", "build", "--bundles", "nsis", "--config", conf], { cwd: dir, env: benv, echo: true, shim: true });
 
   // 4. Smoke test: the files are there, and the CLI, the app and the manifest agree on the version.
   const exe = path.join(target, "bundle", "nsis", installerName(version));
   if (!fs.existsSync(exe) || fs.statSync(exe).size < 1 << 20) throw new Error(`smoke test: no installer at ${exe}`);
   const signature = fs.existsSync(exe + ".sig") ? fs.readFileSync(exe + ".sig", "utf8").trim() : "";
   if (!signature) throw new Error(`smoke test: the installer has no signature (${exe}.sig)`);
-  const kolux = (words, env) => sh(path.join(target, "kolux.exe"), words, env ? { env: { ...process.env, ...env } } : {});
+  const kolux = (words, env) => run(path.join(target, "kolux.exe"), words, env ? { env: { ...process.env, ...env } } : {});
   smokeCli(kolux, version);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kolux-migrate-smoke-"));
   try { smokeMigration(kolux, scratch); } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
@@ -261,8 +269,8 @@ export function buildOnce(o, env = process.env) {
     if (!onGitHub(repo, env)) throw new Error(`the source repository ${repo} is not on GitHub, so nothing is published; set KOLUX_RELEASE_PUBLISH_DIR to rehearse`);
     // APP-031: the manifest goes up last, so a release is never announced before its installer is there.
     const files = [installerName(version), installerName(version) + ".sig"].map((f) => path.join(out, f));
-    sh("gh", ["release", "create", `v${version}`, "--repo", FEED_REPO, "--title", `Kolux RS ${version}`, "--notes-file", path.join(out, "notes.md"), ...files]);
-    sh("gh", ["release", "upload", `v${version}`, "--repo", FEED_REPO, path.join(out, "latest.json")]);
+    run("gh", ["release", "create", `v${version}`, "--repo", FEED_REPO, "--title", `Kolux RS ${version}`, "--notes-file", path.join(out, "notes.md"), ...files], { env });
+    run("gh", ["release", "upload", `v${version}`, "--repo", FEED_REPO, path.join(out, "latest.json")], { env });
     say(`published ${version} to ${FEED_REPO}`);
   }
   return { version, sha, notes, out, published: true };
