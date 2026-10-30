@@ -2,14 +2,24 @@
 // buffer: what is typed in one is copied into the others, so two split panes edit one text; the
 // buffer remembers what is on disk, so a tab is unsaved only while its text differs from that by
 // more than trailing whitespace; a save writes the file once and leaves every view clean.
-import { Annotation, type Transaction, type ChangeSet, type EditorState } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Text, type Extension, type StateEffect, type Transaction, type ChangeSet } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
 
 /** Marks a change Kolux made itself (a copy from the twin view, a reload), not the user's typing. */
 export const synced = Annotation.define<boolean>();
 
+// A file with Windows line ends is shown and saved with them. The editor splits text on its separator only, so
+// T-603: the separator sits in a compartment that a reload with other line ends switches (replaceAll), and text the
+// rich view or the notebook view hands the editor gets the editor's own line breaks (withLineBreaks).
+const lineEnds = new Compartment();
+const lineEndOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
+/** The line separator of an editor showing `text` (EditorPane, DiffPane). */
+export const lineEndsFor = (text: string): Extension => lineEnds.of(EditorState.lineSeparator.of(lineEndOf(text)));
+/** T-603 (F01-editor.2): a change worked out on doc.toString() (lines joined with \n), its line breaks as `state` splits them. */
+export const withLineBreaks = <C extends { insert: string }>(state: EditorState, c: C): C => ({ ...c, insert: c.insert.replace(/\r?\n/g, state.lineBreak) });
+
 /** The part of an editor view a buffer needs; EditorView fits it, and the tests use plain states. */
-export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string }; annotations: Annotation<unknown> | readonly Annotation<unknown>[] }) => void };
+export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string | Text }; effects?: StateEffect<unknown> | readonly StateEffect<unknown>[]; annotations: Annotation<unknown> | readonly Annotation<unknown>[] }) => void };
 
 /** Text equal to the disk copy except for whitespace at the ends of lines (and of the file). */
 export function sameText(a: string, b: string): boolean {
@@ -111,12 +121,16 @@ export async function save(path: string, write: (text: string, loadedHash?: stri
 
 /** Text Kolux puts in itself (a reload): every view shows it and none is unsaved. `undoable`
  *  (EDIT-003's Reload) makes it one step of its own in each view's undo history, so Ctrl+Z or the
- *  toast's Undo brings the edits back. */
+ *  toast's Undo brings the edits back. T-603 (F01-editor.4): text with other line ends than the view
+ *  shows switches the view's separator, and goes in already split into lines (the transaction splits
+ *  a string on the separator it starts with). */
 export function replaceAll(path: string, text: string, undoable = false): void {
   const b = buf(path);
   b.disk = text;
   const annotations = undoable ? [synced.of(true), isolateHistory.of("full")] : synced.of(true);
-  for (const v of b.views) if (v.state.sliceDoc() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, annotations });
+  const end = lineEndOf(text);
+  const insert = Text.of(text.split(end));
+  for (const v of b.views) if (v.state.sliceDoc() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert }, effects: v.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations });
   tell(b);
 }
 

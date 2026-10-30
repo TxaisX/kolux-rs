@@ -1,0 +1,69 @@
+T-603 (lane/review-editor, 2026-10-30, from 025eda2): the rich view keeps a note's line endings, and a file whose line
+endings change on disk is re-read correctly (audit F01-editor.2 and F01-editor.4).
+
+WHAT CHANGED
+ - src/editor/buffers.ts:11-19 the tab editor's line separator now sits in a CodeMirror Compartment (lineEndsFor(text),
+   same rule as before: CRLF when the text holds a CRLF, else LF), and withLineBreaks(state, change) gives a change the
+   editor's own line breaks (state.lineBreak). The rich view works on doc.toString(), whose lines are joined with \n, so
+   its positions are the editor's; only the inserted text needed the file's spelling (the editor splits inserted text on
+   its separator only, which is why the new lines became one line with stray LFs in a CRLF note).
+ - src/editor/EditorPane.tsx:345 the tab's editor uses lineEndsFor(text); :536 the rich view's edit is dispatched through
+   withLineBreaks; :894 the notebook view's full-text write too (the audit's same mismatch: a cell edit in a CRLF .ipynb
+   turned the whole notebook into one line and saved it with LF).
+ - src/editor/buffers.ts:122-136 replaceAll (the quiet reload of a clean tab, the Reload button, the followed log) detects
+   the new text's line ending and, when it differs from the view's, switches the view's separator in the same transaction;
+   the text goes in already split into lines (a transaction splits a string with the separator it starts with).
+ - src/editor/DiffPane.tsx:310 the diff tab's editable side uses lineEndsFor too, so its reloads (replaceAll) re-detect.
+ The test the audit named (richSaveGuards LOW-3) still passes; it feeds CRLF text to richChange, which the app never does,
+ so the new tests drive the real path instead.
+TESTS ADDED src/editor/buffers.test.ts, describe "line ends survive the rich view and a rewrite on disk (T-603)", built
+as the app builds it: an EditorState with lineEndsFor of the text read, the rich view's text from doc.toString(), the real
+richChange (with roundTrip giving the rich view's before/after), the tab's dispatch (withLineBreaks), save, and replaceAll.
+ 1. F01-editor.2, the auditor's note "# Title / First paragraph. / Second paragraph." in CRLF: a paragraph typed in the
+    rich view is saved all CRLF and the editor holds 8 lines (the new paragraph is line 5).
+ 2. F01-editor.2, notebook: a CRLF notebook written back by the notebook view keeps CRLF and its 5 lines.
+ 3. F01-editor.4: a 300-line CRLF file rewritten with LF on disk reloads as 301 lines (line 120 is "const line120 = 120;",
+    so a file:line link lands right) and stays clean; rewritten back to CRLF, line 2 has no stray CR and it stays clean.
+ Before the fix the code was first refactored without any change in behaviour (lineEndsFor returned the old plain facet,
+ withLineBreaks returned the change as it was), so the tests ran the app's code as it was:
+BEFORE THE FIX (vitest run src/editor/buffers.test.ts):
+  ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+   FAIL  src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > F01-editor.2: a paragraph typed in the rich view of a CRLF note is saved with CRLF and shows as its own lines
+  AssertionError: expected '# Title\r\n\r\nFirst paragraph.\r\n\r…' to be '# Title\r\n\r\nFirst paragraph.\r\n\r…' // Object.is equality
+   FAIL  src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > F01-editor.2: a notebook cell edit in a CRLF notebook keeps the notebook's lines and line ends
+  AssertionError: expected '{\n "cells": [1],\n "nbformat": 4\n}\n' to be '{\r\n "cells": [1],\r\n "nbformat": 4…' // Object.is equality
+   FAIL  src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > F01-editor.4: a CRLF file rewritten with LF on disk reloads as its own lines, and back again without stray CRs
+  AssertionError: expected 1 to be 301 // Object.is equality
+        Tests  3 failed | 11 passed (14)
+  The first failure's received text, line ends shown (^M = CR): the new paragraph's two lines end in a bare LF inside the
+  CRLF note, exactly the audit's reproduction:
+      First paragraph.^M
+      ^M
+    + A new paragraph typed in the rich view.      <- LF only
+    +                                              <- LF only
+      Second paragraph.^M
+AFTER THE FIX
+ - vitest run src/editor/buffers.test.ts:
+    Test Files  1 passed (1)
+         Tests  14 passed (14)
+ - every test file importing buffers.ts, EditorPane, DiffPane or frontMatter.ts (20 files: DiffPane, EDIT-001-003 card,
+   autosaveHold, buffers, carryOver, diskChange, drafts, editFuzz, editPlacement, fileMoved, frontMatter,
+   richChangeRefusal, richSaveGapKeep, richSaveGuards, richSaveInvariant, richSaveLists, richSaveQuoteLists, richTable,
+   staleSave, wrapSafety):
+    Test Files  20 passed (20)
+         Tests  588 passed (588)
+ - pnpm exec tsc: exit 0.
+LEFT (not in this task)
+ - A file with MIXED line ends (CRLF with some LF-only lines, e.g. lines an agent added) still opens, and reloads, with
+   the LF-only lines merged into their neighbour, as before: CodeMirror splits on one separator only, so showing such a
+   file line by line means either showing a CR on every CRLF line (and typing at a line end lands after the CR) or
+   normalising the file to one line ending when it is saved. That is a product choice (see the result's question).
+ - Undo after Reload (EDIT-003) brings the edits back but keeps the new separator, so text undone back from a CRLF copy is
+   then saved with the file's new LF ends.
+ - Pastes of LF text into a CRLF file (CodeMirror's paste, src/editor/paste.ts chunked paste) and the staged diff's
+   refresh (DiffPane.tsx:389) still go in as plain strings; the audit marked the paste case "not verified" on Windows.
+LIVE PROOF PENDING (Windows)
+ 1. Clone a repo with core.autocrlf=true, open README.md (CRLF) in the rich view, add a paragraph, switch to Source: the
+    new lines are separate lines with no red dots; git diff shows only the added lines.
+ 2. With a CRLF file open and clean, run prettier --end-of-line lf --write on it: the tab reloads with every line separate;
+    run it again with --end-of-line crlf: no red dots at the line ends.
