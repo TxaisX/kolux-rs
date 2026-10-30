@@ -276,12 +276,42 @@ fn t167b_sleep_records_the_workspace_agents_before_clearing_their_rows_and_quit_
     saved::at_sleep(&store, &["T:/t167b/ws1".to_string()]);
     let record = |s: &crate::state::Store| saved::parse(s.get(saved::RESUMABLE_KEY).unwrap().as_deref(), now).into_iter().filter_map(|r| r.session_id).filter(|s| s.starts_with("t167b-")).collect::<Vec<_>>();
     assert_eq!(record(&store), ["t167b-s1"], "the sleeping workspace's working agent is recorded; its finished one is not; the other workspace is untouched");
-    let left: Vec<u32> = saved::agent_status_saved().into_iter().map(|r| r.row.pane_key).filter(|k| (71..=73).contains(k)).collect();
+    let left: Vec<u32> = saved::restored().into_iter().map(|r| r.row.pane_key).filter(|k| (71..=73).contains(k)).collect();
     assert_eq!(left, [73], "the sleeping rows are cleared after the record");
     saved::at_quit(&store);
     let mut both = record(&store);
     both.sort();
     assert_eq!(both, ["t167b-s1", "t167b-s3"], "quitting later offers both workspaces");
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- T-618 (F05-app-shell-launch.3): a closed tab's saved status never reaches a new tab given its number ----
+
+#[test]
+fn t618_rows_of_panes_the_window_did_not_bring_back_leave_the_restored_rows_and_the_save_for_good() {
+    let _turn = SAVED_ROWS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("kolux-t618-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let store = crate::state::Store::open(&dir).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    // Run 1: tab 91 asked a question and was closed; tab 92 kept working, and the layout kept only tab 92.
+    let rows = [Row { at: now - 1000, ..row(91, "waiting", 1, Some("t618-closed")) }, Row { at: now - 1000, ..row(92, "working", 1, Some("t618-kept")) }];
+    store.set(saved::SAVED_KEY, &saved::serialize(&rows)).unwrap();
+    saved::startup(&store, &dir);
+    let mine = || saved::restored().into_iter().map(|r| r.row.pane_key).filter(|k| (91..=92).contains(k)).collect::<Vec<_>>();
+    assert_eq!(mine(), [91, 92], "before the window says which panes came back, both rows wait");
+    // Run 2: the window came back with tab 92 only.
+    saved::keep_panes(&store, &[92]);
+    assert_eq!(mine(), [92], "the closed tab's row is no longer served");
+    let in_save = |s: &crate::state::Store| saved::parse(s.get(saved::SAVED_KEY).unwrap().as_deref(), now).into_iter().map(|r| r.pane_key).collect::<Vec<_>>();
+    assert_eq!(in_save(&store), [92], "nor kept in the save");
+    // The next start finds nothing for number 91, so a new tab given that number has nothing to wear.
+    saved::startup(&store, &dir);
+    assert_eq!(mine(), [92]);
+    saved::keep_panes(&store, &[92, 91]);
+    assert_eq!(mine(), [92], "a new tab 91 in a later layout gets no row back");
     drop(store);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -303,7 +333,7 @@ fn t167b_a_restored_row_is_unconfirmed_until_its_pane_reports_and_holds_nothing_
     let rows = [Row { at: now - 1000, hook_version: Some(0), ..row(81, "permission", 1, Some("t167b-u1")) }, Row { at: now - 1000, ..row(82, "working", 1, Some("t167b-u2")) }];
     store.set(saved::SAVED_KEY, &saved::serialize(&rows)).unwrap();
     saved::startup(&store, &dir);
-    let mine = || saved::agent_status_saved().into_iter().filter(|r| (81..=82).contains(&r.row.pane_key)).collect::<Vec<_>>();
+    let mine = || saved::restored().into_iter().filter(|r| (81..=82).contains(&r.row.pane_key)).collect::<Vec<_>>();
     let shown = mine();
     assert_eq!(shown.len(), 2);
     assert!(shown.iter().all(|r| r.unconfirmed), "a restored row never counts as confirmed");
