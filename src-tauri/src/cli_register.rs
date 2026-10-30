@@ -502,10 +502,27 @@ pub fn launcher_remove(target: &Path, exe: &Path, on_path: bool) -> Result<Regis
 
 // ------------------------------------------------------------------------ the app's three commands
 
+/// T-593 (CLI-006, DT-R27): the folder the command lives in. An installed copy keeps kolux.exe and
+/// kolux.cmd in a bin folder beside the app; a development build runs its CLI from its own folder.
+/// Registration, Settings, the setup guide (ONB-027) and new panes (CLI-007) all use this one rule.
+pub fn cli_dir(app_dir: &Path) -> PathBuf {
+    let bin = app_dir.join("bin");
+    if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() {
+        bin
+    } else {
+        app_dir.to_path_buf()
+    }
+}
+
 fn folder_and_exe() -> Result<(PathBuf, PathBuf), String> {
     let current = std::env::current_exe().map_err(|e| format!("Kolux cannot find its own program: {e}"))?;
-    let exe = launch_exe(std::env::var("APPIMAGE").ok(), current);
-    let dir = exe.parent().map(Path::to_path_buf).ok_or("Kolux cannot find its own folder")?;
+    folder_and_exe_of(current, std::env::var("APPIMAGE").ok())
+}
+
+/// The CLI folder and the program a launcher runs, for the running program `current`.
+fn folder_and_exe_of(current: PathBuf, appimage: Option<String>) -> Result<(PathBuf, PathBuf), String> {
+    let exe = launch_exe(appimage, current);
+    let dir = cli_dir(exe.parent().ok_or("Kolux cannot find its own folder")?);
     Ok((dir, exe))
 }
 
@@ -682,6 +699,33 @@ mod tests {
         windows_register(&f, DIR, &env).unwrap();
         assert_eq!(*f.writes.borrow(), before);
         assert_eq!(windows_remove(&f, DIR, &env).unwrap().state, "not-registered");
+        assert_eq!(f.value.borrow().clone().unwrap(), r"C:\a");
+    }
+
+    /// T-593 (CLI-007, R01-cli.1): the installed layout (scripts/release.mjs, DT-R27) keeps kolux.exe and
+    /// kolux.cmd in a bin folder beside the app; state, register and remove all work on that folder.
+    #[test]
+    fn cli007_an_installed_copy_registers_the_bin_folder_beside_the_app() {
+        let d = scratch("installed");
+        let app = d.join(if cfg!(windows) { "kolux-rs.exe" } else { "kolux-rs" });
+        std::fs::write(&app, "").unwrap();
+        // A development build: no bin folder, so the CLI is the program's own folder.
+        assert_eq!(folder_and_exe_of(app.clone(), None).unwrap(), (d.to_path_buf(), app.clone()));
+        let bin = d.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for f in [if cfg!(windows) { "kolux.exe" } else { "kolux" }, "kolux.cmd"] {
+            std::fs::write(bin.join(f), "").unwrap();
+        }
+        let (dir, exe) = folder_and_exe_of(app.clone(), None).unwrap();
+        assert_eq!((&dir, &exe), (&bin, &app));
+        command_file(&dir).unwrap();
+        let f = Fake::new(Some(r"C:\a"));
+        let place = dir.display().to_string();
+        assert_eq!(windows_state(&f, &place, &env).state, "not-registered");
+        assert_eq!(windows_register(&f, &place, &env).unwrap().state, "registered");
+        assert_eq!(f.value.borrow().clone().unwrap(), format!(r"C:\a;{place}"));
+        assert_eq!(windows_state(&f, &place, &env).state, "registered");
+        assert_eq!(windows_remove(&f, &place, &env).unwrap().state, "not-registered");
         assert_eq!(f.value.borrow().clone().unwrap(), r"C:\a");
     }
 

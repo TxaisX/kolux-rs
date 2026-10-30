@@ -1,0 +1,52 @@
+T-593 evidence, 2026-10-30, lane cli (worktree /home/user/kolux-lanes/cli, branch lane/cli, base 025eda2)
+Register finds kolux.exe in the installed bin folder; the setup guide's CLI step can complete.
+Audit R01-cli.1 (cli_register.rs:508) and its cross-slice twin onboarding.rs:551 cli_status. Card CLI-007 (and CLI-006/DT-R27 layout).
+
+--- what changed
+src-tauri/src/cli_register.rs:505-515  new `pub fn cli_dir(app_dir)`: <app folder>\bin when it holds kolux.exe
+    (kolux on Linux/macOS), else the app folder. This is the rule terminal.rs already used for new panes.
+src-tauri/src/cli_register.rs:517-527  `folder_and_exe()` now goes through `folder_and_exe_of(current, appimage)`,
+    which returns cli_dir(<program folder>). cli_register_state, cli_register and cli_unregister all use
+    folder_and_exe, so state, register and remove now look at <install>\bin, and register puts <install>\bin on PATH.
+src-tauri/src/onboarding.rs:499-501  cli_status_in(app, ...) finds the CLI folder with cli_dir(app); cli_status
+    (the guide's CLI step and its tip) passes the app folder as before, so it now sees <install>\bin\kolux.exe.
+src-tauri/src/terminal.rs:1003-1005  new panes use the same helper (the three inline lines became one call).
+
+--- tests added (test first)
+1. src-tauri/src/onboarding.rs:645  tests::cli007_an_installed_copy_finds_its_cli_in_the_bin_folder
+   Temp folder laid out like the install: kolux-rs(.exe) at the root, bin\kolux(.exe) and bin\kolux.cmd.
+   Asserts cli_status_in(<root>, PATH=<root>\bin) == { installed: true, on_path: true }, and that PATH=<root>
+   (the app's own folder) does not count.
+   This test calls cli_status_in with the signature that exists on 025eda2, so it is a true red/green test.
+   Red (before the fix): cli_status_in looked for kolux.exe/kolux.cmd in <root> itself, which holds only the
+   app, so it returns { installed: false, on_path: false } and the first assert_eq fails
+   (left: CliStatus { installed: false, on_path: false }, right: CliStatus { installed: true, on_path: true }).
+2. src-tauri/src/cli_register.rs:706 tests::cli007_an_installed_copy_registers_the_bin_folder_beside_the_app
+   Same layout. Development layout (no bin) -> the program's folder; install layout -> <root>\bin;
+   command_file(<root>\bin) is Ok; register / state / remove through the fake PATH store write, read back and
+   remove exactly <root>\bin. Before the fix the folder was <root> and command_file failed with
+   "<root> holds no kolux.exe or kolux.cmd, so there is nothing to register" (the error Txais would see).
+   (folder_and_exe_of is the seam added by this fix: on 025eda2 the folder came from current_exe() inline.)
+
+Honest note on the red run: this lane may not run `cargo test` (shared machine rule; the integrator runs
+the Rust tests centrally). Both tests were compiled (cargo check --all-targets compiles test code) but not
+executed here. The expected red output above is derived from the 025eda2 code, not captured from a run.
+
+--- commands run after the fix (from /home/user/kolux-lanes/cli/src-tauri)
+$ CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check --all-targets
+warning: `kolux-rs` (lib) generated 87 warnings ...          (all pre-existing Linux dead-code warnings)
+warning: `kolux-rs` (test "cards_17") generated 1 warning ...
+warning: `kolux-rs` (lib test) generated 24 warnings (16 duplicates) ...
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 47s
+exit 0
+  The only warning in a touched file is the pre-existing `function real_env is never used` at
+  cli_register.rs:94 (it is used only by the Windows code); no new warning.
+$ CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check --target x86_64-pc-windows-gnu --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 04s
+exit 0   (no warnings at all on the Windows target)
+
+--- still open
+- Run the two tests above (integrator's central cargo test; Windows CI runs them on the real target).
+- Live Windows proof (installed copy): Settings > CLI shows <install>\bin and Register succeeds; the setup
+  guide's CLI step completes. CLI-007 box 2 ("an older kolux registered system-wide; kolux --version inside
+  a pane prints the app's own version") is not touched by this task and stays unticked.
