@@ -141,3 +141,15 @@ LIVE PROOF PENDING (Windows), added to steps 1-2 above
  4. Make another LF log (printf 'a\nb\n' > logs/n.log), right-click it > Follow log, then Add-Content logs\n.log "c"; now
     right-click n.log > View file and type a word in that plain tab: the followed tab shows the word too, the plain tab
     shows unsaved, and Ctrl+S writes it (reopen n.log: the word is there).
+
+INTEGRATION RE-RUN (2026-10-30, lane/review-editor merged with main feee15ff; real output pasted, not described)
+ vitest run src/editor/buffers.test.ts:
+     Test Files  1 passed (1)
+          Tests  17 passed (17)
+ the lane's tests by name (vitest --reporter=verbose):
+    ✓ src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > F01-editor.2: a paragraph typed in the rich view of a CRLF note is saved with CRLF and shows as its own lines
+    ✓ src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > F01-editor.2: a notebook cell edit in a CRLF notebook keeps the notebook's lines and line ends
+    ✓ src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > F01-editor.4: a CRLF file rewritten with LF on disk reloads as its own lines, and back again without stray CRs
+    ✓ src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > an LF log that a CRLF writer appends to (PowerShell's Add-Content) keeps every line on reload
+    ✓ src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > a CRLF note emptied or cut to one line on disk stays CRLF, and one that gains LF-only lines keeps CRLF and its bytes
+    ✓ src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) > a second tab of a log that stayed LF through such a reload (View file beside Follow log, a split pane) takes the first tab's lines, so its typing is kept and saved

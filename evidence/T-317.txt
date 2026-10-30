@@ -140,3 +140,17 @@ LIVE PROOF PENDING (Windows), added to steps 1-4 above
     both tabs (the plain tab shows unsaved). Add-Content logs\a.log "line 9": the followed tab does not change. Bring the plain
     tab forward: the disk banner shows; click Reload: both tabs show the file with line 9, and the next Add-Content line shows
     in the followed tab within a second.
+
+INTEGRATION RE-RUN (2026-10-30, lane/review-editor merged with main feee15ff; real output pasted, not described)
+ vitest run src/editor/logFollow.test.ts src/editor/explorerBar.test.ts src/editor/explorerView.test.ts src/editor/Explorer.test.ts:
+     Test Files  4 passed (4)
+          Tests  30 passed (30)
+ the lane's tests by name (vitest --reporter=verbose):
+    ✓ src/editor/logFollow.test.ts > EDIT-026: lines appended to the log show; nothing new shows nothing
+    ✓ src/editor/logFollow.test.ts > EDIT-026: a partly written line is held back until it is complete
+    ✓ src/editor/logFollow.test.ts > EDIT-026: an emptied, rotated or cut log starts again from the top
+    ✓ src/editor/logFollow.test.ts > T-317 (EDIT-003): Follow log never replaces unsaved edits in a plain tab of the same log; it waits, then follows again once they are saved
+    ✓ src/editor/logFollow.test.ts > T-317 (EDIT-003): typing that starts while the followed log is being read is kept too
+    ✓ src/editor/explorerBar.test.ts > EDIT-026 (T-317): a log file's row menu offers Follow log right after View file; other files and folders do not
+    ✓ src/editor/explorerBar.test.ts > EDIT-026 (T-317): Follow log opens the file as a followed tab; View file opens a plain one; only .log names count
+    ✓ src/editor/explorerBar.test.ts > EDIT-026 (T-317): App gives the Explorer its own openFile, so the follow flag is not dropped on the way to the tab

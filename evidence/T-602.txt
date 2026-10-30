@@ -49,3 +49,12 @@ LEFT
 LIVE PROOF PENDING (Windows)
  1. In a note's rich view, type "a | b" into a table cell; switch to source: the cell reads "a \| b"; reopen: one cell.
  2. Open a note whose table has a row with an extra cell: it opens in source view with the banner naming the reason.
+
+INTEGRATION RE-RUN (2026-10-30, lane/review-editor merged with main feee15ff; real output pasted, not described)
+ vitest run src/editor/richTable.test.ts:
+     Test Files  1 passed (1)
+          Tests  17 passed (17)
+ the lane's tests by name (vitest --reporter=verbose):
+    ✓ src/editor/richTable.test.ts > cell text is never lost > a | typed into a cell is saved escaped, so the cell keeps all its text and reopens whole
+    ✓ src/editor/richTable.test.ts > cell text is never lost > a note whose table has a row with more cells than its header opens in source view, with the reason
+    ✓ src/editor/richTable.test.ts > cell text is never lost > editing a row that holds more cells than it shows keeps the row as the file has it instead of dropping the rest

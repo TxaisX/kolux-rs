@@ -115,3 +115,19 @@ LIVE PROOF PENDING (Windows, WebView2)
     note: it lands on that line.
  3. A note with <details><summary>More</summary>inside</details>: clicking More opens it.
  4. Have Claude write a plan or TodoWrite with "Add <script> tag": the plan sheet and chat show it as text and every to-do.
+
+INTEGRATION RE-RUN (2026-10-30, lane/review-editor merged with main feee15ff; real output pasted, not described)
+ vitest run src/editor/PreviewPane.test.ts src/editor/diagrams.test.ts src/editor/linkClicks.test.ts src/terminal/PlanSheet.test.ts
+   src/terminal/PlanSheet.close.test.ts src/terminal/planReview.test.ts src/terminal/__cards__/SAFE-002.test.ts src/terminal/__cards__/SAFE-004.test.ts:
+     Test Files  8 passed (8)
+          Tests  48 passed (48)
+ vitest run src/editor/frontMatter.test.ts src/chat/__cards__/STAT-053.test.ts src/chat/thoughts.test.ts:
+     Test Files  3 passed (3)
+          Tests  17 passed (17)
+ the lane's tests by name (vitest --reporter=verbose):
+    ✓ src/editor/PreviewPane.test.ts > T-601: an agent's plan shows raw HTML as text, so no style sheet, form, image map, overlay or hidden span reaches the page
+    ✓ src/editor/PreviewPane.test.ts > T-601: a to-do that mentions <script> keeps every to-do after it, and the to-do boxes still show
+    ✓ src/editor/PreviewPane.test.ts > T-601: a note keeps its own HTML, but the sanitiser is told to drop style sheets, style attributes, forms, image maps, dialogs, popovers and hidden text
+    ✓ src/editor/PreviewPane.test.ts > T-601: a note's task list still shows which items are done, without form fields
+    ✓ src/editor/PreviewPane.test.ts > T-601: a plain click in a note's page does nothing on its own (an image map, a form button, a link); a collapsible section still opens
+    ✓ src/editor/PreviewPane.test.ts > T-601 (L4-web-js-toolchain.3): diagram text cannot change mermaid's settings, and a diagram that fails leaves no error picture
