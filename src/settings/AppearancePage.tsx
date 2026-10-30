@@ -5,8 +5,7 @@ import { useContext, useEffect, useRef, useState, type CSSProperties, type React
 import { useLeaveSave } from "./leave";
 import { MAX_LEVEL, MIN_LEVEL, onZoom, percentOf, stepZoom, zoomLevel, type ZoomStep } from "./zoom";
 import { SearchFolds } from "./search";
-import { saveChanged } from "./saveChanged";
-import { invoke } from "@tauri-apps/api/core";
+import { saveChanged, settingsDiff } from "./saveChanged";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, terminalFor, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, THEMED_SCREENS, type Appearance, type FontWeight, type Mode } from "../theme";
 import { importScheme, type CustomScheme } from "../terminal/schemes";
 import { parseSchemeFile, planImport, planSummary, sameColours } from "./importSchemes";
@@ -542,21 +541,32 @@ export default function AppearancePage() {
   const timer = useRef<number | undefined>(undefined);
   // SET-036: a change still waiting out the pause is written when the page goes away or the window closes, not dropped.
   const waiting = useRef<Appearance | null>(null);
+  // T-598 (F02-settings-update.3): the look as stored when the waiting change began. A save writes only the
+  // fields that differ from it, so one another page saved meanwhile (the Terminal card's font size) stays.
+  const base = useRef<Appearance | null>(null);
   const flush = () => {
     window.clearTimeout(timer.current);
     const next = waiting.current;
     waiting.current = null;
-    if (!next) return;
-    invoke<Record<string, unknown>>("get_settings")
-      .then((s) => saveChanged(s, writeAppearance(s, next)))
-      .catch((e) => setError(String(e)));
+    const from = base.current;
+    if (!next || !from) return;
+    const changed = settingsDiff(writeAppearance({}, from), writeAppearance({}, next)).set;
+    if (Object.keys(changed).length === 0) return;
+    saveChanged({}, changed).then(
+      () => {
+        base.current = next;
+        setError(null);
+      },
+      (e) => setError(String(e)), // the base stays, so the next change tries these fields again
+    );
   };
   useLeaveSave(flush);
+  // The page shows what is stored and follows saves made on any page or window, except while its own change waits.
   useEffect(() => {
-    invoke<Record<string, unknown>>("get_settings")
-      .then((s) => setLook(readAppearance(s)))
-      .catch((e) => setError(String(e)));
-  }, []);
+    if (!status.settings || waiting.current) return;
+    base.current = readAppearance(status.settings);
+    setLook(base.current);
+  }, [status.settings]);
   const change = (next: Appearance) => {
     setLook(next);
     applyAppearance(next);
@@ -564,9 +574,10 @@ export default function AppearancePage() {
     waiting.current = next;
     timer.current = window.setTimeout(flush, 250);
   };
+  const shown = error ?? (look ? null : status.error); // a first read that failed; later ones show in the Window card
   return (
     <>
-      {error && <p className="conn-detail warn">{error}</p>}
+      {shown && <p className="conn-detail warn">{shown}</p>}
       {look && <AppearanceView look={look} onChange={change} languagePart={status.settings && <LanguageView value={savedLanguage(status.settings[LANGUAGE_FIELD])} onPick={(v) => { applyLanguage(v); void status.save({ [LANGUAGE_FIELD]: v }); }} />} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
       {look && <AppLookCard />}
     </>
