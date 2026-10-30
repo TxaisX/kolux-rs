@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { acquire, buildOnce, downloadUrl, installerName, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, smokeMigration, takeQueued, unlock, FEED_REPO, STALE_MS } from "./release.mjs";
+import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
+import { acquire, buildOnce, downloadUrl, finish, installerName, isStale, manifest, markerOf, newestTag, nextVersion, notesBody, smokeCli, smokeMigration, takeQueued, unlock, verifySignature, FEED_REPO, STALE_MS } from "./release.mjs";
 import { decide, WAIT_MS } from "./ci-gate.mjs";
 import { checkPromises, checkWorkflow } from "./workflow-check.mjs";
 import { parseArgs } from "./ship.mjs";
@@ -94,10 +96,15 @@ describe("packaged old-profile migration smoke test (APP-061)", () => {
 });
 
 // T-587 (X-proc.1): the real publish path, not the rehearsal folder every other test uses. git builds
-// from a scratch main; `run` stands in for gh, pnpm, cargo and the packaged CLI, and logs each call
-// with the environment it was given. Nothing reaches GitHub and nothing is compiled.
+// from a scratch main; `exec` stands in for gh, pnpm, cargo and the packaged CLI, and logs each call
+// with the environment it was given. Nothing reaches GitHub and nothing is compiled. T-588: the signing
+// key is a real throwaway one, and the real tauri signer signs with it.
 describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", () => {
   const git = (dir, ...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" }).trim();
+  const TAURI_JS = fileURLToPath(new URL("../node_modules/@tauri-apps/cli/tauri.js", import.meta.url));
+  const keypair = (key) => execFileSync(process.execPath, [TAURI_JS, "signer", "generate", "--ci", "-p", "key-password", "-w", key], { encoding: "utf8" });
+  const SECRET = /^(GH_TOKEN|GITHUB_TOKEN|KOLUX_RELEASE_KEY|KOLUX_RELEASE_KEY_PASSWORD|TAURI(_SIGNING)?_PRIVATE_KEY(_PATH|_PASSWORD)?)$/;
+  const held = (call) => Object.keys(call.env).filter((k) => SECRET.test(k)).sort();
   function scratch() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "krs-release-"));
     const origin = path.join(root, "origin");
@@ -112,20 +119,20 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
     git(origin, "add", "-A");
     git(origin, "commit", "-qm", "Agents start faster");
     const key = path.join(root, "signing", "kolux-rs.key");
-    fs.mkdirSync(path.dirname(key));
-    fs.writeFileSync(key, "private half");
-    fs.writeFileSync(key + ".pub", "public half");
-    const env = { ...process.env, KOLUX_RELEASE_CHECKOUT: path.join(root, "checkout"), KOLUX_RELEASE_KEY: key, KOLUX_RELEASE_KEY_PASSWORD: "key-password", GH_TOKEN: "release-token", GITHUB_ACTIONS: "true" };
-    for (const k of ["KOLUX_RELEASE_PUBLISH_DIR", "CARGO_TARGET_DIR"]) delete env[k];
-    return { root, origin, env, checkout: env.KOLUX_RELEASE_CHECKOUT, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+    keypair(key);
+    const env = { ...process.env };
+    for (const k of Object.keys(env)) if (SECRET.test(k) || ["KOLUX_RELEASE_PUBLISH_DIR", "CARGO_TARGET_DIR"].includes(k)) delete env[k];
+    Object.assign(env, { KOLUX_RELEASE_CHECKOUT: path.join(root, "checkout"), KOLUX_RELEASE_KEY: key, KOLUX_RELEASE_KEY_PASSWORD: "key-password", GH_TOKEN: "release-token", GITHUB_ACTIONS: "true" });
+    return { root, origin, env, key, checkout: env.KOLUX_RELEASE_CHECKOUT, done: () => fs.rmSync(root, { recursive: true, force: true }) };
   }
-  // gh answers with `latest` (null: no release yet); the bundler leaves a signed installer; the packaged
-  // CLI passes its smoke test.
+  // gh answers with `latest` (null: no release yet); the bundler leaves an installer, signed only when it
+  // is handed the key (as `tauri build` does); tauri signer is the real one; the packaged CLI passes its
+  // smoke test.
   function tools(checkout, latest) {
     const calls = [];
     const version = () => JSON.parse(fs.readFileSync(path.join(checkout, "src-tauri", "tauri.conf.json"), "utf8")).version;
-    const run = (cmd, args, opts = {}) => {
-      const name = path.basename(cmd);
+    const exec = (cmd, args, opts = {}) => {
+      const name = cmd === process.execPath && args[0]?.endsWith("tauri.js") ? `tauri ${args[1]}` : path.basename(cmd);
       calls.push({ name, args, env: opts.env ?? process.env });
       if (name === "gh" && args[1] === "view") {
         if (!latest) throw new Error("gh: release not found");
@@ -135,8 +142,9 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
         const exe = path.join(checkout, "src-tauri", "target", "release", "bundle", "nsis", installerName(version()));
         fs.mkdirSync(path.dirname(exe), { recursive: true });
         fs.writeFileSync(exe, Buffer.alloc((1 << 20) + 1));
-        fs.writeFileSync(exe + ".sig", "c2lnbmF0dXJl");
+        if (opts.env?.TAURI_SIGNING_PRIVATE_KEY) fs.writeFileSync(exe + ".sig", "c2lnbmF0dXJl");
       }
+      if (name === "tauri signer") return execFileSync(process.execPath, [TAURI_JS, ...args.slice(1)], { env: opts.env, encoding: "utf8" });
       if (name === "kolux.exe") {
         if (args[0] === "--version") return version();
         if (args[0] === "--help") return "kolux --version\nkolux worktree create --name <name>";
@@ -144,14 +152,14 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
       }
       return "";
     };
-    return { calls, run, gh: () => calls.filter((c) => c.name === "gh") };
+    return { calls, exec, gh: () => calls.filter((c) => c.name === "gh") };
   }
 
   it("inside GitHub Actions, from the local checkout release.yml passes, it asks gh for the newest release and publishes the next", () => {
     const s = scratch();
     try {
       const t = tools(s.checkout, { tagName: "v0.1.7", body: "- Older\n\n<!-- kolux-rs-source: 1234567 -->\n" });
-      const r = buildOnce({ repo: s.origin }, s.env, t.run);
+      const r = buildOnce({ repo: s.origin }, s.env, t.exec);
       expect(r).toMatchObject({ version: "0.1.8", published: true });
       expect(r.notes).toMatch(/^- Agents start faster\n- Terminals keep their place\n/);
       expect(t.gh().map((c) => c.args.slice(0, 2).join(" "))).toEqual(["release view", "release create", "release upload"]);
@@ -169,7 +177,7 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
     try {
       const sha = git(s.origin, "rev-parse", "HEAD");
       const t = tools(s.checkout, { tagName: "v0.1.3", body: notesBody(["Agents start faster"], sha) });
-      expect(buildOnce({ repo: s.origin }, s.env, t.run)).toBeNull();
+      expect(buildOnce({ repo: s.origin }, s.env, t.exec)).toBeNull();
       expect(t.calls.map((c) => c.name)).toEqual(["gh"]);
     } finally {
       s.done();
@@ -181,12 +189,114 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
     try {
       delete s.env.GITHUB_ACTIONS;
       const t = tools(s.checkout, { tagName: "v0.1.7", body: "" });
-      expect(buildOnce({ repo: s.origin, dryRun: true }, s.env, t.run)).toMatchObject({ version: "0.1.1", dryRun: true });
-      expect(() => buildOnce({ repo: s.origin }, s.env, t.run)).toThrow(/is not on GitHub, so nothing is published/);
+      expect(buildOnce({ repo: s.origin, dryRun: true }, s.env, t.exec)).toMatchObject({ version: "0.1.1", dryRun: true });
+      expect(() => buildOnce({ repo: s.origin }, s.env, t.exec)).toThrow(/is not on GitHub, so nothing is published/);
       expect(t.gh()).toEqual([]);
     } finally {
       s.done();
     }
+  });
+
+  // T-588 (X-proc.5): the build runs every dependency's install and build scripts, so it holds neither
+  // the release token nor the signing key.
+  it("the build gets neither the token nor the key; tauri signer alone gets the key and binds the version; gh alone gets the token", () => {
+    const s = scratch();
+    try {
+      const t = tools(s.checkout, { tagName: "v0.1.7", body: "" });
+      const r = buildOnce({ repo: s.origin }, s.env, t.exec);
+      expect(r).toMatchObject({ version: "0.1.8", published: true });
+      const build = t.calls.filter((c) => ["pnpm", "cargo", "kolux.exe"].includes(c.name));
+      expect(build.map((c) => c.name)).toEqual(["pnpm", "cargo", "pnpm", "kolux.exe", "kolux.exe", "kolux.exe"]);
+      for (const c of build) expect(held(c), `${c.name} ${c.args.join(" ")}`).toEqual([]);
+      const signer = t.calls.filter((c) => c.name === "tauri signer");
+      expect(signer.map((c) => c.args.slice(1, 5))).toEqual([["signer", "sign", "--app-version", "0.1.8"]]);
+      expect(held(signer[0])).toEqual(["TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"]);
+      expect(signer[0].env.TAURI_SIGNING_PRIVATE_KEY).toBe(fs.readFileSync(s.key, "utf8").trim());
+      expect(t.gh()).toHaveLength(3);
+      for (const c of t.gh()) expect(held(c), c.args.slice(0, 2).join(" ")).toEqual(["GH_TOKEN"]);
+      // The manifest carries the signature tauri signer made, bound to the version (requireSignedVersion).
+      const sig = JSON.parse(fs.readFileSync(path.join(r.out, "latest.json"), "utf8")).platforms["windows-x86_64"].signature;
+      expect(Buffer.from(sig, "base64").toString("utf8")).toMatch(/trusted comment: .*\tversion:0\.1\.8\n/);
+    } finally {
+      s.done();
+    }
+  });
+
+  it("a signature that does not check out against the public key the app carries stops the release before anything is published", () => {
+    const s = scratch();
+    try {
+      keypair(path.join(s.root, "other.key"));
+      fs.copyFileSync(path.join(s.root, "other.key.pub"), s.key + ".pub"); // the app is built with another key's public half
+      const t = tools(s.checkout, { tagName: "v0.1.7", body: "" });
+      expect(() => buildOnce({ repo: s.origin }, s.env, t.exec)).toThrow(/another key than the public key the app carries/);
+      expect(t.gh().map((c) => c.args[1])).toEqual(["view"]);
+    } finally {
+      s.done();
+    }
+  });
+
+  it("in CI's two steps, --build-only builds with no private key on the machine and signs nothing; --finish signs that build and publishes it", () => {
+    const s = scratch();
+    try {
+      const t = tools(s.checkout, { tagName: "v0.1.7", body: "" });
+      const privateKey = fs.readFileSync(s.key);
+      fs.rmSync(s.key); // release.yml writes it only in the step that signs
+      const built = buildOnce({ repo: s.origin, buildOnly: true }, s.env, t.exec);
+      expect(built).toMatchObject({ version: "0.1.8", signed: false });
+      expect(fs.readdirSync(built.out).sort()).toEqual([installerName("0.1.8"), "notes.md"]);
+      expect(t.calls.map((c) => c.name)).not.toContain("tauri signer");
+      expect(t.gh().map((c) => c.args[1])).toEqual(["view"]);
+      fs.writeFileSync(s.key, privateKey);
+      expect(finish({}, s.env, t.exec)).toMatchObject({ version: "0.1.8", published: true, out: built.out });
+      expect(t.gh().map((c) => c.args[1])).toEqual(["view", "create", "upload"]);
+      expect(fs.readdirSync(built.out).sort()).toEqual([installerName("0.1.8"), installerName("0.1.8") + ".sig", "latest.json", "notes.md"]);
+    } finally {
+      s.done();
+    }
+  });
+
+  it("the signature check passes tauri signer's own signature and refuses other bytes, another version, an altered version or another key", () => {
+    const s = scratch();
+    try {
+      const file = path.join(s.root, "setup.exe");
+      fs.writeFileSync(file, "installer bytes");
+      execFileSync(process.execPath, [TAURI_JS, "signer", "sign", "--app-version", "0.1.8", file], { env: { ...s.env, TAURI_SIGNING_PRIVATE_KEY: fs.readFileSync(s.key, "utf8").trim(), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "key-password" } });
+      const sig = fs.readFileSync(file + ".sig", "utf8");
+      const pub = fs.readFileSync(s.key + ".pub", "utf8");
+      const bytes = Buffer.from("installer bytes");
+      expect(() => verifySignature(bytes, sig, pub, "0.1.8")).not.toThrow();
+      expect(() => verifySignature(Buffer.from("installer bytez"), sig, pub, "0.1.8")).toThrow(/does not cover this installer/);
+      expect(() => verifySignature(bytes, sig, pub, "0.1.9")).toThrow(/not bound to version 0\.1\.9/);
+      const forged = Buffer.from(Buffer.from(sig, "base64").toString("utf8").replace("version:0.1.8", "version:0.1.9")).toString("base64");
+      expect(() => verifySignature(bytes, forged, pub, "0.1.9")).toThrow(/trusted comment was altered/);
+      keypair(path.join(s.root, "other.key"));
+      expect(() => verifySignature(bytes, sig, fs.readFileSync(path.join(s.root, "other.key.pub"), "utf8"), "0.1.8")).toThrow(/another key/);
+    } finally {
+      s.done();
+    }
+  });
+});
+
+// T-588 (X-proc.5): the workflows run no third-party code that can change under them, and the release
+// job's signing key exists only in the step that signs.
+describe("release and CI workflows hand secrets to as little code as possible", () => {
+  const workflow = (f) => fs.readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8");
+  it("every action is pinned to a full commit SHA, with its version beside it", () => {
+    for (const f of ["ci.yml", "release.yml"]) {
+      const uses = [...workflow(f).matchAll(/^\s*(?:- )?uses: (.+)$/gm)].map((m) => m[1]);
+      expect(uses.length, f).toBeGreaterThan(0);
+      for (const u of uses) expect(`${f}: ${u}`).toMatch(/^\S+: [\w.-]+\/[\w.-]+@[0-9a-f]{40} # (v\d+(\.\d+)*|stable)$/);
+    }
+  });
+  it("the build step holds no signing secret; the one step after it writes the key, signs, and deletes the key", () => {
+    const steps = parse(workflow("release.yml")).jobs.release.steps;
+    const build = steps.findIndex((s) => /scripts\/release\.mjs --build-only/.test(s.run ?? ""));
+    const sign = steps.findIndex((s) => /scripts\/release\.mjs --finish/.test(s.run ?? ""));
+    expect(build).toBeGreaterThan(-1);
+    expect(sign).toBeGreaterThan(build);
+    const keyed = steps.flatMap((s, i) => (/secrets\.KOLUX_RELEASE_KEY(_PASSWORD)? \}\}/.test(JSON.stringify(s.env ?? {})) ? [i] : []));
+    expect(keyed).toEqual([sign]);
+    expect(steps[sign].run).toMatch(/trap 'rm -f "\$KOLUX_RELEASE_KEY"' EXIT\n.*> "\$KOLUX_RELEASE_KEY"\n/);
   });
 });
 

@@ -25,11 +25,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Wait for CI on this commit
@@ -37,29 +37,45 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: node scripts/ci-gate.mjs "$(git rev-parse HEAD)"
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 12
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Signing key
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # T-588 (X-proc.5): the build runs every dependency's install and build scripts, so the machine
+      # holds only the key's public half (the app carries it) until the build is done. release.mjs
+      # hands the token to its `gh release` calls alone, never to the build.
+      # ponytail: steps share one runner, so a build script could still leave something behind for the
+      # signing step; signing in a separate job from a downloaded artifact is the upgrade path.
+      - name: Public key
         shell: bash
         env:
-          KEY: ${{ secrets.KOLUX_RELEASE_KEY }}
           PUB: ${{ secrets.KOLUX_RELEASE_PUBKEY }}
         run: |
           mkdir -p "$RUNNER_TEMP/signing"
-          printf '%s' "$KEY" > "$RUNNER_TEMP/signing/kolux-rs.key"
           printf '%s' "$PUB" > "$RUNNER_TEMP/signing/kolux-rs.key.pub"
-      - name: Release job
+      - name: Build and smoke-test
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.KOLUX_RELEASES_TOKEN }}
           KOLUX_RELEASE_CHECKOUT: ${{ runner.temp }}/release-checkout
           KOLUX_RELEASE_KEY: ${{ runner.temp }}/signing/kolux-rs.key
+        run: node scripts/release.mjs --build-only --repo "$GITHUB_WORKSPACE"
+      # The private key exists only for this step: written just before tauri signer runs, deleted when
+      # the step ends however it ends.
+      - name: Sign and publish
+        shell: bash
+        env:
+          KEY: ${{ secrets.KOLUX_RELEASE_KEY }}
+          GH_TOKEN: ${{ secrets.KOLUX_RELEASES_TOKEN }}
+          KOLUX_RELEASE_CHECKOUT: ${{ runner.temp }}/release-checkout
+          KOLUX_RELEASE_KEY: ${{ runner.temp }}/signing/kolux-rs.key
           KOLUX_RELEASE_KEY_PASSWORD: ${{ secrets.KOLUX_RELEASE_KEY_PASSWORD }}
         run: |
+          trap 'rm -f "$KOLUX_RELEASE_KEY"' EXIT
+          printf '%s' "$KEY" > "$KOLUX_RELEASE_KEY"
+          unset KEY
           if [ "${{ inputs.publish }}" = "true" ]; then
-            node scripts/release.mjs --repo "$GITHUB_WORKSPACE"
+            node scripts/release.mjs --finish
           else
-            node scripts/release.mjs --no-publish --repo "$GITHUB_WORKSPACE"
+            node scripts/release.mjs --finish --no-publish
           fi
