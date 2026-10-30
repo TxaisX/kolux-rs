@@ -9,10 +9,22 @@ WHAT CHANGED
   never the network). ponytail comment: the list is uncapped; count + first few if a huge branch shows up.
 - src-tauri/src/projects.rs:1540       remove_check() fills it (also for a folder already gone, PROJ-072: the branch
   is still deleted then).
-- src-tauri/src/projects.rs:2333-2348  remove_one(): with no branch choice (None, the record default), a branch holding
-  such commits stays (kept, handed back as Kept for the kept-branch list). An explicit Some(false) still deletes it.
-  This one default covers the single delete, the parent batch, the multi-select bar, the Space batch
-  (workspace_remove_many, keepBranch null) and the cleanup dialog.
+- src-tauri/src/projects.rs:2355-2382  remove_one(): with no branch choice (None, the record default) and a branch made by
+  Kolux, the folder goes first with its branch kept for now (remove_worktree keep=true); then
+  branch_goes_unless_only_here() (projects.rs:2385) decides the branch: it re-runs only_here for that branch and deletes it
+  (Git::delete_branch_if_at, which declines a moved or checked-out branch, plus its branch.<name> settings as
+  `git branch -D` did) only when nothing is found; otherwise the branch stays and comes back as Kept. An explicit
+  Some(false) still deletes it with the folder; Some(true) and a branch the workspace was opened on keep it as before.
+- src-tauri/src/projects.rs:56-62  branch_turn(repo): a per-repository lock, built like repo_turn but separate so
+  creations are not blocked. The branch decisions of side-by-side deletes (workspace_remove_many runs four at once,
+  PROJ-071) take turns under it, so of a parent with unpushed commits and a child made from its tip with none of its
+  own, the second decision sees the first branch gone and keeps its branch. Folders still go side by side.
+- src-tauri/src/projects.rs:1518  only_here() takes the branch name and head instead of a &Worktree, so the re-check
+  can run after the worktree is gone.
+- Where the decision reaches: the single delete, the parent batch, the multi-select bar, the cleanup dialog's plain
+  delete, and the Space batch (workspace_remove_many). The Space view (src/space/SpaceView.tsx:82) already sent
+  keepBranch: null before this lane; its kept branches are named only in the batch summary note
+  (src/space/view.ts:58-61, "1 branch kept: tx/fix"), not added to the kept-branch list (outside this lane).
 - src/projects/deleting.ts:4-45  RemoveCheck.commits; skipsQuestion() never skips when there are such commits (the
   "skip the question" setting no longer applies to them); shownCommits(), commitsNote(), keepsAtFirst().
 - src/projects/ProjectsPanel.tsx:1097, 1141  the question starts with Keep the branch ticked when there are such
@@ -29,6 +41,10 @@ TESTS ADDED
   (real git repo: a fresh workspace has none and loses its branch as before; two commits are named newest first; a
   commit another branch holds or one on a remote-tracking ref is not counted; remove_one with None keeps the branch and
   returns Kept{branch, tip}; remove_one with Some(false) deletes it).
+- src-tauri/src/projects.rs t613_a_parent_and_a_child_at_its_tip_deleted_side_by_side_keep_their_unpushed_commits
+  (review round 1: a parent with 3 commits and a child created from its tip; both remove_checks find nothing; remove_one
+  with None runs for both on two threads started together by a Barrier; asserts both folders went, exactly one of the
+  two branches remains holding the tip, and it comes back as Kept).
 - src/projects/deleting.test.ts "T-613: commits found on no other branch and no remote are named, keep the branch at
   first, and always ask".
 - src/projects/removeCommits.test.ts (new; real ProjectsPanel and PickedBar on the small DOM, backend mocked):
@@ -57,6 +73,22 @@ TS: VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run src/pro
       - "keepBranch": null   + "keepBranch": false   (both rows)
   Test Files  2 failed (2)   Tests  5 failed | 8 passed (13)
 
+Review round 1 (parent/child side by side), before the fix: the race needs cargo test, which lanes may not run, so
+the failing order is shown with the same git query in a scratch repo (git 2.43.0;
+/tmp/claude-0/-home-user-kolux-rs/0d1dcaa5-c3c2-58da-a983-3d3196003914/scratchpad/t613b/repro.sh):
+  == OLD order (both checks before any delete, as remove_one decided before):
+  check tx/fix: 0 commits only here; check tx/fix-tests: 0
+  branches left: 0
+  0 commits reachable from any ref            <- the 3 unpushed commits are lost
+  == NEW order (folder first, branch decision one at a time under branch_turn):
+  check tx/fix-tests: 0
+  check tx/fix: 3
+  kept tx/fix
+  branches left: tx/fix
+  3                                           <- all 3 commits kept
+The old remove_one ran remove_check (projects.rs `let now = remove_check(...)`) and fixed `keep` before
+remove_worktree's `branch -D` (git.rs:760-764), so two concurrent deletes both decided on the state with both branches.
+
 The git mechanism itself, shown in a scratch repo (git 2.43.0): three commits on tx/fix-login only
   $ git log --format='%h %s' refs/heads/tx/fix-login --not --exclude=tx/fix-login --branches --remotes --
   c4380b8 fix step 3 / e1d6d44 fix step 2 / 786e6a9 fix step 1
@@ -72,11 +104,19 @@ AFTER THE FIX
     all pre-existing Linux dead-code warnings; none in the changed code)
   (src-tauri) ... cargo check --target x86_64-pc-windows-gnu --all-targets
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 05s   (exit 0, 0 warnings)
+  Review round 1 (after branch_turn + branch_goes_unless_only_here + the side-by-side test):
+  (src-tauri) ... cargo check --all-targets   -> Finished `dev` profile ... in 57.51s (exit 0; lib 87 warnings as before,
+    none in projects.rs changed code)
+  (src-tauri) ... cargo check --target x86_64-pc-windows-gnu --all-targets   -> Finished `dev` profile ... in 2m 09s (exit 0)
+  No TypeScript changed in round 1.
   cargo test was not run here (lane rule); the integrator runs
   t613_commits_found_nowhere_else_are_named_and_keep_the_branch_unless_the_form_says_delete_it centrally.
 
 STILL OPEN
-- The Rust test's pass is proven only by the integrator's central cargo test run.
+- The Rust tests' pass (both t613_ tests, including the side-by-side parent/child one) is proven only by the
+  integrator's central cargo test run; lanes may not run cargo test.
+- Outside this lane: the Space view names branches kept by its batch only in the summary note
+  (src/space/view.ts:58-61), not in the kept-branch list the Projects panel uses.
 - Live Windows run: delete a workspace with unpushed commits from the row X with "ask before deleting" switched off;
   expect the question, the commits listed, Keep the branch ticked, the folder gone and the branch kept (toast).
 - Not changed (outside this lane and this task): `kolux worktree rm` (src-tauri/src/cli.rs:2206) still deletes a
