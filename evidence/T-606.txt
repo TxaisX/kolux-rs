@@ -65,6 +65,18 @@ OUTSIDE THIS LANE'S FILES (the integrator applies these; see the result's outsid
   it fails. The snippets were type-checked in a scratch copy of the probe (exit 0).
 - PR text (pr_review.rs) and branch naming (projects.rs) call writers::ask and are covered already.
 
+REVIEW ROUND 1 (both required changes are in scm.rs / scm_recipe.rs, which this lane does not own)
+- Ready patch: evidence/safety-scm.patch (git apply from the repo root). It holds exactly the three
+  call changes above plus the git019 test update (scm_recipe.rs:367 and :369 take
+  "--setting-sources user --strict-mcp-config"). It must land in the same merge as e16db79d, or
+  git019 fails. Applied in this worktree, then reverted (the files stay unchanged on lane/safety):
+  $ cargo check --all-targets                                   Finished `dev` profile ... in 1m 57s (exit 0; no warning in scm.rs, scm_recipe.rs, scm_writers.rs)
+  $ cargo check --target x86_64-pc-windows-gnu --all-targets    Finished `dev` profile ... in 2m 04s (exit 0; no warning in those files)
+- Not run here: cargo test (git019 and the T-606 tests run centrally after the patch is applied).
+- Side effect to know: an agent recipe's extra arguments now run from the empty folder, so a
+  relative path in them (for example {files}, which are workspace-relative names) no longer points
+  into the workspace. The prompt already carries the diff; a template recipe is unchanged.
+
 TESTS ADDED (scm_writers.rs)
 - t606_the_claude_writer_runs_from_an_empty_folder_of_its_own_with_only_the_users_settings: a
   workspace holding .claude/settings.json (hooks, env ANTHROPIC_BASE_URL) and .mcp.json, and a stand-in
