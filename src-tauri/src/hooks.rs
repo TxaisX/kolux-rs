@@ -1085,7 +1085,8 @@ pub fn install_claude_from(file: &Path, text: Option<String>, command: &str, sta
         // T-152-b (4): a "hooks" object the user had, even an empty one, is part of his file.
         agent_hooks::remove_groups(&mut v, original.get("hooks").is_none());
         v.as_object_mut().map(|o| o.remove("statusLine"));
-        v
+        // T-584: an empty list under an event (another tool's leftover "Stop": []) holds nothing, on either side.
+        agent_hooks::without_empty_lists(&v)
     };
     if rest(&settings) != rest(&original) {
         return Err(format!("{}: the install would change more than Kolux's entries; hooks not installed", file.display()));

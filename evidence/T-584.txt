@@ -1,0 +1,48 @@
+T-584 (status-hooks lane, 2026-10-30): Claude hooks install even when settings.json has an empty hook list
+=========================================================================================================
+Audit R02-hooks-status.4 (then hooks.rs:1001; the check is at hooks.rs:1081-1093 now).
+
+THE PROBLEM
+~/.claude/settings.json holding "hooks": {"Stop": []} (other hook tools leave this behind when they uninstall):
+- install_groups adds Kolux's group to the empty Stop list. The self-check then sets Kolux's entries aside on both
+  sides with remove_groups: on the new file, stripping Kolux's group empties Stop and clear_unused drops the key; on
+  the original, there is nothing to strip, so "Stop": [] stays. {"hooks":{}} never equals {"hooks":{"Stop":[]}}, so
+  every start and every switch-on failed with "the install would change more than Kolux's entries; hooks not
+  installed", which does not say why. once_more retries only a file that changed, so it never got past this.
+- Removal had the twin problem: the emptied key is dropped, so the result never matched the kept copy and the file
+  was rewritten without the user's "Stop": [] instead of coming back byte for byte. Codex's hooks.json removal the same.
+
+WHAT CHANGED
+- src-tauri/src/agent_hooks/mod.rs:111-119 without_empty_lists(): a {"hooks": {...}} file as the checks compare it; an
+  event whose list is empty holds no entries, so it reads as absent.
+- src-tauri/src/hooks.rs:1083-1093 the install self-check compares both sides through it (the empty list is ignored on
+  either side; anything else the install would change still refuses the install).
+- src-tauri/src/agent_hooks/mod.rs:184 (Claude) and :208 (Codex): removal compares the result with the kept
+  .bak-kolux copy through it, so the copy's exact bytes, empty list included, are written back.
+Nothing else in the install or removal changed: Kolux's group still goes into the empty list, and a user's own
+entries are never touched.
+
+TEST ADDED: src-tauri/src/agent_hooks/tests.rs:1424-1464
+t584_a_file_with_an_empty_hook_list_installs_and_comes_back_byte_for_byte
+- three Claude files ({"hooks":{"Stop":[]}} compact; a pretty file with "model", "Stop": [], a user's Notification hook
+  and "PreToolUse": []; a CRLF file with two empty lists): each installs, inspects as installed, keeps the model and
+  the user's hook, comes back byte for byte when switched off, and a second switch-off writes nothing;
+- a Codex hooks.json {"hooks":{"Stop":[]}}: Kolux's groups written, then switched off: back byte for byte.
+
+Before the fix: the test compiles against the old code (it uses only existing calls), and there it fails at its first
+step: install_claude_at returns Err("...settings.json: the install would change more than Kolux's entries; hooks not
+installed") for every Claude file (traced above; the audit reproduced it in a mirror for all 12 events), and the
+Codex part comes back as {"hooks":{}}, not {"hooks":{"Stop":[]}}.
+$ cargo check --all-targets   (test added, fix not yet)
+ Finished `dev` profile [unoptimized + debuginfo] target(s) in 6m 28s   (exit 0)
+cargo test is not run in the lanes; the integrator runs it.
+
+After the fix:
+$ CARGO_TARGET_DIR=... CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check --all-targets
+ Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 09s   (exit 0; no warning in hooks.rs, automations.rs, status.rs, agent_hooks/)
+$ ... cargo check --target x86_64-pc-windows-gnu --all-targets
+    Compiling kolux-rs v0.1.0 (/home/user/kolux-lanes/status-hooks/src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 20s   (exit 0; no errors, no warnings)
+
+NEEDS THE INTEGRATOR: cargo test t584_ plus the existing t_152* install/removal tests (byte-for-byte round trips).
+STILL OPEN: a live switch-on with a real Claude settings.json holding "Stop": [] on Windows.

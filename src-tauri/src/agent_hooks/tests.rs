@@ -1421,6 +1421,48 @@ fn t_152_b_4_a_claude_file_with_an_empty_hooks_object_installs_and_comes_back_by
     let _ = fs::remove_dir_all(&dir);
 }
 
+// T-584 (R02-hooks-status.4): another tool's uninstall often leaves an empty list under an event, e.g. "Stop": [].
+// An empty list holds no entries: the install goes ahead, and switching off gives the file back byte for byte.
+#[test]
+fn t584_a_file_with_an_empty_hook_list_installs_and_comes_back_byte_for_byte() {
+    let dir = temp("t584-empty-list");
+    let home = dir.join("home");
+    let user_hook = "{\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"notify.cmd\"\n          }\n        ]\n      }";
+    let texts = [
+        "{\"hooks\":{\"Stop\":[]}}".to_string(),
+        format!("{{\n  \"model\": \"opus\",\n  \"hooks\": {{\n    \"Stop\": [],\n    \"Notification\": [\n      {user_hook}\n    ],\n    \"PreToolUse\": []\n  }}\n}}\n"),
+        "{\r\n  \"hooks\": {\r\n    \"SessionStart\": [],\r\n    \"Stop\": []\r\n  }\r\n}\r\n".to_string(),
+    ];
+    for (i, text) in texts.iter().enumerate() {
+        let file = dir.join(format!("c{i}")).join("settings.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, text).unwrap();
+        install_claude_at(&home, &file).unwrap_or_else(|e| panic!("{text:?} did not install: {e}"));
+        assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed", "{text:?}");
+        let on: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        if i == 1 {
+            assert_eq!(on["model"], "opus");
+            assert_eq!(on["hooks"]["Notification"][0]["hooks"][0]["command"], "notify.cmd", "the user's own hook is kept");
+        }
+        remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), *text, "on then off gives back {text:?} byte for byte");
+        assert!(!remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap(), "nothing of Kolux's left");
+    }
+    // Codex's hooks.json is taken out the same way: its empty list comes back with the rest of the file.
+    let profile = dir.join("profile");
+    let managed = profile.join(crate::codex_accounts::FOLDER).join("t584");
+    let file = managed.join("hooks.json");
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    let text = "{\"hooks\":{\"Stop\":[]}}";
+    fs::create_dir_all(&managed).unwrap();
+    fs::write(&file, text).unwrap();
+    let mut v: Value = serde_json::from_str(text).unwrap();
+    assert!(write_codex_groups(&file, Some(text), &mut v, command).unwrap());
+    apply(&home, &profile, &Value::Null, "codex", Plan::Remove).unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), text, "Codex: on then off gives back {text:?} byte for byte");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn t_152_b_3_the_kept_copy_is_checked_against_its_record_on_every_install() {
     let dir = temp("t152b-record");

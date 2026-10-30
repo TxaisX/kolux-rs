@@ -108,6 +108,16 @@ pub fn clear_unused(hooks: &mut Map<String, Value>, keep: &[&str]) -> bool {
     changed
 }
 
+/// T-584 (R02-hooks-status.4): a `{"hooks": {...}}` file as the install and removal checks compare it. An event whose
+/// list is empty holds no entries (other tools leave `"Stop": []` behind when they uninstall), so it reads as absent.
+pub fn without_empty_lists(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Some(hooks) = v.get_mut("hooks").and_then(Value::as_object_mut) {
+        hooks.retain(|_, groups| groups.as_array().is_none_or(|g| !g.is_empty()));
+    }
+    v
+}
+
 /// Takes every Kolux entry out of a `{"hooks": {...}}` file. A `hooks` object left empty goes
 /// too only when `drop_empty` (Kolux created it); T-152-b (4): one the user had, even `{}`, stays.
 pub fn remove_groups(root: &mut Value, drop_empty: bool) -> bool {
@@ -171,7 +181,7 @@ fn remove_claude_once(file: &Path, prev: &Path) -> Result<bool, String> {
     }
     if changed {
         let record = prev.parent().map(|d| d.join(BACKUP_RECORD)).unwrap_or_default();
-        match copy.filter(|(_, v)| *v == s) {
+        match copy.filter(|(_, v)| without_empty_lists(v) == without_empty_lists(&s)) {
             Some((bytes, _)) => write_atomic(file, &bytes, Some(&text))?,
             None if drop_created(file, &record, &s, &text)? => {}
             None => write_json(file, &s, Some(&text))?,
@@ -195,7 +205,7 @@ pub fn remove_codex(home: &Path) -> Result<bool, String> {
     let created = copy.is_none() && was_created(&record, &file);
     let changed = remove_groups(&mut v, created || copy.as_ref().is_some_and(|(_, c)| c.get("hooks").is_none()));
     if changed {
-        match copy.filter(|(_, c)| *c == v) {
+        match copy.filter(|(_, c)| without_empty_lists(c) == without_empty_lists(&v)) {
             Some((bytes, _)) => write_atomic(&file, &bytes, Some(&text))?,
             None if drop_created(&file, &record, &v, &text)? => {}
             None => write_json(&file, &v, Some(&text))?,
