@@ -23,7 +23,7 @@ import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
-import { attach, baseName, detach, heldOf, isDirty, opening, relay, replaceAll, subscribe, textOf, type Held } from "./buffers";
+import { attach, baseName, detach, heldOf, isDirty, lineEndsFor, opening, relay, replaceAll, subscribe, textOf, type Held } from "./buffers";
 import { confirmed } from "./fileMoved";
 import { keepUnsaved, keptToast } from "./unsavedCopy";
 import { copiers, editors, look, saveFile, StaleNotice } from "./EditorPane";
@@ -307,7 +307,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
     const count = (st: EditorState) => setChanges(getChunks(st)?.chunks.length ?? 0);
     const right: Extension[] = [
       ...common,
-      EditorState.lineSeparator.of(modified.includes("\r\n") ? "\r\n" : "\n"),
+      lineEndsFor(modified),
       staged ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
       noteTools(act.current, "new"),
       EditorView.updateListener.of((u) => {
