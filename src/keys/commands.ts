@@ -1,0 +1,43 @@
+// T-611 (brief "Path to an A", Phase 0): every command is runnable and none does nothing. The palette's
+// Commands section lists every command in actions.ts, the 56 unbound ones included, and runs each through
+// the same code its shortcut runs (runCommand.ts). windowCommand is what the window's key switch does for
+// the commands it had no case for (evidence/product-ux-App.patch).
+import { actions } from "./actions";
+import { labelOf, type Keymap } from "./keymap";
+import { runCommand } from "./runCommand";
+import type { PaletteItem } from "../projects/WorktreePalette";
+
+/** One palette row per command; the two 1 to 9 commands get a row per digit, and TERM-041's new-tab
+ *  commands one per installed agent. The hint is the command's keys, when it has some. */
+export function commandRows(map: Keymap, installed: readonly string[], run: (id: string, index?: number) => void = runCommand): PaletteItem[] {
+  return actions.flatMap((a): PaletteItem[] => {
+    if (a.id.startsWith("tab.newAgent.") && !installed.includes(a.id.slice("tab.newAgent.".length))) return [];
+    const keys = labelOf(map, a.id);
+    if (!a.index) return [{ section: "Commands", label: a.title, hint: keys.join("+") || undefined, run: () => run(a.id) }];
+    return Array.from({ length: 9 }, (_, i) => ({
+      section: "Commands",
+      label: a.title.replace(/1.9$/, String(i + 1)),
+      hint: keys.length ? [...keys.slice(0, -1), String(i + 1)].join("+") : undefined,
+      run: () => run(a.id, i + 1),
+    }));
+  });
+}
+
+/** What windowCommand asks the window to do. */
+export type WindowCalls = { toggleRight: (tab: "checks") => void; renameWorkspace: () => void; reload: () => void };
+
+/** T-611: the commands the window's key switch had no case for; true when `id` is one of them. */
+export function windowCommand(id: string, w: WindowCalls): boolean {
+  switch (id) {
+    case "sidebar.checks.toggle": // VIEW-057 / GIT-029: the right sidebar's Checks tab, closed again when it is showing
+      w.toggleRight("checks");
+      return true;
+    case "workspace.rename": // PROJ-059: the sidebar starts the inline rename of the workspace in front
+      w.renameWorkspace();
+      return true;
+    case "app.forceReload": // APP-009: the same reload as the View menu's Force Reload (menu.rs Route::Reload)
+      w.reload();
+      return true;
+  }
+  return false;
+}

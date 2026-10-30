@@ -1,0 +1,33 @@
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -146,6 +146,8 @@
+   createName?: string;
+   /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
+   deleteRequest: number;
++  /** T-611: bumped by workspace.rename (PROJ-059): starts the inline rename of the workspace shown. */
++  renameRequest?: number;
+   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
+   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => Promise<number | null> | void;
+   /** PROJ-047: child workspaces nest under their parent unless this is off. */
+@@ -200,7 +202,7 @@
+   }
+ };
+ 
+-export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup, skillsOn = false, onSkills = () => {} }: Props) {
++export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, renameRequest = 0, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup, skillsOn = false, onSkills = () => {} }: Props) {
+   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
+   // PROJ-065: the right-click menu, PROJ-060: the details form, T-055: a parent deleted together with its children.
+   const [menu, setMenu] = useState<{ x: number; y: number; projectId: string; path: string; items: MenuItem[] } | null>(null);
+@@ -928,6 +930,12 @@
+     }
+     say("warn", `The workspace ${hovered === null ? "shown" : "under the pointer"} is not one Kolux can delete (a project's main folder, or no workspace).`);
+   }, [deleteRequest]);
++  // T-611 (PROJ-059): workspace.rename opens the same inline rename as F2 on the workspace shown.
++  useEffect(() => {
++    if (renameRequest === 0 || activeDir === null) return;
++    const w = projects.flatMap((p) => worktrees[p.id] ?? []).find((x) => same(x.path, activeDir));
++    if (w) startRename(w);
++  }, [renameRequest]);
+   // SESS-035: Recent (projects the composer made workspaces in), then the rest by match, then Add project.
+   const projectItems = (q: string): PickItem[] => {
+     const hints = pathHints(projects);

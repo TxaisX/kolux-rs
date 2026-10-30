@@ -3,7 +3,8 @@
 // for this platform, then the file's all-platforms section, then its section for this platform.
 // A custom chord that collides with another binding in the same scope (or conflict group) is
 // dropped and the default stays, so an edit can never silently steal a key.
-import { actionById, actions, defaultsFor, type Action, type Platform, type Scope } from "./actions";
+import { actionById, actions, defaultsFor, sameAs, type Action, type Platform, type Scope } from "./actions";
+import { commandOf } from "./runCommand";
 import { currentLayout, layoutKeyLabel } from "../terminal/keyLayout";
 import { doubleTapLabel, doubleTapSpelling, parseDoubleTap } from "./doubleTap";
 
@@ -299,15 +300,21 @@ function keyMatches(key: string, e: KeyLike): boolean {
 
 /** The first action in the wanted scopes whose chord fires for this event. */
 export function matchEvent(map: Keymap, e: KeyLike, scopes: Scope[]): Match | null {
+  // T-611: a command picked in the palette answers its stand-in key event wherever its scope is live.
+  const picked = commandOf(e);
+  if (picked) return scopes.includes(actionById.get(picked.id)?.scope as Scope) ? matchOf(picked.id, picked.index) : null;
   for (const b of map.bindings.values()) {
     if (!scopes.includes(b.action.scope)) continue;
     for (const chord of b.chords) {
       const hit = chordMatches(chord, e, map.platform, b.action.index);
-      if (hit) return hit.index === undefined ? { id: b.action.id } : { id: b.action.id, index: hit.index };
+      if (hit) return matchOf(b.action.id, hit.index);
     }
   }
   return null;
 }
+
+/** T-611: the match for a command, an old id answering as the command it stands for (actions.ts sameAs). */
+export const matchOf = (id: string, index?: number): Match => (index === undefined ? { id: sameAs[id] ?? id } : { id: sameAs[id] ?? id, index });
 
 /** The chords of one action, or [] when it is unassigned. */
 export function chordsOf(map: Keymap, id: string): string[] {
