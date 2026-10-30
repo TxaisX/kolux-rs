@@ -46,6 +46,10 @@ type ActionDeps = {
 };
 
 export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, settings, screen, setScreen, setPage, owner, recentDirs, activeRef }: ActionDeps) {
+  // T-614: the panes as last drawn, for a removal that finishes after long awaits (git takes seconds
+  // on Windows) and must see the tabs as they are then, not as they were when it was clicked.
+  const panesNow = useRef(panes);
+  panesNow.current = panes;
   // PROJ-033 / SESS-037: the setup script runs in a Setup terminal of the new workspace: a tab
   // beside its first pane, or a cell of its own to the right or below. `then` runs once it ends
   // (the agent waiting for setup), whatever its exit code, and lands as a tab beside it.
@@ -92,15 +96,18 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
   // PROJ-070: the removed one gives way to the sibling used last that still has panes; the shown
   // workspace is read when the delete finishes, so a user who went elsewhere meanwhile stays there.
   // PROJ-053: putting workspaces to sleep closes their panes the same way, all at once.
+  // T-614: the panes are updated from the newest list, so a tab opened meanwhile stays (and its
+  // process lives) and a tab removed earlier never comes back; several removals are one call.
   const removedAll = (paths: string[]) => {
     if (paths.length === 0) return;
-    const left = paths.reduce((ps, d) => withoutDir(ps, d), panes);
+    const without = (ps: Pane[]) => paths.reduce((x, d) => withoutDir(x, d), ps);
+    const left = without(panesNow.current);
     const gone = (d: string) => paths.some((x) => sameDir(d, x));
     const pid = projectOf(paths[0]);
     const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !gone(d) && panesIn(left, d).length > 0).map(([d]) => d);
     const hit = paths.find((x) => activeRef.current !== null && activeAfterRemove(activeRef.current, x) !== activeRef.current);
     const next = hit === undefined ? activeRef.current : activeAfterRemove(activeRef.current, hit, recentDirs.current.filter((d) => !gone(d)), siblings);
-    setPanes(left);
+    setPanes(without);
     setActiveDir(next);
     setFocused((f) => focusIn(left, next, f));
   };
