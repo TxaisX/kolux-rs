@@ -53,10 +53,16 @@ impl Custom {
     }
 
     pub fn hits(&self, command: &str) -> bool {
+        self.hits_in(command, &std::cell::OnceCell::new())
+    }
+
+    /// `hits`, with the command's reading (`read`) shared with the built-in rules and every other
+    /// rule asked about it (T-604: a long command is read once, in time for the hook).
+    fn hits_in<'a>(&self, command: &'a str, read: &std::cell::OnceCell<crate::protected::Read<'a>>) -> bool {
         match self.kind {
             Kind::StartsWith => {
                 let want: Vec<String> = self.pattern.split_whitespace().map(str::to_lowercase).collect();
-                crate::protected::starts_with(command, &want)
+                read.get_or_init(|| crate::protected::Read::new(command)).start_with(&want)
             }
             Kind::Contains => {
                 let want = squeeze(&self.pattern);
@@ -326,10 +332,11 @@ pub fn check(command: &str, base: &crate::protected::Base, settings: &Value, cwd
     let w = working(settings, cwd);
     let mut merged = settings.clone();
     merged[crate::protected::OFF_FIELD] = json!(w.off);
-    if let Some(rule) = crate::protected::check(command, base, &merged) {
+    let read = std::cell::OnceCell::new();
+    if let Some(rule) = crate::protected::check_with(command, &read, base, &merged) {
         return Some(rule.name.to_string());
     }
-    w.customs.iter().find(|c| c.hits(command)).map(|c| c.shown_name().to_string())
+    w.customs.iter().find(|c| c.hits_in(command, &read)).map(|c| c.shown_name().to_string())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -521,7 +528,8 @@ mod tests {
 
     /// T-604 (R03-safety-accounts.2): a 1 MB command is answered, and its attempt kept, within the
     /// hook's 1.5 s. Each filler once made reading or masking a command quadratic; it comes first so
-    /// masking meets it, and the protected action comes last so every rule reads the whole command.
+    /// masking meets it, and the protected action comes last, tripping the last of ten starts-with
+    /// rules of the user's own, so all seven built-ins and all ten rules read the whole command.
     /// The bar is the optimized build's promise; a debug build only has to finish.
     #[test]
     fn t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time() {
@@ -540,16 +548,22 @@ mod tests {
             ("quotes", "\"'".repeat(n / 2)),
             ("substitutions", "echo $(true) ".repeat(n / 13)),
         ];
+        let mut rules: Vec<Value> = ["terraform destroy", "helm uninstall", "aws s3 rm", "gcloud projects delete", "az group delete", "docker system prune", "npm unpublish", "flyctl apps destroy", "heroku apps:destroy"]
+            .iter()
+            .map(|p| json!({ "id": p, "kind": "starts-with", "pattern": p }))
+            .collect();
+        rules.push(json!({ "id": "pods", "name": "Pod deletes", "kind": "starts-with", "pattern": "kubectl delete" }));
+        let settings = json!({ RULES_FIELD: rules });
         let bar_ms = 750.0;
         let mut slow = Vec::new();
         for (label, filler) in fillers {
             let ev = json!({ "hook_event_name": "PreToolUse", "session_id": "t604-time", "tool_use_id": label, "cwd": "/home/me/t604", "tool_name": "Bash",
-                "tool_input": { "command": format!("{filler}\ngit push --force origin main") } }).to_string();
+                "tool_input": { "command": format!("{filler}\nkubectl delete pod web-1") } }).to_string();
             let t0 = std::time::Instant::now();
-            let answer = listen("/claude", ev.as_bytes(), &json!({}));
+            let answer = listen("/claude", ev.as_bytes(), &settings);
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             println!("TIME hook {label} bytes={} ms={ms:.0}", ev.len());
-            assert!(answer.is_some_and(|a| a.contains("Force-push to main")), "{label} must ask");
+            assert!(answer.is_some_and(|a| a.contains("Pod deletes")), "{label} must ask");
             if ms > bar_ms {
                 slow.push(format!("{label}: {ms:.0} ms"));
             }

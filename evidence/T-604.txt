@@ -159,3 +159,33 @@ WHAT STILL NEEDS A LIVE WINDOWS RUN OR TXAIS
   gets the ask through the real curl -m 1.5 hook.
 - SAFE-014's acceptance boxes were already ticked and still pass; SAFE-016's boxes are UI checks
   (adding rules on the Safety page) and are not claimed here.
+
+FOLLOW-UP (same day): ONE READING PER HOOK ANSWER
+The user's own starts-with rules read the command once, and share that reading with the seven
+built-in rules, instead of reading it again per rule (each reading of 1 MB took 50-90 ms in an
+optimized build, so ten rules could have used most of the hook's 1.5 s).
+- protected.rs:49-61   check -> check_with(command, read, ..): the reading is made lazily in `read`.
+- protected.rs:312     Read is pub(crate); 635-652 Read::start_with replaces starts_with(command, ..).
+- protected_custom.rs:55-70  Custom::hits -> hits_in(command, read); check (330-340) passes one
+  OnceCell to the built-ins and the user's rules.
+- The 1 MB timing test now ends each command with "kubectl delete pod web-1", which trips the last of
+  ten starts-with rules of the user's own, so all seven built-ins and all ten rules read the whole
+  command on the timed path (it ended in a force-push before, which stopped at the second built-in).
+$ probe-g --test-threads=2   test result: ok. 61 passed; 0 failed; finished in 25.64s
+$ probe-O --test-threads=2   test result: ok. 61 passed; 0 failed; finished in 3.66s
+$ probe-O t604_a_1_mb --nocapture   (ten custom rules on the path)
+  with a reading per rule (before this follow-up): worst heredoc_table 573 ms, mysql_p 471 ms
+  with one shared reading:
+TIME hook flags_p bytes=1048751 ms=142        TIME hook heredoc_script bytes=1089083 ms=243
+TIME hook flags_u bytes=1048751 ms=108        TIME hook assignments bytes=1048756 ms=52
+TIME hook mysql_p bytes=1048757 ms=334        TIME hook wrappers bytes=1048752 ms=62
+TIME hook curl_u bytes=1048755 ms=285         TIME hook comments bytes=1198545 ms=99
+TIME hook pipes bytes=1048750 ms=134          TIME hook quotes bytes=1573039 ms=107
+TIME hook heredoc_table bytes=1123684 ms=348  TIME hook substitutions bytes=1048749 ms=208
+test result: ok. 1 passed
+$ cargo check --all-targets (Linux): Finished in 1m 18s, exit 0; --target x86_64-pc-windows-gnu:
+  Finished in 4m 27s, exit 0; no warning in protected.rs or protected_custom.rs.
+Possible next step (not needed for the bar): mysql_p and curl_u spend most of their time masking the
+4,048-character head (one read of the words before each flag); keeping the last read and extending
+it when no quote, bracket or separator lies between two flags (as HeaderContext::command_start does
+for labels) would make that linear too.

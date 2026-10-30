@@ -47,11 +47,16 @@ pub static RULES: [Rule; 7] = [
 
 /// The first rule `command` trips, honouring the master switch and the switched-off list.
 pub fn check(command: &str, base: &Base, settings: &Value) -> Option<&'static Rule> {
+    check_with(command, &OnceCell::new(), base, settings)
+}
+
+/// `check`, reading `command` into `read` when a rule first needs it, so the user's own rules can
+/// use the same reading (T-604: a long command is read once per hook answer).
+pub(crate) fn check_with<'a>(command: &'a str, read: &OnceCell<Read<'a>>, base: &Base, settings: &Value) -> Option<&'static Rule> {
     if settings.get(ASK_FIELD) == Some(&Value::Bool(false)) {
         return None;
     }
     let off: Vec<&str> = settings.get(OFF_FIELD).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-    let read = OnceCell::new();
     RULES.iter().find(|r| !off.contains(&r.id) && (r.hit)(read.get_or_init(|| Read::new(command)), base))
 }
 
@@ -303,14 +308,14 @@ impl Seg {
 }
 
 /// A command as the rules read it: its text and the chain of each reading, worked out once for
-/// all seven rules.
-struct Read<'a> {
+/// all seven rules and the user's own starts-with rules.
+pub(crate) struct Read<'a> {
     text: &'a str,
     chains: Vec<Vec<Seg>>,
 }
 
 impl<'a> Read<'a> {
-    fn new(text: &'a str) -> Self {
+    pub(crate) fn new(text: &'a str) -> Self {
         Read { text, chains: chains(text) }
     }
 
@@ -627,21 +632,23 @@ fn program_at(w: &[String], mut step: impl FnMut(usize)) -> usize {
     }
 }
 
-/// T-604 (R03-safety-accounts.3, SAFE-016): whether a command in `command` begins with `want`
-/// (lower-case words, the first a program name), read the way the rules read it (every reading,
-/// SAFE-014) at every step of `program_at`: `npm publish`, `sudo npm publish`, `npx prisma ..`,
-/// `C:\tools\kubectl.exe delete ..` and `bash -c "kubectl delete .."` each begin with what they run.
-pub(crate) fn starts_with(command: &str, want: &[String]) -> bool {
-    let Some((first, rest)) = want.split_first() else { return false };
-    let first = program(std::slice::from_ref(first));
-    chains(command).iter().flatten().any(|s| {
-        let mut hit = false;
-        program_at(&s.words, |k| {
-            let w = &s.words[k..];
-            hit |= w.len() > rest.len() && program(w) == first && w[1..=rest.len()].iter().zip(rest).all(|(a, b)| a.to_lowercase() == *b);
-        });
-        hit
-    })
+impl Read<'_> {
+    /// T-604 (R03-safety-accounts.3, SAFE-016): whether one of the commands, in any reading, begins
+    /// with `want` (lower-case words, the first a program name) at any step of `program_at`:
+    /// `npm publish`, `sudo npm publish`, `npx prisma ..`, `C:\tools\kubectl.exe delete ..` and
+    /// `bash -c "kubectl delete .."` each begin with what they run.
+    pub(crate) fn start_with(&self, want: &[String]) -> bool {
+        let Some((first, rest)) = want.split_first() else { return false };
+        let first = program(std::slice::from_ref(first));
+        self.chains.iter().flatten().any(|s| {
+            let mut hit = false;
+            program_at(&s.words, |k| {
+                let w = &s.words[k..];
+                hit |= w.len() > rest.len() && program(w) == first && w[1..=rest.len()].iter().zip(rest).all(|(a, b)| a.to_lowercase() == *b);
+            });
+            hit
+        })
+    }
 }
 
 enum Ps {
