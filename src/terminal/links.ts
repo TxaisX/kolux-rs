@@ -5,6 +5,9 @@
 // looks like one, never because it was probed (a network share is never stat-ed).
 // ponytail: one regex pass per row; a provider cache keyed on row text if a 10k-column buffer ever shows lag.
 
+import { linesOf, type BufRow, type Cell, type Line } from "./find";
+import { handlesIn } from "./tabs";
+
 export type Found = { start: number; end: number; kind: "url" | "file"; target: string; line?: number; column?: number };
 
 /** Punctuation that ends a sentence, not a link: "see https://x.y/z." or "(C:\a\b.txt)" keeps the link clean. */
@@ -102,40 +105,91 @@ export function resolvePath(target: string, cwd: string | null): string | null {
   return p;
 }
 
-export type Row = { text: string; isWrapped: boolean };
+/** One buffer row as the link scan reads it (find.ts's shape): its cells, a plain string standing for one cell per
+ *  character, and whether it continues the row above. */
+export type Row = BufRow;
 
 /** TERM-095: the longest logical line (in cells) that is scanned for links; longer ones get none. */
 export const LINK_SCAN_CAP = 16 * 1024;
 
+/** A logical line as the scan joined it: its first row, its text, and for each index of the text the cell it starts
+ *  in and the cell after it, counted from the first row (T-586: a wide character takes two cells but one index, an
+ *  emoji sequence several indices but its two cells, so an index is not a column). */
+export type Span = Line & { first: number };
+const NONE: Line = { text: "", at: [], to: [] };
+
 /** The rows that make up the logical line holding row `y`: back to the first unwrapped row, forward while the next
- *  row says it is wrapped. Returns the first row's index and the joined text, every row but the last padded to `cols`
- *  so an index in the text maps back to a cell. */
-export function spanOf(row: (y: number) => Row | undefined, y: number, cols: number, cap = LINK_SCAN_CAP): { first: number; text: string } {
+ *  row says it is wrapped. A row given as a string has every row but the last padded to `cols`, as on screen. */
+export function spanOf(row: (y: number) => Row | undefined, y: number, cols: number, cap = LINK_SCAN_CAP): Span {
   // TERM-095: a logical line past the cap gets no link scan; the walk stops at the cap too, so a hover over a 1 MB line
   // costs a few hundred row lookups, never a join of the whole line and a regex pass over it.
   const maxRows = Math.max(1, Math.floor(cap / Math.max(1, cols)));
   let first = y;
-  while (first > 0 && row(first)?.isWrapped) {
-    if (y - first >= maxRows) return { first: y, text: "" };
+  while (first > 0 && row(first)?.wrapped) {
+    if (y - first >= maxRows) return { first: y, ...NONE };
     first--;
   }
   let last = y;
-  while (row(last + 1)?.isWrapped) {
-    if (last - first + 1 >= maxRows) return { first, text: "" };
+  while (row(last + 1)?.wrapped) {
+    if (last - first + 1 >= maxRows) return { first, ...NONE };
     last++;
   }
-  const parts: string[] = [];
+  const rows: Row[] = [];
   for (let i = first; i <= last; i++) {
-    const t = row(i)?.text ?? "";
-    parts.push(i < last ? t.padEnd(cols) : t.replace(/\s+$/, ""));
+    const cells = row(i)?.cells ?? "";
+    rows.push({ wrapped: i > first, cells: typeof cells === "string" && i < last ? cells.padEnd(cols) : cells });
   }
-  return { first, text: parts.join("") };
+  return { first, ...(linesOf(rows, cols)[0] ?? NONE) };
 }
 
-/** xterm's 1-based inclusive cell range for a [start, end) index span of a joined line. */
-export function rangeOf(start: number, end: number, first: number, cols: number) {
-  const cell = (i: number) => ({ x: (i % cols) + 1, y: first + Math.floor(i / cols) + 1 });
-  return { start: cell(start), end: cell(end - 1) };
+/** xterm's 1-based inclusive cell range for a [start, end) index span of a joined line, through its cells. */
+export function rangeOf(span: Span, start: number, end: number, cols: number) {
+  const cell = (i: number) => ({ x: (i % cols) + 1, y: span.first + Math.floor(i / cols) + 1 });
+  return { start: cell(span.at[start]), end: cell(span.to[end - 1] - 1) };
+}
+
+/** The terminal's buffer as the link scans read it: xterm's IBuffer and IBufferLine, as far as they need. */
+export type Buf = { getLine(y: number): BufLine | undefined };
+export type BufLine = { isWrapped: boolean; translateToString(trimRight?: boolean): string; getCell(x: number): { getChars(): string; getWidth(): number } | undefined };
+/** xterm's 1-based inclusive cell range of a link. */
+export type Range = { start: { x: number; y: number }; end: { x: number; y: number } };
+
+/** One buffer row as cells: a full row of plain ASCII as its string (one cell per character), any other row cell by
+ *  cell, so a wide character keeps its two cells and an emoji sequence its one cell group. */
+export function rowOf(l: BufLine, cols: number): Row["cells"] {
+  const s = l.translateToString(false);
+  if (s.length === cols && /^[ -~]*$/.test(s)) return s;
+  const cells: Cell[] = [];
+  for (let x = 0; x < cols; x++) {
+    const c = l.getCell(x);
+    cells.push({ chars: c?.getChars() ?? "", width: c?.getWidth() ?? 1 });
+  }
+  return cells;
+}
+
+/** The logical line holding buffer row `y` (0-based), read from the buffer's cells. */
+const spanAt = (buf: Buf, y: number, cols: number) =>
+  spanOf(
+    (i) => {
+      const l = buf.getLine(i);
+      return l ? { wrapped: l.isWrapped, cells: rowOf(l, cols) } : undefined;
+    },
+    y,
+    cols,
+  );
+
+/** TERM-092 / TERM-093: the web and file links of the logical line holding buffer row `y` (0-based), each with the
+ *  cells it covers. */
+export function linksIn(buf: Buf, y: number, cols: number): { f: Found; range: Range }[] {
+  const span = spanAt(buf, y, cols);
+  return findLinks(span.text).map((f) => ({ f, range: rangeOf(span, f.start, f.end, cols) }));
+}
+
+/** TERM-096: the printed handles of open terminals (term-N) in the logical line holding buffer row `y` (0-based), each
+ *  with the cells it covers. */
+export function handlesOn(buf: Buf, y: number, cols: number): { handle: string; range: Range }[] {
+  const span = spanAt(buf, y, cols);
+  return handlesIn(span.text).map(({ start, end, handle }) => ({ handle, range: rangeOf(span, start, end, cols) }));
 }
 
 /** Where a plain modifier-click goes, said in the hover hint. */
