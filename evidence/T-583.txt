@@ -201,3 +201,59 @@ RE-RUN after merging origin/main 98a494a6 (PR #10, #11, #12) into the lane, full
  cargo test --tests: 2689 passed, 46 failed = the 45 known Linux-only failures + activity::tests::proj051_stamps_last_across_restarts_and_one_folder_has_one_key (a timing flake outside this lane: alone it failed 2 of 5 runs)
  status::tests 59 ok / 0 failed; hooks::tests 28 ok / 1 known; hooks::agent_hooks 132 ok / 2 known
  clippy windows-gnu -D warnings: Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 22s (exit 0)
+
+PR #13 REVIEW (2026-10-30)
+Blocking: accept() gave every connection a bare std::thread::spawn with no cap; a flood or a thread limit makes spawn
+panic, the accept thread dies, and status and every protected-command check stop for the session (hooks fail open).
+Nit: queue()'s worker died with a panicking after_reply job, and later jobs were dropped.
+Fix (src-tauri/src/hooks.rs): accept() spawns with thread::Builder; on Err the closure, its stream and its place are
+dropped and the loop goes on. MAX_IN_FLIGHT = 64 connections at once, counted by an AtomicUsize per listener; an
+InFlight guard gives the place back when the handler ends. A connection over the cap is closed at once, unanswered (the
+hook script then goes on without Kolux), logged once per flood. queue() runs each job under catch_unwind and keeps going.
+Tests added:
+ t583_with_the_cap_reached_a_new_connection_is_closed_at_once_and_the_line_keeps_accepting
+ t583_a_job_after_the_reply_that_panics_leaves_the_queue_running_for_the_next
+Before the fix (tests added; old accept and queue; only the MAX_IN_FLIGHT constant the test names was added):
+$ cargo test --lib -- t583_with_the_cap t583_a_job_after
+ test hooks::tests::t583_a_job_after_the_reply_that_panics_leaves_the_queue_running_for_the_next ... FAILED
+ test hooks::tests::t583_with_the_cap_reached_a_new_connection_is_closed_at_once_and_the_line_keeps_accepting ... FAILED
+ thread 'hooks::tests::t583_with_the_cap_reached_...' panicked at src/hooks.rs:2139:9:
+ the connection over the cap gets no answer: Ok(64)
+ thread 'hooks::tests::t583_a_job_after_...' panicked at src/hooks.rs:2159:9:
+ assertion `left == right` failed: the job after the panic still runs
+   left: Err(Disconnected)
+  right: Ok(2)
+ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2521 filtered out; finished in 2.33s
+(The over-cap connection was held and answered with a 64-byte reply after its read deadline; the queue's worker died
+with job 1, so jobs 2 and 3 were never run.)
+
+Found on the way: the first version of the cap test ended with a protected command and failed only when run next to
+t583_a_huge_... ("the listener keeps accepting: 2.14924612s"; with every other t583 test alone it passed). The cause is
+outside this lane: protected_custom.rs Attempts::paused masks the command under the app-wide attempts lock, so a huge
+command's mask holds up every other pane's protected command. The test now ends with a plain command (it is about the
+accept loop), and the lock is a follow-up in STATE.md. So the earlier "holds up no other pane" holds only until that
+huge command's mask starts.
+
+After (merged with origin/main 7bf6f08a):
+$ cargo check --all-targets
+     Finished `dev` profile [unoptimized + debuginfo] target(s) in 55.91s   (exit 0)
+$ cargo check --target x86_64-pc-windows-gnu --all-targets
+     Finished `dev` profile [unoptimized + debuginfo] target(s) in 56.20s   (exit 0)
+$ cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings
+     Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 33s   (exit 0)
+$ cargo test --lib -- t583_ --test-threads=3
+ test hooks::tests::t583_a_hook_is_answered_inside_its_limit_while_other_connections_send_nothing ... ok
+ test hooks::tests::t583_a_job_after_the_reply_that_panics_leaves_the_queue_running_for_the_next ... ok
+ test hooks::tests::t583_a_protected_command_is_answered_from_the_last_settings_read_while_slow_work_holds_the_store ... ok
+ test hooks::tests::t583_a_protected_command_is_answered_while_an_agent_finished_automation_is_still_in_its_precheck ... ok
+ test hooks::tests::t583_an_endless_header_line_or_a_head_that_never_ends_is_no_request ... ok
+ test hooks::tests::t583_with_the_cap_reached_a_new_connection_is_closed_at_once_and_the_line_keeps_accepting ... ok
+ test hooks::tests::t583_a_client_that_trickles_bytes_is_cut_off_at_the_deadline_not_held_forever ... ok
+ test hooks::tests::t583_a_huge_protected_command_still_being_checked_holds_up_no_other_pane ... ok
+ test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 2515 filtered out; finished in 3.21s
+$ cargo test --lib -- hooks:: --test-threads=3
+ test result: FAILED. 162 passed; 3 failed; 0 ignored; 0 measured; 2358 filtered out; finished in 3.79s
+ test hooks::agent_hooks::tests::t_152_4_a_failed_install_after_the_status_line_save_leaves_his_line_for_the_next_off ... FAILED
+ test hooks::agent_hooks::tests::t_152_c_5_a_temp_folder_too_wide_for_scratch_is_refused_and_lane_variables_fence ... FAILED
+ test hooks::tests::trust_entries_come_from_codex_listing ... FAILED
+ (all three are on the list of 45 known Linux-only failures; see evidence/T-584.txt for why)

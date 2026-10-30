@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 714 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 714 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 4 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -101,6 +101,10 @@ recorded default until told otherwise; nothing here blocks a pass.
   first hook after the store frees. (2) Keep each pane's order for near-simultaneous events: two hooks of one pane that
   arrive together are stepped in the order their threads take the ORDER lock, not always the order they were sent.
   (3) automations.rs still starts a bare thread per job with no cap; give it a cap and a Builder spawn as the hook line has.
+  (4) Found while fixing the review: protected_custom.rs Attempts::paused masks the whole command under the app-wide
+  attempts lock (STORE), so while one huge protected command is masked, every other pane's protected command (and any
+  prompt, which also takes that lock) waits for it: about 2 s in the hook tests. Mask before taking the lock. Not this
+  lane's file, so not changed here; T-583's "holds up no other pane" is true only until that mask starts.
 - [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder

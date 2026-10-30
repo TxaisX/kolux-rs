@@ -2182,8 +2182,10 @@ Content-Length: {}
         // The silent clients go; their handlers end and free their places. The line still answers.
         drop(silent);
         std::thread::sleep(Duration::from_millis(300));
-        let (body, took) = hook(port, 58_308, &shell("git push --force origin main"));
-        assert!(took < LIMIT && body.contains(r#""permissionDecision":"ask""#), "the listener keeps accepting: {took:?} {body}");
+        // A plain command: a protected one would also wait on protected_custom's attempts lock, which another test's
+        // huge command holds while it is masked (a follow-up in STATE.md), and this test is about the accept loop.
+        let (body, took) = hook(port, 58_308, &shell("git status"));
+        assert!(took < LIMIT && body == "{}", "the listener keeps accepting: {took:?} {body}");
     }
 
     #[test]
