@@ -17,17 +17,23 @@ const os = builtin("node:os");
 const path = builtin("node:path");
 const SCRIPTS: string = path.resolve(path.dirname(builtin("node:url").fileURLToPath(import.meta.url)), "../../../scripts");
 
-/** A fresh folder under the scratch root (the nearest folder above the temp dir that holds the marker file). */
+/** A fresh folder under the scratch root: the nearest marked folder above the temp dir, or a
+ *  dedicated marked root this test makes inside the temp dir, so a clean checkout needs no setup. */
+let scratchRoot: string | null = null;
 function scratch(tag: string): string {
-  let root: string | null = null;
-  for (let d = os.tmpdir(); path.dirname(d) !== d; d = path.dirname(d)) {
-    if (fs.existsSync(path.join(d, ".kolux-rs-scratch"))) {
-      root = d;
-      break;
+  if (!scratchRoot) {
+    for (let d = os.tmpdir(); path.dirname(d) !== d; d = path.dirname(d)) {
+      if (fs.existsSync(path.join(d, ".kolux-rs-scratch"))) {
+        scratchRoot = d;
+        break;
+      }
+    }
+    if (!scratchRoot) {
+      scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kolux-rs-scratch-"));
+      fs.writeFileSync(path.join(scratchRoot, ".kolux-rs-scratch"), "");
     }
   }
-  if (!root) throw new Error("run with TEMP/TMP set to a scratch folder that holds .kolux-rs-scratch");
-  const dir = fs.mkdtempSync(path.join(root, `${tag}-`));
+  const dir = fs.mkdtempSync(path.join(scratchRoot, `${tag}-`));
   fs.writeFileSync(path.join(dir, ".kolux-rs-scratch"), "");
   return dir;
 }
