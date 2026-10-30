@@ -121,3 +121,30 @@ STILL OPEN
   expect the question, the commits listed, Keep the branch ticked, the folder gone and the branch kept (toast).
 - Not changed (outside this lane and this task): `kolux worktree rm` (src-tauri/src/cli.rs:2206) still deletes a
   branch holding commits found nowhere else; it does not go through remove_one.
+
+CENTRAL RUN (integrator, 2026-10-30, lane/workspaces merged with origin/main, Linux, git 2.43.0)
+BEFORE, real (throwaway worktree at 025eda2 with only the side-by-side test copied in):
+  The test as written does not compile against the old code (it reads RemoveCheck.commits):
+    error[E0609]: no field `commits` on type `&projects::RemoveCheck`
+       --> src/projects.rs:4762:41
+       = note: available fields are: `changes`, `locked`, `nested`, `stamp`, `missing`
+    error: could not compile `kolux-rs` (lib test) due to 1 previous error; 6 warnings emitted
+  With only that one assert line removed (everything else unchanged), cargo test --lib -- t613_a_parent, 3 runs, 3 failures:
+    thread 'projects::tests::t613_a_parent_and_a_child_at_its_tip_deleted_side_by_side_keep_their_unpushed_commits' panicked at src/projects.rs:4780:9:
+    assertion `left == right` failed: exactly one of the two branches stays, holding the commits: ""
+      left: 0
+     right: 1
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2494 filtered out; finished in 0.34s
+  i.e. the old remove_one deleted both branches and the 3 unpushed commits.
+  The first t613_ test cannot compile against the old code at all (every step reads .commits), so its "before" stays
+  the compile error quoted above under BEFORE THE FIX.
+
+AFTER, real:
+  (src-tauri) . ../scripts/test-env.sh; CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 cargo test --tests --no-fail-fast -- --test-threads=3
+    test projects::tests::t613_a_parent_and_a_child_at_its_tip_deleted_side_by_side_keep_their_unpushed_commits ... ok
+    test projects::tests::t613_commits_found_nowhere_else_are_named_and_keep_the_branch_unless_the_form_says_delete_it ... ok
+  lib: test result: FAILED. 2466 passed; 39 failed; 3 ignored; 0 measured; 0 filtered out; finished in 241.51s
+  46 FAILED names in all: the 45 known Linux-only baseline failures plus
+  activity::tests::proj051_stamps_last_across_restarts_and_one_folder_has_one_key (known flaky on Linux; not in this
+  lane's files; run alone 3 times: FAILED, ok, ok). No new failure.
+  The STILL OPEN line about the integrator's cargo test is now done.

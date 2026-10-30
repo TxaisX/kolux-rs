@@ -48,3 +48,22 @@ STILL OPEN
 - Proof on a case-insensitive disk: the Windows CI job (or a live Windows run: Explorer, rename notes.md to README.md
   next to readme.md -> "README.md already exists here", readme.md unchanged; rename notes.md to NOTES.md -> works).
 - ReFS / Dev Drive and FAT/exFAT are covered by the code paths above but not run anywhere yet.
+
+CENTRAL RUN (integrator, 2026-10-30, lane/workspaces merged with origin/main, Linux, git 2.43.0)
+BEFORE, real (throwaway worktree at 025eda2 with only the two tests that compile there copied in;
+t616_the_identity_check_tells_one_entry_from_another calls same_entry, which the old code lacks, so its "before" stays
+the compile error quoted above):
+    test fsops::tests::t616_renaming_onto_another_files_name_in_other_capitals_is_refused ... ok
+    test fsops::tests::t616_a_case_only_rename_of_one_file_or_folder_still_works ... ok
+  Both pass on the old code here as expected: this Linux disk keeps letter case apart, so the clash never happens.
+  The clash test can only go red on a case-insensitive disk (Windows CI or macOS); still open, see above.
+
+AFTER, real:
+  (src-tauri) . ../scripts/test-env.sh; CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 cargo test --tests --no-fail-fast -- --test-threads=3
+    test fsops::tests::t616_a_case_only_rename_of_one_file_or_folder_still_works ... ok
+    test fsops::tests::t616_renaming_onto_another_files_name_in_other_capitals_is_refused ... ok
+    test fsops::tests::t616_the_identity_check_tells_one_entry_from_another ... ok
+  lib: test result: FAILED. 2466 passed; 39 failed; 3 ignored; 0 measured; 0 filtered out; finished in 241.51s
+  46 FAILED names in all: the 45 known Linux-only baseline failures plus
+  activity::tests::proj051_stamps_last_across_restarts_and_one_folder_has_one_key (known flaky on Linux; not in this
+  lane's files; run alone 3 times: FAILED, ok, ok). No new failure.

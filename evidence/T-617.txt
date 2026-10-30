@@ -39,3 +39,19 @@ STILL OPEN
 - The Rust test's red-then-green run is the integrator's (central cargo test).
 - Live Windows run with Developer Mode on (or core.symlinks=true): open CLAUDE.md that links to AGENTS.md in the editor,
   save; `git status` must show AGENTS.md modified and no typechange on CLAUDE.md.
+
+CENTRAL RUN (integrator, 2026-10-30, lane/workspaces merged with origin/main, Linux, git 2.43.0)
+BEFORE, real (throwaway worktree at 025eda2 with only this test copied in; cargo test --lib -- t617_):
+    test files::tests::t617_saving_through_a_link_writes_the_real_file_and_keeps_the_link ... FAILED
+    thread 'files::tests::t617_saving_through_a_link_writes_the_real_file_and_keeps_the_link' panicked at src/files.rs:1139:13:
+    /tmp/krs-files-t617-24142/CLAUDE.md is still a link
+  (the old save replaced the link with a plain file, as the python3 run above predicted)
+
+AFTER, real:
+  (src-tauri) . ../scripts/test-env.sh; CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 cargo test --tests --no-fail-fast -- --test-threads=3
+    test files::tests::t617_saving_through_a_link_writes_the_real_file_and_keeps_the_link ... ok
+  lib: test result: FAILED. 2466 passed; 39 failed; 3 ignored; 0 measured; 0 filtered out; finished in 241.51s
+  46 FAILED names in all: the 45 known Linux-only baseline failures plus
+  activity::tests::proj051_stamps_last_across_restarts_and_one_folder_has_one_key (known flaky on Linux; not in this
+  lane's files; run alone 3 times: FAILED, ok, ok). No new failure.
+  The STILL OPEN line about the integrator's cargo test is now done; the live Windows check remains.

@@ -2611,6 +2611,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}
+            onRemovedAll={removedAll}
             onSleep={removedAll}
             nest={settings[NESTING_KEY] !== false}
             onNest={(on) => saveSetting(NESTING_KEY, on)}
