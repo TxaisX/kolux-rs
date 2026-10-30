@@ -561,50 +561,58 @@ mod tests {
         }
     }
 
-    /// T-604 (R03-safety-accounts.2): a 1 MB command is answered, and its attempt kept, within the
-    /// hook's 1.5 s. Each filler once made reading or masking a command quadratic; it comes first so
-    /// masking meets it, and the protected action comes last, tripping the last of ten starts-with
-    /// rules of the user's own, so all seven built-ins and all ten rules read the whole command.
-    /// The bar is the optimized build's promise; a debug build only has to finish.
+    /// T-604 (R03-safety-accounts.2): a 1 MB command is asked about at once, unread (anything over
+    /// 256 KB is), and its attempt is kept, masked and cut, well inside the hook's 1.5 s. A command
+    /// just under the cap is read in full: 250 KB of backslash tricks, line joins, ANSI-C quotes and
+    /// fillers that once made reading quadratic, the protected action last, tripping the last of
+    /// ten starts-with rules of the user's own, so every reading and every rule reads all of it.
+    /// The bar for the full read is the optimized build's promise; a debug build only has to finish.
     #[test]
     fn t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time() {
-        let n = 1 << 20;
-        let fillers = [
-            ("flags_p", "-p ".repeat(n / 3)),
-            ("flags_u", "-u ".repeat(n / 3)),
-            ("mysql_p", format!("mysql {}", "-p ".repeat(n / 3))),
-            ("curl_u", format!("curl {}", "-u a ".repeat(n / 5))),
-            ("pipes", "| ".repeat(n / 2)),
-            ("heredoc_table", format!("cat > docs/TABLE.md <<'EOF'\n{}EOF", "| a | b | c |\n".repeat(n / 14))),
-            ("heredoc_script", format!("bash <<'EOF'\n{}EOF", "mkdir -p a/b && cp -p x y\n".repeat(n / 26))),
-            ("assignments", "A=1 ".repeat(n / 4)),
-            ("wrappers", "sudo ".repeat(n / 5)),
-            ("comments", "# it's\n".repeat(n / 7)),
-            ("quotes", "\"'".repeat(n / 2)),
-            ("substitutions", "echo $(true) ".repeat(n / 13)),
-        ];
         let mut rules: Vec<Value> = ["terraform destroy", "helm uninstall", "aws s3 rm", "gcloud projects delete", "az group delete", "docker system prune", "npm unpublish", "flyctl apps destroy", "heroku apps:destroy"]
             .iter()
             .map(|p| json!({ "id": p, "kind": "starts-with", "pattern": p }))
             .collect();
         rules.push(json!({ "id": "pods", "name": "Pod deletes", "kind": "starts-with", "pattern": "kubectl delete" }));
         let settings = json!({ RULES_FIELD: rules });
-        let bar_ms = 750.0;
-        let mut slow = Vec::new();
-        for (label, filler) in fillers {
+        let ask = |label: &str, command: String| {
             let ev = json!({ "hook_event_name": "PreToolUse", "session_id": "t604-time", "tool_use_id": label, "cwd": "/home/me/t604", "tool_name": "Bash",
-                "tool_input": { "command": format!("{filler}\nkubectl delete pod web-1") } }).to_string();
+                "tool_input": { "command": command } }).to_string();
             let t0 = std::time::Instant::now();
             let answer = listen("/claude", ev.as_bytes(), &settings);
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             println!("TIME hook {label} bytes={} ms={ms:.0}", ev.len());
-            assert!(answer.is_some_and(|a| a.contains("Pod deletes")), "{label} must ask");
+            (answer.unwrap_or_default(), ms)
+        };
+        let n = 1 << 20;
+        let (answer, ms) = ask("one_mb", format!("{}\nkubectl delete pod web-1", "-p ".repeat(n / 3)));
+        assert!(answer.contains("Commands over 256 KB, too long to read in time"), "{answer}");
+        assert!(ms < 750.0, "a 1 MB command was asked about in {ms:.0} ms");
+        let m = 250 * 1024;
+        let fill = |unit: &str| unit.repeat(m / unit.len());
+        let fillers = [
+            ("escaped_words", fill("g\\it \\-\\-forc\\e ")),
+            ("escaped_paths", fill("rm -rf /tmp/a:/\\.\\./\\.\\. ; ")),
+            ("line_joins", fill("git reset --ha\\\nrd ; ")),
+            ("ansi_c", fill("echo $'\\'' ; ")),
+            ("ifs", fill("git${IFS}status ; ")),
+            ("mixed_quotes", fill("\"'\\'\\\"")),
+            ("heredoc_table", format!("cat > docs/TABLE.md <<'EOF'\n{}EOF", fill("| a \\| b | c |\n"))),
+            ("substitutions", fill("echo $(g\\it status) ")),
+        ];
+        let bar_ms = 750.0;
+        let mut slow = Vec::new();
+        for (label, filler) in fillers {
+            let command = format!("{filler}\nkubectl delete pod web-1");
+            assert!(command.len() <= 256 * 1024, "{label} is {} bytes", command.len());
+            let (answer, ms) = ask(label, command);
+            assert!(answer.contains("protected action"), "{label} must ask: {answer}");
             if ms > bar_ms {
                 slow.push(format!("{label}: {ms:.0} ms"));
             }
         }
         let kept: Vec<Attempt> = protected_attempts().into_iter().filter(|a| a.worktree == "/home/me/t604").collect();
-        assert_eq!(kept.len(), 12);
+        assert_eq!(kept.len(), 9);
         assert!(kept.iter().all(|a| a.command.chars().count() <= COMMAND_SHOWN));
         assert!(cfg!(debug_assertions) || slow.is_empty(), "over {bar_ms} ms: {slow:#?}");
     }

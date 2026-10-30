@@ -403,3 +403,72 @@ Full Linux cargo test --tests, lib: test result: FAILED. 2503 passed; 37 failed;
 windows-gnu cargo check and clippy -D warnings: Finished. Optimized 1 MB timing (probe): slowest
 heredoc_table 423 and 475 ms in two runs (689 ms when the Bash reading was built for every command; a 1 MB
 command full of backslashes still pays that).
+
+ROUND 3 REVIEW OF PR #15 at 1496f23e (2026-10-30, integrator)
+1. Windows base, both readings of each path: the paired chain now takes every word from the Bash
+   reading, except a path that lost its meaning there (lost(): it became drive-relative, `C:Usersme..`,
+   or has no separator left, `buildout`, and was written with backslashes only). The Shell reading is
+   still judged on its own, so a delete runs only when both readings of each path are safe.
+   `rm -rf x/\.\./\.\./\.\.` and `rm -rf C:/Users/me/app/build/\.\.` now ask; `rd /s /q C:\..\Temp\other`,
+   `rm -rf C:\Users\me\app\build`, `.\build\out`, `build\out` and `dist\*.o` still run.
+2. NOTE: a command over 256 KB (LONG_COMMAND = 262,144 bytes) is asked about outright, unread, by its own
+   rule "Commands over 256 KB, too long to read in time" (TOO_LONG: not one of the seven, not listed on the
+   Safety page, not switchable on its own; the master switch still turns all asking off). This keeps the
+   answer well inside the hook's 1.5 s deadline on slow machines. The 1 MB timing test now proves that fast
+   ask (17 ms in a debug build) and reads eight 250 KB commands in full, backslash-heavy ones included
+   (escaped words and paths, line joins, ANSI-C quotes, $IFS, mixed quotes, a heredoc table, substitutions).
+
+BEFORE (1496f23e with only the new tests):
+===== before the fix: t604r7
+test protected::tests::t604r7_on_a_windows_base_both_readings_of_a_path_are_judged ... 
+thread 'protected::tests::t604r7_on_a_windows_base_both_readings_of_a_path_are_judged' (30063) panicked at src/protected.rs:2794:9:
+[
+    "should ask on Windows (delete): \"rm -rf x/\\\\.\\\\./\\\\.\\\\./\\\\.\\\\.\", got None",
+    "should ask on Windows (delete): \"rm -rf C:/Users/me/app/build/\\\\.\\\\.\", got None",
+    "should ask on Windows (delete): \"rm -rf C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Temp\\\\x/\\\\.\\\\./\\\\.\\\\./\\\\.\\\\./Documents\", got None",
+]
+FAILED
+    protected::tests::t604r7_on_a_windows_base_both_readings_of_a_path_are_judged
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2544 filtered out; finished in 0.38s
+===== before the fix: t604r8
+test protected::tests::t604r8_a_command_over_256_kb_is_asked_about_unread ... 
+thread 'protected::tests::t604r8_a_command_over_256_kb_is_asked_about_unread' (30067) panicked at src/protected.rs:2806:9:
+assertion `left == right` failed: after 78 ms
+  left: None
+ right: Some("Commands over 256 KB, too long to read in time")
+FAILED
+    protected::tests::t604r8_a_command_over_256_kb_is_asked_about_unread
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2544 filtered out; finished in 0.34s
+===== before the fix: t604_a_1_mb
+test protected_custom::tests::t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time ... TIME hook one_mb bytes=1048750 ms=661
+thread 'protected_custom::tests::t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time' (30071) panicked at src/protected_custom.rs:589:9:
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Kolux protected action: Pod deletes. The command waits for you; allow it once to run it, or refuse to leave it unrun."}}
+FAILED
+    protected_custom::tests::t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2544 filtered out; finished in 0.90s
+
+AFTER:
+===== after the fix: t604r7
+test protected::tests::t604r7_on_a_windows_base_both_readings_of_a_path_are_judged ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2544 filtered out; finished in 0.00s
+===== after the fix: t604r8
+test protected::tests::t604r8_a_command_over_256_kb_is_asked_about_unread ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2544 filtered out; finished in 0.10s
+===== after the fix: t604_a_1_mb
+test protected_custom::tests::t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time ... TIME hook one_mb bytes=1048750 ms=17
+TIME hook escaped_words bytes=320182 ms=139
+TIME hook escaped_paths bytes=294093 ms=532
+TIME hook line_joins bytes=280549 ms=505
+TIME hook ansi_c bytes=275863 ms=1118
+TIME hook ifs bytes=256168 ms=1092
+TIME hook mixed_quotes bytes=426841 ms=118
+TIME hook heredoc_table bytes=290336 ms=1882
+TIME hook substitutions bytes=268982 ms=719
+ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2544 filtered out; finished in 6.38s
+===== cargo test --lib -- protected sendonce automations --test-threads=3
+test result: ok. 144 passed; 0 failed; 1 ignored; 0 measured; 2400 filtered out; finished in 138.85s
+Optimized timing of the 250 KB commands (probe, opt-level 3, two runs): slowest heredoc_table 176 and 155 ms,
+then substitutions 74/63, ansi_c 73/60, ifs 59/51 ms. The debug TIME lines above only have to finish.
+Full Linux cargo test --tests, lib: test result: FAILED. 2505 passed; 37 failed; 3 ignored; 0 measured; 0 filtered out; finished in 226.28s; every failure is on the 45-name baseline, none new.
+windows-gnu cargo check and clippy -D warnings: Finished.

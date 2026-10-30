@@ -15,7 +15,9 @@
 //! T-604: a command is read more than one way (`Reading`): as written, as a shell reads it
 //! (comments, heredoc and here-string bodies, escaped quotes, continued lines), and with quotes
 //! ignored when a quote never closed; a rule asks when any reading trips it, so a stray quote
-//! cannot hide the rest of a command.
+//! cannot hide the rest of a command. Every word is read with its backslashes kept and with them
+//! dropped as bash does. A command over 256 KB (`LONG_COMMAND`) is asked about outright, unread,
+//! so the answer stays well inside the hook's 1.5 s on a slow machine.
 //!
 //! ponytail: the workspace is Claude's own hook `cwd` (a Kolux pane starts Claude in the worktree
 //! folder); a pane variable naming the worktree would tell a cd before launch apart from it.
@@ -45,6 +47,20 @@ pub static RULES: [Rule; 7] = [
     Rule { id: "discard", name: "Throwing away uncommitted work", samples: ["git reset --hard", "git clean -fdx"], hit: discard },
 ];
 
+/// T-604 (round 3 review of PR #15): a command longer than this many bytes is asked about outright,
+/// unread (`TOO_LONG`), so the answer stays well inside the hook's 1.5 s even on a slow machine; an
+/// agent's real commands are far shorter, and one this long is worth a look anyway.
+pub const LONG_COMMAND: usize = 256 * 1024;
+
+/// What a command over `LONG_COMMAND` trips. It is not one of `RULES`: it cannot be switched off
+/// on its own (the master switch still stops it) and the Safety page does not list it.
+pub static TOO_LONG: Rule = Rule {
+    id: "too-long",
+    name: "Commands over 256 KB, too long to read in time",
+    samples: ["", ""],
+    hit: |_, _| true,
+};
+
 /// The first rule `command` trips, honouring the master switch and the switched-off list.
 pub fn check(command: &str, base: &Base, settings: &Value) -> Option<&'static Rule> {
     check_with(command, &OnceCell::new(), base, settings)
@@ -55,6 +71,9 @@ pub fn check(command: &str, base: &Base, settings: &Value) -> Option<&'static Ru
 pub(crate) fn check_with<'a>(command: &'a str, read: &OnceCell<Read<'a>>, base: &Base, settings: &Value) -> Option<&'static Rule> {
     if settings.get(ASK_FIELD) == Some(&Value::Bool(false)) {
         return None;
+    }
+    if command.len() > LONG_COMMAND {
+        return Some(&TOO_LONG);
     }
     let off: Vec<&str> = settings.get(OFF_FIELD).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
     RULES.iter().find(|r| !off.contains(&r.id) && (r.hit)(read.get_or_init(|| Read::new(command)), base))
@@ -97,10 +116,11 @@ impl Base {
 // Each reading's chain is walked in order so an earlier cd, pushd or Set-Location shifts the base.
 fn recursive_delete(c: &Read, base: &Base) -> bool {
     // On a Windows base a backslash is a folder separator, so the `Bash` reading's paths are not
-    // judged as written (`C:\Users` would read `C:Users`): it is paired word for word with `Shell`,
-    // taking the program, wrappers and options from `Bash` (so `r\m -\rf` is `rm -rf`) and every
-    // other word from `Shell`. Anywhere else both readings are judged in full, so a delete runs only
-    // when each reading of it is safe. Unpaired chains are judged in full too.
+    // all judged as written (`C:\Users` would read `C:Users`): it is paired word for word with
+    // `Shell`, every word taken from `Bash` (so `r\m -\rf` is `rm -rf` and `x/\.\.` is `x/..`)
+    // except a path that lost its meaning there (`lost`), taken from `Shell`. `Shell` is judged on
+    // its own as well, so a delete runs only when both readings of each path are safe. Anywhere else
+    // both readings are judged in full; unpaired chains are judged in full too.
     let windows = base.windows();
     let paired = windows.then(|| pair(&c.chains[1], &c.chains[2])).flatten();
     c.chains.iter().enumerate().any(|(i, chain)| {
@@ -109,6 +129,14 @@ fn recursive_delete(c: &Read, base: &Base) -> bool {
         }
         deletes_outside(chain.iter().map(Seg::program_words), base)
     }) || paired.is_some_and(|chain| deletes_outside(chain.iter().map(Seg::program_words), base))
+}
+
+/// Whether a path lost its meaning in the `Bash` reading, so on a Windows base only its `Shell`
+/// form is judged: it became drive-relative (`C:\Users\me` read as `C:Usersme`) or has no folder
+/// separator left (`build\out` read as `buildout`), and it was written with backslashes only (a word
+/// that also has a `/`, as `x/\.\.`, is judged as bash reads it).
+fn lost(shell: &str, bash: &str) -> bool {
+    !shell.contains('/') && (drive_relative(bash) || !bash.contains(['/', '\\']))
 }
 
 /// The `Shell` and `Bash` chains word for word (see `recursive_delete`), or None when they do not
@@ -124,7 +152,7 @@ fn pair(shell: &[Seg], bash: &[Seg]) -> Option<Vec<Seg>> {
             if s.words.len() != b.words.len() || s.at != b.at {
                 return None;
             }
-            let words = s.words.iter().zip(&b.words).enumerate().map(|(k, (sw, bw))| if sw == bw || k <= s.at || bw.starts_with('-') { bw.clone() } else { sw.clone() }).collect();
+            let words = s.words.iter().zip(&b.words).enumerate().map(|(k, (sw, bw))| if sw == bw || k <= s.at || bw.starts_with('-') || !lost(sw, bw) { bw.clone() } else { sw.clone() }).collect();
             Some(Seg { words, at: s.at })
         })
         .collect()
@@ -2766,6 +2794,47 @@ mod tests {
             }
         }
         assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 round 3 review of PR #15: on a Windows base the path of each word is judged in both
+    /// readings, so Git Bash's `\.\.` (`..`) is not read as `/./.`; the `Shell` path stands alone only
+    /// where the `Bash` word lost its meaning (drive-relative, or no separator left).
+    #[test]
+    fn t604r7_on_a_windows_base_both_readings_of_a_path_are_judged() {
+        let win = Base {
+            workspace: Some("C:\\Users\\me\\app".into()),
+            cwd: Some("C:\\Users\\me\\app".into()),
+            home: Some("C:\\Users\\me".into()),
+            temp: vec!["C:\\Users\\me\\AppData\\Local\\Temp".into()],
+        };
+        let w = |c: &str| check(c, &win, &json!({})).map(|r| r.id);
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["rm -rf x/\\.\\./\\.\\./\\.\\.", "rm -rf C:/Users/me/app/build/\\.\\.", "rm -rf C:\\Users\\me\\AppData\\Local\\Temp\\x/\\.\\./\\.\\./\\.\\./Documents"] {
+            if w(c) != Some("delete") {
+                missed.push(format!("should ask on Windows (delete): {c:?}, got {:?}", w(c)));
+            }
+        }
+        for c in ["rd /s /q C:\\Users\\me\\AppData\\Local\\Temp\\other", "rm -rf C:\\Users\\me\\app\\build", "Remove-Item -Recurse -Force .\\build\\out", "rm -rf build\\out", "del /s /q dist\\*.o"] {
+            if w(c).is_some() {
+                missed.push(format!("should run on Windows: {c:?}, got {:?}", w(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604 round 3 review of PR #15: a command over 256 KB is asked about outright, unread, so
+    /// the answer stays well inside the hook's 1.5 s on a slow machine; one just under is read as
+    /// usual, and the master switch still turns asking off.
+    #[test]
+    fn t604r8_a_command_over_256_kb_is_asked_about_unread() {
+        let long = format!("echo {}", "a".repeat(256 * 1024));
+        let t0 = std::time::Instant::now();
+        let asked = check(&long, &base(), &json!({})).map(|r| r.name);
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(asked, Some("Commands over 256 KB, too long to read in time"), "after {ms:.0} ms");
+        assert!(ms < 50.0, "asked in {ms:.0} ms");
+        assert_eq!(check(&format!("echo {}", "a".repeat(256 * 1024 - 5)), &base(), &json!({})).map(|r| r.id), None);
+        assert_eq!(check(&long, &base(), &json!({ ASK_FIELD: false })).map(|r| r.id), None);
     }
 
     /// T-604: every rule's own examples still ask behind one to three harmless lines of the kinds
