@@ -632,13 +632,17 @@ enum After {
     Usage(Usage),
 }
 
+/// T-583: keeps the status machine's order and the window's order identical across connection threads (see handle).
+static ORDER: Mutex<()> = Mutex::new(());
+
 /// T-583: what each hook connection is given besides its stream. Only `settings` is read before the reply, and it never
 /// waits on the store; `raise` and `after` only hand things on.
 struct Line {
     token: String,
     /// The settings the protected-command answer reads (SAFE-009).
     settings: Box<dyn Fn() -> Arc<Value> + Send + Sync>,
-    /// The window hears a status before its reply goes, so a pane's events reach it in the order they were answered.
+    /// The window hears a status before its reply goes, under ORDER, so a pane's events reach it in the order the
+    /// status machine stepped them.
     raise: Box<dyn Fn(&crate::status::Status) + Send + Sync>,
     /// The work after the reply, handed over before the reply goes, so it keeps the order the hooks were answered in.
     after: Box<dyn Fn(After) + Send + Sync>,
@@ -704,6 +708,10 @@ fn handle(stream: &TcpStream, accepted: Instant, line: &Line) {
             Err(code) => code,
         },
         Some(req) => {
+            // T-583: one thread per connection, so a pane's step in the status machine, its emit and its after-work
+            // are taken under one lock: the window and saved::note hear the steps in the machine's order. All of
+            // it is quick and never waits on the store; the request is read and the reply written outside it.
+            let _order = ORDER.lock().unwrap_or_else(PoisonError::into_inner);
             let (code, status) = answer(&req, &line.token);
             if code == 200 {
                 // SAFE-009: the settings as last read, fresh whenever the store is free.

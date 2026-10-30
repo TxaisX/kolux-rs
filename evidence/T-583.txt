@@ -94,3 +94,17 @@ LIMITS AND WHAT IS LEFT
   standing in for them, not by driving them.
 - Live proof on Windows: an "agent finished" automation with a precheck such as `Start-Sleep 120`; while it runs, other
   panes' status keeps moving and a protected command in another Claude pane still asks.
+
+REVIEW ROUND 1 (2026-10-30)
+Required change: with one thread per connection, the status-machine step (answer) and the emit/after-queue were not
+atomic, so two concurrent hooks of one pane (Claude's parallel tool calls) could reach the window in the opposite
+order to the machine (pane reads working while Claude waits for permission; saved::note keeps the older row).
+Fix: src-tauri/src/hooks.rs:636 static ORDER: Mutex<()>; handle() (hooks.rs:714) takes it just before answer() and holds it
+through reply_body, (line.raise) and (line.after); the request read and the reply write stay outside it. Everything
+under it is quick and never touches the Store (answer: the session lock; reply_body: the settings snapshot; raise: an
+emit; after: a channel send), so the T-583 freeze cannot come back through it. Line.raise doc corrected.
+Test: none added. The race needs two threads interleaving between answer() and the emit, which a test cannot force
+without a hook point inside handle(); a test that holds ORDER itself would stall the other t583 tests running in
+parallel. The t583_ tests still prove each reply within 1.5 s (none of them holds ORDER).
+After: cargo check --all-targets: Finished in 3m 12s (no warning in this lane's files); cargo check --target
+x86_64-pc-windows-gnu --all-targets: Finished in 1m 59s.
