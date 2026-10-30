@@ -39,10 +39,12 @@ vi.mock("react", async (orig) => {
 });
 
 const calls: string[] = [];
+const closes: string[] = []; // T-612: each stored close's outcome
 const store = { closeOk: true, reopenOk: true };
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string) => {
+  invoke: (cmd: string, args?: { outcome?: string }) => {
     calls.push(cmd);
+    if (cmd === "onboarding_close" && store.closeOk) closes.push(args?.outcome ?? "");
     if (cmd === "onboarding_get") return Promise.resolve({ step: 2 });
     if (cmd === "onboarding_close") return store.closeOk ? Promise.resolve() : Promise.reject(new Error("disk full"));
     if (cmd === "onboarding_reopen") return store.reopenOk ? Promise.resolve() : Promise.reject(new Error("locked"));
@@ -60,6 +62,7 @@ beforeEach(() => {
   h.slots = [];
   h.effects = [];
   calls.length = 0;
+  closes.length = 0;
   heard.length = 0;
   toasts.length = 0;
   started.length = 0;
@@ -68,7 +71,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function mountWizard(settings: Record<string, unknown> = {}) {
+async function mountWizard(settings: Record<string, unknown> = {}, activeDir: string | null = null) {
   const { useWizard } = await import("./useWizard");
   const { CHECKLIST_CHANGED } = await import("./firstRun");
   const { PROJECT_ADDED } = await import("./sidebar");
@@ -83,7 +86,7 @@ async function mountWizard(settings: Record<string, unknown> = {}) {
     setToast: (t: string) => void toasts.push(t),
     agents,
     settings,
-    activeDir: null,
+    activeDir,
     kitAIs: [],
     startIn: async (a: { id: string }, dir: string) => (started.push(`${a.id}@${dir}`), 1),
     startKit: async () => true,
@@ -181,4 +184,31 @@ test("a plain terminal as the saved default starts nothing in the first folder (
   app.now().projectAdded("C:/q", null);
   expect(heard).toEqual(["project"]);
   expect(started).toEqual([]);
+});
+
+// T-612 (audit F08-onboarding-look-misc.2): since kits went (T-568), "Your work"'s Continue reaches the last screen with no
+// workspace, and Open a session silently did nothing there. Now it leads to picking a folder and opens the session in it.
+test("T-612: Open a session with no workspace yet closes setup as completed, opens Add Project, and starts the session in the folder picked, once", async () => {
+  const { ADD_PROJECT } = await import("./firstRun");
+  win.addEventListener(ADD_PROJECT, () => heard.push("add-project"));
+  const app = await mountWizard(); // a new profile: no saved default agent, no workspace
+  await app.now().wizardSession();
+  await app.settle();
+  expect(closes).toEqual(["completed"]);
+  expect(app.now().wizard).toBeNull();
+  expect(heard).toContain("add-project");
+  expect(started).toEqual([]);
+  app.now().projectAdded("C:/new", "main");
+  expect(started).toEqual(["claude@C:/new"]); // the agent Open a session would have used: the first one offered
+  app.now().projectAdded("C:/other", null);
+  expect(started).toEqual(["claude@C:/new"]);
+});
+
+test("T-612: with a workspace in front, Open a session starts the session there and closes setup as completed", async () => {
+  const app = await mountWizard({}, "C:/w");
+  await app.now().wizardSession();
+  await app.settle();
+  expect(started).toEqual(["claude@C:/w"]);
+  expect(closes).toEqual(["completed"]);
+  expect(heard.filter((x) => x === "add-project")).toEqual([]);
 });

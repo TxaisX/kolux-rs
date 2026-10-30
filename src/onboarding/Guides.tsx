@@ -376,9 +376,34 @@ function StartupTip() {
       window.clearTimeout(timer);
     };
   }, []);
-  if (!tip) return null;
   const close = () => (setTip(null), setSetup(false));
+  // T-612: Escape closes the tip from wherever the keyboard is (the card never takes it).
+  useEffect(() => {
+    if (!tip) return;
+    return tipEscape(window as unknown as Parameters<typeof tipEscape>[0], () => document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"]') !== null, close);
+  }, [tip]);
+  if (!tip) return null;
   return <TipDocked tip={tip} cli={cli} setup={setup} onSetup={() => setSetup(true)} onClose={close} />;
+}
+
+type TipKey = { key: string; isComposing: boolean; preventDefault(): void; stopPropagation(): void };
+
+/** T-612 (PLAN.md T-566, Tip part): Escape closes the tip wherever the keyboard is, since the card leaves the keyboard
+ *  in the restored pane; a modal dialog's Escape stays its own. Listens in the capture phase, ahead of a focused
+ *  terminal (as the wizard does, ONB-006). Returns the cleanup. */
+export function tipEscape(
+  win: { addEventListener(t: "keydown", f: (e: TipKey) => void, capture: boolean): void; removeEventListener(t: "keydown", f: (e: TipKey) => void, capture: boolean): void },
+  modalOpen: () => boolean,
+  close: () => void,
+): () => void {
+  const key = (e: TipKey) => {
+    if (e.key !== "Escape" || e.isComposing || modalOpen()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    close();
+  };
+  win.addEventListener("keydown", key, true);
+  return () => win.removeEventListener("keydown", key, true);
 }
 
 function TipDocked(props: Omit<Parameters<typeof TipView>[0], "dock">) {
@@ -418,7 +443,7 @@ function useTipDock(): CSSProperties {
 export function TipView({ tip, cli, setup, onSetup, onClose: close, dock = { right: 16, bottom: 40 } }: { tip: TipId; cli: CliStatus | null; setup: boolean; onSetup: () => void; onClose: () => void; dock?: CSSProperties }) {
   return (
     <div className="tip-dock" style={dock} data-docked={dock.left !== undefined ? "" : undefined}>
-      <div className="tip-card" role="dialog" aria-modal="false" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
+      <div className="tip-card" role="dialog" aria-modal="false" aria-label="Tip">
         <span className="tip-badge">Tip</span>
         {tip !== "cli" && tip !== "palette" ? (
           <>
