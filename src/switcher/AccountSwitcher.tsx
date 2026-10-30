@@ -78,9 +78,10 @@ export function AccountSwitcherView({ groups, open, error = null, onOpen, onClos
       </button>
       {open && (
         <>
-          <div className="menu-backdrop" onClick={onClose} aria-hidden="true" />
+          {/* T-620: the menu is drawn inside the top bar's drag region; "false" keeps clicks on it from moving the window. */}
+          <div className="menu-backdrop" onClick={onClose} aria-hidden="true" data-tauri-drag-region="false" />
           <EscapeWatch onClose={onClose} />
-          <div className="menu acct-menu" role="menu" aria-label="Accounts for new panes" style={open}>
+          <div className="menu acct-menu" role="menu" aria-label="Accounts for new panes" style={open} data-tauri-drag-region="false">
             {groups.map((g) => (
               <div key={g.provider} role="group" aria-label={`${g.name} accounts`}>
                 <div className="menu-title">{g.name}</div>
