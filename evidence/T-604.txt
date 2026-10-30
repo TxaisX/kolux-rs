@@ -1,0 +1,161 @@
+T-604 · Protected rules fail closed (R03-safety-accounts.1, .2, .3; SAFE-014, SAFE-016)
+Safety lane, 2026-10-30, branch lane/safety (base 025eda2).
+
+WHAT THE USER GETS
+- A stray quote can no longer switch the protected rules off. An apostrophe in a "#" comment, in a
+  heredoc or PowerShell here-string body, a backslash- or backtick-escaped quote, the '\'' idiom, or a
+  line continued with "\" or "`" no longer hides a force-push, a hard reset or a folder delete that
+  follows it: Kolux pauses it as it would the bare command.
+- The user's own "starts with" rules now see a command the way the built-in rules do: through
+  NAME=value, sudo and other wrappers, npx / bunx / pnpm exec / pnpm dlx / npm exec / yarn dlx,
+  folders and .exe/.cmd, PowerShell's "& prog", a lone "&", bash -c "..." and (cd d && ...).
+  "npm publish" still matches npm publish as written.
+- A paused 1 MB command is answered within the hook's time (it never finished before), so a long
+  command can no longer outlast the hook's 1.5 s and run without the ask.
+
+WHAT CHANGED (file:line at the commit)
+src-tauri/src/protected.rs
+- 286-339  `Reading` (Plain / Shell / Blind), `Seg`, `Read` and `chains`: a command is read as
+  written (the old SAFE-014 reading, unchanged), as a shell reads it, and, when either of those ended
+  inside a quote that never closed, with quotes ignored. A rule asks when any reading trips it. The
+  readings are worked out once per command for all seven rules (`check`, line 49).
+- 341-370  `collect` takes the reading; 376-495 `shell_text`, `plain`, `copy_body`: the Shell
+  reading drops "#" comments that begin a word outside quotes and PowerShell "<# #>" blocks, joins
+  lines ended by "\" or "`", turns quotes escaped by "\" (outside single quotes) or "`", and every
+  quote of a heredoc or here-string body and its closing mark, into "_". Bodies stay in place and are
+  still read line by line (a heredoc may feed a shell).
+- 497-539  `substitutions`: in the Shell reading a "'" inside double quotes is text (it used to hide
+  a later $( )); in the Blind reading nothing hides a substitution.
+- 541-563  `split`: reports a quote that never closed; the Blind reading splits everywhere.
+- 594-626  `program_at` replaces `unwrap`: counts instead of removing from the front (a 1 MB run of
+  "A=1 " or "sudo " was quadratic) and reports every step for the user's rules.
+- 634-645  `starts_with` (pub(crate)): the user's starts-with rules, every reading, every step.
+- 88-95    `recursive_delete` walks each reading's chain on its own (a cd shifts only its own chain).
+- 929-951  `mask` unchanged in its answers; new `mask_head(text, n)` masks only the first n
+  characters; where that cut falls inside a JSON secret value the value is hidden to the end
+  (`json_values(t, cut)`, 2132).
+- 1587-1597 `secret_flags`: reads the words before a flag at most once per flag, and only when a
+  program that flag belongs to (curl, sshpass, mysql/mariadb/7z/rar) is named in the text at all.
+  Proven exact: the two recorded-digest tests over generated inputs still match (see below).
+- 2370-2374 test fix: the Windows-only letter-case assertion in
+  safe013_recursive_deletes_outside_unknown_or_piped_ask_inside_and_temp_run now runs on Windows only,
+  as the neighbouring test already did ("Letter case is ignored on Windows only."). It failed on Linux
+  at the base commit (55 pass, 1 fail before this lane; 61 pass now).
+src-tauri/src/protected_custom.rs
+- 24       MASK_MARGIN = 2048: masking reads the 2,000 shown characters and 2,048 after them.
+- 59       a starts-with rule calls protected::starts_with; the old local splitter is deleted.
+- 369      `paused` masks with mask_head(raw, COMMAND_SHOWN + MASK_MARGIN) instead of the whole command.
+
+TESTS ADDED
+protected.rs
+- safe014_comments_heredocs_here_strings_and_escapes_cannot_hide_a_command: the audit's eight
+  commands verbatim, five more with the stray quotes paired up (no reading ends in an open quote),
+  two continued lines; and five lookalikes that must still run.
+- safe014_known_asking_commands_still_ask_behind_comment_heredoc_and_escape_prefixes (property
+  style): 3,000 commands made by a fixed-seed xorshift: one to three of twelve hostile prefixes
+  (comments, block comment, heredoc, <<- heredoc, both here-strings, escapes, an unclosed quote),
+  joined by newline, ";", "&&" or "||", then one of the 14 rule examples; each must ask with its rule.
+protected_custom.rs
+- t604_a_starts_with_rule_sees_through_wrappers_runners_paths_and_inner_shells
+- t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time: twelve 1 MB commands
+  (runs of -p, -u, mysql -p, curl -u, pipes, a heredoc table, a heredoc mkdir/cp script,
+  assignments, sudo, "# it's" comments, quotes, $( ) substitutions), each ending in a force-push,
+  through the real hook answer (listen); each must ask and keep its attempt; release bar 750 ms each.
+- t604_a_secret_cut_off_where_masking_stops_reading_stays_hidden: a 6,000-character JSON
+  credential starting in the shown part is still hidden when masking reads only the head.
+
+HOW THE RUST TESTS WERE RUN HERE (cargo test is the integrator's)
+A scratch probe compiles this lane's real protected.rs and protected_custom.rs, their own test
+modules included, with plain rustc against the prebuilt serde/serde_json/base64/regex rlibs; the only
+edits are stripping "#[tauri::command]" lines and two one-line stand-ins (hooks::reply_body ->
+protected_custom::listen, automations::now_ms -> 0). Script:
+/tmp/claude-0/-home-user-kolux-rs/0d1dcaa5-c3c2-58da-a983-3d3196003914/scratchpad/lanes/safety-probe/probe.sh
+
+BEFORE THE FIX (same tests, code at 025eda2)
+$ probe-g safe014_comments safe014_known t604_a_starts_with t604_a_secret_cut
+test protected::tests::safe014_comments_heredocs_here_strings_and_escapes_cannot_hide_a_command ... FAILED
+test protected_custom::tests::t604_a_secret_cut_off_where_masking_stops_reading_stays_hidden ... ok
+test protected_custom::tests::t604_a_starts_with_rule_sees_through_wrappers_runners_paths_and_inner_shells ... FAILED
+test protected::tests::safe014_known_asking_commands_still_ask_behind_comment_heredoc_and_escape_prefixes ... FAILED
+assertion `left == right` failed: asks: "# Let's publish the fix\ngit push --force origin main"
+  left: None
+ right: Some("force-push")
+2239 of 3000 missed; first: Some("Write-Host \"Say `\"hi`\"\" || Write-Host \"Say `\"hi`\"\"; echo It\\'s done && dropdb production")
+test result: FAILED. 1 passed; 3 failed
+(The cut-secret test passed before because the whole command was masked; it guards the new bounded
+read. With the bounded read but without the JSON cut rule it fails:
+test protected_custom::tests::t604_a_secret_cut_off_where_masking_stops_reading_stays_hidden ... FAILED)
+
+Each command on its own, before -> after (scratch listing, base /home/me/app):
+"# Let's publish the fix\ngit push --force origin main"                     None -> force-push
+"git add -A # don't forget new files\ngit reset --hard origin/main"         None -> discard
+"cat > NOTES.md <<'EOF'\nIt's done\nEOF\ngit push --force origin main"     None -> force-push
+"cat > NOTES.md <<EOF\nIt's done\nEOF\ngit push --force origin main"       None -> force-push
+"$notes = @'\nIt's done\n'@\n...\nRemove-Item -Recurse -Force C:\Users\me\Documents"  None -> delete
+"git commit -m 'Don'\''t crash' && git push --force origin main"           None -> force-push
+"echo It\'s done; rm -rf ~/Documents"                                       None -> delete
+"git commit -m \"Say `\"hi`\"\" ; git push -f origin main"                  None -> force-push
+"# it's late\ngit push --force origin main\n# it's done"                    None -> force-push
+"echo It\'s; rm -rf ~/Documents; echo it\'s"                                None -> delete
+"git push \\\n  --force origin main"                                        None -> force-push
+"git push `\n  --force origin main"                                         None -> force-push
+Starts-with "prisma migrate reset" / "kubectl delete", before -> after:
+npx prisma migrate reset --force false -> true; pnpm exec ... false -> true; pnpm dlx ... false -> true
+sudo kubectl delete ns prod false -> true; KUBECONFIG=prod.yaml kubectl delete ... false -> true
+kubectl.exe delete pod x false -> true; C:\tools\kubectl.exe delete pod x false -> true
+& kubectl delete pod x false -> true; bash -c "kubectl delete pod x" false -> true
+(cd infra && kubectl delete pod x) true -> true; sleep 1 & kubectl delete pod x false -> true
+
+Timing before (optimized probe, scratch measurements of the code at 025eda2):
+mask of "-p " x n: 8 KB 2,560 ms, 16 KB 9,301 ms, 32 KB 37,736 ms (quadratic)
+mask of "-u " x n: 8 KB 1,079 ms, 16 KB 3,992 ms, 32 KB 17,008 ms
+mask of "| " x n: 8 KB 207 ms, 32 KB 2,896 ms; heredoc table 32 KB 1,383 ms
+check of "A=1 " x n: 32 KB 130 ms; "sudo " x n: 32 KB 81 ms (quadratic front removals)
+$ timeout 180 probe-O t604_a_1_mb --nocapture
+Terminated   exit=143 elapsed=180s   (the first 1 MB command never finished)
+
+AFTER THE FIX
+$ probe-g --test-threads=2            (debug, all tests of both files)
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.13s
+ incl. safe014_comments_heredocs_here_strings_and_escapes_cannot_hide_a_command ... ok
+       safe014_known_asking_commands_still_ask_behind_comment_heredoc_and_escape_prefixes ... ok
+       safe014_wrapped_chained_nested_and_encoded_commands_still_ask_and_lookalikes_run ... ok
+       safe013_recursive_deletes_outside_unknown_or_piped_ask_inside_and_temp_run ... ok
+       mask_answers_the_written_down_cases_exactly ... ok
+       mask_answers_generated_inputs_exactly_as_before ... ok   (mask's answers unchanged)
+       t604_a_starts_with_rule_sees_through_wrappers_runners_paths_and_inner_shells ... ok
+       t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time ... ok
+       t604_a_secret_cut_off_where_masking_stops_reading_stays_hidden ... ok
+$ probe-O --test-threads=2            (optimized, all tests)
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.23s
+$ probe-O t604_a_1_mb --nocapture     (1 MB commands through the hook answer, optimized)
+TIME hook flags_p bytes=1048755 ms=91        TIME hook heredoc_script bytes=1089087 ms=91
+TIME hook flags_u bytes=1048755 ms=78        TIME hook assignments bytes=1048760 ms=47
+TIME hook mysql_p bytes=1048761 ms=306       TIME hook wrappers bytes=1048756 ms=50
+TIME hook curl_u bytes=1048759 ms=246        TIME hook comments bytes=1198549 ms=53
+TIME hook pipes bytes=1048754 ms=154         TIME hook quotes bytes=1573043 ms=86
+TIME hook heredoc_table bytes=1123688 ms=189 TIME hook substitutions bytes=1048753 ms=90
+test result: ok. 1 passed   (debug build of the same test: 11 s in all, worst command 1,982 ms)
+$ CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 18s   (exit 0; no warning in
+    protected.rs or protected_custom.rs; the 99 warnings are other files', as before)
+
+LIMITS (ponytail notes in the code)
+- mask() itself is still superlinear on a long run of -p/-u flags when the text names mysql, curl
+  or sshpass, and on long runs of pipes; nothing in the app masks unbounded text any more (the
+  attempt is masked from its first 4,048 characters), so the hook's cost no longer grows with the
+  command. Masking the head can miss a secret only when what decides it lies more than 2,048
+  characters after it (a pipe into sudo -S that far on, an -AsPlainText that far on); a JSON value
+  cut by the head is hidden to the end.
+- The Blind reading can ask for an odd command whose quotes never close and that holds a dangerous
+  command inside its quoted text (fails closed, never the other way).
+- A starts-with rule still means "the program and its first words": kubectl --context prod delete
+  does not match "kubectl delete" (options before the subcommand are not guessed).
+
+WHAT STILL NEEDS A LIVE WINDOWS RUN OR TXAIS
+- Live: Claude in a Kolux pane on Windows runs one of the audit's commands (for example
+  "# Let's publish the fix<newline>git push --force origin main" in a scratch repo) and Kolux shows
+  the "Force-push to main" ask; and a long command (a 1 MB heredoc then a protected action) still
+  gets the ask through the real curl -m 1.5 hook.
+- SAFE-014's acceptance boxes were already ticked and still pass; SAFE-016's boxes are UI checks
+  (adding rules on the Safety page) and are not claimed here.

@@ -12,6 +12,11 @@
 //! sh -c, cmd /c, PowerShell (-Command or encoded), eval, iex and wsl are given to run is read
 //! too; the recursive-delete rule judges paths as text against the workspace and the temp roots.
 //!
+//! T-604: a command is read more than one way (`Reading`): as written, as a shell reads it
+//! (comments, heredoc and here-string bodies, escaped quotes, continued lines), and with quotes
+//! ignored when a quote never closed; a rule asks when any reading trips it, so a stray quote
+//! cannot hide the rest of a command.
+//!
 //! ponytail: the workspace is Claude's own hook `cwd` (a Kolux pane starts Claude in the worktree
 //! folder); a pane variable naming the worktree would tell a cd before launch apart from it.
 
@@ -27,7 +32,7 @@ pub struct Rule {
     pub name: &'static str,
     /// SAFE-015: two commands the rule asks about, shown as its examples on the Safety page.
     pub samples: [&'static str; 2],
-    hit: fn(&str, &Base) -> bool,
+    hit: fn(&Read, &Base) -> bool,
 }
 
 pub static RULES: [Rule; 7] = [
@@ -46,7 +51,8 @@ pub fn check(command: &str, base: &Base, settings: &Value) -> Option<&'static Ru
         return None;
     }
     let off: Vec<&str> = settings.get(OFF_FIELD).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-    RULES.iter().find(|r| !off.contains(&r.id) && (r.hit)(command, base))
+    let read = OnceCell::new();
+    RULES.iter().find(|r| !off.contains(&r.id) && (r.hit)(read.get_or_init(|| Read::new(command)), base))
 }
 
 /// What Claude's prompt says (SAFE-009): the rule's name, cut to 120 characters, and what allowing
@@ -78,11 +84,15 @@ impl Base {
 }
 
 // SAFE-013: a recursive delete that reaches outside the workspace, or whose target is unknown.
-// The chain is walked in order so an earlier cd, pushd or Set-Location shifts the base.
-fn recursive_delete(command: &str, base: &Base) -> bool {
+// Each reading's chain is walked in order so an earlier cd, pushd or Set-Location shifts the base.
+fn recursive_delete(c: &Read, base: &Base) -> bool {
+    c.chains.iter().any(|chain| deletes_outside(chain.iter().map(Seg::program_words), base))
+}
+
+fn deletes_outside<'a>(chain: impl Iterator<Item = &'a [String]>, base: &Base) -> bool {
     let mut dir = base.cwd.clone().or_else(|| base.workspace.clone());
-    for seg in segments(command) {
-        let p = program(&seg);
+    for seg in chain {
+        let p = program(seg);
         let args: Vec<&str> = seg[1..].iter().map(String::as_str).collect();
         match p.as_str() {
             "cd" | "chdir" | "set-location" | "sl" | "pushd" => {
@@ -267,47 +277,234 @@ fn words(s: &str) -> Vec<String> {
     out
 }
 
-/// The commands of a chain in order, each as its words with wrappers dropped so the program
-/// comes first (SAFE-014): split on `;`, `&`, `|`, newlines and grouping outside quotes; `$( )`
-/// and backtick substitutions are pulled out (four levels deep); what a shell is given to run
-/// (sh -c, cmd /c, PowerShell -Command or encoded, eval, iex, wsl) is read in its place.
-fn segments(command: &str) -> Vec<Vec<String>> {
-    let mut out = Vec::new();
-    collect(command, 0, &mut out);
+/// How a command's text is read (T-604, R03-safety-accounts.1). `Plain` reads it as written
+/// (SAFE-014). `Shell` reads it as a shell would (`shell_text`): comments gone, escaped quotes and
+/// the quotes of heredoc and here-string bodies plain text, continued lines joined. `Blind`
+/// ignores quotes; it is read only when one of the other two ended inside a quote that never
+/// closed. A rule asks when any reading trips it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    Plain,
+    Shell,
+    Blind,
+}
+
+/// One command as written, and where its program starts (`program_at`).
+struct Seg {
+    words: Vec<String>,
+    at: usize,
+}
+
+impl Seg {
+    /// The command with its wrappers dropped, so the program comes first.
+    fn program_words(&self) -> &[String] {
+        &self.words[self.at..]
+    }
+}
+
+/// A command as the rules read it: its text and the chain of each reading, worked out once for
+/// all seven rules.
+struct Read<'a> {
+    text: &'a str,
+    chains: Vec<Vec<Seg>>,
+}
+
+impl<'a> Read<'a> {
+    fn new(text: &'a str) -> Self {
+        Read { text, chains: chains(text) }
+    }
+
+    /// Every command of every reading, the program first.
+    fn segments(&self) -> impl Iterator<Item = &[String]> {
+        self.chains.iter().flatten().map(Seg::program_words)
+    }
+}
+
+/// The chains a command is read as, one per reading (`Reading`): each the commands in order
+/// (SAFE-014), split on `;`, `&`, `|`, newlines and grouping outside quotes, with `$( )` and
+/// backtick substitutions pulled out (four levels deep) and what a shell is given to run (sh -c,
+/// cmd /c, PowerShell -Command or encoded, eval, iex, wsl) read in its place.
+fn chains(command: &str) -> Vec<Vec<Seg>> {
+    let read = |r: Reading, open: &mut bool| {
+        let mut chain = Vec::new();
+        collect(command, 0, r, &mut chain, open);
+        chain
+    };
+    let mut open = false;
+    let mut out = vec![read(Reading::Plain, &mut open), read(Reading::Shell, &mut open)];
+    if open {
+        out.push(read(Reading::Blind, &mut open));
+    }
     out
 }
 
-fn collect(text: &str, depth: usize, out: &mut Vec<Vec<String>>) {
+fn collect(text: &str, depth: usize, r: Reading, out: &mut Vec<Seg>, open: &mut bool) {
     if depth > 4 {
         return;
     }
-    let (outer, inners) = substitutions(text);
+    let shell;
+    let text = match r {
+        Reading::Shell => {
+            shell = shell_text(text);
+            shell.as_str()
+        }
+        _ => text,
+    };
+    let (outer, inners) = substitutions(text, r);
     for inner in inners {
-        collect(&inner, depth + 1, out);
+        collect(&inner, depth + 1, r, out, open);
     }
-    for part in split(&outer) {
-        let w = unwrap(words(&part));
-        if w.is_empty() {
+    for part in split(&outer, r, open) {
+        let words = words(&part);
+        let at = program_at(&words, |_| {});
+        if at == words.len() {
             continue;
         }
-        match inner_command(&w) {
-            Some(inner) => collect(&inner, depth + 1, out),
-            None => out.push(w),
+        match inner_command(&words[at..]) {
+            Some(inner) => collect(&inner, depth + 1, r, out, open),
+            None => out.push(Seg { words, at }),
         }
     }
 }
 
+/// T-604: `text` as a shell reads it, for the `Shell` reading. A `#` comment that begins a word
+/// outside quotes and a PowerShell `<# #>` block go; a line ending in a backslash or a backtick
+/// joins the next; a quote escaped with a backslash (not inside single quotes) or a backtick, and
+/// every quote of a heredoc or PowerShell here-string body and of its closing mark, becomes `_`,
+/// so none can open a quote that swallows the rest of the command. Bodies stay where they are and
+/// are still read line by line, since a heredoc may feed a shell.
+fn shell_text(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut quote: Option<u8> = None;
+    // Heredocs opened on the current line: each delimiter, and whether tabs may lead its closing line (`<<-`).
+    let mut pending: Vec<(Vec<u8>, bool)> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let (c, next) = (b[i], b.get(i + 1).copied());
+        match quote {
+            Some(b'\'') => {
+                if c == b'\'' {
+                    quote = None;
+                }
+                out.push(c);
+            }
+            Some(_) => {
+                if let (b'\\' | b'`', Some(n)) = (c, next) {
+                    // `\"`, `\\` and PowerShell's `` `" ``: the escaped character is text.
+                    out.extend([c, if n == b'"' { b'_' } else { n }]);
+                    i += 2;
+                    continue;
+                }
+                if c == b'"' {
+                    quote = None;
+                }
+                out.push(c);
+            }
+            None => {
+                let continued = matches!(c, b'\\' | b'`') && (next == Some(b'\n') || (next == Some(b'\r') && b.get(i + 2) == Some(&b'\n')));
+                if continued {
+                    out.push(b' ');
+                    i += if next == Some(b'\r') { 3 } else { 2 };
+                    continue;
+                }
+                if let (b'\\' | b'`', Some(n)) = (c, next) {
+                    // An escaped character is text: a quote opens nothing, a `#` starts no comment.
+                    out.extend([c, plain(n)]);
+                    i += 2;
+                    continue;
+                }
+                if matches!(c, b'\'' | b'"') && i > 0 && b[i - 1] == b'@' && (next == Some(b'\n') || next == Some(b'\r')) {
+                    // A PowerShell here-string, `@'` to a line that begins `'@`.
+                    out.push(b'_');
+                    i = copy_body(b, i + 1, &mut out, |line| (line.len() >= 2 && line[0] == c && line[1] == b'@').then_some(2));
+                    continue;
+                }
+                if matches!(c, b'\'' | b'"') {
+                    quote = Some(c);
+                } else if c == b'#' && (i == 0 || matches!(b[i - 1], b' ' | b'\t' | b'\r' | b'\n' | b';' | b'&' | b'|' | b'(' | b')')) {
+                    i += b[i..].iter().position(|&x| x == b'\n').unwrap_or(b.len() - i);
+                    continue;
+                } else if c == b'<' && next == Some(b'#') {
+                    out.push(b' ');
+                    i = b[i + 2..].windows(2).position(|w| w == b"#>").map_or(b.len(), |k| i + 2 + k + 2);
+                    continue;
+                } else if c == b'<' && next == Some(b'<') && b.get(i + 2) != Some(&b'<') && (i == 0 || b[i - 1] != b'<') {
+                    let dash = b.get(i + 2) == Some(&b'-');
+                    let mut q = i + 2 + usize::from(dash);
+                    q += b[q..].iter().take_while(|x| matches!(x, b' ' | b'\t')).count();
+                    let word = b[q..].iter().take_while(|x| !(x.is_ascii_whitespace() || matches!(x, b';' | b'|' | b'&' | b'<' | b'>' | b'(' | b')'))).count();
+                    let delimiter: Vec<u8> = b[q..q + word].iter().copied().filter(|x| !matches!(x, b'"' | b'\'' | b'\\')).collect();
+                    if !delimiter.is_empty() {
+                        pending.push((delimiter, dash));
+                    }
+                    out.extend_from_slice(&b[i..q + word]);
+                    i = q + word;
+                    continue;
+                } else if c == b'\n' && !pending.is_empty() {
+                    // The end of a line that opened heredocs: their bodies follow, one after another.
+                    out.push(c);
+                    i += 1;
+                    for (delimiter, dash) in std::mem::take(&mut pending) {
+                        i = copy_body(b, i, &mut out, |line| {
+                            let t = line.strip_suffix(b"\r").unwrap_or(line);
+                            let t = if dash { &t[t.iter().take_while(|x| **x == b'\t').count()..] } else { t };
+                            (t == delimiter.as_slice()).then_some(line.len())
+                        });
+                    }
+                    continue;
+                }
+                out.push(c);
+            }
+        }
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+}
+
+/// A quote or backtick as plain text (`_`), anything else as it is.
+fn plain(c: u8) -> u8 {
+    if matches!(c, b'\'' | b'"' | b'`') {
+        b'_'
+    } else {
+        c
+    }
+}
+
+/// Copies the lines of a heredoc or here-string body from `from` into `out` with every quote and
+/// backtick plain (`_`), up to the line that `closes`: it answers how many of that line's bytes
+/// close the body, and those are copied too. Returns where reading goes on, the end of the text
+/// when no line closes the body.
+fn copy_body(b: &[u8], from: usize, out: &mut Vec<u8>, closes: impl Fn(&[u8]) -> Option<usize>) -> usize {
+    let mut line = from;
+    while line < b.len() {
+        let end = b[line..].iter().position(|&x| x == b'\n').map_or(b.len(), |k| line + k);
+        let shut = closes(&b[line..end]).map(|n| line + n);
+        let stop = shut.unwrap_or((end + 1).min(b.len()));
+        out.extend(b[line..stop].iter().map(|&c| plain(c)));
+        if shut.is_some() {
+            return stop;
+        }
+        line = stop;
+    }
+    b.len()
+}
+
 /// `$( )` and backtick substitutions pulled out of `text`: the outer text with each replaced by
-/// `$sub` (so it reads as a variable), and the inner commands. Single quotes hide them.
-fn substitutions(text: &str) -> (String, Vec<String>) {
+/// `$sub` (so it reads as a variable), and the inner commands. Single quotes hide them; in the
+/// `Shell` reading a `'` inside double quotes is text (`"it's" $(..)`), and in the `Blind` one
+/// nothing hides them.
+fn substitutions(text: &str, r: Reading) -> (String, Vec<String>) {
     let c: Vec<char> = text.chars().collect();
     let mut outer = String::new();
     let mut inners = Vec::new();
-    let mut single = false;
+    let (mut single, mut double) = (false, false);
     let mut i = 0;
     while i < c.len() {
-        if c[i] == '\'' {
+        if c[i] == '\'' && r != Reading::Blind && !double {
             single = !single;
+        } else if c[i] == '"' && r == Reading::Shell && !single {
+            double = !double;
         } else if !single && c[i] == '$' && c.get(i + 1) == Some(&'(') {
             let mut depth = 0;
             let mut j = i + 1;
@@ -339,8 +536,9 @@ fn substitutions(text: &str) -> (String, Vec<String>) {
     (outer, inners)
 }
 
-/// The pieces of a chain: split on `;`, `&`, `|`, newlines and grouping marks outside quotes.
-fn split(text: &str) -> Vec<String> {
+/// The pieces of a chain: split on `;`, `&`, `|`, newlines and grouping marks outside quotes (in
+/// the `Blind` reading, everywhere). `open` hears of a quote that never closed.
+fn split(text: &str, r: Reading, open: &mut bool) -> Vec<String> {
     let mut parts = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
@@ -351,7 +549,7 @@ fn split(text: &str) -> Vec<String> {
                 cur.push(c);
             }
             Some(_) => cur.push(c),
-            None if c == '\'' || c == '"' => {
+            None if (c == '\'' || c == '"') && r != Reading::Blind => {
                 quote = Some(c);
                 cur.push(c);
             }
@@ -359,6 +557,7 @@ fn split(text: &str) -> Vec<String> {
             None => cur.push(c),
         }
     }
+    *open |= quote.is_some();
     parts.push(cur);
     parts
 }
@@ -387,27 +586,32 @@ const WRAPPERS: [(&str, &[&str]); 19] = [
     ("wsl", &["d", "u", "distribution", "user", "cd"]),
 ];
 
-/// Drops leading assignments, wrapper programs with their options, the timeout length and a
-/// package runner's exec subcommand, so the program comes first.
-fn unwrap(mut w: Vec<String>) -> Vec<String> {
+/// Where the program starts in `w`: past leading assignments, wrapper programs with their options,
+/// the timeout length and a package runner's exec subcommand. Every step passes words at the
+/// front only, so `step` hears where each one leaves the command (T-604: the user's starts-with
+/// rules match at any of them), and it counts instead of removing from the front, so a long run
+/// of wrappers or assignments stays linear (R03-safety-accounts.2).
+fn program_at(w: &[String], mut step: impl FnMut(usize)) -> usize {
+    let mut k = 0;
     loop {
-        let Some(first) = w.first() else { return w };
+        step(k);
+        let Some(first) = w.get(k) else { return k };
         if first.contains('=') && !first.starts_with('-') {
-            w.remove(0);
+            k += 1;
             continue;
         }
-        let f = program(&w);
-        let Some((_, values)) = WRAPPERS.iter().find(|(n, _)| *n == f) else { return w };
-        w.remove(0);
+        let f = program(&w[k..]);
+        let Some((_, values)) = WRAPPERS.iter().find(|(n, _)| *n == f) else { return k };
+        k += 1;
         if matches!(f.as_str(), "pnpm" | "yarn" | "npm" | "bun") {
-            if w.first().is_some_and(|s| matches!(s.as_str(), "exec" | "dlx" | "x")) {
-                w.remove(0);
+            if w.get(k).is_some_and(|s| matches!(s.as_str(), "exec" | "dlx" | "x")) {
+                k += 1;
             }
             continue;
         }
-        while let Some(o) = w.first().cloned() {
+        while let Some(o) = w.get(k) {
             if (f == "start" && (o.is_empty() || o.starts_with('/'))) || (f == "wsl" && matches!(o.as_str(), "--" | "-e" | "--exec")) {
-                w.remove(0);
+                k += 1;
                 continue;
             }
             if !o.starts_with('-') || o == "-" {
@@ -415,12 +619,29 @@ fn unwrap(mut w: Vec<String>) -> Vec<String> {
             }
             let body = o.trim_start_matches('-');
             let takes_next = if o.starts_with("--") { !body.contains('=') && values.contains(&body) } else { body.len() == 1 && values.contains(&body) };
-            w.drain(..(1 + usize::from(takes_next)).min(w.len()));
+            k = (k + 1 + usize::from(takes_next)).min(w.len());
         }
-        if f == "timeout" && !w.is_empty() {
-            w.remove(0);
+        if f == "timeout" && k < w.len() {
+            k += 1;
         }
     }
+}
+
+/// T-604 (R03-safety-accounts.3, SAFE-016): whether a command in `command` begins with `want`
+/// (lower-case words, the first a program name), read the way the rules read it (every reading,
+/// SAFE-014) at every step of `program_at`: `npm publish`, `sudo npm publish`, `npx prisma ..`,
+/// `C:\tools\kubectl.exe delete ..` and `bash -c "kubectl delete .."` each begin with what they run.
+pub(crate) fn starts_with(command: &str, want: &[String]) -> bool {
+    let Some((first, rest)) = want.split_first() else { return false };
+    let first = program(std::slice::from_ref(first));
+    chains(command).iter().flatten().any(|s| {
+        let mut hit = false;
+        program_at(&s.words, |k| {
+            let w = &s.words[k..];
+            hit |= w.len() > rest.len() && program(w) == first && w[1..=rest.len()].iter().zip(rest).all(|(a, b)| a.to_lowercase() == *b);
+        });
+        hit
+    })
 }
 
 enum Ps {
@@ -525,8 +746,8 @@ fn is_search(seg: &[String]) -> bool {
 }
 
 // SAFE-010: force-push or deletion aimed at main/master (or an unclear target), by `git push`.
-fn force_push(command: &str, _base: &Base) -> bool {
-    segments(command).iter().any(|seg| {
+fn force_push(c: &Read, _base: &Base) -> bool {
+    c.segments().any(|seg| {
         let Some(args) = git_args(seg, "push") else { return false };
         let mut force = false;
         let mut delete = false;
@@ -596,8 +817,8 @@ fn git_args<'a>(seg: &'a [String], sub: &str) -> Option<&'a [String]> {
 }
 
 // SAFE-010: a hard reset, or a forced clean that is not a dry run.
-fn discard(command: &str, _base: &Base) -> bool {
-    segments(command).iter().any(|seg| {
+fn discard(c: &Read, _base: &Base) -> bool {
+    c.segments().any(|seg| {
         if let Some(args) = git_args(seg, "reset") {
             return args.iter().any(|a| a == "--hard");
         }
@@ -611,16 +832,15 @@ fn discard(command: &str, _base: &Base) -> bool {
 }
 
 // SAFE-011: a database client given a drop or truncate anywhere on the line, or dropdb itself.
-fn db_drop(command: &str, _base: &Base) -> bool {
+fn db_drop(c: &Read, _base: &Base) -> bool {
     const CLIENTS: [&str; 18] = ["psql", "mysql", "mariadb", "sqlite3", "sqlcmd", "mongosh", "mongo", "supabase", "prisma", "wrangler", "bq", "duckdb", "turso", "pscale", "neonctl", "cockroach", "clickhouse-client", "usql"];
-    let segs = segments(command);
-    if segs.iter().any(|s| program(s) == "dropdb") {
+    if c.segments().any(|s| program(s) == "dropdb") {
         return true;
     }
-    if !segs.iter().any(|s| CLIENTS.contains(&program(s).as_str())) {
+    if !c.segments().any(|s| CLIENTS.contains(&program(s).as_str())) {
         return false;
     }
-    let text = command.to_ascii_lowercase();
+    let text = c.text.to_ascii_lowercase();
     if text.contains("truncate") || text.contains(".drop(") || text.contains("dropdatabase(") || text.contains("dropcollection(") {
         return true;
     }
@@ -635,19 +855,18 @@ fn db_drop(command: &str, _base: &Base) -> bool {
 }
 
 // SAFE-012: live Stripe data changes.
-fn stripe(command: &str, _base: &Base) -> bool {
+fn stripe(c: &Read, _base: &Base) -> bool {
     const VERBS: [&str; 12] = ["create", "update", "delete", "cancel", "refund", "post", "capture", "confirm", "void", "detach", "attach", "trigger"];
-    let segs = segments(command);
-    let lower = command.to_ascii_lowercase();
-    if (lower.contains("sk_live_") || lower.contains("rk_live_")) && !segs.iter().all(|s| is_search(s)) {
+    let lower = c.text.to_ascii_lowercase();
+    if (lower.contains("sk_live_") || lower.contains("rk_live_")) && !c.segments().all(is_search) {
         return true;
     }
-    segs.iter().any(|seg| program(seg) == "stripe" && (seg.iter().any(|a| a == "--live") || seg.iter().skip(1).take(3).any(|w| VERBS.contains(&w.to_ascii_lowercase().as_str()))))
+    c.segments().any(|seg| program(seg) == "stripe" && (seg.iter().any(|a| a == "--live") || seg.iter().skip(1).take(3).any(|w| VERBS.contains(&w.to_ascii_lowercase().as_str()))))
 }
 
 // SAFE-012: applying or tearing down infrastructure.
-fn infra(command: &str, _base: &Base) -> bool {
-    segments(command).iter().any(|seg| {
+fn infra(c: &Read, _base: &Base) -> bool {
+    c.segments().any(|seg| {
         let subs: Vec<String> = seg.iter().skip(1).filter(|a| !a.starts_with('-')).take(2).map(|s| s.to_ascii_lowercase()).collect();
         let first = subs.first().map(String::as_str).unwrap_or("");
         let second = subs.get(1).map(String::as_str).unwrap_or("");
@@ -662,9 +881,9 @@ fn infra(command: &str, _base: &Base) -> bool {
 }
 
 // SAFE-012: a production marker together with a deployment tool or a deploy verb.
-fn prod_deploy(command: &str, _base: &Base) -> bool {
+fn prod_deploy(c: &Read, _base: &Base) -> bool {
     const CLIS: [&str; 14] = ["vercel", "netlify", "firebase", "wrangler", "fly", "flyctl", "railway", "heroku", "gcloud", "az", "serverless", "sls", "sst", "eb"];
-    segments(command).iter().any(|seg| {
+    c.segments().any(|seg| {
         let lower: Vec<String> = seg.iter().map(|w| w.to_ascii_lowercase()).collect();
         let marker = lower.iter().any(|w| {
             let bare = w.trim_start_matches('-');
@@ -707,9 +926,21 @@ const STRIPE_PREFIXES: [&str; 5] = ["sk_live_", "sk_test_", "rk_live_", "rk_test
 /// the loop.
 #[allow(dead_code)] // the recent-attempts list (T-156-b, SAFE-018) is its first caller
 pub fn mask(text: &str) -> String {
-    let mut t = mask_once(text);
+    mask_cut(text, false)
+}
+
+/// T-604 (R03-safety-accounts.2): `mask` of the first `n` characters of `text`, the part a long
+/// command is shown by, so masking takes the same time however long the command is. Where the cut
+/// fell inside a JSON secret value, the value is hidden to the end (`json_values`).
+pub fn mask_head(text: &str, n: usize) -> String {
+    let head = text.char_indices().nth(n).map_or(text, |(i, _)| &text[..i]);
+    mask_cut(head, head.len() < text.len())
+}
+
+fn mask_cut(text: &str, cut: bool) -> String {
+    let mut t = mask_once(text, cut);
     for _ in 1..MASK_RUNS {
-        let next = mask_once(&t);
+        let next = mask_once(&t, cut);
         if next == t {
             break;
         }
@@ -720,14 +951,14 @@ pub fn mask(text: &str) -> String {
 
 const MASK_RUNS: usize = 8;
 
-fn mask_once(text: &str) -> String {
+fn mask_once(text: &str, cut: bool) -> String {
     let t = stripe_keys(text);
     let t = pem_blocks(&t);
     let t = url_credentials(&t);
     let t = provider_keys(&t);
     let t = auth_headers(&t);
     let t = header_values(&t);
-    let t = json_values(&t);
+    let t = json_values(&t, cut);
     let t = piped_passwords(&t);
     let t = secure_strings(&t);
     let t = secret_flags(&t);
@@ -1354,18 +1585,29 @@ fn already_as(value: &str, refs: bool) -> bool {
 /// sshpass's `-p secret`, and a short password flag with the value attached, `-pS3cret`, for the programs
 /// that take one (MySQL and MariaDB clients, 7z, rar, sshpass).
 fn secret_flags(t: &str) -> String {
+    // T-604 (R03-safety-accounts.2): the words before a flag are read at most once per flag, and not
+    // at all when no program the flag belongs to is named anywhere in the text (a word's name is a
+    // piece of the text), so a long run of `-p` or `-u` flags no longer re-reads the command from its
+    // start at each one. ponytail: with such a program named the read stays one per flag; masking is
+    // only asked for the head of a command (`protected_custom::paused`), which bounds it.
+    let lower = t.to_ascii_lowercase();
+    let curl = lower.contains("curl");
+    let sshpass = lower.contains("sshpass");
+    let attached = ["mysql", "mariadb", "7z", "rar", "sshpass"].iter().any(|p| lower.contains(p));
     scan(t, |t, i| {
         let prev = if i == 0 { b' ' } else { t.as_bytes()[i - 1] };
         if !(prev.is_ascii_whitespace() || matches!(prev, b'"' | b'\'' | b'\\' | b'(' | b'`')) {
             return None;
         }
         let rest = t.get(i..)?;
+        let words = OnceCell::new();
+        let before = || words.get_or_init(|| words_before(t, i));
         // curl: `-u user:password` (also `-U`, `--user`, `--proxy-user`; a space, or `=` for the long ones).
         for f in ["--proxy-user", "--user", "-u", "-U"] {
             let Some(after) = rest.strip_prefix(f) else { continue };
             let gap = run(after, |b| b == b' ' || b == b'\t');
             let eq = f.starts_with("--") && after.starts_with('=');
-            if (gap == 0 && !eq) || !runs(&words_before(t, i), |w| w == "curl") {
+            if (gap == 0 && !eq) || !curl || !runs(before(), |w| w == "curl") {
                 continue;
             }
             let at = if eq { 1 } else { gap };
@@ -1379,9 +1621,11 @@ fn secret_flags(t: &str) -> String {
         // sshpass: `-p secret` straight after the program (only its own options before the value).
         if let Some(after) = rest.strip_prefix("-p") {
             let gap = run(after, |b| b == b' ' || b == b'\t');
-            let words = words_before(t, i);
-            let own = words.iter().rposition(|w| w.name == "sshpass").is_some_and(|p| words[p + 1..].iter().all(|w| w.name.starts_with('-')));
-            if gap > 0 && own {
+            let own = || {
+                let words = before();
+                words.iter().rposition(|w| w.name == "sshpass").is_some_and(|p| words[p + 1..].iter().all(|w| w.name.starts_with('-')))
+            };
+            if gap > 0 && sshpass && own() {
                 let value = &after[gap..];
                 let len = value_span(value, COMMAND_END);
                 if len > 0 && !value.starts_with('-') && !already(&value[..len]) {
@@ -1393,7 +1637,7 @@ fn secret_flags(t: &str) -> String {
             if let Some(tail) = rest.strip_prefix("-p") {
                 let len = value_span(tail, COMMAND_END);
                 let value = &tail[..len];
-                let program = runs(&words_before(t, i), takes_attached_password);
+                let program = attached && runs(before(), takes_attached_password);
                 if program && !value.is_empty() && !value.starts_with('-') && !value.starts_with('=') && !already(value) {
                     return Some((i + 2 + len, format!("-p{HIDDEN}")));
                 }
@@ -1882,8 +2126,10 @@ fn json_end(value: &str, q: &str) -> Option<usize> {
 }
 
 /// A JSON string value whose key says it holds a secret: `"password":"..."`, also written with
-/// escaped quotes inside a quoted command (`{\"token\":\"..\"}`).
-fn json_values(t: &str) -> String {
+/// escaped quotes inside a quoted command (`{\"token\":\"..\"}`). In a text `cut` short (T-604,
+/// `mask_head`) a value with no closing quote is hidden to the end, as a private key cut short is:
+/// the cut took its closing quote.
+fn json_values(t: &str, cut: bool) -> String {
     scan(t, |t, i| {
         let rest = t.get(i..)?;
         let q = if rest.starts_with("\\\"") {
@@ -1900,7 +2146,7 @@ fn json_values(t: &str) -> String {
         }
         let after = body[n..].strip_prefix(q)?.trim_start().strip_prefix(':')?.trim_start();
         let value = after.strip_prefix(q)?;
-        let end = json_end(value, q)?;
+        let end = json_end(value, q).or(cut.then_some(value.len()))?;
         if already_as(&value[..end], false) {
             return None;
         }
@@ -2122,7 +2368,11 @@ mod tests {
         let win = Base { workspace: Some("C:\\Users\\me\\app".into()), cwd: Some("C:\\Users\\me\\app".into()), home: Some("C:\\Users\\me".into()), temp: vec!["C:\\Users\\me\\AppData\\Local\\Temp".into()] };
         let w = |c: &str| check(c, &win, &json!({})).map(|r| r.id) == Some("delete");
         assert!(w("rm -rf /c/Users/me/app/.git") && w("rd /s /q C:\\Users\\me") && w("Remove-Item -Recurse -Force -LiteralPath C:\\Users\\me\\app"));
-        assert!(!w("rm -rf /c/users/ME/app/dist") && !w("rd /s /q node_modules") && !w("rm -rf C:\\Users\\me\\AppData\\Local\\Temp\\x"));
+        assert!(!w("rd /s /q node_modules") && !w("rm -rf C:\\Users\\me\\AppData\\Local\\Temp\\x"));
+        // Letter case is ignored on Windows only.
+        if cfg!(windows) {
+            assert!(!w("rm -rf /c/users/ME/app/dist"));
+        }
     }
 
     /// A scratch HOME under TEMP: HOME and every ancestor of it still ask; siblings and children run.
@@ -2187,6 +2437,91 @@ mod tests {
         ] {
             assert_eq!(hit(c), None, "runs: {c}");
         }
+    }
+
+    /// T-604 (R03-safety-accounts.1): the audit's commands. An apostrophe in a `#` comment or in a
+    /// heredoc or PowerShell here-string body, a backslash-escaped quote, the `'\''` idiom or a
+    /// PowerShell backtick-escaped quote once hid the rest of the command from every rule.
+    #[test]
+    fn safe014_comments_heredocs_here_strings_and_escapes_cannot_hide_a_command() {
+        for (c, id) in [
+            ("# Let's publish the fix\ngit push --force origin main", "force-push"),
+            ("git add -A # don't forget new files\ngit reset --hard origin/main", "discard"),
+            ("cat > NOTES.md <<'EOF'\nIt's done\nEOF\ngit push --force origin main", "force-push"),
+            ("cat > NOTES.md <<EOF\nIt's done\nEOF\ngit push --force origin main", "force-push"),
+            ("$notes = @'\nIt's done\n'@\n...\nRemove-Item -Recurse -Force C:\\Users\\me\\Documents", "delete"),
+            ("git commit -m 'Don'\\''t crash' && git push --force origin main", "force-push"),
+            ("echo It\\'s done; rm -rf ~/Documents", "delete"),
+            ("git commit -m \"Say `\"hi`\"\" ; git push -f origin main", "force-push"),
+            // The same tricks with the stray quotes paired up, so no reading ends inside a quote.
+            ("# it's late\ngit push --force origin main\n# it's done", "force-push"),
+            ("echo It\\'s; rm -rf ~/Documents; echo it\\'s", "delete"),
+            ("cat > a.md <<'EOF'\nIt's\nEOF\ngit reset --hard\ncat > b.md <<'EOF'\nit's\nEOF", "discard"),
+            ("$a = @'\nIt's\n'@\nRemove-Item -Recurse -Force ~\n$b = @'\nit's\n'@", "delete"),
+            ("<# it's #>\ngit clean -fdx\n<# it's #>", "discard"),
+            // A line continued with a backslash (or PowerShell's backtick) is one command.
+            ("git push \\\n  --force origin main", "force-push"),
+            ("git push `\n  --force origin main", "force-push"),
+        ] {
+            assert_eq!(hit(c), Some(id), "asks: {c:?}");
+        }
+        for c in [
+            "# git push --force origin main\ngit status",
+            "git commit -m 'Don'\\''t push --force to main'",
+            "echo \"it's fine\" # rm -rf ~",
+            "printf '%s\\n' \"a \\\" b\"",
+            "cat > notes.md <<'EOF'\nIt's done: git status\nEOF\ngit status",
+        ] {
+            assert_eq!(hit(c), None, "runs: {c:?}");
+        }
+    }
+
+    /// T-604: every rule's own examples still ask behind one to three harmless lines of the kinds
+    /// that once hid what followed (comments, heredocs, here-strings and escapes with stray quotes),
+    /// joined by a line break or a chain operator. A fixed-seed xorshift draws the mix, so a
+    /// failure names its command and repeats.
+    #[test]
+    fn safe014_known_asking_commands_still_ask_behind_comment_heredoc_and_escape_prefixes() {
+        // (prefix, whether only a line break may follow it: a comment runs to the end of its line,
+        // and a heredoc's closing line stands alone)
+        const PREFIXES: [(&str, bool); 12] = [
+            ("# Let's go", true),
+            ("ls # don't", true),
+            ("<# it's a block #>", false),
+            ("cat > N.md <<'EOF'\nIt's done\nEOF", true),
+            ("cat > N.md <<-EOF\n\tit's \"odd\n\tEOF", true),
+            ("$n = @'\nIt's done\n'@", false),
+            ("$n = @\"\nSay \"hi\n\"@", false),
+            ("echo It\\'s done", false),
+            ("git commit -m 'Don'\\''t crash'", false),
+            ("Write-Host \"Say `\"hi`\"\"", false),
+            ("echo \"a \\\" b\"", false),
+            ("echo 'unclosed", true),
+        ];
+        const JOINS: [&str; 4] = ["\n", "; ", " && ", " || "];
+        let mut seed: u64 = 0x5AFE_0604_C0DE_0001;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let samples: Vec<(&str, &str)> = RULES.iter().flat_map(|r| r.samples.iter().map(move |s| (*s, r.id))).collect();
+        let mut missed = Vec::new();
+        for _ in 0..3000 {
+            let mut c = String::new();
+            for _ in 0..1 + next() % 3 {
+                let (prefix, line) = PREFIXES[(next() % PREFIXES.len() as u64) as usize];
+                c.push_str(prefix);
+                c.push_str(if line { "\n" } else { JOINS[(next() % JOINS.len() as u64) as usize] });
+            }
+            let (sample, id) = samples[(next() % samples.len() as u64) as usize];
+            c.push_str(sample);
+            if hit(&c) != Some(id) {
+                missed.push(c);
+            }
+        }
+        assert!(missed.is_empty(), "{} of 3000 missed; first: {:?}", missed.len(), missed.first());
     }
 
     /// SAFE-015: the page lists the seven rules by plain name with two examples each, and every

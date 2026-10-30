@@ -18,6 +18,10 @@ pub const REGEX_SEES: usize = 4096;
 /// The attempts list keeps this many, newest first, each command cut to `COMMAND_SHOWN` characters.
 pub const ATTEMPTS: usize = 50;
 pub const COMMAND_SHOWN: usize = 2000;
+/// T-604 (R03-safety-accounts.2): how far past the shown part masking reads, so a secret that
+/// begins in the shown part is judged with what follows it. Masking a whole long command made the
+/// hook miss its 1.5 s, and the command then ran without the ask.
+pub const MASK_MARGIN: usize = 2048;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -52,7 +56,7 @@ impl Custom {
         match self.kind {
             Kind::StartsWith => {
                 let want: Vec<String> = self.pattern.split_whitespace().map(str::to_lowercase).collect();
-                !want.is_empty() && segments(command).iter().any(|seg| seg.len() >= want.len() && seg[..want.len()] == want[..])
+                crate::protected::starts_with(command, &want)
             }
             Kind::Contains => {
                 let want = squeeze(&self.pattern);
@@ -61,13 +65,6 @@ impl Custom {
             Kind::Regex => compile(&self.pattern).is_ok_and(|re| re.is_match(head(command, REGEX_SEES))),
         }
     }
-}
-
-/// The command's segments as lists of lowercase words: a starts-with rule reads the program and
-/// the first words of each. ponytail: the split is not quote-aware (a `;` inside quotes also
-/// splits); protected.rs's segments() is private and a false split only makes a rule ask more.
-fn segments(command: &str) -> Vec<Vec<String>> {
-    command.replace("&&", "\n").replace("||", "\n").split(['\n', ';', '|']).map(|s| s.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>()).filter(|w| !w.is_empty()).collect()
 }
 
 /// Lowercase with runs of whitespace squeezed to one space, for a contains rule.
@@ -365,10 +362,11 @@ pub struct Attempts(VecDeque<Attempt>);
 
 impl Attempts {
     /// A command was paused: the raw text is masked before anything keeps it, and an earlier
-    /// attempt of the same session still waiting is taken as refused.
+    /// attempt of the same session still waiting is taken as refused. Only the shown part and a
+    /// margin after it are masked (T-604), so the time this takes does not grow with the command.
     pub fn paused(&mut self, session: &str, call: &str, worktree: &str, raw: &str, rule: &str, time: u64) {
         self.turn_ended(session);
-        let masked = crate::protected::mask(raw);
+        let masked = crate::protected::mask_head(raw, COMMAND_SHOWN + MASK_MARGIN);
         let command = head(&masked, COMMAND_SHOWN).to_string();
         // A nameless rule shows its own pattern and the folder is free text too: neither may carry a
         // secret into the list either.
@@ -480,6 +478,100 @@ mod tests {
         assert!(!r.hits("echo kubectl delete"));
         assert!(!r.hits("kubectl get pods"));
         assert!(!rule(Kind::StartsWith, "   ").hits("anything"));
+    }
+
+    /// T-604 (R03-safety-accounts.3): a starts-with rule reads commands the way the built-in rules
+    /// do (SAFE-014): leading `NAME=value`, wrappers, package runners, folders, `.exe` and `.cmd`,
+    /// PowerShell's call operator, a lone `&`, inner shells and grouping are seen through.
+    #[test]
+    fn t604_a_starts_with_rule_sees_through_wrappers_runners_paths_and_inner_shells() {
+        let prisma = rule(Kind::StartsWith, "prisma migrate reset");
+        for c in ["npx prisma migrate reset --force", "pnpm exec prisma migrate reset", "pnpm dlx prisma migrate reset", "bunx prisma migrate reset", "npm exec prisma migrate reset", "yarn dlx prisma migrate reset"] {
+            assert!(prisma.hits(c), "{c}");
+        }
+        let kubectl = rule(Kind::StartsWith, "kubectl delete");
+        for c in [
+            "sudo kubectl delete ns prod",
+            "KUBECONFIG=prod.yaml kubectl delete ns prod",
+            "kubectl.exe delete pod x",
+            "C:\\tools\\kubectl.exe delete pod x",
+            "/usr/local/bin/kubectl delete pod x",
+            "& kubectl delete pod x",
+            "& \"C:\\Program Files\\k8s\\kubectl.exe\" delete pod x",
+            "bash -c \"kubectl delete pod x\"",
+            "(cd infra && kubectl delete pod x)",
+            "sleep 1 & kubectl delete pod x",
+        ] {
+            assert!(kubectl.hits(c), "{c}");
+        }
+        let terraform = rule(Kind::StartsWith, "terraform destroy");
+        for c in ["FOO=1 terraform destroy", "sudo terraform destroy", "(cd infra && terraform destroy)", "bash -c \"terraform destroy\"", "sleep 1 & terraform destroy", "npx terraform destroy", "& terraform destroy", "terraform.exe destroy"] {
+            assert!(terraform.hits(c), "{c}");
+        }
+        // A package manager named in the rule is still the program: `npm publish` as written, or as a shim.
+        let publish = rule(Kind::StartsWith, "npm publish");
+        for c in ["npm publish", "npm.cmd publish", "sudo npm publish", "C:\\nodejs\\npm.cmd publish --tag next"] {
+            assert!(publish.hits(c), "{c}");
+        }
+        // Still the program and its first words: a mention, another subcommand or a comment runs.
+        for c in ["echo kubectl delete pod", "kubectl get pods", "git commit -m 'kubectl delete'", "# kubectl delete pod"] {
+            assert!(!kubectl.hits(c), "{c}");
+        }
+    }
+
+    /// T-604 (R03-safety-accounts.2): a 1 MB command is answered, and its attempt kept, within the
+    /// hook's 1.5 s. Each filler once made reading or masking a command quadratic; it comes first so
+    /// masking meets it, and the protected action comes last so every rule reads the whole command.
+    /// The bar is the optimized build's promise; a debug build only has to finish.
+    #[test]
+    fn t604_a_1_mb_command_is_answered_and_its_attempt_kept_within_the_hooks_time() {
+        let n = 1 << 20;
+        let fillers = [
+            ("flags_p", "-p ".repeat(n / 3)),
+            ("flags_u", "-u ".repeat(n / 3)),
+            ("mysql_p", format!("mysql {}", "-p ".repeat(n / 3))),
+            ("curl_u", format!("curl {}", "-u a ".repeat(n / 5))),
+            ("pipes", "| ".repeat(n / 2)),
+            ("heredoc_table", format!("cat > docs/TABLE.md <<'EOF'\n{}EOF", "| a | b | c |\n".repeat(n / 14))),
+            ("heredoc_script", format!("bash <<'EOF'\n{}EOF", "mkdir -p a/b && cp -p x y\n".repeat(n / 26))),
+            ("assignments", "A=1 ".repeat(n / 4)),
+            ("wrappers", "sudo ".repeat(n / 5)),
+            ("comments", "# it's\n".repeat(n / 7)),
+            ("quotes", "\"'".repeat(n / 2)),
+            ("substitutions", "echo $(true) ".repeat(n / 13)),
+        ];
+        let bar_ms = 750.0;
+        let mut slow = Vec::new();
+        for (label, filler) in fillers {
+            let ev = json!({ "hook_event_name": "PreToolUse", "session_id": "t604-time", "tool_use_id": label, "cwd": "/home/me/t604", "tool_name": "Bash",
+                "tool_input": { "command": format!("{filler}\ngit push --force origin main") } }).to_string();
+            let t0 = std::time::Instant::now();
+            let answer = listen("/claude", ev.as_bytes(), &json!({}));
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            println!("TIME hook {label} bytes={} ms={ms:.0}", ev.len());
+            assert!(answer.is_some_and(|a| a.contains("Force-push to main")), "{label} must ask");
+            if ms > bar_ms {
+                slow.push(format!("{label}: {ms:.0} ms"));
+            }
+        }
+        let kept: Vec<Attempt> = protected_attempts().into_iter().filter(|a| a.worktree == "/home/me/t604").collect();
+        assert_eq!(kept.len(), 12);
+        assert!(kept.iter().all(|a| a.command.chars().count() <= COMMAND_SHOWN));
+        assert!(cfg!(debug_assertions) || slow.is_empty(), "over {bar_ms} ms: {slow:#?}");
+    }
+
+    /// T-604: masking reads only the shown part of a command and a margin after it, and a secret
+    /// cut off by that margin stays hidden: a JSON value whose closing quote lies past the margin is
+    /// hidden to the end of what was read, as a private key cut short is.
+    #[test]
+    fn t604_a_secret_cut_off_where_masking_stops_reading_stays_hidden() {
+        let mut a = Attempts::default();
+        let blob = "QUJD".repeat(1500);
+        let raw = format!("{}curl -d '{{\"credentials\":\"{blob}\"}}' https://x\ngit push --force origin main", "x".repeat(1900));
+        a.paused("w", "c", "", &raw, "Force-push to main", 1);
+        let kept = &a.list()[0].command;
+        assert!(!kept.contains("QUJDQUJD") && kept.contains(crate::protected::HIDDEN), "{kept}");
+        assert!(kept.chars().count() <= COMMAND_SHOWN);
     }
 
     #[test]
