@@ -626,8 +626,8 @@ fn limits_of(store: &crate::state::Store, dir: Option<&str>) -> Vec<Limit> {
 
 /// T-583: what a hook's answer leaves for after its reply: the work that may wait on the store or start an automation.
 enum After {
-    /// A status the hooks reported, with the request that carried it.
-    Status(Request, crate::status::Status),
+    /// A status the hooks reported, with the request that carried it (shared with the reply, never copied).
+    Status(Arc<Request>, crate::status::Status),
     /// A status-line report (STAT-040, USAGE-021): its figures go to the store and the window.
     Usage(Usage),
 }
@@ -708,18 +708,23 @@ fn handle(stream: &TcpStream, accepted: Instant, line: &Line) {
             Err(code) => code,
         },
         Some(req) => {
-            // T-583: one thread per connection, so a pane's step in the status machine, its emit and its after-work
-            // are taken under one lock: the window and saved::note hear the steps in the machine's order. All of
-            // it is quick and never waits on the store; the request is read and the reply written outside it.
-            let _order = ORDER.lock().unwrap_or_else(PoisonError::into_inner);
-            let (code, status) = answer(&req, &line.token);
+            let req = Arc::new(req);
+            // T-583: one thread per connection, so a pane's step in the status machine, its emit and its queued
+            // after-work are taken under one lock: the window and saved::note hear the steps in the machine's order.
+            // Only those three quick steps sit under it; the reply body (a protected command's check and mask,
+            // which can take long on a huge command) is worked out after, so it holds up its own connection only.
+            let code = {
+                let _order = ORDER.lock().unwrap_or_else(PoisonError::into_inner);
+                let (code, status) = answer(&req, &line.token);
+                if let Some(status) = status {
+                    (line.raise)(&status);
+                    (line.after)(After::Status(Arc::clone(&req), status));
+                }
+                code
+            };
             if code == 200 {
                 // SAFE-009: the settings as last read, fresh whenever the store is free.
                 body = reply_body(&req.path, &req.body, &(line.settings)());
-            }
-            if let Some(status) = status {
-                (line.raise)(&status);
-                (line.after)(After::Status(req, status));
             }
             code
         }
@@ -2084,6 +2089,35 @@ Content-Length: {}
         assert!(took < LIMIT, "answered after {took:?}");
         assert!(body.contains(r#""permissionDecision":"ask""#), "{body}");
         let _ = release.send(());
+    }
+
+    #[test]
+    fn t583_a_huge_protected_command_still_being_checked_holds_up_no_other_pane() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (checking, begun) = std::sync::mpsc::channel::<()>();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (checking, held) = (Mutex::new(checking), Mutex::new(held));
+        let first = AtomicBool::new(true);
+        // The first reply's work (its rules read, then a mask of up to 8 passes over a 2 MiB command) stands still
+        // until released; under the round-1 ORDER lock every other pane's hook queued behind it.
+        let port = line_with(
+            move || {
+                if first.swap(false, Ordering::SeqCst) {
+                    let _ = checking.lock().unwrap().send(());
+                    let _ = held.lock().unwrap().recv_timeout(Duration::from_secs(30));
+                }
+                Arc::new(json!({}))
+            },
+            |_| {},
+        );
+        let huge = std::thread::spawn(move || hook(port, 58_305, &shell(&format!("git push --force origin main {}", "x".repeat(2 << 20)))));
+        begun.recv_timeout(Duration::from_secs(10)).expect("the huge command reached its reply");
+        let (_, took) = hook(port, 58_306, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go","session_id":"t583b"}"#);
+        assert!(took < LIMIT, "another pane's status answered after {took:?}");
+        let (body, took) = hook(port, 58_307, &shell("git push --force origin main"));
+        assert!(took < LIMIT && body.contains(r#""permissionDecision":"ask""#), "another pane's protected command: {took:?} {body}");
+        let _ = release.send(());
+        assert!(huge.join().unwrap().0.contains(r#""permissionDecision":"ask""#), "the huge command still asks");
     }
 
     #[test]
