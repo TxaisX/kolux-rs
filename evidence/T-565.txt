@@ -73,21 +73,31 @@ lets the Escape go on, and leaves the page at once:
   5. Escape in a dialog inside Settings that does not stop it (the Share card) closes only that dialog
   6. Escape in a dialog outside Settings with the keyboard in it (Send feedback) closes only that dialog
   7. a dialog of a pane under Settings (the shell ended) does not block Escape                (guard)
-before the round 1 fix (vitest run src/settings/SettingsPage.escape.test.ts):
- FAIL  ... > Escape in a dialog inside Settings that does not stop it (the Share card) closes only that dialog
+before the round 1 fix (re-run at integration 2026-10-30: src/settings/SettingsPage.tsx put back to 8b091d7a, the commit
+before 47ed888b, with the round 1 tests in place; VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run
+--reporter=verbose src/settings/SettingsPage.escape.test.ts):
+ ✓ src/settings/SettingsPage.escape.test.ts > Settings opened from a terminal takes the keyboard: Escape closes it and never reaches the terminal 804ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape with the keyboard on a control inside Settings closes Settings 49ms
+ ✓ src/settings/SettingsPage.escape.test.ts > closing Settings gives the keyboard back to the terminal it was opened from 46ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape in the xAI key dialog inside Settings closes only that dialog; the next one closes Settings 65ms
+ × src/settings/SettingsPage.escape.test.ts > Escape in a dialog inside Settings that does not stop it (the Share card) closes only that dialog 59ms
+ × src/settings/SettingsPage.escape.test.ts > Escape in a dialog outside Settings with the keyboard in it (Send feedback) closes only that dialog 49ms
+ ✓ src/settings/SettingsPage.escape.test.ts > a dialog of a pane under Settings (the shell ended) does not block Escape 49ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  src/settings/SettingsPage.escape.test.ts > Escape in a dialog inside Settings that does not stop it (the Share card) closes only that dialog
 AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
- FAIL  ... > Escape in a dialog outside Settings with the keyboard in it (Send feedback) closes only that dialog
+ FAIL  src/settings/SettingsPage.escape.test.ts > Escape in a dialog outside Settings with the keyboard in it (Send feedback) closes only that dialog
 AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
  Test Files  1 failed (1)
       Tests  2 failed | 5 passed (7)
-after (vitest run --reporter=verbose src/settings/SettingsPage.escape.test.ts):
- ✓ src/settings/SettingsPage.escape.test.ts > Settings opened from a terminal takes the keyboard: Escape closes it and never reaches the terminal 935ms
- ✓ src/settings/SettingsPage.escape.test.ts > Escape with the keyboard on a control inside Settings closes Settings 47ms
+after (the same command with SettingsPage.tsx as committed, re-run at integration 2026-10-30):
+ ✓ src/settings/SettingsPage.escape.test.ts > Settings opened from a terminal takes the keyboard: Escape closes it and never reaches the terminal 588ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape with the keyboard on a control inside Settings closes Settings 50ms
  ✓ src/settings/SettingsPage.escape.test.ts > closing Settings gives the keyboard back to the terminal it was opened from 50ms
- ✓ src/settings/SettingsPage.escape.test.ts > Escape in the xAI key dialog inside Settings closes only that dialog; the next one closes Settings 63ms
- ✓ src/settings/SettingsPage.escape.test.ts > Escape in a dialog inside Settings that does not stop it (the Share card) closes only that dialog 56ms
- ✓ src/settings/SettingsPage.escape.test.ts > Escape in a dialog outside Settings with the keyboard in it (Send feedback) closes only that dialog 46ms
- ✓ src/settings/SettingsPage.escape.test.ts > a dialog of a pane under Settings (the shell ended) does not block Escape 44ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape in the xAI key dialog inside Settings closes only that dialog; the next one closes Settings 66ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape in a dialog inside Settings that does not stop it (the Share card) closes only that dialog 45ms
+ ✓ src/settings/SettingsPage.escape.test.ts > Escape in a dialog outside Settings with the keyboard in it (Send feedback) closes only that dialog 44ms
+ ✓ src/settings/SettingsPage.escape.test.ts > a dialog of a pane under Settings (the shell ended) does not block Escape 46ms
  Test Files  1 passed (1)
       Tests  7 passed (7)
 --- every test file that draws SettingsPage (13 files: plainWords, SettingsPage.restore, ClaudeAccounts, ACCT-001,

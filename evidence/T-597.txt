@@ -50,12 +50,13 @@ AssertionError: expected 'useEffect(() => {\n    if (!read && !…' to match /^u
 AssertionError: expected 2 to be greater than 5000
  Test Files  1 failed (1)
       Tests  2 failed | 3 passed (5)
---- after `git apply evidence/reliability-App.patch` (both App changes): vitest run --reporter=verbose src/main.slowStart.test.ts
- ✓ ... a slow start draws the window without the saved tabs, then draws it again with them once the settings answer
- ✓ ... a slow start whose settings never answer stays as it was drawn: no saved tabs, read false
- ✓ ... a timely start draws once, with the saved tabs and read true
- ✓ ... App (evidence/reliability-App.patch): the layout effect writes nothing until the saved tabs are back, ...
- ✓ ... App (evidence/reliability-App.patch): a tab opened during a slow start never takes a saved tab's pane key
+--- after `git apply --3way evidence/reliability-App.patch` (both App changes), re-run at integration 2026-10-30 on
+    lane/reliability merged with main: VITEST_MAX_WORKERS=2 flock /tmp/kolux-node.lock pnpm exec vitest run --reporter=verbose src/main.slowStart.test.ts
+ ✓ src/main.slowStart.test.ts > a slow start draws the window without the saved tabs, then draws it again with them once the settings answer 1799ms
+ ✓ src/main.slowStart.test.ts > a slow start whose settings never answer stays as it was drawn: no saved tabs, read false 1549ms
+ ✓ src/main.slowStart.test.ts > a timely start draws once, with the saved tabs and read true 85ms
+ ✓ src/main.slowStart.test.ts > App (evidence/reliability-App.patch): the layout effect writes nothing until the saved tabs are back, even after its own settings read lands 2ms
+ ✓ src/main.slowStart.test.ts > App (evidence/reliability-App.patch): a tab opened during a slow start never takes a saved tab's pane key 2ms
  Test Files  1 passed (1)
       Tests  5 passed (5)
 --- flock /tmp/kolux-node.lock pnpm exec tsc with the patch applied: exit 0. Then `git diff src/App.tsx >

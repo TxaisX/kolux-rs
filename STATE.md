@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 689 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 694 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 4 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -34,6 +34,19 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
+- [reliability] 2026-10-30 · Open: live Windows checks on the installed build. T-565 (round 1 review fixed): Escape
+  in the Usage Share card or the Send feedback box closes only that box (SettingsPage.tsx:318-334, 7 tests in
+  SettingsPage.escape.test.ts); check Ctrl+, from a terminal then Escape, and Escape in Share and Send feedback.
+  T-597 (round 1 review fixed): while a slow start waits, App hands out pane keys from 1_000_000 (applied from
+  evidence/reliability-App.patch), so a wait tab never takes over a saved tab's running terminal;
+  main.slowStart.test.ts tests 4 and 5 pass with it; check a start whose settings read takes over 1.5 s.
+- [reliability] 2026-10-30 · Known flake: src/settings/__cards__/SET-006-link.test.ts "terminal-first" fails on the
+  untouched base 025eda2 on the shared Linux machine (its until() waits about 400 ms for the Shortcuts page to load).
+- [reliability] 2026-10-30 · Follow-ups not built (need new Rust): (1) T-599: a crash_note(summary) command in
+  src-tauri/src/resources/recovery.rs that calls note_crash, registered in lib.rs and called from a componentDidCatch
+  in src/recovery/ScreenBoundary.tsx with crashText(error), so Help > Report Crash can show a crash nobody reported
+  before the reload. (2) T-598 audit: agent_creds.rs, projects.rs set_place, claude_key.rs and the `kolux agent hooks`
+  CLI should send the settings-saved broadcast after they write settings.
 - [updates] 2026-10-30 · Open: four steps make every installed copy update itself (DT-R39). (1) Create
   the public repository TxaisX/kolux-rs-releases with a README (Claude's GitHub connection cannot create
   repositories). (2) Give the Claude GitHub App access to it. (3) Lift the GitHub Actions billing block
