@@ -146,7 +146,15 @@ export function GrokKeyDialog({ open, onSubmit, onClose }: { open: boolean; onSu
     onClose();
   };
   return (
-    <div className="ask-backdrop" hidden={!open} onKeyDown={(e) => e.key === "Escape" && cancel()}>
+    <div
+      className="ask-backdrop"
+      hidden={!open}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        e.stopPropagation(); // T-565: this Escape is the dialog's; Settings under it stays open
+        cancel();
+      }}
+    >
       <form
         className="ask"
         role="dialog"

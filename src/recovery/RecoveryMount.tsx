@@ -13,7 +13,8 @@ import RecoveryNotes from "./RecoveryNotes";
 import { loadRecoveryNotes } from "./startupNotes";
 import { repaint, WOKE_EVENT } from "./hidden";
 import { requestUpdateCheck } from "../update/UpdateCenter";
-import { afterBurst, HEARTBEAT_MS, launchPrompt, updateNotice, type GraphicsPrompt, type LastAttempt } from "./model";
+import { useHeartbeat } from "./heartbeat";
+import { afterBurst, launchPrompt, updateNotice, type GraphicsPrompt, type LastAttempt } from "./model";
 
 export default function RecoveryMount() {
   const [g, setG] = useState<GraphicsPrompt>(null);
@@ -25,12 +26,7 @@ export default function RecoveryMount() {
     invoke<LastAttempt>("update_last_attempt").then((a) => setUpd(updateNotice(a)), () => {});
   }, []);
 
-  useEffect(() => {
-    const beat = () => void invoke("ui_heartbeat").catch(() => {});
-    beat();
-    const t = setInterval(beat, HEARTBEAT_MS);
-    return () => clearInterval(t);
-  }, []);
+  useHeartbeat();
 
   // T-286-b (APP-017): after the computer wakes the page replays held updates and repaints.
   useEffect(() => {
