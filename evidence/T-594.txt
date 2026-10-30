@@ -53,6 +53,25 @@ disk had 2.8 GB free). The model checks the algorithm, not NSIS's own string ins
 3. Uninstall: the entry is gone, every other entry and the type unchanged; a new terminal no longer finds kolux.
 4. With a user PATH over ~1000 characters: PATH is left exactly as it was and the log says so.
 
+--- review round (PR #5 fresh review, 2026-10-30, integrator)
+Finding: KOLUX_PATH_NAME stopped its walk at the first value with an empty name. If HKCU\Environment has its
+unnamed default value set, Path was never found and the installer wrote a new Path holding only
+$INSTDIR\bin, wiping the user's PATH.
+Fix (src-tauri/installer-hooks.nsh, KOLUX_PATH_NAME): the walk ends only on the error flag (set by
+EnumRegValue past the last value); an empty name is skipped like any other non-Path value. If the walk finds
+no Path, `ReadRegStr HKCU Environment Path` is tried and a value that answers is used, so Path is never
+created over an existing one. Only a full walk with no Path and a failed read count as "no PATH".
+Header reworded: a PATH stored as REG_SZ is written back as REG_EXPAND_SZ (it does not "stay" REG_SZ).
+$ makensis -WX -V3 -DOUT=<scratch>/hooks-check.exe evidence/T-594-hooks-check.nsi      (makensis v3.09-4)
+Install: 1 page (64 bytes), 1 section (4120 bytes), 146 instructions (4088 bytes), 62 strings (1978 bytes), 1 language table (194 bytes).
+Uninstall: 1 page (128 bytes), 1 section (4120 bytes), 118 instructions (3304 bytes), 54 strings (1592 bytes), 1 language table (194 bytes).
+with headers exit 0
+$ makensis -WX -V3 -DALONE=1 -DOUT=<scratch>/hooks-alone.exe evidence/T-594-hooks-check.nsi
+alone exit 0
+Still unproved without Windows: the walk past an unnamed default value. Add to the live checks below:
+5. Set an unnamed default value on HKCU\Environment (reg add HKCU\Environment /ve /d x), install: PATH keeps
+   every old entry and gains <install>\bin once.
+
 --- note for Txais (not blocking)
 An update reruns the installer, so if someone removed kolux in Settings > CLI, the next update puts it back
 on PATH (the task says: add it on install when missing). If that should stay removed, it needs a choice.

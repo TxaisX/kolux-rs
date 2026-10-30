@@ -2,8 +2,9 @@
 ; opens (first-run wizard and Settings > Agents), and Kolux installs just those, several at once.
 ; T-594 (CLI-007): a new terminal finds kolux. The installer puts the install's bin folder (kolux.exe and
 ; kolux.cmd, DT-R27) on the user's PATH when it is missing, and the uninstaller takes exactly that entry off
-; again. The rules are cli_register.rs's (CLI-008): the variable keeps its name and stays REG_EXPAND_SZ, the
-; change is read back before it is reported, and no other entry is ever touched.
+; again. The rules are cli_register.rs's (CLI-008): the variable keeps its name and is written as
+; REG_EXPAND_SZ (a PATH stored as REG_SZ comes back as REG_EXPAND_SZ, which Windows reads the same way),
+; the change is read back before it is reported, and no other entry is ever touched.
 ; ponytail: NSIS strings hold 1024 characters, so a PATH too long to change safely is left as it is and the
 ; log says so (Settings > CLI > Register has no such limit); upgrade: read and write the value through the
 ; System plugin into a buffer of its own size.
@@ -14,6 +15,10 @@
 !define /math KOLUX_STRLEN_MAX ${NSIS_MAX_STRLEN} - 1
 
 ; $R9: the name the PATH variable goes by in HKCU\Environment (Path, PATH, ...), or "" when there is none.
+; The walk ends only on the error flag, which EnumRegValue sets past the last value: a value with an empty
+; name (the key's unnamed default) is skipped, never taken for the end, so it cannot hide Path and make the
+; installer write a new Path that holds only $INSTDIR\bin. If the walk still finds nothing, Path is read by
+; name; a value that answers is used. Only a full walk with no Path and a read that fails counts as none.
 !macro KOLUX_PATH_NAME
   StrCpy $R9 ""
   StrCpy $R8 0
@@ -21,7 +26,6 @@
     ClearErrors
     EnumRegValue $R7 HKCU "Environment" $R8
     ${If} ${Errors}
-    ${OrIf} $R7 == ""
       ${ExitDo}
     ${EndIf}
     ${If} $R7 == "Path"
@@ -30,6 +34,14 @@
     ${EndIf}
     IntOp $R8 $R8 + 1
   ${Loop}
+  ${If} $R9 == ""
+    ClearErrors
+    ReadRegStr $R7 HKCU "Environment" "Path"
+    ${IfNot} ${Errors}
+      StrCpy $R9 "Path"
+    ${EndIf}
+  ${EndIf}
+  ClearErrors
 !macroend
 
 ; $R2: the PATH text in $R8 without its entries that are $INSTDIR\bin (any case, with or without a trailing

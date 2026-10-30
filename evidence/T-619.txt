@@ -57,3 +57,20 @@ exit 0   (no warnings; the Windows paths compile)
   pane, close the busy one: the second pane keeps echoing typed keys and output.
 - Outside this lane's files (from the same audit text): the window side's Terminals::resize
   (terminal.rs:1200-1203) and spawn still hold the window registry lock across a service round trip.
+
+--- real test runs (integrator, 2026-10-30)
+Full run on the merged branch (from src-tauri: `. ../scripts/test-env.sh`, then
+`cargo test --tests --no-fail-fast -- --test-threads=3`, CARGO_TARGET_DIR shared, 3 jobs):
+cli-test.log:2323: test pty::service::tests::row784_a_stalled_kill_does_not_hold_the_service_lock ... ok
+cli-test.log:2332: test pty::service::tests::t619_a_resize_waiting_on_its_terminal_does_not_hold_the_service_lock ... ok
+Re-run after the PR #5 review fixes (`cargo test --lib -- --test-threads=3 cli:: fence:: pty::service::
+onboarding::tests::cli007`): the same lines pass again. The 6 failures in that run are 5 known Linux-only
+baseline failures plus fence cli018, which fails on Linux when the random scratch folder name has capitals
+(it passes with a lowercase KRS_SCRATCH_ROOT); fence.rs is not this lane's file.
+Real red on the base: throwaway worktree at 025eda2 with only the test copied in (plus its list_answers
+helper / the submit_verdict call), run with `. ../scripts/test-env.sh` and a name filter, then removed:
+test pty::service::tests::row784_a_stalled_kill_does_not_hold_the_service_lock ... FAILED
+thread 'pty::service::tests::row784_a_stalled_kill_does_not_hold_the_service_lock' panicked at src/pty_service.rs:1262:9:
+list waited behind a stalled kill
+The t619 resize red stays a derived note. Review nit: resize_outside now carries a ponytail comment naming
+it as a copy of PtySession::resize, to be shared as one function in pty.rs.

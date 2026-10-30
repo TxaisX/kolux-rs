@@ -166,6 +166,8 @@ impl Inner {
 
 /// T-619: `PtySession::resize` on the master and size keeper taken out of the service lock: the size
 /// is recorded under the master's own lock, so a restore cannot put an older one back, then applied.
+/// ponytail: this body is a copy of `PtySession::resize` (pty.rs), which needs `&PtySession` and so the
+/// service lock; upgrade: share one free function in pty.rs (not this lane's file) that both call.
 fn resize_outside(master: Option<super::window_ops::SharedMaster>, size: Option<Arc<super::window_ops::SizeKeeper>>, cols: u16, rows: u16) -> Result<(), String> {
     let m = master.ok_or("session already closed")?;
     let m = m.lock().map_err(|_| "pty lock poisoned".to_string())?;

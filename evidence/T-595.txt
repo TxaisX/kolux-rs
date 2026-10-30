@@ -51,3 +51,14 @@ exit 0   (no warnings)
 - Not done here (outside this task's files): L2-rust-crates.2 also suggests SetDefaultDllDirectories(SYSTEM32 |
   APPLICATION_DIR) at the start of every Kolux process; with this fix the current folder of a process started
   by `kolux open` is already the install folder, which the loader searches anyway.
+
+--- real test runs (integrator, 2026-10-30)
+Full run on the merged branch (from src-tauri: `. ../scripts/test-env.sh`, then
+`cargo test --tests --no-fail-fast -- --test-threads=3`, CARGO_TARGET_DIR shared, 3 jobs):
+cli-test.log:1266: test cli::tests::cli011_open_starts_the_app_in_its_own_folder_not_the_callers ... ok
+cli-test.log:2320: test pty::service::tests::cli011_the_service_starts_in_its_own_folder_not_the_callers ... ok
+Re-run after the PR #5 review fixes (`cargo test --lib -- --test-threads=3 cli:: fence:: pty::service::
+onboarding::tests::cli007`): the same lines pass again. The 6 failures in that run are 5 known Linux-only
+baseline failures plus fence cli018, which fails on Linux when the random scratch folder name has capitals
+(it passes with a lowercase KRS_SCRATCH_ROOT); fence.rs is not this lane's file.
+The red stays the derived note above (no base run).

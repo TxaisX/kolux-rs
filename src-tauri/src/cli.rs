@@ -2746,8 +2746,10 @@ fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 for p in projects::load_projects(&store).into_iter().filter(|p| only.as_ref().is_none_or(|o| o.id == p.id)) {
                     // T-596 (CLI-017, R01-cli.8): a project whose folder is gone or offline (APP-051 keeps
                     // it) is named, not fatal: the others are still listed, as pick_in and terminal_rows do.
+                    // With --repo naming that one project there is nothing else to list, so its error stands.
                     match projects::list_workspaces(ctx.git, &store, &p) {
                         Ok(all) => lists.push((p, all)),
+                        Err(e) if only.is_some() => return Err(e.into()),
                         Err(e) => unreadable.push(json!({ "repoId": p.id, "repo": p.name, "path": p.path, "error": e.trim() })),
                     }
                 }
@@ -6231,6 +6233,11 @@ mod tests {
         assert!(!missing[0]["error"].as_str().unwrap().is_empty());
         let text = text_of("worktree.list", &list);
         assert!(text.contains("kept") && text.contains("gone: not listed"), "{text}");
+        // --repo naming the gone project itself still fails, as before T-596: only the full listing tolerates it.
+        let one = Request { args: json!({ "repo": "name:gone" }), ..req.clone() };
+        assert!(dispatch(&ctx, &one).is_err(), "--repo on a missing folder must still fail");
+        let kept_only = dispatch(&ctx, &Request { args: json!({ "repo": "name:kept" }), ..req.clone() }).unwrap();
+        assert_eq!(kept_only["worktrees"].as_array().unwrap().len(), 1, "{kept_only}");
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
