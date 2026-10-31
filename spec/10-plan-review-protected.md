@@ -146,7 +146,8 @@ Acceptance:
   - [x] No comments and an empty note → Request changes is disabled. (cards; evidence/cards-SAFE-004.txt)
   - [x] Two comments, then Request changes → Claude gets a single message naming both line ranges
         and comes back with a revised plan. (cards live; evidence/cards-SAFE-004.txt)
-  - [ ] A pane whose status never updates → the feedback still arrives after about 3 seconds.
+  - [x] A pane whose status never updates → the feedback still arrives after about 3 seconds.
+        (cards; evidence/cycle3-SAFE-004.txt)
 Compat: —
 Source: D-10-004
 

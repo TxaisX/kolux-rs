@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { LIMIT } from "../terminal/paste";
 import { ASKING_NOTE } from "./composer";
-import { UNSEEN_NOTE, forgetHearing, hearStates, heardOf, holdNote, sendToPane } from "./send";
+import { UNSEEN_NOTE, forgetHearing, hearStates, heardAt, heardOf, holdNote, sendToPane, setClock } from "./send";
 
 type Status = { paneKey: number; state?: string };
 type Handler = (e: { payload: Status }) => void;
@@ -115,6 +115,19 @@ describe("a send's stop check reads the send's own pane (council FB2)", () => {
     emit({ paneKey: 8 });
     expect(heardOf(7)).toBe("permission");
     expect(heardOf(8)).toBe("idle");
+  });
+
+  it("SAFE-004 box 3: a pane's newest reading time advances with every agent-status event, even when the state word repeats", async () => {
+    const { listen, emit } = fakeListen();
+    let now = 100;
+    setClock(() => now);
+    await hearStates(listen);
+    emit({ paneKey: 7, state: "permission" });
+    expect(heardAt(7)).toBe(100);
+    now = 250;
+    emit({ paneKey: 7, state: "permission" }); // the same word again: the status source is still reporting
+    expect(heardAt(7)).toBe(250); // so a pane that keeps asking with fresh readings is not taken for a stuck one
+    expect(heardAt(8)).toBeUndefined(); // and a pane nothing was ever heard from has no reading time
   });
 
   it("a clear pane gets the whole message and its Enter, into the terminal the pane has at send time", async () => {
