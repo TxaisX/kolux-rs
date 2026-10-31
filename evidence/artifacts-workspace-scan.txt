@@ -11,11 +11,12 @@ for it to land in the tab automatically, and for video, audio and other files to
 
 What changed
 - src-tauri/src/artifacts.rs: artifacts_scan(path, project) and workspace_files(). The scan reads
-  the top-level files in <workspace>/artifacts, imports each once, refreshes a changed file by its
-  origin instead of adding a second entry, skips entries the library already holds, emits
-  artifacts-changed, and leaves relative paths and network shares alone. Top-level only, so a test
-  run's shots/ folder is not imported; a page's own relative assets are still copied with it.
-  JSON and log data count in the explicit artifacts folder but not in the global Claude Write list.
+  every top-level file in <workspace>/artifacts, whatever its extension, imports each once,
+  refreshes a changed file by its origin instead of adding a second entry, skips entries the
+  library already holds, emits artifacts-changed, and leaves relative paths and network shares
+  alone. Top-level only, so a test run's shots/ folder is not imported; a page's own relative
+  assets are still copied with it. Dotfiles and .tmp/.part/.crdownload/.lock files are skipped,
+  so a half-written download is not an artifact. The global Claude Write list stays narrow.
 - Media: mp4, webm, mov, m4v, ogv, mkv, avi, mp3, wav, m4a, ogg, oga, flac, aac and opus are kept
   and typed as video or audio. The single-file cap rises from 25 MB to 100 MB. The artifact scheme
   now answers byte ranges (206 with Content-Range and Accept-Ranges) so a video or audio track can
@@ -29,10 +30,10 @@ What changed
 - src/styles.css: the media, audio and PDF viewer surfaces.
 
 Proof
-- cargo test --lib artifacts::tests: 10 passed, 0 failed. The tests cover workspace selection and
-  exclusions, first import, unchanged second scan, refresh of a changed file, a fresh app run not
-  re-adding entries, media kinds and MIME types, range parsing and clamping, and a real media file
-  served through the scheme as a 206 with the requested bytes.
+- cargo test --lib artifacts::tests: 10 passed, 0 failed. The tests cover every top-level file and
+  the dotfile/partial/subfolder exclusions, first import, unchanged second scan, refresh of a
+  changed file, a fresh app run not re-adding entries, media kinds and MIME types, range parsing
+  and clamping, and a real media file served through the scheme as a 206 with the requested bytes.
 - pnpm exec tsc --noEmit: pass.
 - pnpm exec vitest run src/artifacts/ArtifactsPage.test.ts: 5 passed, including video, audio and PDF
   view modes.

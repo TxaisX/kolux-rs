@@ -153,11 +153,16 @@ pub const KEPT: &[&str] = &[
     "mp3", "wav", "m4a", "ogg", "oga", "flac", "aac", "opus",
 ];
 
-/// A file in a workspace's explicit `artifacts/` folder is a deliverable by definition, so data
-/// files count there even though a Claude `Write` of a project's `package.json` must not.
-fn kept_in_workspace(path: &Path) -> bool {
+/// A file in a workspace's explicit `artifacts/` folder is a deliverable by definition, so every
+/// top-level file counts there even when the same extension would be source elsewhere. Dotfiles and
+/// half-written downloads are not deliverables.
+fn is_workspace_file(path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    if name.starts_with('.') {
+        return false;
+    }
     let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    KEPT.contains(&ext.as_str()) || matches!(ext.as_str(), "json" | "log")
+    !matches!(ext.as_str(), "tmp" | "part" | "crdownload" | "lock")
 }
 
 fn unescape(s: &str) -> String {
@@ -450,14 +455,15 @@ impl Library {
 /// The folder a workspace keeps its finished artifacts in: `<workspace>/artifacts`.
 pub const WORKSPACE_DIR: &str = "artifacts";
 
-/// Every kept file directly in `<workspace>/artifacts`, in a stable order. Subfolders are not
-/// entries: they hold a page's own assets (copied with the page) or a test run's screenshots, not a
-/// second deliverable. A symlink is not a file here, so the scan never leaves the folder.
+/// Every file directly in `<workspace>/artifacts`, in a stable order, whatever its extension.
+/// Subfolders are not entries: they hold a page's own assets (copied with the page) or a test run's
+/// screenshots, not a second deliverable. A symlink is not a file here, so the scan never leaves the
+/// folder, and a dotfile or a half-written download is not an artifact.
 pub fn workspace_files(workspace: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for entry in fs::read_dir(workspace.join(WORKSPACE_DIR)).into_iter().flatten().flatten() {
         let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_file()) && kept_in_workspace(&path) {
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) && is_workspace_file(&path) {
             out.push(path);
         }
     }
@@ -830,7 +836,8 @@ mod tests {
         }
         assert_eq!(kind_of(Path::new("data.json")), "text");
         assert!(!KEPT.contains(&"json"), "a project JSON is not auto-captured from a Write");
-        assert!(kept_in_workspace(Path::new("data.json")));
+        assert!(is_workspace_file(Path::new("data.json")));
+        assert!(is_workspace_file(Path::new("model.psd")), "any file in the artifacts folder counts");
         assert_eq!(mime("clip.mp4"), "video/mp4");
         assert_eq!(mime("track.mp3"), "audio/mpeg");
         assert_eq!(mime("paper.pdf"), "application/pdf");
@@ -882,24 +889,26 @@ mod tests {
         fs::write(ws.join("artifacts").join("notes.md"), "# Notes").unwrap();
         fs::write(ws.join("artifacts").join("data.json"), "{}").unwrap();
         fs::write(ws.join("artifacts").join("skip.exe"), "no").unwrap();
+        fs::write(ws.join("artifacts").join("page.html.tmp"), "partial").unwrap();
+        fs::write(ws.join("artifacts").join(".DS_Store"), "noise").unwrap();
         fs::write(ws.join("artifacts").join("node_modules").join("c.html"), "<title>C</title>").unwrap();
 
         let files = workspace_files(&ws);
-        assert_eq!(files.len(), 3, "top-level kept files and data only; a subfolder is not an entry: {files:?}");
+        assert_eq!(files.len(), 4, "every top-level file; a subfolder is not an entry: {files:?}");
         assert!(workspace_files(&root.join("missing")).is_empty());
 
         let lib = Library::new(root.join("lib"));
         let mut seen = std::collections::HashMap::new();
-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 3);
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 4);
         let first = lib.list();
-        assert_eq!(first.len(), 3);
+        assert_eq!(first.len(), 4);
         assert!(first.iter().all(|e| e.entry.source == "workspace" && e.entry.project.as_deref() == Some("Project")));
         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 0, "an unchanged folder adds nothing");
 
         fs::write(ws.join("artifacts").join("a.html"), "<title>A2</title>").unwrap();
         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 1, "only the changed page is refreshed");
         let again = lib.list();
-        assert_eq!(again.len(), 3);
+        assert_eq!(again.len(), 4);
         assert!(again.iter().any(|e| e.entry.title == "A2"));
         let mut fresh = std::collections::HashMap::new();
         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut fresh), 0, "a new app run does not re-add entries the library already holds");
