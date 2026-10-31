@@ -167,7 +167,16 @@ export function takeQueued(dir) {
     return false;
   }
 }
-export const unlock = (dir) => fs.rmSync(dir + ".lock", { force: true });
+/** Removes the lock only when `pid` owns it: a failed build must never unlock the run that replaced it. */
+export const unlock = (dir, pid = process.pid) => {
+  let owner;
+  try {
+    owner = JSON.parse(fs.readFileSync(dir + ".lock", "utf8")).pid;
+  } catch {
+    return; // already gone, or not provably this build's
+  }
+  if (owner === pid) fs.rmSync(dir + ".lock", { force: true });
+};
 
 // ------------------------------------------------------------------ the job
 

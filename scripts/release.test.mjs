@@ -55,7 +55,9 @@ describe("one build at a time (APP-059)", () => {
     expect(takeQueued(dir)).toBe(true);
     expect(takeQueued(dir)).toBe(false); // three ships, one extra build
     expect(acquire(dir, { pid: 4, isAlive: () => false })).toBe("locked"); // holder died
-    unlock(dir);
+    unlock(dir, 3); // a build that no longer owns the lock leaves it alone
+    expect(fs.existsSync(dir + ".lock")).toBe(true);
+    unlock(dir, 4);
     expect(fs.existsSync(dir + ".lock")).toBe(false);
   });
 });
