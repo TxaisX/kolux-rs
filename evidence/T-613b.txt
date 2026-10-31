@@ -1,0 +1,71 @@
+T-613b / T-617b: data-loss follow-ups from the PR #10 review (items 1-5)
+Lane: lane2/data-loss, based on main a7f3f406. Linux cloud machine; no live Windows check was run.
+
+BEFORE: the new tests on main's code (the fixes taken out, the tests kept)
+$ cd src-tauri && . ../scripts/test-env.sh && CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test --lib -- t613b t617b t604b t607b
+test files::tests::t617b_old_save_copies_beside_a_dangling_link_are_cleared ... FAILED
+test projects::tests::t613b_a_branch_that_cannot_be_read_is_not_taken_for_one_with_nothing_to_lose ... FAILED
+test cli::tests::t613b_worktree_rm_keeps_a_branch_holding_a_commit_found_nowhere_else ... FAILED
+test projects::tests::t613b_a_detached_workspace_with_commits_found_nowhere_else_keeps_them_on_a_new_branch ... FAILED
+test projects::tests::t613b_an_explicit_branch_delete_takes_the_branch_turn ... FAILED
+
+---- files::tests::t617b_old_save_copies_beside_a_dangling_link_are_cleared stdout ----
+thread 'files::tests::t617b_old_save_copies_beside_a_dangling_link_are_cleared' (21553) panicked at src/files.rs:1241:9:
+assertion `left == right` failed
+  left: [".CLAUDE.md.kolux-save-1-0", ".CLAUDE.md.kolux-save-2-0", ".b.txt.kolux-save-1-0", "CLAUDE.md"]
+ right: [".CLAUDE.md.kolux-save-2-0", ".b.txt.kolux-save-1-0", "CLAUDE.md"]
+
+---- projects::tests::t613b_a_branch_that_cannot_be_read_is_not_taken_for_one_with_nothing_to_lose stdout ----
+thread 'projects::tests::t613b_a_branch_that_cannot_be_read_is_not_taken_for_one_with_nothing_to_lose' (21554) panicked at src/projects.rs:4962:9:
+a failed read is not an empty list: Ok([])
+
+---- cli::tests::t613b_worktree_rm_keeps_a_branch_holding_a_commit_found_nowhere_else stdout ----
+thread 'cli::tests::t613b_worktree_rm_keeps_a_branch_holding_a_commit_found_nowhere_else' (21552) panicked at src/cli.rs:6569:9:
+the unique commit survives on its branch: {"path":"/tmp/krs-scratch.970addf4310d/tmp/kolux-rs-cli613b-21550/ws/repo/unique","branch":"unique","name":null,"projectId":"repo-1793407696427","branchKept":false,"stopped":0,"stuck":[],"warnings":[]}
+
+---- projects::tests::t613b_a_detached_workspace_with_commits_found_nowhere_else_keeps_them_on_a_new_branch stdout ----
+thread 'projects::tests::t613b_a_detached_workspace_with_commits_found_nowhere_else_keeps_them_on_a_new_branch' (21663) panicked at src/projects.rs:4934:13:
+assertion `left == right` failed: batch: the new branch is named
+  left: None
+ right: Some(Kept { branch: "kolux/kept-468bed2", commit: "468bed2c10e816fe64cb40cf0a2758a5a6266282" })
+
+---- projects::tests::t613b_an_explicit_branch_delete_takes_the_branch_turn stdout ----
+thread 'projects::tests::t613b_an_explicit_branch_delete_takes_the_branch_turn' (21671) panicked at src/projects.rs:4997:13:
+the branch waits for the turn before it goes
+
+AFTER: with the fixes
+$ cd src-tauri && . ../scripts/test-env.sh && CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test --lib -- projects:: cli:: protected files:: browser::engine cleanup bulk --test-threads=2
+test cli::tests::t613b_worktree_rm_keeps_a_branch_holding_a_commit_found_nowhere_else ... ok
+test files::tests::t617b_old_save_copies_beside_a_dangling_link_are_cleared ... ok
+test projects::tests::t613b_a_branch_that_cannot_be_read_is_not_taken_for_one_with_nothing_to_lose ... ok
+test projects::tests::t613b_a_detached_workspace_with_commits_found_nowhere_else_keeps_them_on_a_new_branch ... ok
+test projects::tests::t613b_an_explicit_branch_delete_takes_the_branch_turn ... ok
+(whole run: test result: FAILED. 459 passed; 6 failed; 1 ignored; 0 measured; 2093 filtered out; finished in 171.88s; the 6 failures are all in the 45-name baseline
+ checks/baseline-failures.txt: cli019_worktree_set_renames_links_comments_and_moves_a_worktree,
+ fix4_b_offered_lines_run_from_the_coordinator_pane_and_from_no_pane, fix6_c_offered_lines_quote_at_comma_and_equals,
+ edit043_the_canonical_folder_is_fenced_again_before_it_opens, edit043_the_fence_decides_before_the_disk_and_only_a_folder_opens,
+ new_workspaces_bring_listed_files_along_and_removal_refuses_dirty_work_unless_forced)
+
+Note: the detached-HEAD test's "nothing of its own" check was corrected after the first fixed run (other kept
+branches also hold main's commit, so it now counts kolux/ branches instead); its BEFORE failure above is at the
+earlier "batch: the new branch is named" assertion, which that change does not touch.
+
+CHECKS (each run once, at the end, from src-tauri with CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0)
+$ cargo check --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 59.06s   (no warning in a file this lane changed but one
+    pre-existing test warning at projects.rs:3056, `let mut all`, untouched)
+$ cargo check --target x86_64-pc-windows-gnu --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 57.91s   (0 warnings)
+$ cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 16s   (0 warnings)
+$ . ../scripts/test-env.sh && cargo test --tests --no-fail-fast -- --test-threads=2
+    2729 passed, 44 failed. All 44 are in checks/baseline-failures.txt (45 names); none is new. The 45th,
+    protected::tests::safe013_recursive_deletes_outside_unknown_or_piped_ask_inside_and_temp_run, now passes.
+macOS: no #[cfg(target_os = "macos")] code was touched.
+
+LIVE WINDOWS (not run here; steps for a later check)
+1. In a Kolux workspace, commit one file and do not push. In a terminal: kolux worktree rm --worktree current.
+   Expect: the folder goes; the answer names the branch as kept; `git branch` in the project still lists it.
+2. In the project folder: git worktree add --detach ..\det; commit one file there; Add it in Kolux and delete it
+   from the Space batch. Expect: the summary keeps kolux/kept-<7 chars>; `git log kolux/kept-...` shows the commit.

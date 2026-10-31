@@ -1,0 +1,109 @@
+T-604b / T-607b: protected-delete and frame follow-ups from the PR #15 review (items 6-7)
+Lane: lane2/data-loss, based on main a7f3f406. Linux cloud machine; no live Windows check was run.
+
+BEFORE: the new tests on main's code (the fixes taken out, the tests kept)
+$ cd src-tauri && . ../scripts/test-env.sh && CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test --lib -- t613b t617b t604b t607b
+test browser::engine::tests::t607b_the_dev_servers_loopback_addresses_are_refused_in_a_development_build ... FAILED
+test protected::tests::t604b_a_delete_through_a_link_in_the_temp_folder_is_judged_where_the_link_leads ... FAILED
+test protected::tests::t604b_a_powershell_delete_with_a_wildcard_asks ... FAILED
+test protected::tests::t604b_nested_folder_wrappers_are_joined_in_order ... FAILED
+test protected::tests::t604b_find_delete_rimraf_directory_delete_and_robocopy_mir_are_recursive_deletes ... FAILED
+
+---- browser::engine::tests::t607b_the_dev_servers_loopback_addresses_are_refused_in_a_development_build stdout ----
+thread 'browser::engine::tests::t607b_the_dev_servers_loopback_addresses_are_refused_in_a_development_build' (21551) panicked at src/browser_engine.rs:664:13:
+refused in a development build: http://127.0.0.1:1420/
+
+---- protected::tests::t604b_a_delete_through_a_link_in_the_temp_folder_is_judged_where_the_link_leads stdout ----
+thread 'protected::tests::t604b_a_delete_through_a_link_in_the_temp_folder_is_judged_where_the_link_leads' (21679) panicked at src/protected.rs:4165:9:
+[
+    "should ask (delete): \"rm -rf /tmp/krs-scratch.970addf4310d/tmp/krs-t604b-21550/out\", got None",
+    "should ask (delete): \"rm -rf /tmp/krs-scratch.970addf4310d/tmp/krs-t604b-21550/out/\", got None",
+    "should ask (delete): \"rm -rf /tmp/krs-scratch.970addf4310d/tmp/krs-t604b-21550/out/sub\", got None",
+    "should ask (delete): \"rm -rf /tmp/krs-scratch.970addf4310d/tmp/krs-t604b-21550/out/*\", got None",
+    "should ask (delete): \"Remove-Item -Recurse -Force /tmp/krs-scratch.970addf4310d/tmp/krs-t604b-21550/out\", got None",
+    "should ask (delete): \"cd /tmp/krs-scratch.970addf4310d/tmp/krs-t604b-21550 && rm -rf out\", got None",
+    "should ask (delete): \"rm -rf /tmp/krs-scratch.970addf4310d/tmp/krs-t604b-21550/dangling/x\", got None",
+]
+
+---- protected::tests::t604b_a_powershell_delete_with_a_wildcard_asks stdout ----
+thread 'protected::tests::t604b_a_powershell_delete_with_a_wildcard_asks' (21684) panicked at src/protected.rs:4261:9:
+[
+    "should ask (delete): \"Remove-Item -Recurse -Force build/*\", got None",
+    "should ask (delete): \"Remove-Item -Path 'out/[ab]*' -Recurse\", got None",
+    "should ask (delete): \"cd build; Remove-Item -Recurse -Force .*\", got None",
+]
+
+---- protected::tests::t604b_nested_folder_wrappers_are_joined_in_order stdout ----
+thread 'protected::tests::t604b_nested_folder_wrappers_are_joined_in_order' (21688) panicked at src/protected.rs:4183:9:
+[
+    "should ask (delete): \"env -C .. env -C sub rm -rf x\", got None",
+    "should ask (delete): \"sudo -D .. env -C other rm -rf build\", got None",
+    "should ask (delete): \"env -C .. -C app rm -rf build\", got None",
+    "should ask (delete): \"env -C /home env -C me rm -rf app\", got None",
+    "should run: \"env -C build env -C .. rm -rf out\", got Some(\"delete\")",
+]
+
+---- protected::tests::t604b_find_delete_rimraf_directory_delete_and_robocopy_mir_are_recursive_deletes stdout ----
+thread 'protected::tests::t604b_find_delete_rimraf_directory_delete_and_robocopy_mir_are_recursive_deletes' (21685) panicked at src/protected.rs:4242:9:
+[
+    "should ask (delete): \"find .. -name x -delete\", got None",
+    "should ask (delete): \"find / -delete\", got None",
+    "should ask (delete): \"find ~ -type f -delete\", got None",
+    "should ask (delete): \"find -L /etc -name '*.conf' -delete\", got None",
+    "should ask (delete): \"find . -delete\", got None",
+    "should ask (delete): \"find $DIR -delete\", got None",
+    "should ask (delete): \"cd .. && find app -delete\", got None",
+    "should ask (delete): \"rimraf ../other\", got None",
+    "should ask (delete): \"npx rimraf /\", got None",
+    "should ask (delete): \"pnpm exec rimraf ~/code\", got None",
+    "should ask (delete): \"rimraf --glob '../**'\", got None",
+    "should ask (delete): \"[IO.Directory]::Delete('/home/me/other', $true)\", got None",
+    "should ask (delete): \"[System.IO.Directory]::Delete(\\\"..\\\", $true)\", got None",
+    "should ask (delete): \"pwsh -c \\\"[System.IO.Directory]::Delete('../x', $true)\\\"\", got None",
+    "should ask (delete): \"[io.directory]::delete( '/etc' , 1 )\", got None",
+    "should ask (delete): \"robocopy empty ../other /MIR\", got None",
+    "should ask (delete): \"robocopy.exe empty /home/me /mir /njh\", got None",
+    "should ask (delete): \"robocopy empty .. /PURGE\", got None",
+    "should ask on Windows (delete): \"[IO.Directory]::Delete('C:\\\\Users\\\\me\\\\other', $true)\", got None",
+    "should ask on Windows (delete): \"robocopy empty C:\\\\Users\\\\me\\\\other /MIR\", got None",
+    "should ask on Windows (delete): \"find C:\\\\Users -delete\", got None",
+]
+
+AFTER: with the fixes
+$ cd src-tauri && . ../scripts/test-env.sh && CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test --lib -- projects:: cli:: protected files:: browser::engine cleanup bulk --test-threads=2
+test browser::engine::tests::t607b_the_dev_servers_loopback_addresses_are_refused_in_a_development_build ... ok
+test protected::tests::t604b_a_delete_through_a_link_in_the_temp_folder_is_judged_where_the_link_leads ... ok
+test protected::tests::t604b_a_powershell_delete_with_a_wildcard_asks ... ok
+test protected::tests::t604b_find_delete_rimraf_directory_delete_and_robocopy_mir_are_recursive_deletes ... ok
+test protected::tests::t604b_nested_folder_wrappers_are_joined_in_order ... ok
+(whole run: test result: FAILED. 459 passed; 6 failed; 1 ignored; 0 measured; 2093 filtered out; finished in 171.88s; the 6 failures are all in the 45-name baseline
+ checks/baseline-failures.txt: cli019_worktree_set_renames_links_comments_and_moves_a_worktree,
+ fix4_b_offered_lines_run_from_the_coordinator_pane_and_from_no_pane, fix6_c_offered_lines_quote_at_comma_and_equals,
+ edit043_the_canonical_folder_is_fenced_again_before_it_opens, edit043_the_fence_decides_before_the_disk_and_only_a_folder_opens,
+ new_workspaces_bring_listed_files_along_and_removal_refuses_dirty_work_unless_forced)
+
+Note: the detached-HEAD test's "nothing of its own" check was corrected after the first fixed run (other kept
+branches also hold main's commit, so it now counts kolux/ branches instead); its BEFORE failure above is at the
+earlier "batch: the new branch is named" assertion, which that change does not touch.
+
+CHECKS (each run once, at the end, from src-tauri with CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0)
+$ cargo check --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 59.06s   (no warning in a file this lane changed but one
+    pre-existing test warning at projects.rs:3056, `let mut all`, untouched)
+$ cargo check --target x86_64-pc-windows-gnu --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 57.91s   (0 warnings)
+$ cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 16s   (0 warnings)
+$ . ../scripts/test-env.sh && cargo test --tests --no-fail-fast -- --test-threads=2
+    2729 passed, 44 failed. All 44 are in checks/baseline-failures.txt (45 names); none is new. The 45th,
+    protected::tests::safe013_recursive_deletes_outside_unknown_or_piped_ask_inside_and_temp_run, now passes.
+macOS: no #[cfg(target_os = "macos")] code was touched.
+
+LIVE WINDOWS (not run here; steps for a later check)
+1. In a Claude pane (PowerShell tool): ask Claude to run `[System.IO.Directory]::Delete('C:\Users\<you>\x', $true)`,
+   `robocopy empty C:\Users\<you>\x /MIR` and `Remove-Item -Recurse -Force build\*`. Expect: Claude's permission
+   prompt names "Deleting folders outside the workspace" for each.
+2. mklink /J %TEMP%\out C:\Users\<you>\Documents, then ask Claude to run rm -rf "$TEMP/out/". Expect: it asks.
+3. In the dev build (pnpm tauri dev), open a page that frames http://127.0.0.1:1420/ in a browser tab. Expect: the
+   frame stays blank.
