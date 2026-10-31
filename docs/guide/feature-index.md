@@ -76,7 +76,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-025-c | Subagents and teammates show under their lead session. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-026-a | A desktop notification arrives when an agent finishes, needs you or goes quiet. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-026-b | One status vocabulary is used for every dot, chip and label. | [Board, Agents and Inbox](board-agents-inbox.md) |
-| T-026-c | The Inbox lists what needs you, what is running and what finished today. | [Board, Agents and Inbox](board-agents-inbox.md) |
+| T-026-c | The Inbox lists what needs you, what is running, what finished today and what stopped today. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-027 | Thought rows in the Agents chat start folded and open or fold from the keyboard; Expand all and Collapse all sit above the chat. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
 | T-028-a | Board cards show one line of activity, status chips, and approve or deny buttons. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-028-b | The Agents screen uses the same fixed status words. | [Board, Agents and Inbox](board-agents-inbox.md) |

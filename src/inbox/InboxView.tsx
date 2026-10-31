@@ -55,7 +55,7 @@ export default function InboxView({ items, now, onOpen, onReview }: Props) {
           if (rows.length === 0) return null;
           return (
             <section key={g.id} aria-label={g.title}>
-              <h3>{g.title}</h3>
+              <h3 title={g.about}>{g.title}</h3>
               {rows.map((i) => (
                 <div key={i.key} id={`inbox-${i.key}`} role="option" aria-selected={i.key === current} className={`row ${VOCAB[i.state].tone}`} onClick={() => setSelected(i.key)} onDoubleClick={() => onOpen(i.key)}>
                   <span className="st" data-tip={VOCAB[i.state].explain}>

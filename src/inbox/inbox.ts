@@ -10,11 +10,11 @@ export type Source = { key: number; agent: string; title: string; branch: string
 /** `state` "stopped" (DT-C52): an agent whose program has exited, as the Board and the Tower show it. */
 export type Item = Omit<Source, "finishedAt" | "running" | "interrupted" | "changed" | "state"> & { state: AgentState | "stopped"; group: Group; label: string; when: number; exited: boolean };
 
-export const GROUPS: Array<{ id: Group; title: string }> = [
-  { id: "needs", title: "Needs you" },
-  { id: "waiting", title: "Waiting on agent" },
-  { id: "done", title: "Done today" },
-  { id: "stopped", title: "Stopped" },
+export const GROUPS: Array<{ id: Group; title: string; about: string }> = [
+  { id: "needs", title: "Needs you", about: "A permission, a question, or a blocked session. A blocked session stays here; the Board and the Tower call it Stopped." },
+  { id: "waiting", title: "Waiting on agent", about: "Sessions running their turn, or queued for it." },
+  { id: "done", title: "Done today", about: "Finished its turn in the last 30 minutes, with its program still running." },
+  { id: "stopped", title: "Stopped", about: "Its program exited in the last 30 minutes, so Kolux cannot say its work finished." },
 ];
 /** Done today keeps the 20 newest finishes of the last 30 minutes; Stopped the same for programs that exited. */
 export const DONE_LIMIT = 20;
