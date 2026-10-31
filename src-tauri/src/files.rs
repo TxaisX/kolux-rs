@@ -76,6 +76,11 @@ fn replace_with(path: &Path, private: bool, put: impl FnOnce(&mut fs::File) -> s
     // ponytail: the link is read again here, after the fence looked at it; a program that swaps it in
     // between is followed (it could write there itself); hand the fenced target down if that matters.
     let real = if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        // T-617b: copies named after the link itself (a save before T-617, which wrote beside the
+        // link) are cleared beside it, even when the link leads nowhere and this save fails.
+        if let (Some(name), Some(dir)) = (path.file_name(), path.parent()) {
+            clear_stale_copies(if dir.as_os_str().is_empty() { Path::new(".") } else { dir }, &format!(".{}.kolux-save-", name.to_string_lossy()));
+        }
         fs::canonicalize(path).map_err(|e| format!("could not save {}: {e}", path.display()))?
     } else {
         path.to_path_buf()
@@ -1210,6 +1215,41 @@ mod tests {
         write_text(&f, "saved").unwrap();
         // Only this file's own old leftover goes; a recent copy (maybe a save in progress) and another file's stay.
         assert_eq!(entries(&d), vec![".a.txt.kolux-save-2-0".to_string(), ".b.txt.kolux-save-1-0".to_string(), "a.txt".to_string()]);
+    }
+
+    /// T-617b (review of PR #10): a save through a link that leads nowhere fails, and the old save
+    /// copies beside the link (named after it) are still cleared, as they were before T-617; a
+    /// recent copy and another file's stay. A save through a working link clears them too.
+    #[test]
+    fn t617b_old_save_copies_beside_a_dangling_link_are_cleared() {
+        let d = temp_dir("t617b");
+        let link = d.join("CLAUDE.md");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink("AGENTS.md", &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file("AGENTS.md", &link);
+        if let Err(e) = made {
+            println!("t617b NOT exercised: this system would not make a file link ({e}); on Windows that takes Developer Mode or an administrator");
+            return;
+        }
+        let old = d.join(".CLAUDE.md.kolux-save-1-0");
+        let fresh = d.join(".CLAUDE.md.kolux-save-2-0");
+        let other = d.join(".b.txt.kolux-save-1-0");
+        for p in [&old, &fresh, &other] {
+            fs::write(p, "x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(STALE_COPY_SECS + 60);
+        for p in [&old, &other] {
+            fs::File::options().write(true).open(p).unwrap().set_modified(long_ago).unwrap();
+        }
+        assert!(write_text(&link, "saved").is_err(), "the link leads nowhere");
+        assert_eq!(entries(&d), vec![".CLAUDE.md.kolux-save-2-0".to_string(), ".b.txt.kolux-save-1-0".to_string(), "CLAUDE.md".to_string()]);
+        // the link leads somewhere again: the copies named after the link are cleared beside it too
+        fs::write(d.join("AGENTS.md"), "rules").unwrap();
+        fs::File::options().write(true).open(&fresh).unwrap().set_modified(long_ago).unwrap();
+        write_text(&link, "saved").unwrap();
+        assert_eq!(entries(&d), vec![".b.txt.kolux-save-1-0".to_string(), "AGENTS.md".to_string(), "CLAUDE.md".to_string()]);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
