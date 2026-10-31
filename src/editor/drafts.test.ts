@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { attach, detach, hashOf, type View } from "./buffers";
+import { attach, detach, hashOf, type View } from "./editors";
 import { answerFlushRequests, createDrafts, flushOnLeave, restoreFrom, type Draft, type DraftIo } from "./drafts";
 
 // EDIT-004 (T-177): unsaved text is kept as a draft, brought back unsaved, and never written into the file.

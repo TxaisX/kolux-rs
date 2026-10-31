@@ -38,11 +38,12 @@ describe("first-load bundle budget", () => {
     expect(r.bytes).toBeGreaterThan(20_000);
   });
 
-  it("refuses to pass a build it cannot read, and keeps its ceiling between the 1.5 MB bar and 2 MB", () => {
+  it("refuses to pass a build it cannot read, and holds the first load under the 1.5 MB bar", () => {
     expect(() => budget(path.join(os.tmpdir(), "krs-no-dist"))).toThrow(/vite build/);
-    // The ceiling may never be eased back past the 1.5 MB target, nor raised above this cycle's size by more
-    // than the small fixes the ceiling already allows for (cycle 3: 1,859,764 bytes measured, 1,880,000 kept).
-    expect(CEILING).toBeGreaterThan(1_500_000);
-    expect(CEILING).toBeLessThan(2_000_000);
+    // Cycle 3 measured 1,471,768 bytes, so the ceiling was lowered to just above it (1,485,000) and now
+    // sits UNDER the 1.5 MB target: the bar is enforced, not merely aimed at, and may never be raised
+    // back past it.
+    expect(CEILING).toBeLessThanOrEqual(1_500_000);
+    expect(CEILING).toBeGreaterThan(1_450_000);
   });
 });

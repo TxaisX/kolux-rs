@@ -4,6 +4,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorState, type Transaction } from "@codemirror/state";
 import { attach, detach, docText, fileText, isDirty, lineEndsFor, relay, replaceAll, save, withLineBreaks, type View } from "./buffers";
+// The store's T-603 helpers (lineEndsFor, fileText) are in ./buffers; loading ./editors installs the
+// CodeMirror side they call into, as EditorPane does before it builds a view.
+import "./editors";
 import { richChange } from "./frontMatter";
 import { roundTrip } from "./markdown";
 import fixture from "./__fixtures__/mixed-eol.txt?raw";

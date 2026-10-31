@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorState, type Transaction } from "@codemirror/state";
-import { attach, detach, docText, fileText, hashOf, isDirty, isStale, keyOf, lineEndsFor, loadText, opening, relay, replaceAll, sameText, save, subscribe, withLineBreaks, type View } from "./buffers";
+import { attach, detach, docText, fileText, hashOf, isDirty, isStale, keyOf, lineEndsFor, loadText, opening, relay, replaceAll, sameText, save, subscribe, withLineBreaks, type View } from "./editors";
 import { richChange } from "./frontMatter";
 import { roundTrip } from "./markdown";
 

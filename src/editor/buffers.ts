@@ -2,44 +2,74 @@
 // buffer: what is typed in one is copied into the others, so two split panes edit one text; the
 // buffer remembers what is on disk, so a tab is unsaved only while its text differs from that by
 // more than trailing whitespace; a save writes the file once and leaves every view clean.
-import { Annotation, Compartment, EditorState, StateEffect, StateField, Text, type Extension, type Transaction, type ChangeSet } from "@codemirror/state";
-import { isolateHistory } from "@codemirror/commands";
+//
+// The first frame loads this module (FloatingLayer asks isDirty, the window asks keyOf and
+// baseName), so it carries no CodeMirror: the values it cannot make itself — the annotation that
+// marks Kolux's own change and the read of it, the undo grouping a reload gets, the line separator
+// of a view, the text split into lines, and the field that holds a mixed file's endings — are
+// installed by editor/editors.ts, the CodeMirror side, which loads with the editor. Everything here
+// that is not one of those values is plain text work and stays on the first frame.
+import type { Annotation, ChangeSet, EditorState, Extension, StateEffect, Text, Transaction } from "@codemirror/state";
 
-/** Marks a change Kolux made itself (a copy from the twin view, a reload), not the user's typing. */
-export const synced = Annotation.define<boolean>();
+/** What the CodeMirror side gives the store; editor/editors.ts builds it from @codemirror/state and
+ *  @codemirror/commands and installs it before any view is attached. */
+type CodeMirror = {
+  /** marks a change Kolux made itself (a copy from the twin view, a reload) */
+  mark: () => Annotation<boolean>;
+  /** whether a transaction carries that mark */
+  marked: (tr: Transaction) => boolean;
+  /** makes the transaction one undo step of its own, apart from the typing before it */
+  isolate: () => Annotation<unknown>;
+  /** the effect that switches a view's line separator */
+  ends: (end: string) => StateEffect<unknown>;
+  /** text already split into lines, as a view splits them */
+  lines: (text: string, end: string) => Text;
+  /** T-603: the effect that sets a state's per-line endings beside its document */
+  setEnds: (ends: Ends) => StateEffect<unknown>;
+  /** T-603: the endings a state holds, in order */
+  endsOfState: (state: EditorState) => Ends;
+  /** T-603: the separator compartment and the endings field for a file's text */
+  lineEndsFor: (text: string) => Extension;
+  /** T-603: the text of a state as the file would be saved, each line with its own ending */
+  fileText: (state: EditorState) => string;
+};
 
-// A file with Windows line ends is shown and saved with them. The editor splits text on its separator only, so
-// T-603: the separator sits in a compartment that a reload using other line ends throughout switches (replaceAll), and
-// text the rich view or the notebook view hands the editor gets the editor's own line breaks (withLineBreaks).
-const lineEnds = new Compartment();
+let codeMirror: CodeMirror | null = null;
 
-// DT-C57 (T-603, Txais 2026-10-31, option a): a file that holds both CRLF and LF lines draws every line on its own and
-// is saved ending by ending, byte for byte. One separator cannot split both kinds, so such a file's document holds no
-// CR at all (nothing joins, nothing shows a control character) and each line's own ending is kept beside it in
-// `endsField`; `fileText` puts the endings back, and `save` writes that.
-const mixedEnds = (text: string) => text.includes("\r\n") && /(^|[^\r])\n/.test(text);
+/** Installs the CodeMirror values, once, as editor/editors.ts loads (it is the module the editor and
+ *  the buffers' own tests import; nothing on the first frame calls a view's dispatch). */
+export function useCodeMirror(cm: CodeMirror): void {
+  codeMirror = cm;
+}
+
+function cm(): CodeMirror {
+  if (!codeMirror) throw new Error("editor/buffers: the CodeMirror side is not loaded (import editor/editors before attaching a view)");
+  return codeMirror;
+}
+
+// A file with Windows line ends is shown and saved with them. T-603: the separator sits in a
+// compartment (editor/editors.ts) that a reload using other line ends throughout switches
+// (replaceAll), and text the rich view or the notebook view hands the editor gets the editor's own
+// line breaks (withLineBreaks).
+//
+// DT-C57 (T-603, Txais 2026-10-31, option a): a file that holds both CRLF and LF lines draws every
+// line on its own and is saved ending by ending, byte for byte. One separator cannot split both
+// kinds, so such a file's document holds no CR at all (nothing joins, nothing shows a control
+// character) and each line's own ending is kept beside it in the CodeMirror side's ends field
+// (`endsField` in editor/editors.ts); `fileText` puts the endings back, and `save` writes that.
+export const mixedEnds = (text: string) => text.includes("\r\n") && /(^|[^\r])\n/.test(text);
 /** The text an editor draws for `text`: a mixed file's CRLFs are held aside (see `fileText`). */
 export const docText = (text: string) => (mixedEnds(text) ? text.replace(/\r\n/g, "\n") : text);
-const lineEndOf = (text: string) => (mixedEnds(text) ? "\n" : text.includes("\r\n") ? "\r\n" : "\n");
 
 /** The ending after each line but the last, in order: one entry per line break the file has. */
-type Ends = readonly string[];
-const setEnds = StateEffect.define<Ends>();
-/** The endings of a mixed file's lines; empty for a file with one kind of ending throughout. */
-const endsField = StateField.define<Ends>({
-  create: () => [],
-  update(ends, tr) {
-    for (const e of tr.effects) if (e.is(setEnds)) return e.value;
-    return tr.docChanged && ends.length ? mapEnds(tr.startState.doc, tr.changes, tr.newDoc, ends) : ends;
-  },
-});
+export type Ends = readonly string[];
 /** T-603: the endings of `text`, one per line break, when it mixes CRLF and LF; else none. */
-const endsOf = (text: string): Ends => (mixedEnds(text) ? text.split("\n").slice(0, -1).map((l) => (l.endsWith("\r") ? "\r\n" : "\n")) : []);
+export const endsOf = (text: string): Ends => (mixedEnds(text) ? text.split("\n").slice(0, -1).map((l) => (l.endsWith("\r") ? "\r\n" : "\n")) : []);
 
 /** DT-C57: each break of the new document keeps the ending of the old break it stands for; a break the edit added takes
  *  the ending of the line beside it. Each old break is carried forward through the change; a new break at that same place
  *  is that line's own, and one at a place no old break reached was added by the edit. */
-function mapEnds(oldDoc: Text, changes: ChangeSet, newDoc: Text, ends: Ends): Ends {
+export function mapEnds(oldDoc: Text, changes: ChangeSet, newDoc: Text, ends: Ends): Ends {
   const at = new Map<number, number>();
   for (let i = 1; i < oldDoc.lines; i++) at.set(changes.mapPos(oldDoc.line(i + 1).from - 1, 1), i - 1);
   const out: string[] = [];
@@ -50,18 +80,12 @@ function mapEnds(oldDoc: Text, changes: ChangeSet, newDoc: Text, ends: Ends): En
   return out;
 }
 
-/** The text of the file an editor state would save: its lines with each line's own ending (a state built without the
- *  endings, or a file with one kind throughout, is its document as before). */
-export function fileText(state: EditorState): string {
-  const ends = state.field(endsField, false) ?? [];
-  if (!ends.length) return state.sliceDoc();
-  let out = "";
-  for (let i = 1; i <= state.doc.lines; i++) {
-    out += state.doc.line(i).text;
-    if (i < state.doc.lines) out += ends[Math.min(i - 1, ends.length - 1)];
-  }
-  return out;
-}
+/** The line separator of an editor showing `text` (EditorPane, DiffPane), and a mixed file's line endings. */
+export const lineEndsFor = (text: string): Extension => cm().lineEndsFor(text);
+
+/** The text of the file an editor state would save: its lines with each line's own ending (a state
+ *  built without the endings, or a file with one kind throughout, is its document as before). */
+export const fileText = (state: EditorState): string => cm().fileText(state);
 
 /** T-603: the one line end `text` uses throughout, or null when it has none. A mixed file is split on LF, its CRs
  *  held aside, so every line is drawn on its own. */
@@ -70,12 +94,10 @@ const soleLineEnd = (text: string): string | null => {
   const crlf = text.includes("\r\n");
   return crlf === /(^|[^\r])\n/.test(text) ? null : crlf ? "\r\n" : "\n";
 };
-/** The line separator of an editor showing `text` (EditorPane, DiffPane), and the mixed file's line endings. */
-export const lineEndsFor = (text: string): Extension => [lineEnds.of(EditorState.lineSeparator.of(lineEndOf(text))), endsField.init(() => endsOf(text))];
+
 /** T-603 (F01-editor.2): a change worked out on doc.toString() (lines joined with \n), its line breaks as `state` splits them. */
 export const withLineBreaks = <C extends { insert: string }>(state: EditorState, c: C): C =>
   state.lineBreak === "\n" ? c : { ...c, insert: c.insert.replace(/\r?\n/g, state.lineBreak) };
-
 
 /** The part of an editor view a buffer needs; EditorView fits it, and the tests use plain states. */
 export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string | Text }; effects?: StateEffect<unknown> | readonly StateEffect<unknown>[]; annotations: Annotation<unknown> | readonly Annotation<unknown>[] }) => void };
@@ -132,8 +154,8 @@ export function attach(path: string, view: View, disk: string): void {
     const end = twin.state.lineBreak;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: twin.state.doc },
-      effects: [...(view.state.lineBreak === end ? [] : [lineEnds.reconfigure(EditorState.lineSeparator.of(end))]), setEnds.of(twin.state.field(endsField, false) ?? [])],
-      annotations: synced.of(true),
+      effects: [...(view.state.lineBreak === end ? [] : [cm().ends(end)]), cm().setEnds(cm().endsOfState(twin.state))],
+      annotations: cm().mark(),
     });
   }
   tell(b);
@@ -149,7 +171,7 @@ export function detach(path: string, view: View): void {
 export function relay(path: string, from: View, tr: Transaction): void {
   if (!tr.docChanged) return;
   const b = buf(path);
-  if (!tr.annotation(synced)) for (const v of b.views) if (v !== from) v.dispatch({ changes: tr.changes, annotations: synced.of(true) });
+  if (!cm().marked(tr)) for (const v of b.views) if (v !== from) v.dispatch({ changes: tr.changes, annotations: cm().mark() });
   tell(b);
 }
 
@@ -193,16 +215,15 @@ export async function save(path: string, write: (text: string, loadedHash?: stri
 export function replaceAll(path: string, text: string, undoable = false): void {
   const b = buf(path);
   b.disk = text;
-  const annotations = undoable ? [synced.of(true), isolateHistory.of("full")] : synced.of(true);
+  const annotations = undoable ? [cm().mark(), cm().isolate()] : cm().mark();
   const sole = soleLineEnd(text);
-  const shown = docText(text);
   const ends = endsOf(text);
   for (const v of b.views) {
     if (fileText(v.state) === text) continue;
     const end = sole ?? v.state.lineBreak;
     v.dispatch({
-      changes: { from: 0, to: v.state.doc.length, insert: Text.of(end === "\r\n" ? text.split(end) : shown.split("\n")) },
-      effects: [...(v.state.lineBreak === end ? [] : [lineEnds.reconfigure(EditorState.lineSeparator.of(end))]), setEnds.of(ends)],
+      changes: { from: 0, to: v.state.doc.length, insert: cm().lines(end === "\r\n" ? text : docText(text), end) },
+      effects: [...(v.state.lineBreak === end ? [] : [cm().ends(end)]), cm().setEnds(ends)],
       annotations,
     });
   }

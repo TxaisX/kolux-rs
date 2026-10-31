@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { attach, detach, hashOf, isDirty, type View } from "./buffers";
+import { attach, detach, hashOf, isDirty, type View } from "./editors";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, keep, readFresh, goneText, reloadNow, remember, sameStamp, verdict, type Io, type Stamp } from "./diskChange";
 
 // EDIT-003 (T-073): the disk-change check behind the banner. The stamp (modified time + size) is
