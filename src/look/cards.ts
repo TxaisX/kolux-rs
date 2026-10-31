@@ -1,5 +1,6 @@
 // PROJ-062 / SET-021 (T-270, T-266): what a workspace card in the sidebar shows besides its name and
-// status dot. Three presets - Compact (status only), Default (status and an agent summary) and
+// status dot. Three presets - Compact (status only), Default (status, an agent summary and the changed-file
+// count, T-609) and
 // Detailed (adds the pull request, the changed-file count and the workspace's note) - or a list of
 // separate details the user ticks one by one (T-266's chooser).
 //
@@ -23,7 +24,7 @@ export const DENSITIES = ["default", "compact", "detailed"] as const;
 export type Density = (typeof DENSITIES)[number];
 export const DENSITY_LABEL: Record<Density, string> = { default: "Default", compact: "Compact", detailed: "Detailed" };
 export const DENSITY_NOTE: Record<Density, string> = {
-  default: "Status and an agent summary under the name.",
+  default: "Status, an agent summary and the changed-file count under the name.",
   compact: "One line per workspace; the rest shows when you hover it.",
   detailed: "Status, agents, pull request, changed files and the note.",
 };
@@ -85,7 +86,7 @@ export const CARD_DETAILS: readonly CardDetail[] = [
 
 export const PRESETS: Record<Density, readonly string[]> = {
   compact: ["status"],
-  default: ["status", "agents"],
+  default: ["status", "agents", "changes"],
   detailed: ["status", "agents", "pr", "changes", "note"],
 };
 
