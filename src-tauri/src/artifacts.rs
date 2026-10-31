@@ -3,9 +3,11 @@
 //! to by relative path, plus one line in `library.json`. The viewer loads entries through the
 //! `kolux-artifact` scheme, which serves only that entry's files.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 pub const SCHEME: &str = "kolux-artifact";
 /// Where the web view puts the scheme: Windows' web view reaches custom schemes over http.
@@ -424,6 +426,89 @@ impl Library {
     }
 }
 
+/// The folder a workspace keeps its finished artifacts in: `<workspace>/artifacts`.
+pub const WORKSPACE_DIR: &str = "artifacts";
+
+/// Every kept file directly in `<workspace>/artifacts`, in a stable order. Subfolders are not
+/// entries: they hold a page's own assets (copied with the page) or a test run's screenshots, not a
+/// second deliverable. A symlink is not a file here, so the scan never leaves the folder.
+pub fn workspace_files(workspace: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(workspace.join(WORKSPACE_DIR)).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) && crate::capture::is_kept(&path.to_string_lossy()) {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}
+
+fn modified_ms(path: &Path) -> u64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Last (modified, size) seen for each workspace file, so the page's 3 s scan does not re-add a file
+/// that has not changed. One map for the app's life; the library is the durable record.
+static SCANNED: OnceLock<Mutex<HashMap<String, (u64, u64)>>> = OnceLock::new();
+
+/// Imports every kept file under `<workspace>/artifacts`, one entry per file. A changed file
+/// refreshes its origin instead of adding a second entry. `seen` is the caller's memory of
+/// unchanged files; a file whose store fails stays out of it so a later scan can retry.
+pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, seen: &mut HashMap<String, (u64, u64)>) -> usize {
+    let project = project.filter(|p| !p.trim().is_empty()).or_else(|| workspace.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let known: HashMap<String, (u64, u64)> = lib.list().into_iter().map(|e| (e.entry.origin, (e.entry.added, e.entry.size))).collect();
+    let mut changed = 0;
+    for file in workspace_files(workspace) {
+        let Ok(meta) = fs::metadata(&file) else { continue };
+        let stamp = (modified_ms(&file), meta.len());
+        let key = file.to_string_lossy().into_owned();
+        if seen.get(&key) == Some(&stamp) {
+            continue;
+        }
+        // The library already holds this exact file from an earlier run: remember it and move on.
+        if known.get(&key).is_some_and(|&(added, size)| size == meta.len() && added >= stamp.0) {
+            seen.insert(key, stamp);
+            continue;
+        }
+        let from = Origin { origin: key, source: "workspace", project: project.clone(), session: None, at: stamp.0.max(1) };
+        match lib.add(&file, from, fetch) {
+            Ok(_) => {
+                seen.insert(file.to_string_lossy().into_owned(), stamp);
+                changed += 1;
+            }
+            Err(e) => eprintln!("artifacts: could not keep {}: {e}", file.display()),
+        }
+    }
+    changed
+}
+
+/// Scans the active workspace's `artifacts/` folder. The Artifacts page calls this when it opens and
+/// every few seconds, so a page an agent writes lands in the tab without Add artifact. A network
+/// share is left alone (DT-R21); the library never reads one.
+#[tauri::command]
+pub fn artifacts_scan(app: tauri::AppHandle, path: String, project: Option<String>) -> Result<usize, String> {
+    let workspace = PathBuf::from(path);
+    if !workspace.is_absolute() || !workspace.is_dir() || on_network_share(&workspace) {
+        return Ok(0);
+    }
+    use tauri::{Emitter, Manager};
+    let lib = app.state::<Library>();
+    let changed = {
+        let mut seen = SCANNED.get_or_init(Default::default).lock().map_err(|e| e.to_string())?;
+        scan_workspace(lib.inner(), &workspace, project, &|u| fetch_script(&app, u), &mut seen)
+    };
+    if changed > 0 {
+        let _ = app.emit(crate::capture::EVENT, ());
+    }
+    Ok(changed)
+}
+
 fn mime(path: &str) -> &'static str {
     match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
         "html" | "htm" => "text/html; charset=utf-8",
@@ -647,6 +732,40 @@ mod tests {
         assert!(page.contains("https://cdnjs.cloudflare.com/ajax/libs/gone/1/g.js") && page.contains("https://evil.example/x.js"));
         assert_eq!(fs::read_to_string(root.join("cdn").join("1.js")).unwrap(), "/* https://unpkg.com/b@2 */");
         assert!(vendor_scripts("<script src=\"https://cdn.jsdelivr.net/npm/x\"></script>", &root, &|_| None, &mut total).is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_artifacts_are_found_imported_once_and_refreshed_on_change() {
+        let root = temp_dir("workspace");
+        let ws = root.join("Project");
+        fs::create_dir_all(ws.join("artifacts").join("nested")).unwrap();
+        fs::create_dir_all(ws.join("artifacts").join("node_modules")).unwrap();
+        fs::write(ws.join("artifacts").join("a.html"), "<title>A</title>").unwrap();
+        fs::write(ws.join("artifacts").join("nested").join("b.png"), b"png").unwrap();
+        fs::write(ws.join("artifacts").join("notes.md"), "# Notes").unwrap();
+        fs::write(ws.join("artifacts").join("skip.exe"), "no").unwrap();
+        fs::write(ws.join("artifacts").join("node_modules").join("c.html"), "<title>C</title>").unwrap();
+
+        let files = workspace_files(&ws);
+        assert_eq!(files.len(), 2, "top-level kept files only; a subfolder is not an entry: {files:?}");
+        assert!(workspace_files(&root.join("missing")).is_empty());
+
+        let lib = Library::new(root.join("lib"));
+        let mut seen = std::collections::HashMap::new();
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 2);
+        let first = lib.list();
+        assert_eq!(first.len(), 2);
+        assert!(first.iter().all(|e| e.entry.source == "workspace" && e.entry.project.as_deref() == Some("Project")));
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 0, "an unchanged folder adds nothing");
+
+        fs::write(ws.join("artifacts").join("a.html"), "<title>A2</title>").unwrap();
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 1, "only the changed page is refreshed");
+        let again = lib.list();
+        assert_eq!(again.len(), 2);
+        assert!(again.iter().any(|e| e.entry.title == "A2"));
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut fresh), 0, "a new app run does not re-add entries the library already holds");
         let _ = fs::remove_dir_all(&root);
     }
 

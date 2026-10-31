@@ -160,7 +160,7 @@ export default function WindowContent() {
       )}
       {screen === "artifacts" && (
         <>
-          <ArtifactsPage onToast={setToast} />
+          <ArtifactsPage onToast={setToast} workspace={activeDir} project={projects.find((p) => p.id === projectFor(projectOf(activeDir)))?.name ?? null} />
           {toast && (
             <div className="toast" role="status">
               {toast}

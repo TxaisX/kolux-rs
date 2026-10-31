@@ -1,0 +1,38 @@
+Artifacts: import a workspace's artifacts/ folder automatically
+Date: 2026-10-31
+Lane: lane/artifacts-auto
+Base: 282ae0be (origin/main)
+
+Why
+The library only knew pages added by hand and files Claude Code's Write tool made (DT-C58).
+A page written by another agent, such as the design artifact in this workspace's artifacts/
+folder, stayed invisible until Add artifact and a trip through the file picker. The user asked
+for it to land in the tab automatically.
+
+What changed
+- src-tauri/src/artifacts.rs: artifacts_scan(path, project) and workspace_files(). The scan reads
+  the top-level kept files in <workspace>/artifacts, imports each once, refreshes a changed file by
+  its origin instead of adding a second entry, skips entries the library already holds, emits
+  artifacts-changed, and leaves relative paths and network shares alone. Top-level only, so a test
+  run's shots/ folder is not imported; a page's own relative assets are still copied with it by
+  Library::add.
+- src-tauri/src/lib.rs: registers artifacts_scan.
+- src/artifacts/ArtifactsPage.tsx: scans when the page opens and every 3 s while it is up, and
+  refreshes the list when the scan imported something. The empty state names the folder.
+- src/shell/window/Content.tsx: passes the active workspace and its project name.
+
+Proof
+- cargo test --lib artifacts::tests: 8 passed, 0 failed. The new test covers top-level selection,
+  kept extensions, the node_modules and nested exclusions, first import, unchanged second scan,
+  refresh of a changed page, and a fresh app run not re-adding entries the library holds.
+- pnpm exec tsc --noEmit: pass.
+- pnpm exec vitest run src/artifacts/ArtifactsPage.test.ts: 5 passed.
+- pnpm check: pass. invoke-contract: 705 invoke calls by name against 445 registered commands.
+- pnpm build: pass.
+- cargo clippy --lib -- -D warnings: clean.
+
+Live proof pending
+This lane has not been launched as a GUI in this pass, so the command has not been exercised through
+the running app. On the first Artifacts open with a workspace that has a top-level artifacts/ page,
+the page is imported automatically. The design artifact in the vault worktree is top-level and will
+appear under the active project's heading.
