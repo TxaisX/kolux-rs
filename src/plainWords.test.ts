@@ -39,6 +39,11 @@ const SOURCES = import.meta.glob(
     "./settings/useSettingsPlumbing.ts",
     "./chrome/useWindowChrome.ts",
     "./browser/useBrowserChords.ts",
+    "./launch/launchActions.ts",
+    "./terminal/paneActions.ts",
+    "./editor/reviewActions.ts",
+    "./terminal/tabName.tsx",
+    "./shell/windowLate.ts",
   ],
   { query: "?raw", import: "default", eager: true },
 ) as Record<string, string>;
@@ -50,7 +55,7 @@ const TOASTS = new Set(["say", "setNotice", "setMessage", "setError"]);
 /** Object fields the Connect cards print as their headline and detail lines. */
 const SHOWN_FIELDS = new Set(["headline", "detail", "text"]);
 /** Files whose JSX is not a newcomer screen as a whole; only their toasts count. */
-const TOASTS_ONLY = new Set(["./App.tsx", "./shell/windowStore.ts", "./shell/useWindowStart.ts", "./settings/useSettingsPlumbing.ts", "./chrome/useWindowChrome.ts", "./browser/useBrowserChords.ts"]);
+const TOASTS_ONLY = new Set(["./App.tsx", "./shell/windowStore.ts", "./shell/useWindowStart.ts", "./settings/useSettingsPlumbing.ts", "./chrome/useWindowChrome.ts", "./browser/useBrowserChords.ts", "./launch/launchActions.ts", "./terminal/paneActions.ts", "./editor/reviewActions.ts", "./terminal/tabName.tsx", "./shell/windowLate.ts"]);
 /** SettingsPage also holds pages beyond the Connect cards (project pages, the settings list). */
 const CARDS_ONLY: Record<string, (n: ts.Node) => boolean> = {
   "./settings/SettingsPage.tsx": (n) => ts.isFunctionDeclaration(n) && n.name?.text === "ClaudeCardView",
@@ -88,7 +93,7 @@ function shownText(file: string): string[] {
 }
 
 test("ONB-036: no banned word in the text shown on a newcomer screen", () => {
-  expect(SCREENS).toHaveLength(23); // a renamed file must not drop out of the scan silently
+  expect(SCREENS).toHaveLength(28); // a renamed file must not drop out of the scan silently
   const found = SCREENS.flatMap((f) => shownText(f).flatMap((t) => jargon(t).map((w) => `${f}: "${w}" in "${t.trim()}"`)));
   expect(found).toEqual([]);
 });
