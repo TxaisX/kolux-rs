@@ -275,16 +275,6 @@ pub fn agent_install_cancel(installs: tauri::State<'_, Installs>, agent: String)
     }
 }
 
-/// Clears a leftover install failure from the card (its Cancel with nothing running, ACCT-002).
-#[tauri::command]
-pub fn agent_install_dismiss(installs: tauri::State<'_, Installs>, agent: String) {
-    if installs.jobs.lock().map(|j| !j.contains_key(&agent)).unwrap_or(false) {
-        if let Ok(mut v) = installs.views.lock() {
-            v.remove(&agent);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

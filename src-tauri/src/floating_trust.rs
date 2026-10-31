@@ -137,13 +137,6 @@ fn trust_picked(store: &Store, folder: &str, canon: Canon, home: &str) -> Result
     Ok(c)
 }
 
-/// SAFE-027: the folders the floating workspace may open in.
-#[tauri::command]
-pub fn floating_trusted(store: tauri::State<'_, Mutex<Store>>) -> Result<Vec<String>, String> {
-    let s = store.lock().map_err(|e| e.to_string())?;
-    Ok(load(&s, &canonical, &home()))
-}
-
 /// SAFE-027: shows the system folder picker; the folder chosen there is trusted and returned (none when cancelled).
 #[tauri::command]
 pub async fn floating_pick(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>) -> Result<Option<String>, String> {

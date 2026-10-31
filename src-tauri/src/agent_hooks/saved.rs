@@ -376,10 +376,3 @@ pub fn agent_status_saved(store: tauri::State<'_, Mutex<crate::state::Store>>, k
     }
     restored()
 }
-
-/// The agents recorded for resuming at the last quit (STAT-037; the offer itself is T-066).
-#[tauri::command]
-pub fn agent_resumable(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Result<Vec<Row>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(store.get(RESUMABLE_KEY).map_err(|e| e.to_string())?.and_then(|t| serde_json::from_str::<Saved>(&t).ok()).filter(|s| s.version == VERSION).map(|s| s.rows).unwrap_or_default())
-}

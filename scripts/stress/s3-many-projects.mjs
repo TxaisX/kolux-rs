@@ -125,13 +125,13 @@ export async function run({ launch, checks }) {
   }
   const full = got ? await app.evalJs(COUNTS) : await app.evalJs(COUNTS).catch(() => ({}));
   checks.add(`sidebar shows all ${PROJECTS} projects after a page load`, `${PROJECTS} .proj rows within ${SIDEBAR_BAR_MS} ms of navigation start`, got ? `${got.now} ms since navigation start (${got.proj} projects, ${got.sess} worktree rows at that moment; polled ${polls}x, cadence ~150 ms)` : `NEVER (counts ${JSON.stringify(full)})`, !!got && got.now <= SIDEBAR_BAR_MS);
-  // The panel scans projects one after another (two calls each) and shows no worktree row until the last is done.
-  // Same two calls per project the panel makes, started in the page and polled; the panel re-scans every 5 s and drops a scan another one overtook.
-  await app.evalJs(`(() => { window.__scan = null; const ids = ${JSON.stringify(Array.from({ length: PROJECTS }, (_, k) => `p-${pad(k + 1)}`))}; const t0 = performance.now(); (async () => { for (const id of ids) { await window.__TAURI_INTERNALS__.invoke("workspace_list", { projectId: id }); await window.__TAURI_INTERNALS__.invoke("workspace_unseen", { projectId: id }); } window.__scan = Math.round(performance.now() - t0); })(); return 1; })()`);
+  // The panel scans projects one after another and shows no worktree row until the last is done.
+  // Cycle 2: workspace_unseen is gone; the one workspace_scan call per project the sidebar makes (T-442-c), started in the page and polled; the panel re-scans every 5 s and drops a scan another one overtook.
+  await app.evalJs(`(() => { window.__scan = null; const ids = ${JSON.stringify(Array.from({ length: PROJECTS }, (_, k) => `p-${pad(k + 1)}`))}; const t0 = performance.now(); (async () => { for (const id of ids) { await window.__TAURI_INTERNALS__.invoke("workspace_scan", { projectId: id }); } window.__scan = Math.round(performance.now() - t0); })(); return 1; })()`);
   const peek = async () => { const r = await app.evalJs("window.__scan"); return r && typeof r === "object" && r.result ? r.result.value : r; };
   await app.waitFor("the scan", async () => (await peek()) || null, 240000, 1000).catch(() => null);
   const scanMs = await peek();
-  checks.add("one full worktree scan of 150 projects (workspace_list + workspace_unseen each, one after another)", "finishes inside the panel's 5000 ms refresh interval, else its result is dropped when the next scan starts", typeof scanMs === "number" ? `${scanMs} ms (${(scanMs / PROJECTS).toFixed(0)} ms per project)` : `not finished in 240 s (page said ${JSON.stringify(scanMs)})`, typeof scanMs === "number" && scanMs < 5000);
+  checks.add("one full worktree scan of 150 projects (one workspace_scan each, one after another)", "finishes inside the panel's 5000 ms refresh interval, else its result is dropped when the next scan starts", typeof scanMs === "number" ? `${scanMs} ms (${(scanMs / PROJECTS).toFixed(0)} ms per project)` : `not finished in 240 s (page said ${JSON.stringify(scanMs)})`, typeof scanMs === "number" && scanMs < 5000);
   const settled = await app.waitFor("the worktree rows", async () => {
     const c = await app.evalJs(COUNTS);
     return c.main >= PROJECTS && c.sess >= PROJECTS ? c : null;
