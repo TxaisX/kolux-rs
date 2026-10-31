@@ -1086,3 +1086,25 @@ On 2026-10-30 Txais asked for "removing the original kolux and all of its inform
 - Added `docs/reclaim-old-kolux.md` (a plain-words report: what the old app left on the PC, what is safe to delete, what must stay, the order) and `scripts/reclaim-old-kolux.ps1` (lists, and only with `-Delete` plus a typed DELETE removes, the 5 G:\Dev folders LOOP.md section 0 lists, refusing links and stopping if that list changes; it leaves the old agent-hooks folder alone because COMPAT.md section 5 lists it as holding the Codex and Kimi hook scripts too; it takes the folder names from LOOP.md and never contains them). Txais runs it; nothing was deleted on the PC by this change.
 - `design/icon/`: the top-bar and taskbar crops `design/icon/ICON.md` names (`capture-topbar-*.png` and the others) were checked for removal too; none of them is in the tree, so nothing was deleted there. ICON.md now says so.
 - Git history keeps the removed files for the legal record, as it does for the provenance material removed at the freeze. No forbidden folder was opened, listed or read for this change; the PNG was identified by its commit history only, not viewed.
+
+## 2026-10-31 · Artifacts from agent files (DT-C58): an incidental listing of the old repo, recorded
+
+While scoping Txais's request that the artifacts an agent creates appear in the Artifacts button, the
+assistant (an OpenCode session, not the loop) looked for the app's source before it knew which folder
+was which. That look touched material LOOP.md section 0 forbids:
+
+- `G:\Dev\Kolux\` and `G:\Dev\Kolux\kolux\` were **listed** — top-level folder and file names only
+  (`.git`, `kolux`, `kolux-plugins`, `.claude`, `.github`, `config`, `dist`, `docs`, `examples`,
+  `native`, `node_modules`, `out`, `resources`, `skill-guides`, `skill-stubs`, `skills`, `specs`,
+  `src`, `tests`, `package.json` and similar). One listing of `G:\Dev\Kolux\kolux\src\main\artifacts`
+  returned nothing. **No file was opened, read, grepped or diffed, and no code, identifier or
+  behaviour was taken from it.** The finding that mattered — that the live app is `kolux-rs`, not the
+  old Electron tree — came from `STATE.md` and this tree's own files.
+- `G:\Dev\Projects\Txais Brain\03 - Wiki\Syntheses\Kolux Improvements from BridgeMind.md` was read by
+  a keyword search whose output named old-repo paths (`src/main/artifacts/artifact-cloud-config.ts`
+  and others). Those lines are the kind LOOP.md section 0 says to skip; they were seen in search
+  output and not used.
+
+Everything written for DT-C58 comes from this tree's own `artifacts.rs`, `capture.rs`,
+`ArtifactsPage.tsx` and the cards SKILL-035 and SKILL-036 in `spec\15-skills-plugins-kits.md`, so the
+change is original work; this note is here because the rule asks for the record either way.

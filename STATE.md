@@ -44,6 +44,12 @@ recorded default until told otherwise; nothing here blocks a pass.
   `...\Programs\kolux\resources\bin` and two `G:\Dev\kolux-workspaces\...\resources\bin` entries, all naming
   folders that no longer exist; they keep the Path at 1,815 characters, above the installer's 1,024 limit.
   Removing them is reclaim work, not a build change.
+- [product-ux] 2026-10-31 · Open: DT-C58 (artifacts from the files an agent creates) is built and tested
+  in the small tests only, not yet seen in the running app. Check: in a Claude Code pane whose folder is a
+  project, have it write a PNG and a report; open Artifacts from the sidebar and confirm both appear under
+  that folder's name, the PNG shows in the viewer, a PDF opens in its own app, and the same file written
+  again refreshes its one entry instead of adding a second. Codex and other agents are not captured yet
+  (only Claude Code's transcripts are read), which is the next slice if Txais wants it.
 - [product-ux] 2026-10-30 · Open: live Windows checks for T-608 to T-612 (steps in each evidence/T-6xx.txt):
   the consent line on a fresh profile and the one-time card on an old one; a hand-started Claude asking permission
   shows Needs you on the Board, Tower, Inbox, needs strip, bell and sidebar; Review changes from a Done card and an

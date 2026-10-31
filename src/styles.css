@@ -126,8 +126,12 @@ input { font: inherit; }
 .art-title .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .art-meta { margin-top: 2px; font-size: 11.5px; color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .art-remove { position: absolute; right: 4px; top: 6px; }
+.art-group { display: flex; flex-direction: column; gap: 2px; }
+.art-group + .art-group { margin-top: 6px; }
+.art-group-head { position: sticky; top: 0; z-index: 1; padding: 4px 8px 3px; background: var(--pane-bg); color: var(--fg-faint); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .art-view { position: relative; flex: 1; min-width: 0; display: flex; background: var(--pane-bg); border-radius: 10px; overflow: hidden; }
 .art-frame { flex: 1; border: 0; background: #fff; }
+.art-image { flex: 1; min-width: 0; min-height: 0; object-fit: contain; background: var(--pane-bg); }
 .art-loading { position: absolute; left: 12px; top: 10px; }
 .sb-section { display: flex; align-items: center; height: 32px; margin: 13px 4px 0; padding-left: 12px; padding-right: 4px; color: var(--fg-label); font-size: 12.5px; font-weight: 500; }
 .sb-section .icons { margin-left: auto; display: flex; gap: 4px; }

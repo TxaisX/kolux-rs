@@ -11,6 +11,9 @@ pub const SCHEME: &str = "kolux-artifact";
 /// Where the web view puts the scheme: Windows' web view reaches custom schemes over http.
 const ORIGIN: &str = if cfg!(windows) { "http://kolux-artifact.localhost" } else { "kolux-artifact://localhost" };
 const MAX_PAGE: u64 = 10 * 1024 * 1024;
+/// A single file that is not a page (an image, a document, a PDF) is kept whole, so it gets a
+/// larger cap than one page; the viewer shows the kinds it can and hands the rest to the system.
+const MAX_FILE: u64 = 25 * 1024 * 1024;
 const MAX_ASSETS: usize = 100;
 const MAX_ASSET: u64 = 10 * 1024 * 1024;
 const MAX_TOTAL: u64 = 50 * 1024 * 1024;
@@ -41,8 +44,12 @@ pub struct Entry {
     /// Stable for one origin, so adding or publishing the same page again refreshes its entry.
     pub id: String,
     pub title: String,
-    /// "hand" for Add artifact, "claude" for a page a Claude session published.
+    /// "hand" for Add artifact, "claude" for a page a Claude session published or a file it wrote.
     pub source: String,
+    /// "page", "image", "text", "pdf" or "other": what the stored file is, so the viewer knows
+    /// whether it can show it itself. An entry written before this field existed is a page.
+    #[serde(default = "kind_page")]
+    pub kind: String,
     /// The file path (or, for a publish, the URL) the page came from: one entry per origin.
     pub origin: String,
     pub project: Option<String>,
@@ -114,6 +121,26 @@ fn mapped_network_drive(_s: &str) -> bool {
 fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
 }
+
+fn kind_page() -> String {
+    "page".into()
+}
+
+/// What a stored file is, from its extension. Only a page is copied with the files it points to
+/// and made offline; the rest are kept whole and shown by the viewer when it can render them.
+pub fn kind_of(path: &Path) -> &'static str {
+    match path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default().as_str() {
+        "html" | "htm" => "page",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" | "bmp" | "ico" => "image",
+        "md" | "txt" | "csv" | "log" | "json" => "text",
+        "pdf" => "pdf",
+        _ => "other",
+    }
+}
+
+/// The file types an agent's new file is kept from. Anything else it writes is source, not an
+/// artifact, and stays out of the library.
+pub const KEPT: [&str; 16] = ["html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "pdf", "md", "txt", "csv", "docx", "xlsx", "pptx", "zip"];
 
 fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ").replace("&amp;", "&")
@@ -300,6 +327,7 @@ impl Library {
 
     /// Stores a page and the files it points to by relative path inside its own folder, under the
     /// caps, plus copies of the scripts it loads from the allow-listed CDNs (`fetch` gets one).
+    /// A file that is not a page (an image, a document, a PDF) is stored whole, on its own.
     /// A page on a network share gets an "unavailable" entry without being read, and a path this
     /// machine cannot read (a WSL or SSH machine's) a "remote" one. The newest store of an origin
     /// replaces the old one; an older one is ignored.
@@ -309,25 +337,32 @@ impl Library {
             return Ok(newer);
         }
         let name = file_name(src);
-        let mut entry = Entry { id: id.clone(), title: name.clone(), source: from.source.into(), origin: from.origin, project: from.project, session: from.session, added: from.at, size: 0, page: name.clone(), state: "unavailable".into() };
+        let kind = kind_of(src);
+        let mut entry = Entry { id: id.clone(), title: name.clone(), source: from.source.into(), kind: kind.into(), origin: from.origin, project: from.project, session: from.session, added: from.at, size: 0, page: name.clone(), state: "unavailable".into() };
         if !src.is_absolute() {
             entry.state = "remote".into();
         } else if !on_network_share(src) {
             let len = fs::metadata(src).map_err(|e| format!("could not read {name}: {e}"))?.len();
-            if len > MAX_PAGE {
-                return Err(format!("{name} is larger than 10 MB"));
-            }
-            let html = fs::read(src).map_err(|e| format!("could not read {name}: {e}"))?;
-            let text = String::from_utf8_lossy(&html);
-            if let Some(t) = title_of(&text) {
-                entry.title = t;
+            let cap = if kind == "page" { MAX_PAGE } else { MAX_FILE };
+            if len > cap {
+                return Err(format!("{name} is larger than {} MB", cap / (1024 * 1024)));
             }
             let tmp = self.dir.join(format!(".new-{id}"));
             let _ = fs::remove_dir_all(&tmp);
             fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-            let mut size = self.copy_assets(src, &text, &name, &tmp, html.len() as u64);
-            let page = vendor_scripts(&text, &tmp, fetch, &mut size);
-            fs::write(tmp.join(&name), page.as_ref().map_or(&html[..], |p| p.as_bytes())).map_err(|e| e.to_string())?;
+            let mut size = len;
+            if kind == "page" {
+                let html = fs::read(src).map_err(|e| format!("could not read {name}: {e}"))?;
+                let text = String::from_utf8_lossy(&html);
+                if let Some(t) = title_of(&text) {
+                    entry.title = t;
+                }
+                size = self.copy_assets(src, &text, &name, &tmp, html.len() as u64);
+                let page = vendor_scripts(&text, &tmp, fetch, &mut size);
+                fs::write(tmp.join(&name), page.as_ref().map_or(&html[..], |p| p.as_bytes())).map_err(|e| e.to_string())?;
+            } else {
+                fs::copy(src, tmp.join(&name)).map_err(|e| format!("could not read {name}: {e}"))?;
+            }
             entry.size = size;
             let dest = self.dir.join(&id);
             let _ = fs::remove_dir_all(&dest);
@@ -406,7 +441,9 @@ fn mime(path: &str) -> &'static str {
         "ttf" => "font/ttf",
         "otf" => "font/otf",
         "wasm" => "application/wasm",
-        "txt" | "md" => "text/plain; charset=utf-8",
+        "txt" | "md" | "log" => "text/plain; charset=utf-8",
+        "csv" => "text/csv; charset=utf-8",
+        "pdf" => "application/pdf",
         _ => "application/octet-stream",
     }
 }
@@ -573,6 +610,27 @@ mod tests {
         assert_eq!(lib.list().len(), 1);
         lib.remove(&e.id).unwrap();
         assert!(lib.list().is_empty() && !root.join("lib").join(&e.id).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_page_is_kept_whole_and_typed() {
+        let root = temp_dir("files");
+        let shot = root.join("shot.png");
+        fs::write(&shot, b"\x89PNG\r\n").unwrap();
+        let lib = Library::new(root.join("lib"));
+        let e = lib.add(&shot, Origin::hand(&shot), &|_| panic!("a file that is not a page fetches no script")).unwrap();
+        assert_eq!((e.kind.as_str(), e.state.as_str(), e.size), ("image", "ok", 6));
+        assert_eq!(e.title, "shot.png");
+        let (body, kind) = lib.file(&format!("/{}/shot.png", e.id)).unwrap();
+        assert_eq!((body.as_slice(), kind), (&b"\x89PNG\r\n"[..], "image/png"));
+        // A document is kept the same way and reads as text.
+        let doc = root.join("notes.md");
+        fs::write(&doc, "# Plan").unwrap();
+        assert_eq!(lib.add(&doc, Origin::hand(&doc), &|_| None).unwrap().kind, "text");
+        // An entry written before kinds existed is still a page.
+        let old: Entry = serde_json::from_str(r#"{"id":"a","title":"t","source":"hand","origin":"x","project":null,"session":null,"added":1,"size":1,"page":"a.html","state":"ok"}"#).unwrap();
+        assert_eq!(old.kind, "page");
         let _ = fs::remove_dir_all(&root);
     }
 

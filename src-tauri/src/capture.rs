@@ -5,7 +5,7 @@
 //! prose and other tools' output that looks like a publish are never picked up.
 
 use crate::artifacts::{self, Library, Origin};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -28,6 +28,14 @@ pub struct Publish {
     pub at: Option<u64>,
 }
 
+/// What a tool call will produce: a page Claude published, or a file it wrote. A call and its
+/// result are separate transcript lines, so the call's id is held until the result arrives.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Call {
+    Publish,
+    Write,
+}
+
 fn text<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
 }
@@ -41,33 +49,79 @@ fn is_html(path: &str) -> bool {
     low.ends_with(".html") || low.ends_with(".htm")
 }
 
-/// The publishes in a run of transcript lines. `calls` carries the ids of Artifact publish calls
-/// seen so far in the same transcript, since a call and its result are separate lines.
-pub fn scan(lines: &str, calls: &mut HashSet<String>) -> Vec<Publish> {
+/// A folder whose files are the working copy of something (dependencies, build output, caches),
+/// never a deliverable: a write there is not kept.
+const NOISE: [&str; 12] = ["\\node_modules\\", "\\target\\", "\\dist\\", "\\build\\", "\\.git\\", "\\.next\\", "\\.venv\\", "\\__pycache__\\", "\\vendor\\", "\\.cache\\", "\\out\\", "\\.turbo\\"];
+
+/// Whether a file an agent wrote is an artifact worth keeping: a full path, of a kept type, and
+/// not inside a working-copy folder.
+pub fn is_kept(path: &str) -> bool {
+    if !Path::new(path).is_absolute() {
+        return false;
+    }
+    let ext = Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if !artifacts::KEPT.contains(&ext.as_str()) {
+        return false;
+    }
+    let low = format!("{}\\", path.replace('/', "\\").to_ascii_lowercase());
+    !NOISE.iter().any(|n| low.contains(n))
+}
+
+/// The publishes and kept files in a run of transcript lines. `calls` carries the tool calls seen
+/// so far in the same transcript, since a call and its result are separate lines.
+pub fn scan(lines: &str, calls: &mut HashMap<String, Call>) -> Vec<Publish> {
     let mut out = Vec::new();
     for line in lines.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
         let Some(parts) = v.pointer("/message/content").and_then(|c| c.as_array()) else { continue };
         for p in parts {
             match text(p, "type") {
-                Some("tool_use") if text(p, "name") == Some("Artifact") => {
+                Some("tool_use") => {
+                    let Some(id) = text(p, "id") else { continue };
                     let input = &p["input"];
-                    let publish = text(input, "file_path").is_some_and(is_html)
-                        && input.get("asset").and_then(|a| a.as_bool()) != Some(true)
-                        && text(input, "action").is_none_or(|a| a == "publish");
-                    if let (true, Some(id)) = (publish, text(p, "id")) {
-                        calls.insert(id.to_string());
+                    match text(p, "name") {
+                        Some("Artifact") => {
+                            let publish = text(input, "file_path").is_some_and(is_html)
+                                && input.get("asset").and_then(|a| a.as_bool()) != Some(true)
+                                && text(input, "action").is_none_or(|a| a == "publish");
+                            if publish {
+                                calls.insert(id.to_string(), Call::Publish);
+                            }
+                        }
+                        // A file the agent creates is an artifact too: a screenshot, a report, a
+                        // document. Edits to an existing file are not, and neither is anything the
+                        // call does not name a path for.
+                        Some("Write") if text(input, "file_path").is_some_and(is_kept) => {
+                            calls.insert(id.to_string(), Call::Write);
+                        }
+                        _ => {}
                     }
                 }
                 Some("tool_result") => {
                     let Some(id) = text(p, "tool_use_id") else { continue };
-                    if !calls.remove(id) || p.get("is_error").and_then(|e| e.as_bool()) == Some(true) {
+                    let Some(call) = calls.remove(id) else { continue };
+                    if p.get("is_error").and_then(|e| e.as_bool()) == Some(true) {
                         continue;
                     }
                     let r = &v["toolUseResult"];
-                    let (Some(url), Some(path)) = (text(r, "url"), text(r, "path")) else { continue };
-                    if is_artifact_url(url) && is_html(path) {
-                        out.push(Publish { url: url.into(), path: path.into(), cwd: text(&v, "cwd").map(Into::into), session: text(&v, "sessionId").map(Into::into), at: text(&v, "timestamp").and_then(parse_time) });
+                    let at = text(&v, "timestamp").and_then(parse_time);
+                    let cwd = text(&v, "cwd").map(Into::into);
+                    let session = text(&v, "sessionId").map(Into::into);
+                    match call {
+                        Call::Publish => {
+                            let (Some(url), Some(path)) = (text(r, "url"), text(r, "path")) else { continue };
+                            if is_artifact_url(url) && is_html(path) {
+                                out.push(Publish { url: url.into(), path: path.into(), cwd, session, at });
+                            }
+                        }
+                        Call::Write => {
+                            // The result names the file it wrote; the path is the entry's origin,
+                            // so writing the same file again refreshes it.
+                            let Some(path) = text(r, "filePath").or_else(|| text(r, "file_path")) else { continue };
+                            if is_kept(path) {
+                                out.push(Publish { url: path.into(), path: path.into(), cwd, session, at });
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -133,7 +187,7 @@ fn read_span(path: &Path, from: u64, to: u64) -> Option<Vec<u8>> {
 #[derive(Default)]
 struct Seen {
     offset: u64,
-    calls: HashSet<String>,
+    calls: HashMap<String, Call>,
 }
 
 /// Watches the transcripts from now on: files already there are read from their current end, so
@@ -222,13 +276,46 @@ mod tests {
         t += &result("f", url, "G:\\Temp\\notes.md", false);
         t += &line(serde_json::json!({"type": "assistant", "message": {"content": [{"type": "text", "text": format!("Published {page} at {url}")}]}}));
         t += "not json\n";
-        let mut calls = HashSet::new();
+        let mut calls = HashMap::new();
         let got = scan(&t, &mut calls);
         assert_eq!(got, [Publish { url: url.into(), path: page.into(), cwd: Some("G:\\Dev\\repo".into()), session: Some("s-1".into()), at: Some(1_790_243_761_421) }]);
         // A call in one read and its result in the next still pair up.
-        let mut calls = HashSet::new();
+        let mut calls = HashMap::new();
         assert!(scan(&call("g", "Artifact", serde_json::json!({"file_path": page, "action": "publish"})), &mut calls).is_empty());
         assert_eq!(scan(&result("g", url, page, false), &mut calls).len(), 1);
+    }
+
+    fn wrote(id: &str, path: &str, error: bool) -> String {
+        line(serde_json::json!({"type": "user", "sessionId": "s-2", "cwd": "G:\\Dev\\minecraft", "timestamp": "2026-10-31T08:00:00.000Z",
+            "message": {"content": [{"type": "tool_result", "tool_use_id": id, "is_error": error, "content": format!("File created successfully at: {path}")}]},
+            "toolUseResult": {"type": "create", "filePath": path, "content": ""}}))
+    }
+
+    #[test]
+    fn files_an_agent_creates_are_kept_and_source_is_not() {
+        let root = std::env::temp_dir().join("krs-capture-minecraft");
+        let at = |n: &str| root.join(n).to_string_lossy().into_owned();
+        let png = at("shot.png");
+        let mut t = String::new();
+        t += &call("w1", "Write", serde_json::json!({"file_path": png, "content": "x"}));
+        t += &wrote("w1", &png, false);
+        // A failed write, a file type that is source rather than an artifact, a file inside a
+        // working-copy folder, a relative path, an edit of an existing file, and a Bash command
+        // that writes something: none count.
+        for (id, name, path) in [
+            ("w2", "Write", at("report.html")),
+            ("w3", "Write", at("src") + "\\main.rs"),
+            ("w4", "Write", at("node_modules") + "\\x\\a.png"),
+            ("w5", "Write", "shot.png".into()),
+            ("w6", "Edit", at("notes.md")),
+            ("w7", "Bash", at("b.png")),
+        ] {
+            let input = if name == "Bash" { serde_json::json!({"command": "copy a.png b.png"}) } else { serde_json::json!({"file_path": path, "content": "x"}) };
+            t += &call(id, name, input);
+            t += &wrote(id, &path, id == "w2");
+        }
+        let mut calls = HashMap::new();
+        assert_eq!(scan(&t, &mut calls), [Publish { url: png.clone(), path: png, cwd: Some("G:\\Dev\\minecraft".into()), session: Some("s-2".into()), at: Some(1_793_433_600_000) }]);
     }
 
     #[test]
