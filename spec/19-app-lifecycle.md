@@ -206,8 +206,8 @@ Rules: the release is built in a separate checkout kept only for releases, never
   are 0.x.y, with x going up for a new capability and y for improvements, and 1.0 never happens
   without the owner; there is no rollback inside the app, and only Windows builds are released.
 Acceptance:
-  - [ ] Ship to main → a release one patch higher appears with the three files and notes listing the
-        shipped commits.
+  - [x] Ship to main → a release one patch higher appears with the three files and notes listing the
+        shipped commits. (release v0.1.3; evidence/APP-059-release-013.txt)
   - [x] Ship twice in quick succession → exactly two builds run, one after the other, never side by side. (cards; evidence/cards-APP-059.txt)
 Compat: `kolux --version` prints the release version; an environment variable can point the release
   job at a different build checkout; the release job takes `--dry-run` and `--no-publish`.
