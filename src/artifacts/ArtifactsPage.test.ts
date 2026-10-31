@@ -40,14 +40,17 @@ describe("Artifacts library (SKILL-036)", () => {
     expect(section(art({ project: "minecraft" }))).toBe("minecraft");
   });
 
-  it("shows a page or text in the frame, an image as a picture, and the rest in its own app", () => {
+  it("shows a page, text or PDF in the frame, an image as a picture, media as a player, and the rest in its own app", () => {
     expect(view(undefined)).toBe("frame");
     expect(view("page")).toBe("frame");
     expect(view("text")).toBe("frame");
     expect(view("image")).toBe("image");
-    expect(view("pdf")).toBe("app");
+    expect(view("video")).toBe("video");
+    expect(view("audio")).toBe("audio");
+    expect(view("pdf")).toBe("pdf");
     expect(view("other")).toBe("app");
     expect(extText("shot.png")).toBe("PNG");
+    expect(extText("clip.mp4")).toBe("MP4");
     expect(extText("no-extension")).toBe("");
   });
 });

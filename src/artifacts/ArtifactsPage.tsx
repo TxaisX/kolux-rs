@@ -4,7 +4,7 @@
 // stored files; the viewer frame is sandboxed, and a clicked link that leaves the entry comes back
 // here as a message and opens in the system browser. An image or a text file is shown straight from
 // the same scheme; a PDF or a document the viewer cannot render is handed to its own app.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -48,9 +48,12 @@ export function group(list: Artifact[]): { project: string; items: Artifact[] }[
   return [...by].map(([project, items]) => ({ project, items })).sort((x, y) => y.items[0].added - x.items[0].added);
 }
 
-/** How the viewer shows an entry: in the frame, as a picture, or not at all. */
-export function view(kind: string | undefined): "frame" | "image" | "app" {
+/** How the viewer shows an entry: in the frame, as a picture or media, or not at all. */
+export function view(kind: string | undefined): "frame" | "image" | "video" | "audio" | "pdf" | "app" {
   if (kind === "image") return "image";
+  if (kind === "video") return "video";
+  if (kind === "audio") return "audio";
+  if (kind === "pdf") return "pdf";
   if (kind === undefined || kind === "page" || kind === "text") return "frame";
   return "app";
 }
@@ -74,22 +77,51 @@ export function viewerUrl(a: Pick<Artifact, "id" | "page">, windows = navigator.
   return `${base}/${a.id}/${a.page.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-type Props = { onToast: (text: string) => void };
+type Props = {
+  onToast: (text: string) => void;
+  /** The workspace whose `artifacts/` folder is imported automatically; none when no folder is open. */
+  workspace?: string | null;
+  /** The project the workspace belongs to, so imports sit under that heading rather than the folder name. */
+  project?: string | null;
+};
 
-export default function ArtifactsPage({ onToast }: Props) {
+export default function ArtifactsPage({ onToast, workspace, project }: Props) {
   const [list, setList] = useState<Artifact[] | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement>(null);
 
-  const refresh = () => invoke<Artifact[]>("artifacts_list").then(setList, (e) => onToast(`Could not read the library: ${e}`));
+  const refresh = useCallback(
+    () => invoke<Artifact[]>("artifacts_list").then(setList, (e) => onToast(`Could not read the library: ${e}`)),
+    [onToast],
+  );
   useEffect(() => {
     void refresh();
-    // A Claude session published a page (SKILL-035).
+    // A Claude session published a page (SKILL-035), or the workspace scan imported one.
     const off = listen("artifacts-changed", () => void refresh());
     return () => void off.then((f) => f());
-  }, []);
+  }, [refresh]);
+
+  // SKILL-036: a workspace keeps its finished files in `artifacts/`. Import that folder when the
+  // page opens and watch it while it is up, so an agent's new page is already in the tab without
+  // Add artifact. The Rust scan remembers unchanged files and only re-imports a changed one.
+  useEffect(() => {
+    if (!workspace) return;
+    let live = true;
+    const scan = () =>
+      invoke<number>("artifacts_scan", { path: workspace, project })
+        .then((n) => {
+          if (live && n > 0) void refresh();
+        })
+        .catch(() => {});
+    void scan();
+    const timer = window.setInterval(scan, 3000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [workspace, project, refresh]);
 
   // A link clicked inside the viewer: only messages from our own frame count.
   useEffect(() => {
@@ -111,7 +143,8 @@ export default function ArtifactsPage({ onToast }: Props) {
       title: "Add artifact",
       filters: [
         { name: "Pages and pictures", extensions: ["html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "pdf"] },
-        { name: "Documents", extensions: ["md", "txt", "csv", "docx", "xlsx", "pptx"] },
+        { name: "Video and audio", extensions: ["mp4", "webm", "mov", "m4v", "ogv", "mkv", "avi", "mp3", "wav", "m4a", "ogg", "oga", "flac", "aac", "opus"] },
+        { name: "Documents", extensions: ["md", "txt", "csv", "json", "log", "docx", "xlsx", "pptx", "zip"] },
         { name: "All files", extensions: ["*"] },
       ],
     }).catch(() => null);
@@ -148,7 +181,7 @@ export default function ArtifactsPage({ onToast }: Props) {
         </div>
         <input className="picker-input" placeholder="Search titles" aria-label="Search artifacts" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="art-list" role="listbox" aria-label="Saved artifacts">
-          {list && list.length === 0 && <div className="menu-hint">No artifacts yet. Pages and files your agents make land here, or add one yourself.</div>}
+          {list && list.length === 0 && <div className="menu-hint">No artifacts yet. Files in this workspace's artifacts folder land here automatically, or add one yourself.</div>}
           {list && list.length > 0 && shown.length === 0 && <div className="menu-hint">No titles hold every word of “{query.trim()}”.</div>}
           {shown.map((s) => (
             <div key={s.project} className="art-group">
@@ -190,6 +223,21 @@ export default function ArtifactsPage({ onToast }: Props) {
         {current?.state === "unavailable" && <div className="empty"><h2>{current.title}</h2><p>This page is on a network share, which Kolux never opens.</p></div>}
         {current?.state === "ok" && !current.stored && <div className="empty"><h2>{current.title}</h2><p>Could not show this file: its stored copy is missing. Add it again to restore it.</p></div>}
         {current?.state === "ok" && current.stored && view(current.kind) === "image" && <img className="art-image" src={viewerUrl(current)} alt={current.title} />}
+        {current?.state === "ok" && current.stored && view(current.kind) === "video" && (
+          <video className="art-media" src={viewerUrl(current)} controls preload="metadata" aria-label={current.title} />
+        )}
+        {current?.state === "ok" && current.stored && view(current.kind) === "audio" && (
+          <div className="art-audio">
+            <span>{current.title}</span>
+            <audio src={viewerUrl(current)} controls preload="metadata" aria-label={current.title} />
+          </div>
+        )}
+        {current?.state === "ok" && current.stored && view(current.kind) === "pdf" && (
+          <div className="art-pdf">
+            <iframe className="art-frame" title={current.title} src={viewerUrl(current)} />
+            <button className="btn art-open" onClick={() => void openFile(current)}>Open PDF</button>
+          </div>
+        )}
         {current?.state === "ok" && current.stored && view(current.kind) === "app" && (
           <div className="empty">
             <h2>{current.title}</h2>
