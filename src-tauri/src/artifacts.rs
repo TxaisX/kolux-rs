@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
@@ -13,9 +14,10 @@ pub const SCHEME: &str = "kolux-artifact";
 /// Where the web view puts the scheme: Windows' web view reaches custom schemes over http.
 const ORIGIN: &str = if cfg!(windows) { "http://kolux-artifact.localhost" } else { "kolux-artifact://localhost" };
 const MAX_PAGE: u64 = 10 * 1024 * 1024;
-/// A single file that is not a page (an image, a document, a PDF) is kept whole, so it gets a
-/// larger cap than one page; the viewer shows the kinds it can and hands the rest to the system.
-const MAX_FILE: u64 = 25 * 1024 * 1024;
+/// A single file that is not a page (an image, a video, an audio track, a document, a PDF) is kept
+/// whole, so it gets a larger cap than one page; the viewer plays or shows the kinds it can and
+/// hands the rest to the system.
+const MAX_FILE: u64 = 100 * 1024 * 1024;
 const MAX_ASSETS: usize = 100;
 const MAX_ASSET: u64 = 10 * 1024 * 1024;
 const MAX_TOTAL: u64 = 50 * 1024 * 1024;
@@ -134,6 +136,8 @@ pub fn kind_of(path: &Path) -> &'static str {
     match path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default().as_str() {
         "html" | "htm" => "page",
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" | "bmp" | "ico" => "image",
+        "mp4" | "webm" | "mov" | "m4v" | "ogv" | "mkv" | "avi" => "video",
+        "mp3" | "wav" | "m4a" | "ogg" | "oga" | "flac" | "aac" | "opus" => "audio",
         "md" | "txt" | "csv" | "log" | "json" => "text",
         "pdf" => "pdf",
         _ => "other",
@@ -142,7 +146,19 @@ pub fn kind_of(path: &Path) -> &'static str {
 
 /// The file types an agent's new file is kept from. Anything else it writes is source, not an
 /// artifact, and stays out of the library.
-pub const KEPT: [&str; 16] = ["html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "pdf", "md", "txt", "csv", "docx", "xlsx", "pptx", "zip"];
+pub const KEPT: &[&str] = &[
+    "html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "pdf", "md", "txt", "csv",
+    "docx", "xlsx", "pptx", "zip",
+    "mp4", "webm", "mov", "m4v", "ogv", "mkv", "avi",
+    "mp3", "wav", "m4a", "ogg", "oga", "flac", "aac", "opus",
+];
+
+/// A file in a workspace's explicit `artifacts/` folder is a deliverable by definition, so data
+/// files count there even though a Claude `Write` of a project's `package.json` must not.
+fn kept_in_workspace(path: &Path) -> bool {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    KEPT.contains(&ext.as_str()) || matches!(ext.as_str(), "json" | "log")
+}
 
 fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ").replace("&amp;", "&")
@@ -414,15 +430,20 @@ impl Library {
     }
 
     /// A stored file for the viewer: `/<id>/<path>`, never outside that entry's folder.
-    pub fn file(&self, url_path: &str) -> Option<(Vec<u8>, &'static str)> {
+    pub fn open(&self, url_path: &str) -> Option<(PathBuf, &'static str)> {
         let path = pct(url_path);
         let (id, rest) = path.trim_start_matches('/').split_once('/')?;
         if id.len() != 16 || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
         let file = inside(&self.dir.join(id), rest)?;
-        let body = fs::read(&file).ok()?;
-        Some((body, mime(rest)))
+        file.is_file().then(|| (file, mime(rest)))
+    }
+
+    /// The whole stored file, for a page or a small one-shot read.
+    pub fn file(&self, url_path: &str) -> Option<(Vec<u8>, &'static str)> {
+        let (file, kind) = self.open(url_path)?;
+        Some((fs::read(file).ok()?, kind))
     }
 }
 
@@ -436,7 +457,7 @@ pub fn workspace_files(workspace: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for entry in fs::read_dir(workspace.join(WORKSPACE_DIR)).into_iter().flatten().flatten() {
         let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_file()) && crate::capture::is_kept(&path.to_string_lossy()) {
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) && kept_in_workspace(&path) {
             out.push(path);
         }
     }
@@ -529,6 +550,23 @@ fn mime(path: &str) -> &'static str {
         "txt" | "md" | "log" => "text/plain; charset=utf-8",
         "csv" => "text/csv; charset=utf-8",
         "pdf" => "application/pdf",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "ogv" => "video/ogg",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "aac" => "audio/aac",
+        "opus" => "audio/opus",
+        "zip" => "application/zip",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         _ => "application/octet-stream",
     }
 }
@@ -542,13 +580,52 @@ fn link_script(base: &str) -> String {
     )
 }
 
+/// A `Range: bytes=start-end` request against a file of `total` bytes, clamped to the file. A
+/// suffix (`bytes=-N`) asks for the last N bytes; malformed, reversed and multi-part ranges get the
+/// whole file instead of an error, which every browser can still play.
+fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
+    let spec = header.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') || total == 0 {
+        return None;
+    }
+    let (a, b) = spec.split_once('-')?;
+    let (start, end) = if a.trim().is_empty() {
+        let n: u64 = b.trim().parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        (total.saturating_sub(n), total - 1)
+    } else {
+        let start: u64 = a.trim().parse().ok()?;
+        let end = if b.trim().is_empty() { total - 1 } else { b.trim().parse::<u64>().ok()?.min(total - 1) };
+        (start, end)
+    };
+    (start <= end && start < total).then_some((start, end))
+}
+
+fn read_range(file: &Path, start: u64, end: u64) -> Option<Vec<u8>> {
+    let mut f = fs::File::open(file).ok()?;
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut body = vec![0; (end - start + 1) as usize];
+    f.read_exact(&mut body).ok()?;
+    Some(body)
+}
+
 /// The `kolux-artifact` scheme: the entry's files with a policy that lets the page load only them.
+/// Media answers byte ranges, so a video or an audio track can seek without loading the whole file.
 pub fn serve(lib: &Library, req: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
     use tauri::http::Response;
     let uri = req.uri();
     let path = uri.path();
-    let Some((mut body, kind)) = lib.file(path) else {
+    let Some((file, kind)) = lib.open(path) else {
         return Response::builder().status(404).header("Content-Type", "text/plain").body(b"not in this artifact".to_vec()).unwrap();
+    };
+    let total = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+    let wants_range = !kind.starts_with("text/html");
+    let range = wants_range.then(|| req.headers().get("range").and_then(|v| v.to_str().ok()).and_then(|v| parse_range(v, total))).flatten();
+    let (mut body, status, content_range) = match range.and_then(|(start, end)| read_range(&file, start, end).map(|b| (start, end, b))) {
+        Some((start, end, b)) => (b, 206, Some(format!("bytes {start}-{end}/{total}"))),
+        None => (fs::read(&file).unwrap_or_default(), 200, None),
     };
     let id = path.trim_start_matches('/').split('/').next().unwrap_or("");
     let base = format!("/{id}/");
@@ -559,7 +636,17 @@ pub fn serve(lib: &Library, req: &tauri::http::Request<Vec<u8>>) -> tauri::http:
     let only = format!("{ORIGIN}{base}");
     let cdns = CDNS.map(|c| c.trim_end_matches('/')).join(" ");
     let csp = format!("default-src {only} 'unsafe-inline' 'unsafe-eval' data: blob:; script-src {only} 'unsafe-inline' 'unsafe-eval' data: blob: {cdns}; form-action 'none'");
-    Response::builder().header("Content-Type", kind).header("Content-Security-Policy", csp).header("Access-Control-Allow-Origin", "*").body(body).unwrap()
+    let mut out = Response::builder()
+        .status(status)
+        .header("Content-Type", kind)
+        .header("Content-Length", body.len().to_string())
+        .header("Accept-Ranges", "bytes")
+        .header("Content-Security-Policy", csp)
+        .header("Access-Control-Allow-Origin", "*");
+    if let Some(cr) = content_range {
+        out = out.header("Content-Range", cr);
+    }
+    out.body(body).unwrap()
 }
 
 #[tauri::command]
@@ -736,6 +823,55 @@ mod tests {
     }
 
     #[test]
+    fn video_audio_and_pdf_are_kept_and_media_ranges_are_clamped() {
+        for (name, kind) in [("clip.mp4", "video"), ("clip.webm", "video"), ("track.mp3", "audio"), ("track.m4a", "audio"), ("paper.pdf", "pdf")] {
+            assert_eq!(kind_of(Path::new(name)), kind, "{name}");
+            assert!(KEPT.contains(&name.rsplit('.').next().unwrap()));
+        }
+        assert_eq!(kind_of(Path::new("data.json")), "text");
+        assert!(!KEPT.contains(&"json"), "a project JSON is not auto-captured from a Write");
+        assert!(kept_in_workspace(Path::new("data.json")));
+        assert_eq!(mime("clip.mp4"), "video/mp4");
+        assert_eq!(mime("track.mp3"), "audio/mpeg");
+        assert_eq!(mime("paper.pdf"), "application/pdf");
+        assert_eq!(parse_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(parse_range("bytes=100-", 1000), Some((100, 999)));
+        assert_eq!(parse_range("bytes=-100", 1000), Some((900, 999)));
+        assert_eq!(parse_range("bytes=0-2000", 1000), Some((0, 999)));
+        assert_eq!(parse_range("bytes=1000-", 1000), None);
+        assert_eq!(parse_range("bytes=10-5", 1000), None);
+        assert_eq!(parse_range("items=0-5", 1000), None);
+        assert_eq!(parse_range("bytes=0-5,10-15", 1000), None);
+        let root = temp_dir("range");
+        let file = root.join("clip.mp4");
+        fs::write(&file, (0..=255).collect::<Vec<u8>>()).unwrap();
+        assert_eq!(read_range(&file, 10, 12), Some(vec![10, 11, 12]));
+        assert_eq!(read_range(&file, 254, 300), None, "a range past the end is refused, never short");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn media_is_served_in_byte_ranges_from_the_artifact_scheme() {
+        let root = temp_dir("serve");
+        let lib = Library::new(root.join("lib"));
+        let file = root.join("clip.mp4");
+        fs::write(&file, (0..=255).collect::<Vec<u8>>()).unwrap();
+        let e = lib.add(&file, Origin::hand(&file), &|_| None).unwrap();
+        let uri = format!("http://kolux-artifact.localhost/{}/clip.mp4", e.id);
+        let ranged = tauri::http::Request::builder().uri(&uri).header("range", "bytes=10-12").body(Vec::new()).unwrap();
+        let r = serve(&lib, &ranged);
+        assert_eq!(r.status(), 206);
+        assert_eq!(r.headers().get("content-range").and_then(|v| v.to_str().ok()), Some("bytes 10-12/256"));
+        assert_eq!(r.headers().get("accept-ranges").and_then(|v| v.to_str().ok()), Some("bytes"));
+        assert_eq!(r.body().as_slice(), &[10, 11, 12]);
+        let full = tauri::http::Request::builder().uri(&uri).body(Vec::new()).unwrap();
+        let r = serve(&lib, &full);
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.body().len(), 256);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn workspace_artifacts_are_found_imported_once_and_refreshed_on_change() {
         let root = temp_dir("workspace");
         let ws = root.join("Project");
@@ -744,25 +880,26 @@ mod tests {
         fs::write(ws.join("artifacts").join("a.html"), "<title>A</title>").unwrap();
         fs::write(ws.join("artifacts").join("nested").join("b.png"), b"png").unwrap();
         fs::write(ws.join("artifacts").join("notes.md"), "# Notes").unwrap();
+        fs::write(ws.join("artifacts").join("data.json"), "{}").unwrap();
         fs::write(ws.join("artifacts").join("skip.exe"), "no").unwrap();
         fs::write(ws.join("artifacts").join("node_modules").join("c.html"), "<title>C</title>").unwrap();
 
         let files = workspace_files(&ws);
-        assert_eq!(files.len(), 2, "top-level kept files only; a subfolder is not an entry: {files:?}");
+        assert_eq!(files.len(), 3, "top-level kept files and data only; a subfolder is not an entry: {files:?}");
         assert!(workspace_files(&root.join("missing")).is_empty());
 
         let lib = Library::new(root.join("lib"));
         let mut seen = std::collections::HashMap::new();
-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 2);
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 3);
         let first = lib.list();
-        assert_eq!(first.len(), 2);
+        assert_eq!(first.len(), 3);
         assert!(first.iter().all(|e| e.entry.source == "workspace" && e.entry.project.as_deref() == Some("Project")));
         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 0, "an unchanged folder adds nothing");
 
         fs::write(ws.join("artifacts").join("a.html"), "<title>A2</title>").unwrap();
         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 1, "only the changed page is refreshed");
         let again = lib.list();
-        assert_eq!(again.len(), 2);
+        assert_eq!(again.len(), 3);
         assert!(again.iter().any(|e| e.entry.title == "A2"));
         let mut fresh = std::collections::HashMap::new();
         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut fresh), 0, "a new app run does not re-add entries the library already holds");

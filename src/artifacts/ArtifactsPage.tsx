@@ -48,9 +48,12 @@ export function group(list: Artifact[]): { project: string; items: Artifact[] }[
   return [...by].map(([project, items]) => ({ project, items })).sort((x, y) => y.items[0].added - x.items[0].added);
 }
 
-/** How the viewer shows an entry: in the frame, as a picture, or not at all. */
-export function view(kind: string | undefined): "frame" | "image" | "app" {
+/** How the viewer shows an entry: in the frame, as a picture or media, or not at all. */
+export function view(kind: string | undefined): "frame" | "image" | "video" | "audio" | "pdf" | "app" {
   if (kind === "image") return "image";
+  if (kind === "video") return "video";
+  if (kind === "audio") return "audio";
+  if (kind === "pdf") return "pdf";
   if (kind === undefined || kind === "page" || kind === "text") return "frame";
   return "app";
 }
@@ -140,7 +143,8 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
       title: "Add artifact",
       filters: [
         { name: "Pages and pictures", extensions: ["html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "pdf"] },
-        { name: "Documents", extensions: ["md", "txt", "csv", "docx", "xlsx", "pptx"] },
+        { name: "Video and audio", extensions: ["mp4", "webm", "mov", "m4v", "ogv", "mkv", "avi", "mp3", "wav", "m4a", "ogg", "oga", "flac", "aac", "opus"] },
+        { name: "Documents", extensions: ["md", "txt", "csv", "json", "log", "docx", "xlsx", "pptx", "zip"] },
         { name: "All files", extensions: ["*"] },
       ],
     }).catch(() => null);
@@ -219,6 +223,21 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
         {current?.state === "unavailable" && <div className="empty"><h2>{current.title}</h2><p>This page is on a network share, which Kolux never opens.</p></div>}
         {current?.state === "ok" && !current.stored && <div className="empty"><h2>{current.title}</h2><p>Could not show this file: its stored copy is missing. Add it again to restore it.</p></div>}
         {current?.state === "ok" && current.stored && view(current.kind) === "image" && <img className="art-image" src={viewerUrl(current)} alt={current.title} />}
+        {current?.state === "ok" && current.stored && view(current.kind) === "video" && (
+          <video className="art-media" src={viewerUrl(current)} controls preload="metadata" aria-label={current.title} />
+        )}
+        {current?.state === "ok" && current.stored && view(current.kind) === "audio" && (
+          <div className="art-audio">
+            <span>{current.title}</span>
+            <audio src={viewerUrl(current)} controls preload="metadata" aria-label={current.title} />
+          </div>
+        )}
+        {current?.state === "ok" && current.stored && view(current.kind) === "pdf" && (
+          <div className="art-pdf">
+            <iframe className="art-frame" title={current.title} src={viewerUrl(current)} />
+            <button className="btn art-open" onClick={() => void openFile(current)}>Open PDF</button>
+          </div>
+        )}
         {current?.state === "ok" && current.stored && view(current.kind) === "app" && (
           <div className="empty">
             <h2>{current.title}</h2>
