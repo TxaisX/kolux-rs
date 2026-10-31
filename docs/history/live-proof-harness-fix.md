@@ -84,7 +84,7 @@ is touched.
 to start from inside a Kolux terminal. Everything else can be run where the work happens:
 
 ```powershell
-cd G:\Dev\kolux-rs
+cd <your clone of kolux-rs>
 node scripts/prove/live-installed.mjs start
 node scripts/prove/live-checks.mjs b7     # BROW-008 box 2
 node scripts/prove/live-installed.mjs stop
