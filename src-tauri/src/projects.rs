@@ -1297,10 +1297,8 @@ pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force:
     let left = git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch))?;
     // The branch stayed: because the user chose to keep it, or because another worktree has it.
     Ok(match (target.branch, keep_branch, left) {
-        (Some(branch), true, _) => {
-            let commit = crate::git::run(&["rev-parse", "--verify", &format!("refs/heads/{branch}")], Some(repo))?;
-            Some(Kept { branch, commit })
-        }
+        // An unborn branch (no commit yet) has nothing to keep, and the folder is already gone.
+        (Some(branch), true, _) => crate::git::run(&["rev-parse", "--verify", &format!("refs/heads/{branch}")], Some(repo)).ok().map(|commit| Kept { branch, commit }),
         (Some(branch), false, Some(commit)) => Some(Kept { branch, commit }),
         _ => None,
     })
@@ -1512,21 +1510,37 @@ pub struct RemoveCheck {
 
 /// T-613: the commits deleting `w`'s branch would lose: reachable from its branch (or a detached
 /// HEAD) and from no other local branch and no remote-tracking branch. Reads only refs Git already
-/// has, never the network; an unborn branch has none.
+/// has, never the network; an unborn branch has none. T-613b: a read that fails (a broken ref, a
+/// git error) is an error, never "nothing to lose", so the branch is kept.
 /// ponytail: every such commit comes back, one short line each, so a branch with thousands never
 /// pushed sends thousands of lines; count with `rev-list --count` and list the first few if one shows up.
-fn only_here(git: &Git, repo: &Path, branch: Option<&str>, head: &str) -> Result<Vec<String>, String> {
+fn only_here(_git: &Git, repo: &Path, branch: Option<&str>, head: &str) -> Result<Vec<String>, String> {
+    // T-613b: a detached worktree whose HEAD Git could not tell has commits Kolux cannot see.
+    if branch.is_none() && head.is_empty() {
+        return Err(UNREAD_HEAD.into());
+    }
     let rev = branch.map_or_else(|| head.to_string(), |b| format!("refs/heads/{b}"));
-    if !git.rev_exists(repo, &rev) {
-        return Ok(Vec::new());
+    if !Git::ref_ok(&rev) {
+        return Err(format!("{rev} cannot be read as a branch"));
+    }
+    if branch.is_some() {
+        // for-each-ref lists nothing for a ref that is not there (an unborn branch) and fails on a broken one.
+        let listed = crate::git::run(&["for-each-ref", "--format=%(refname)", &rev], Some(repo)).map_err(|_| UNREAD_BRANCH.to_string())?;
+        if !listed.lines().any(|l| l == rev) {
+            return Ok(Vec::new());
+        }
     }
     // `--exclude` drops the branch itself from the `--branches` it comes before (a ref name has no glob characters).
     let itself = branch.map(|b| format!("--exclude={b}"));
     let mut args = vec!["log", "--format=%h %s", rev.as_str(), "--not"];
     args.extend(itself.as_deref());
     args.extend(["--branches", "--remotes", "--"]);
-    crate::git::run(&args, Some(repo)).map(|out| out.lines().map(str::to_string).collect())
+    crate::git::run(&args, Some(repo)).map(|out| out.lines().map(str::to_string).collect()).map_err(|_| if branch.is_some() { UNREAD_BRANCH } else { UNREAD_HEAD }.to_string())
 }
+
+/// T-613b: why a delete is refused when the commits it could lose cannot be read.
+const UNREAD_BRANCH: &str = "Kolux could not read this branch, so it was left in place.";
+const UNREAD_HEAD: &str = "Kolux could not read this workspace's commit, so it was left in place.";
 
 pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result<RemoveCheck, String> {
     let all = git.worktrees(Path::new(&project.path))?;
@@ -2353,40 +2367,85 @@ pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::ter
     // runs before the watch ends; an early return after it would drop the handle below without
     // telling the page.
     let keep = keep_branch.unwrap_or(keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path));
-    // T-613: with no choice made, the folder goes with its branch kept for now; whether the branch
-    // goes too is decided below, after the folder, when no other delete's branch decision is running.
-    let decide_after = keep_branch.is_none() && !keep;
+    // T-613: unless it is kept, the folder goes with its branch kept for now, and whether the branch
+    // goes too is decided below, after the folder, in the repository's branch turn: with no choice made
+    // it stays when it holds commits found nowhere else; T-613b: Keep the branch unticked
+    // (Some(false)) deletes it anyway, but in its turn too.
+    let decide_after = !keep;
+    let delete_anyway = keep_branch == Some(false);
+    // T-613b: a detached HEAD has no branch to keep, so its commits found nowhere else are put on a
+    // new one first (unless Keep the branch was unticked), before anything is deleted.
+    let saved = if delete_anyway { None } else { keep_detached(git, project, path)? };
     // T-033-e: the Source Control watch on this folder ends first and its folder handles are
     // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
     let watch = crate::scm::watch::unwatch_root(Path::new(path));
-    let kept = match remove_worktree(git, project, path, force, keep || decide_after) {
+    let kept = match remove_worktree(git, project, path, force, true) {
         Ok(k) => k,
         Err(e) => {
             // FIX-1: the folder stays after all, so its panel is told to watch it again.
             if let Some(w) = watch {
                 w.tell_page();
             }
+            // The folder and its HEAD are still there, so the keep-branch made for it goes again.
+            if let Some(k) = &saved {
+                let _ = git.delete_branch_if_at(Path::new(&project.path), &k.branch, &k.commit);
+            }
             return Err(e);
         }
     };
     let kept = match kept {
-        Some(k) if decide_after => branch_goes_unless_only_here(git, Path::new(&project.path), k),
+        Some(k) if decide_after => branch_goes(git, Path::new(&project.path), k, delete_anyway),
         k => k,
     };
     let store = store.lock().map_err(|e| e.to_string())?;
     forget_workspace(&store, path)?;
-    Ok(kept)
+    Ok(kept.or(saved))
+}
+
+/// T-613b: the branch a detached-HEAD workspace's commits are kept on when its folder goes:
+/// `kolux/kept-<short id>` at its HEAD (numbered when that name is taken), made only when the HEAD
+/// holds commits no branch and no remote has (or that cannot be read). None when the workspace is on
+/// a branch or has nothing of its own. A branch that cannot be made refuses the delete.
+fn keep_detached(git: &Git, project: &Project, path: &str) -> Result<Option<Kept>, String> {
+    let repo = Path::new(&project.path);
+    let Some(target) = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(path))) else { return Ok(None) };
+    if target.branch.is_some() {
+        return Ok(None);
+    }
+    if target.head.is_empty() {
+        return Err(UNREAD_HEAD.into());
+    }
+    // In the branch turn, so two detached workspaces at one HEAD deleted side by side make one branch.
+    let turn = branch_turn(repo);
+    let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    if only_here(git, repo, None, &target.head).is_ok_and(|c| c.is_empty()) {
+        return Ok(None);
+    }
+    let short = &target.head[..target.head.len().min(7)];
+    for n in 1..=50 {
+        let name = if n == 1 { format!("kolux/kept-{short}") } else { format!("kolux/kept-{short}-{n}") };
+        if git.branch_taken(repo, &name) {
+            continue;
+        }
+        // Without --force, `git branch` never moves a branch that is already there.
+        return match crate::git::run(&["branch", "--no-track", &name, &target.head], Some(repo)) {
+            Ok(_) => Ok(Some(Kept { branch: name, commit: target.head.clone() })),
+            Err(e) => Err(format!("Its commits are on no branch, and a branch to keep them could not be made ({e}), so it was not deleted.")),
+        };
+    }
+    Err("Its commits are on no branch, and every kolux/kept name for them is taken, so it was not deleted.".into())
 }
 
 /// T-613: a branch whose folder just went is deleted unless it holds commits that no other branch
 /// and no remote has (or it moved, or another worktree has it): then it stays and comes back as kept.
+/// T-613b: `delete_anyway` (the user unticked Keep the branch) skips the commits check only.
 /// Side-by-side deletes (PROJ-071) take turns here, so a parent and a child made from its tip, each
 /// holding the same unpushed commits, never both see the other as the copy and both go.
-fn branch_goes_unless_only_here(git: &Git, repo: &Path, kept: Kept) -> Option<Kept> {
+fn branch_goes(git: &Git, repo: &Path, kept: Kept, delete_anyway: bool) -> Option<Kept> {
     let turn = branch_turn(repo);
     let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
     // Anything that cannot be read keeps the branch.
-    let gone = only_here(git, repo, Some(&kept.branch), &kept.commit).is_ok_and(|c| c.is_empty()) && git.delete_branch_if_at(repo, &kept.branch, &kept.commit) == Ok(true);
+    let gone = (delete_anyway || only_here(git, repo, Some(&kept.branch), &kept.commit).is_ok_and(|c| c.is_empty())) && git.delete_branch_if_at(repo, &kept.branch, &kept.commit) == Ok(true);
     if gone {
         // As `git branch -D` would: the branch's own settings (its upstream) go with it.
         let _ = crate::git::run(&["config", "--remove-section", &format!("branch.{}", kept.branch)], Some(repo));
@@ -4893,6 +4952,122 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert_eq!(holders.len(), 1, "exactly one of the two branches stays, holding the commits: {holding:?}");
         let kept: Vec<Kept> = kept.into_iter().flatten().collect();
         assert_eq!(kept, vec![Kept { branch: holders[0].to_string(), commit: tip }], "and it comes back as kept");
+        drop(store);
+        for d in [profile, repo, place.root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    /// T-613b (review of PR #10): a detached-HEAD workspace whose commits no branch and no remote
+    /// holds gets a keep-branch at its HEAD (`kolux/kept-<short id>`) before its folder goes, with no
+    /// choice made (the batch, the CLI) and with Keep the branch ticked; it comes back as kept. With
+    /// nothing of its own, or with Keep the branch unticked, no branch is made.
+    #[test]
+    fn t613b_a_detached_workspace_with_commits_found_nowhere_else_keeps_them_on_a_new_branch() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile613d");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let repo = temp_repo("repo613d");
+        let project = add_project(&git, &store.lock().unwrap(), &repo).unwrap();
+        let terminals = crate::terminal::Terminals::default();
+        let ws_root = temp("ws613d");
+        let detached = |name: &str, commit: bool| -> (String, String) {
+            let path = ws_root.join(name);
+            git_in(&repo, &["worktree", "add", "-q", "--detach", &path.to_string_lossy()]);
+            if commit {
+                fs::write(path.join(format!("{name}.txt")), name).unwrap();
+                git_in(&path, &["add", "."]);
+                git_in(&path, &["commit", "-q", "-m", name]);
+            }
+            let tip = crate::git::run(&["rev-parse", "HEAD"], Some(&path)).unwrap();
+            (path.to_string_lossy().into_owned(), tip)
+        };
+        let on_a_branch = |tip: &str| crate::git::run(&["for-each-ref", "--format=%(refname:short)", "--contains", tip, "refs/heads"], Some(&repo)).unwrap();
+        for (name, choice) in [("batch", None), ("ticked", Some(true))] {
+            let (path, tip) = detached(name, true);
+            let check = remove_check(&git, &project, &path).unwrap();
+            assert_eq!(check.commits.len(), 1, "{check:?}");
+            let kept = remove_one(&git, &store, &terminals, &project, &path, false, &check.stamp, choice).unwrap();
+            assert!(!Path::new(&path).exists(), "the folder went");
+            let want = format!("kolux/kept-{}", &tip[..7]);
+            assert_eq!(kept, Some(Kept { branch: want.clone(), commit: tip.clone() }), "{name}: the new branch is named");
+            assert_eq!(on_a_branch(&tip), want, "{name}: the commit survives on it");
+        }
+        // nothing of its own (its HEAD is on main): no branch is made
+        let (path, tip) = detached("clean", false);
+        let check = remove_check(&git, &project, &path).unwrap();
+        let kept_now = || crate::git::run(&["for-each-ref", "--format=%(refname:short)", "refs/heads/kolux"], Some(&repo)).unwrap().lines().count();
+        let before = kept_now();
+        assert_eq!(remove_one(&git, &store, &terminals, &project, &path, false, &check.stamp, None).unwrap(), None);
+        assert!(on_a_branch(&tip).lines().any(|b| b == "main") && kept_now() == before, "no new branch");
+        // Keep the branch unticked, the commits listed in the question: the user let them go
+        let (path, tip) = detached("letgo", true);
+        let check = remove_check(&git, &project, &path).unwrap();
+        assert_eq!(remove_one(&git, &store, &terminals, &project, &path, false, &check.stamp, Some(false)).unwrap(), None);
+        assert_eq!(on_a_branch(&tip), "");
+        drop(store);
+        for d in [profile, repo, ws_root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    /// T-613b (review of PR #10): a branch whose commit cannot be read is not "nothing to lose": the
+    /// read fails, so the check refuses rather than letting the branch go.
+    #[test]
+    fn t613b_a_branch_that_cannot_be_read_is_not_taken_for_one_with_nothing_to_lose() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("repo613r");
+        git_in(&repo, &["branch", "broken"]);
+        fs::write(repo.join(".git/refs/heads/broken"), "0000000000000000000000000000000000000bad\n").unwrap();
+        let read = only_here(&git, &repo, Some("broken"), "");
+        assert_eq!(read, Err("Kolux could not read this branch, so it was left in place.".to_string()), "a failed read is not an empty list");
+        // a branch that is not there at all (unborn) still has nothing to lose
+        assert_eq!(only_here(&git, &repo, Some("never-made"), ""), Ok(Vec::new()));
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    /// T-613b (review of lane2): a detached worktree whose HEAD Git could not tell (an empty head)
+    /// is not taken for one with no commits: the check refuses with a plain message.
+    #[test]
+    fn t613b_a_detached_worktree_whose_head_cannot_be_read_is_refused() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("repo613h");
+        assert_eq!(only_here(&git, &repo, None, ""), Err("Kolux could not read this workspace's commit, so it was left in place.".to_string()));
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    /// T-613b (review of PR #10): a delete with Keep the branch unticked (Some(false)) deletes the
+    /// branch only in its turn, as the no-choice delete does, so it never races another delete's
+    /// decision about the same commits.
+    #[test]
+    fn t613b_an_explicit_branch_delete_takes_the_branch_turn() {
+        use std::time::Duration;
+        let git = Git::detect().unwrap();
+        let profile = temp("profile613t");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let repo = temp_repo("repo613t");
+        let project = add_project(&git, &store.lock().unwrap(), &repo).unwrap();
+        let place = nested(&temp("ws613t"));
+        let terminals = crate::terminal::Terminals::default();
+        let work = create_workspace(&git, &place, &project, "gone", None).unwrap().worktree;
+        let branch = work.branch.clone().unwrap();
+        let exists = || crate::git::run(&["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")], Some(&repo)).is_ok();
+        let check = remove_check(&git, &project, &work.path).unwrap();
+        let turn = branch_turn(Path::new(&project.path));
+        let held = turn.lock().unwrap();
+        std::thread::scope(|s| {
+            let run = s.spawn(|| remove_one(&git, &store, &terminals, &project, &work.path, false, &check.stamp, Some(false)));
+            let start = std::time::Instant::now();
+            while Path::new(&work.path).exists() && start.elapsed() < Duration::from_secs(20) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            let during = exists();
+            drop(held);
+            assert_eq!(run.join().unwrap(), Ok(None));
+            assert!(during, "the branch waits for the turn before it goes");
+        });
+        assert!(!exists(), "and goes once the turn is free");
         drop(store);
         for d in [profile, repo, place.root] {
             let _ = fs::remove_dir_all(d);

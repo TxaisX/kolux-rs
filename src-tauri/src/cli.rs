@@ -2211,16 +2211,20 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 let pids: Vec<String> = stopped.stuck.iter().map(u32::to_string).collect();
                 return Err(Fail { code: "stuck", message: format!("{} process{} in {shown} did not stop (pid {})", pids.len(), if pids.len() == 1 { "" } else { "es" }, pids.join(", ")), data: json!({ "hint": "add --force to remove it anyway, leaving them running", "pids": stopped.stuck }) });
             }
-            // CLI-020: --force forces only the checkout's removal; the branch is kept.
-            let keep = a["force"].as_bool().unwrap_or(false) || projects::keeps_branch(&*ctx.store.lock().map_err(|e| e.to_string())?, &w.path);
-            projects::remove_worktree(ctx.git, &project, &w.path, true, keep)?;
-            {
-                let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                projects::forget_workspace(&store, &w.path)?;
-            }
+            // CLI-020: --force forces only the checkout's removal; the branch is kept. T-613b: without
+            // it the branch is decided as the app's delete decides it (remove_one with no choice made):
+            // the workspace's own record, then a branch holding commits found on no other branch and no
+            // remote stays, and a detached HEAD's such commits are kept on a new kolux/kept- branch.
+            let force = a["force"].as_bool().unwrap_or(false);
+            let check = projects::remove_check(ctx.git, &project, &w.path)?;
+            let by_record = projects::keeps_branch(&*ctx.store.lock().map_err(|e| e.to_string())?, &w.path);
+            let kept = projects::remove_one(ctx.git, ctx.store, ctx.terminals, &project, &w.path, force, &check.stamp, force.then_some(true))?;
             (ctx.notify)(json!({ "kind": "removed", "path": w.path }));
-            let warnings: Vec<&str> = if a["runHooks"].as_bool().unwrap_or(false) { vec!["--run-hooks: teardown scripts do not run yet; the worktree was removed without them"] } else { vec![] };
-            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": keep && w.branch.is_some(), "stopped": stopped.ended, "stuck": stopped.stuck, "warnings": warnings }))
+            let mut warnings: Vec<String> = if a["runHooks"].as_bool().unwrap_or(false) { vec!["--run-hooks: teardown scripts do not run yet; the worktree was removed without them".into()] } else { vec![] };
+            if let Some(k) = kept.as_ref().filter(|_| !check.commits.is_empty() && (w.branch.is_none() || (!force && !by_record))) {
+                warnings.push(format!("the branch {} was kept: it holds commits found on no other branch and no remote (delete it with git branch -D {} once they are safe)", k.branch, k.branch));
+            }
+            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": kept.is_some(), "keptBranch": kept.as_ref().map(|k| &k.branch), "stopped": stopped.ended, "stuck": stopped.stuck, "warnings": warnings }))
         }
         "app.open" => {
             // T-324-b (APP-019): markdown files a second launch was handed wait for the page to take them.
@@ -6528,6 +6532,53 @@ mod tests {
         let s2 = ov["siblings"].as_array().unwrap().iter().find(|s| s["branch"] == "two").cloned().unwrap();
         assert_eq!(s2["clash"], "unverifiable", "{s2}");
         assert!(s2["why"].as_str().unwrap().contains("older than 2.38"), "{s2}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T-613b (review of PR #10): `kolux worktree rm` decides the branch as the app's delete does
+    /// (`remove_one` with no choice made): a branch holding a commit found on no other branch and no
+    /// remote is kept and named; one with nothing of its own still goes.
+    #[test]
+    fn t613b_worktree_rm_keeps_a_branch_holding_a_commit_found_nowhere_else() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli613b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q", "-b", "main"], &repo);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"], &repo);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let mut settings = s.settings();
+            settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
+            s.save_settings(&settings).unwrap();
+        }
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: repo.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let made = dispatch(&ctx, &req("worktree.create", json!({ "name": "unique", "setup": "skip" }))).unwrap();
+        let path = PathBuf::from(made["path"].as_str().unwrap());
+        std::fs::write(path.join("work.txt"), "only here").unwrap();
+        git(&["add", "."], &path);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "only here"], &path);
+        let tip = String::from_utf8(Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&path).output().unwrap().stdout).unwrap().trim().to_string();
+        let out = dispatch(&ctx, &req("worktree.rm", json!({ "worktree": "name:unique" }))).unwrap();
+        assert!(!path.exists(), "the folder went");
+        let has = |rev: &str| Command::new("git").args(["rev-parse", "--verify", "--quiet", rev]).current_dir(&repo).output().unwrap().status.success();
+        let holders = String::from_utf8(Command::new("git").args(["branch", "--contains", &tip]).current_dir(&repo).output().unwrap().stdout).unwrap_or_default();
+        assert!(has("refs/heads/unique") && holders.contains("unique"), "the unique commit survives on its branch: {out}");
+        assert_eq!(out["branchKept"], true, "{out}");
+        assert!(out["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("unique") && w.as_str().unwrap().contains("found on no other branch")), "the kept branch is named: {out}");
+        // nothing of its own: the branch goes with the folder, as before
+        let plain = dispatch(&ctx, &req("worktree.create", json!({ "name": "plain", "setup": "skip" }))).unwrap();
+        let out = dispatch(&ctx, &req("worktree.rm", json!({ "worktree": format!("path:{}", plain["path"].as_str().unwrap()) }))).unwrap();
+        assert_eq!(out["branchKept"], false, "{out}");
+        assert!(!has("refs/heads/plain"));
+        drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
