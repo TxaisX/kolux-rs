@@ -599,13 +599,26 @@ pub fn clear_certificate_allowances(app: &AppHandle) {
 #[cfg_attr(not(windows), allow(dead_code))] // the frame hook is Windows-only
 pub fn frame_ok(uri: &str, app: Option<&Url>) -> bool {
     let Ok(url) = Url::parse(uri) else { return false };
+    let web = |u: &Url| super::allowed(u, app).is_ok() && !dev_alias(u, app);
     match url.scheme() {
-        "http" | "https" => super::allowed(&url, app).is_ok(),
+        "http" | "https" => web(&url),
         "about" => matches!(url.path(), "blank" | "srcdoc"),
         "data" => true,
-        "blob" => url.path().starts_with("null/") || Url::parse(url.path()).is_ok_and(|inner| matches!(inner.scheme(), "http" | "https") && super::allowed(&inner, app).is_ok()),
+        "blob" => url.path().starts_with("null/") || Url::parse(url.path()).is_ok_and(|inner| matches!(inner.scheme(), "http" | "https") && web(&inner)),
         _ => false,
     }
+}
+
+/// T-607b (review of PR #15): in a development build (`app` is the dev server, which `allowed` judges
+/// by its own host only) the server also answers on the loopback addresses, so `127.0.0.1`, any
+/// other 127.x address and `[::1]` at its port count as the app's own too. A release build has no
+/// dev server, so nothing is refused here.
+fn dev_alias(url: &Url, app: Option<&Url>) -> bool {
+    let loopback = |u: &Url| {
+        let host = u.host_str().unwrap_or_default().trim_end_matches('.');
+        host.eq_ignore_ascii_case("localhost") || host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    };
+    app.is_some_and(|a| loopback(a) && loopback(url) && a.port_or_known_default() == url.port_or_known_default())
 }
 
 #[cfg(test)]
@@ -652,6 +665,21 @@ mod tests {
             assert!(frame_ok(ok, Some(&dev)), "loads: {ok}");
         }
         assert!(frame_ok("http://localhost:1420/", None), "a release build has no dev server: a user's own server on that port loads");
+    }
+
+    /// T-607b (review of PR #15): in a development build the dev server also answers on the loopback
+    /// addresses, so a frame of 127.0.0.1 or [::1] at its port is refused too; other ports load, and
+    /// a release build (no dev server) loads them all.
+    #[test]
+    fn t607b_the_dev_servers_loopback_addresses_are_refused_in_a_development_build() {
+        let dev = Url::parse("http://localhost:1420/").unwrap();
+        for own in ["http://127.0.0.1:1420/", "http://127.0.0.1:1420/index.html", "http://[::1]:1420/", "https://127.0.0.1:1420/", "blob:http://127.0.0.1:1420/0b3c-uuid", "http://[::1]:1420/src/main.tsx"] {
+            assert!(!frame_ok(own, Some(&dev)), "refused in a development build: {own}");
+            assert!(frame_ok(own, None), "a release build has no dev server: {own} loads");
+        }
+        for ok in ["http://127.0.0.1:8080/", "http://[::1]:5173/", "http://127.0.0.1/"] {
+            assert!(frame_ok(ok, Some(&dev)), "loads: {ok}");
+        }
     }
 
     /// T-607: the rule is wired into every tab's frame hook (not only a preview's) and into every

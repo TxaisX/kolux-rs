@@ -181,36 +181,14 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-30 · [workspaces] T-613 · Optional, Space lane: the Space batch delete names the branches it kept only in
   its summary note (src/space/view.ts:58-61); add them (batch.items[].kept) to the kept-branch list as the Projects
   panel does.
-- 2026-10-30 · [workspaces] T-613 · DATA LOSS (review of PR #10): `kolux worktree rm` (src-tauri/src/cli.rs:2206)
-  bypasses remove_one and can delete a branch holding commits found on no other branch and no remote; route it
-  through remove_one with keep_branch None.
-- 2026-10-30 · [workspaces] T-613 · DATA LOSS, pre-existing (review of PR #10): a detached-HEAD workspace with
-  commits found nowhere else loses them on any delete; the batch paths never ask and the single delete's "Keep the
-  branch" does nothing there. Refuse the delete, or create a keep-branch at HEAD first.
-- 2026-10-30 · [workspaces] T-613 · Review of PR #10: src-tauri/src/projects.rs:1519 rev_exists treats a failed read
-  as "nothing to lose"; treat it as keep.
-- 2026-10-30 · [workspaces] T-613 · Review of PR #10: src-tauri/src/projects.rs:1548 an explicit Some(false) (delete
-  the branch) does not take branch_turn; take it there too.
-- 2026-10-30 · [workspaces] T-617 · Review of PR #10: src-tauri/src/files.rs:79 save copies left by a save through a
-  dangling link are no longer cleared up; clear them again.
 
-- 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: a recursive rm of a symbolic link into the temp
-  folder is let through by the temp-folder exemption although it may point elsewhere; resolve the link (or ask) first.
-- 2026-10-30 · [safety] T-607 · Review of PR #15: browser_engine.rs frame_ok judges the dev server by its own origin
-  only; also refuse 127.0.0.1:1420 and [::1]:1420 in a development build.
 - 2026-10-30 · [safety] T-606 · Review of PR #15: the Cursor writer now gets --trust (it runs in the empty temp folder,
   so it trusts nothing of the workspace); confirm that is wanted when Cursor's writer is checked live.
 - 2026-10-30 · [safety] T-606 · Review of PR #15: a writer installed as a non-npm .cmd/.bat script refuses a multi-line
   prompt with a plain message (cmd.exe cannot take a line break); a typed or file hand-over would lift that.
 
 
-- 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: the protected-delete rule does not cover
-  `[IO.Directory]::Delete`, `find -delete`, `rimraf` or `robocopy /MIR`.
 
-- 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8), not fixed here: nested folder wrappers
-  (`env -C a env -C b rm ...`) use only the last folder; join them the way the shell does, or make the folder unknown.
-- 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8): how PowerShell wildcards treat `..` is unchecked; prove it
-  live on Windows, and ask on any PowerShell wildcard in a delete folder if it can match `..`.
 - 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8): a user whose own environment sets CDPATH is asked about
   every relative `cd ... && rm -rf ...` (an extra question, not a hole).
 
@@ -219,6 +197,12 @@ recorded default until told otherwise; nothing here blocks a pass.
   count-only background command or a longer cache.
 - 2026-10-31 · [product-ux-2] T-608b · Docs: docs/guide/board-agents-inbox.md still describes three Inbox groups; add
   Stopped.
+
+- 2026-10-31 · [data-loss] T-604b · Review, not fixed: a symlink start point inside the workspace is judged by its
+  text, so `find link/ -name '*.pyc' -delete` (and `rm -rf link/`) can delete outside it; resolve start points that
+  are links. A `-delete` after an escaped `\(` group is not seen (protected.rs:191). `rm`, `del` and `rd` used as
+  PowerShell aliases still follow the bash and cmd wildcard rules.
+- 2026-10-31 · [data-loss] T-613b · Review: a commit held only by a tag still keeps its branch (safe, some noise).
 
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt
