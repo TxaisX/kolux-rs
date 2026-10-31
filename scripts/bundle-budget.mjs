@@ -4,17 +4,17 @@
 // on demand (the editor and its CodeMirror, Lexical and highlight.js, the pages and settings, the
 // browser and PDF panes, diagrams) and the CSS do not count.
 // Run after `vite build`:   node scripts/bundle-budget.mjs        exit 0 = within, 1 = over or no build
-// ponytail: the ceiling is today's first load (1,859,764 bytes on 2026-10-31, down from 3,182,193 at
-// d8f805a6 once the editor, the pages and the browser pane moved behind import()) plus about 1% for
-// small fixes. Upgrade path: the 1.5 MB target. What still holds it up: @codemirror/commands, which
-// editor/buffers.ts imports for its undo annotation and which brings the drawing (@codemirror/view and
-// language) with it (315 kB); xterm, which the first frame's terminal needs; and the two sidebars,
-// which are drawn with the first frame.
+// ponytail: the ceiling is today's first load (1,470,936 bytes on 2026-10-31, down from 3,182,193 at
+// d8f805a6 once the editor, the pages and the browser pane moved behind import(), and from 1,862,966
+// when editor/buffers.ts stopped carrying CodeMirror and the help menu's sheet moved behind import())
+// plus about 1% for small fixes. It now sits under the 1.5 MB bar the last two cycles were aiming at,
+// so the bar itself is what the ceiling holds. What sets the floor: xterm, which the first frame's
+// terminal needs; the two sidebars, which are drawn with the first frame; and App's own shell.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const CEILING = 1_880_000;
+export const CEILING = 1_485_000;
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 
 /** The first-load chunks of a built `dist` folder, their total size in bytes, and whether it is within `ceiling`. */

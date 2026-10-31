@@ -1,0 +1,202 @@
+Cycle 3, item 1 (the wall) — first load from 1,862,966 to 1,470,936 bytes: the buffers stop carrying
+CodeMirror, and the help menu's guide loads when it is opened
+Worktree G:\Dev\kolux-rs-lanes\c3-first-load-2, branch lane3/first-load-2, based on main eb907013.
+Windows, Node 26, pnpm, Vite 8 (Rolldown). No cargo was run (front-end lane; another job holds the Rust build).
+
+Commits
+  a0acb905  Cycle 3: Kolux's window no longer loads the code editor's engine to show a terminal
+            (first load 1,862,966 to 1,524,454 bytes)                       [item 1]
+  0809a364  Cycle 3: the Help menu's guide, its tips and its tours load when the menu opens, not when
+            Kolux starts (first load 1,524,454 to 1,470,936 bytes)          [item 2]
+  (this commit) the ceiling drops to 1,485,000 and this file.
+
+== 1. Before, on eb907013 (this worktree, no change)
+
+$ pnpm build && node scripts/bundle-budget.mjs
+bundle-budget: first load 1862966 bytes in 41 chunks (ceiling 1880000)
+bundle-budget: OK
+
+The chunks that carry the two causes, largest first (the whole list is in section 6):
+
+  1019415 App-DANv1xak.js        the window itself
+   315352 dist-BCxUsHlj.js       @codemirror/state + view + language + commands, one chunk
+   309971 index-DspxB75t.js      React 19 + main.tsx
+    26471 buffers-DcBqAKQY.js    editor/buffers.ts, importing the 315,352-byte chunk above
+     8159 guide-rwzmak0o.js      onboarding/guide.ts (the guide's steps and catalogue)
+     4046 notifications-KsmI0jOo.js   reachable only through the help menu's guide
+     2556 firstRun-DhKLb7a7.js   onboarding/firstRun.ts
+     2243 setupChoice-BKxjYAFk.js     reachable only through the help menu's guide
+      479 hooksOn-CGq8yAcT.js    onboarding/hooksOn.ts
+      365 features-DXu7FogU.js   onboarding/features.ts
+
+== 2. Item 1: where the 315,352 bytes come from, and why the whole chunk had to go
+
+Cause: src/editor/buffers.ts had one runtime import that was not needed for its job as a document store —
+  import { isolateHistory } from "@codemirror/commands";
+isolateHistory groups a reload as one undo step of its own. @codemirror/commands imports
+@codemirror/view and @codemirror/language, so all four packages landed in one 315,352-byte chunk that
+the first frame pulled through editor/buffers.ts (FloatingLayer asks isDirty, the window asks keyOf and
+baseName, terminal/paneActions asks keyOf).
+
+Measurement A — drop only that one import, nothing else, to see what it alone costs:
+  commands import replaced by a one-line stand-in, $ pnpm exec vite build && node scripts/bundle-budget.mjs
+  bundle-budget: first load 1573821 bytes in 41 chunks (ceiling 1880000)
+  the chunk fell 315,352 -> 49,171 bytes: @codemirror/state alone, still on the first frame through the
+  same module. 266,181 bytes were commands+view+language.
+So dropping only commands would have landed at 1,573,821 — still 73,821 over the 1.5 MB bar, with the
+state package (49,171) still in the first frame. That is why the fix removes CodeMirror from the store
+entirely rather than just the commands import.
+
+Measurement B — the split as committed (a0acb905):
+  bundle-budget: first load 1524454 bytes in 40 chunks
+  dist-BCxUsHlj.js (315,352) gone; buffers-DcBqAKQY.js 26,471 -> buffers-D5naiSCn.js 3,396 (the store
+  itself); App 1,019,415 -> 1,019,359; index 309,971 -> 309,942.
+  Cut: 1,862,966 - 1,524,454 = 338,512 bytes.
+
+What changed: editor/buffers.ts keeps the documents (open documents, dirty state, save, line endings,
+carry-over, held text, opening) and its public API, and carries no CodeMirror import at all — even its
+@codemirror/state import is `import type`, which erases. The five values it cannot make itself are
+installed by the new editor/editors.ts, the CodeMirror side: the synced annotation and reading it, the
+undo grouping, a view's line separator compartment, and Text.of split into lines. editor/editors.ts also
+takes over lineEndsFor and withLineBreaks and re-exports the store, so a caller imports one module and
+the CodeMirror values are installed before any view can be attached; a missing install throws by name
+instead of mis-grouping undo.
+
+Identity proof for isolateHistory (it is compared by identity with the history extension, so a local copy
+would silently change undo grouping): EDIT-001-003's box 2 ("Reload makes the buffer match disk and offers
+undo; undo brings the edits back") builds a real history() extension, reloads through replaceAll(....,
+undoable), then calls undo() and expects the typed text back. With the real isolateHistory: passes. With
+one stand-in annotation swapped into editor/editors.ts: fails ("box 2 ... 1 failed"). The file was put back
+byte for byte and the test passes.
+
+Files: editor/buffers.ts, editor/editors.ts (new), editor/EditorPane.tsx, editor/DiffPane.tsx,
+editor/buffers.test.ts, editor/carryOver.test.ts, editor/diskChange.test.ts, editor/drafts.test.ts,
+editor/fileMoved.test.ts, editor/logFollow.test.ts, editor/staleSave.test.ts,
+editor/__cards__/EDIT-001-003.test.ts (the last eight: one import line each, from ./buffers to ./editors,
+so the test that builds a CodeMirror state imports the CodeMirror side).
+
+== 3. Item 2: the onboarding guide helpers, and which of them the first frame really needs
+
+Cause: the help button in the sidebar footer (onboarding/HelpMenu.tsx, drawn at start) imported the guide
+window for its ring and live steps (Guides.tsx), the tour catalogue, the step panels, the stop cards, the
+CLI setup, the integrations panel and the star prompt. That is also why vite never split Guides.tsx:
+
+  [INEFFECTIVE_DYNAMIC_IMPORT] src/onboarding/Guides.tsx is dynamically imported by src/lazy/pages.tsx
+  but also statically imported by src/onboarding/HelpMenu.tsx, dynamic import will not move module into
+  another chunk.
+
+Fix: HelpMenu.tsx is now the button only; the menu is onboarding/HelpSheet.tsx, deferred through
+lazy/pages (prefetch() reads it after the first frame). Same items, order, backdrop, Escape and
+autoFocus; useGuideState(true) reads the steps when the sheet mounts, as useGuideState(at !== null) did
+when the menu opened.
+
+Measurement C — the cut as committed (0809a364):
+  bundle-budget: first load 1470936 bytes in 38 chunks
+  App 1,019,359 -> 972,204 (-47,155); index 309,942 -> 309,868 (-74); notifications-KsmI0jOo.js
+  (4,046) and setupChoice-BKxjYAFk.js (2,243) are no longer on the first frame at all.
+  Cut: 1,524,454 - 1,470,936 = 53,518 bytes. The INEFFECTIVE_DYNAMIC_IMPORT warning for Guides.tsx is gone.
+
+What is still on the first frame from src/onboarding, and why it has to be:
+  guide-rwzmak0o.js   8,159   chrome/useChrome.ts dispatches openGuide/openExplore for the menu, and
+                              onboarding/sidebar.ts needs STEPS+words+ring to draw the sidebar's
+                              "Setup Guide, N of M, next: <step name>" line with the first frame
+  firstRun-DhKLb7a7.js 2,556  ADD_PROJECT / openAt / wizardCloser / REOPEN_WIZARD: the wizard's state
+                              and its ways out sit in App
+  hooksOn-CGq8yAcT.js    479  App and the Hosts card read the hooks switch
+  features-DXu7FogU.js   365  noteUse records first-use of a feature from dialogs drawn at start
+  inside App: useWizard, sidebar, tour, star, milestoneNote, moved, agentKind.
+Measured left in App by a temporary build that cut useWizard's imports: tour.ts + star.ts are 13,789
+bytes of the first frame (1,470,936 -> 1,457,147). Not cut here on purpose: startGridTour runs when the
+first-run setup completes and starAfterClose fires when it closes, both from the wizard's close path, so
+deferring them changes when the grid tour starts and when the star event is dispatched — a timing change
+this lane cannot watch in the running app (no cargo, no app launch), and the bar is met without it.
+
+With that, the lane's estimate is accounted for: 53,518 bytes deferred (the guide's window and its tree)
+plus 11,559 in the four named helper modules the first frame genuinely uses = 65,077 of the ~65,800 named.
+
+== 4. The budget line
+
+The old ceiling, before any change (1,880,000) and the measured first load then:
+  bundle-budget: first load 1862966 bytes in 41 chunks (ceiling 1880000)
+The new ceiling would have failed that tree, and the tree after item 1 alone:
+  1,862,966 > 1,485,000  would FAIL (start of this lane)
+  1,524,454 > 1,485,000  would FAIL (after item 1, before item 2)  <- the guard bites
+Now:
+  $ pnpm build && node scripts/bundle-budget.mjs
+  bundle-budget: first load 1470936 bytes in 38 chunks (ceiling 1485000)
+  bundle-budget: OK
+  exit=0
+CEILING 1,880,000 -> 1,485,000 (just above the 1,470,936 measured, +0.96%, the "about 1% for small
+fixes" the file already allowed). The bar is 1,500,000; the ceiling now sits under it, so the bar is
+enforced rather than aimed at. scripts/bundle-budget.test.mjs changed with it — the old assertion
+(CEILING > 1,500,000, which protected the bar while it was not met) is now CEILING <= 1,500,000 plus
+CEILING > 1,450,000: a stronger claim, not a weaker one. 3 tests pass.
+
+== 5. Gate lines (this worktree, after the last change)
+
+$ pnpm exec tsc
+tsc exit=0
+
+$ pnpm exec vitest run src/editor src/onboarding src/main.slowStart.test.ts src/lazy scripts/bundle-budget.test.mjs
+ Test Files  119 passed (119)
+      Tests  1350 passed (1350)
+   Duration  26.96s (transform 2.65s, setup 0ms, import 12.91s, tests 23.80s, environment 9ms)
+
+$ pnpm test
+ Test Files  706 passed (706)
+      Tests  5152 passed (5152)
+   Duration  124.80s (transform 14.79s, setup 0ms, import 50.35s, tests 94.31s, environment 57ms)
+   (One heavy test, src/editor/PreviewPane.test.ts "T-601 ... mermaid's settings", timed out at 5 s at
+   11.3 s under load in an earlier run; re-run alone: 7 tests passed, 5.96 s. Its own file is green.)
+
+$ pnpm build && node scripts/bundle-budget.mjs
+  built in 1.21s
+bundle-budget: first load 1470936 bytes in 38 chunks (ceiling 1485000)
+bundle-budget: OK
+build+budget exit=0
+
+== 6. The first load after the two items, largest first (38 chunks)
+
+  972204 App-s7IGUbqJ.js
+  309868 index-CtWzN6fh.js
+   25657 VendorMark-C27wKse1.js
+   18737 keymap-BD6-SfyQ.js
+   17905 model-Mjsib7c7.js
+   14954 UpdateCenter-D32PhvEm.js
+   13840 window-DPADcQhZ.js
+   13341 PlusMenu-11j-GLff.js
+    8561 icons-CAtHam9j.js
+    8243 jsx-runtime-DKj5X9O4.js
+    8159 guide-rwzmak0o.js
+    6202 seats-Bal93Yjp.js
+    5721 prDraft-DjhQbu99.js
+    5636 model-BBPYdVTB.js
+    4704 hidden-SqeXx4TS.js
+    3396 buffers-D5naiSCn.js
+    2944 KeymapContext-Ce13G-sd.js
+    2881 repoId-BvbYdzkb.js
+    2725 rules-BAz9hvvw.js
+    2711 controls-pXA4Y8Yi.js
+    2556 firstRun-DhKLb7a7.js
+    2355 preview-BcxMtVV2.js
+    1870 generate-DeeVmyw1.js
+    1504 agents-Bfea4vLP.js
+    1408 openIn-BOgDVsTn.js
+    1368 grid-DwZgIkZW.js
+    1358 Ask-CkO6C0sN.js
+    1357 launchWarn-Bxhlj_p2.js
+    1315 event-DhBNdhT4.js
+    1226 diffNotes-vcI1C9_n.js
+    1219 core-DSxqFbar.js
+    1106 rolldown-runtime-Dd_uD5pT.js
+    1047 editorPrefs-o0srKLhT.js
+     803 notifyMaster-C42T8OFo.js
+     695 language-Oms9s072.js
+     516 about-BVJE5YN2.js
+     479 hooksOn-CGq8yAcT.js
+     365 features-DXu7FogU.js
+ 1470936 TOTAL in 38 chunks
+
+@codemirror/* is no longer in this list at all. NOTES: no PLAN.md head counters or task lines were
+edited and DECISIONS.md was not touched; the work item to tick is cycle 3's "until the first frame is
+under 1.5 MB" (item 1 of cycle 3), now met at 1,470,936 bytes.
