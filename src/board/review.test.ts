@@ -83,3 +83,13 @@ test("T-609: Review changes opens that pane's worktree in All Changes, in the pa
   // An All Changes tab of another worktree in the same cell is not taken for this one.
   expect(reviewTab([{ key: 6, cwd: "G:/a", branch: null }, { key: 7, cwd: "G:/b", branch: null, kind: "changes", group: 6 }], 6)).toEqual({ open: { cwd: "G:/a", branch: null, group: 6 } });
 });
+
+test("DT-C52 / T-609: an Inbox row Stopped because its program exited offers Review changes once its worktree holds changes", () => {
+  const [row] = inboxItems([sourceOf({ key: 4, agent: "claude", branch: "feat", cwd: "G:/repo/w4" }, "Claude 4", undefined, false, { at: now - 60_000, interrupted: false })], now);
+  expect(row.group).toBe("stopped");
+  const actions = (changed: number | null) => buttons(detailActions({ item: row, onOpen: () => {}, onReview: () => {}, changed })).map((b) => b.text);
+  expect(actions(3)).toEqual(["Open in Code", "Review changes"]);
+  expect(actions(0), "a clean worktree has nothing to review").toEqual(["Open in Code"]);
+  expect(actions(null), "not read yet").toEqual(["Open in Code"]);
+  expect([canReview("stopped", 2), canReview("stopped"), canReview("done"), canReview("needs", 5)]).toEqual([true, false, true, false]);
+});

@@ -62,3 +62,18 @@ STILL OPEN (live, Windows)
 - Start Gemini from New session: the Tower row and the Inbox detail say Gemini.
 - In a plain PowerShell pane start claude by hand, let it ask, then quit it: the Needs you clears and stays clear
   when its Stop hook arrives late; starting claude again there shows its new status.
+
+MERGE-REVIEW FIXES (2026-10-31, coordinator)
+1. src/board/review.ts canReview(group, changed): an Inbox Stopped row (program exited) whose worktree holds
+   changes offers Review changes, as Done does (InboxView passes the detail's git count).
+2. src/terminal/status.ts VOCAB.stopped tip: "Stopped: waiting on a limit or sign-in, or the program has ended."
+3. src/projects/WorktreePalette.tsx dirMark: a blocked or interrupted workspace row shows Stopped, as the tab does.
+BEFORE (new tests, fixes stashed): vitest run src/board/review.test.ts src/terminal/status.test.ts src/projects/nav.test.ts
+   × palette rows carry the agent's mark, permission over unread over a fresh finish (VIEW-040)
+   × DT-C52: the Stopped tip covers a blocked agent whose program still runs and one whose program ended
+   × DT-C52 / T-609: an Inbox row Stopped because its program exited offers Review changes once its worktree holds changes
+      Tests  3 failed | 33 passed (36)
+AFTER (plus src/inbox, src/terminal/tabs.test.ts, src/board/paneStatus.test.ts)
+ Test Files  9 passed (9)
+      Tests  77 passed (77)
+tsc -p . -> exit 0

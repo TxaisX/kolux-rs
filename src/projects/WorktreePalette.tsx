@@ -29,9 +29,11 @@ export type RowAt = { mark: Badge; since: number } | null;
  * output, which beats a finished turn; work in progress keeps its spinner, as on the tab, and
  * work that only watches background tasks after its turn (STAT-024) shows the radio mark. */
 export function dirMark(state: AgentState | null, unread: boolean, monitoring = false): Badge {
-  if (state === "permission" || state === "waiting" || state === "blocked") return "permission";
+  if (state === "permission" || state === "waiting") return "permission";
   if (state === "working") return monitoring ? "background" : "working";
   if (unread) return "unread";
+  // DT-C52: a stop (a limit, a sign-in, an interrupt) is not a question: Stopped, as on the tab (tabs.ts).
+  if (state === "blocked" || state === "interrupted") return "stopped";
   return state === "done" ? "done" : null;
 }
 

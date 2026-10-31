@@ -80,13 +80,13 @@ type Readable = { prompt: { kind: string; text: string; options: string[] }; cho
 
 /** The detail's buttons: Open (or Answer) in Code, and T-609's Review changes on a done row with a workspace.
  *  A plain render helper (no hooks), drawn inline so the detail stays one tree. */
-export function detailActions({ item, onOpen, onReview }: { item: Item; onOpen: () => void; onReview?: () => void }) {
+export function detailActions({ item, onOpen, onReview, changed = null }: { item: Item; onOpen: () => void; onReview?: () => void; changed?: number | null }) {
   return (
     <div className="actions">
       <button className="btn primary" onClick={onOpen} title="Go to the tab and pane where this agent runs (Enter)">
         {openLabel(item)}
       </button>
-      {canReview(item.group) && item.cwd && onReview && (
+      {canReview(item.group, changed) && item.cwd && onReview && (
         <button className="btn" onClick={onReview} title="Read every file this agent changed, in All Changes">
           Review changes
         </button>
@@ -163,7 +163,7 @@ function Detail({ item, onOpen, onReview }: { item: Item; onOpen: () => void; on
         </div>
       )}
       {note && <p className="exited">{note}</p>}
-      {detailActions({ item, onOpen, onReview })}
+      {detailActions({ item, onOpen, onReview, changed })}
     </div>
   );
 }
