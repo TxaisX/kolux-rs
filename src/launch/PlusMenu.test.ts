@@ -69,6 +69,9 @@ test("agent ids map to vendor marks and header words", () => {
   expect(programWord("claude")).toBe("Claude");
   expect(programWord("codex")).toBe("Codex");
   expect(programWord("shell")).toBe("PowerShell");
+  // Review of PR #16 (b): an agent with no vendor mark (paneAgent names it by its catalogue id) is called by its name.
+  expect(["gemini", "grok", "devin", "hermes", "pi"].map(programWord)).toEqual(["Gemini", "Grok", "Devin", "Hermes", "Pi"]);
+  expect(programWord("some-new-agent"), "an id the catalogue does not list is shown as it is, never as PowerShell").toBe("some-new-agent");
   // ACCT-046: an automatic pane is named for the shell that started, fallbacks included.
   expect(shellWord("C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")).toBe("Windows PowerShell");
   expect(shellWord("C:/Program Files/PowerShell/7/pwsh.exe")).toBe("PowerShell 7");

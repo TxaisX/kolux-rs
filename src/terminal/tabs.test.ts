@@ -69,3 +69,11 @@ test("a tab's menu offers Rename for a terminal or agent tab and Close for every
   expect(tabMenu("browser").map((i) => i.id)).toEqual(["close"]);
   expect(tabMenu(undefined)[0]).toMatchObject({ label: "Rename tab", keys: "tab.rename" });
 });
+
+test("DT-C52: a blocked or interrupted agent's tab shows Stopped, not the question mark and not a spinner; an unseen stop keeps the bell", () => {
+  for (const hook of ["blocked", "interrupted"] as const) {
+    expect(tabBadge("claude", true, false, false, hook), hook).toBe("stopped");
+    expect(tabBadge("claude", true, false, true, hook), hook).toBe("unread");
+  }
+  expect(tabBadge("claude", true, true, false, "blocked"), "a question still wins").toBe("permission");
+});

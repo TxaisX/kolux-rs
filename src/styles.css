@@ -28,8 +28,9 @@ input { font: inherit; }
 
 /* ---- 4. top bar: 35 px fill + 1 px border = 36 px ---- */
 /* Three columns: the switcher stays centred while both sides fit, and moves aside rather than
-   cover the search box when the right-hand group is wider than its half. */
-.topbar { position: relative; flex: none; height: 36px; background: var(--surface); border-bottom: 1px solid var(--line-strong); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+   cover the search box when the right-hand group is wider than its half. T-621: neither side column is ever
+   narrower than its content, so the right group never reaches over the switcher. */
+.topbar { position: relative; flex: none; height: 36px; background: var(--surface); border-bottom: 1px solid var(--line-strong); display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr); align-items: center; }
 .topbar-left { grid-column: 1; display: flex; align-items: center; height: 100%; padding-left: 4px; }
 .topbar-left .mark { color: var(--mark); }
 .topbar-left .dots { margin-left: -1px; }
@@ -37,7 +38,8 @@ input { font: inherit; }
 .topbar-left .back { margin-left: 11px; }
 .topbar-left .fwd { margin-left: -2px; }
 
-.switcher { grid-column: 2; margin: 0 8px; height: 30px; width: 210px; display: flex; align-items: center; gap: 2px; padding: 0 3px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; }
+/* T-621: the frame is as wide as its four segments (it was 210 px, and Tower stuck out of it). */
+.switcher { grid-column: 2; margin: 0 8px; height: 30px; width: max-content; display: flex; align-items: center; gap: 2px; padding: 0 3px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; }
 .switcher button { height: 24px; padding: 0 12px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--fg-muted); white-space: nowrap; }
 .switcher button:hover { color: var(--fg); }
 .switcher button[aria-pressed="true"] { background: var(--seg-active); color: var(--fg); font-weight: 600; }
@@ -50,6 +52,17 @@ input { font: inherit; }
 /* Narrow windows (down to the 900 px minimum): the search box keeps only its icon, so the window
    controls stay on screen beside the switcher. */
 @media (max-width: 1100px) { .searchbox { width: auto; } .searchbox > :not(svg) { display: none; } }
+/* T-621: below 1366 px the whole bar does not fit centred: the switcher follows the left group, and the right
+   group takes the rest. The account and usage pills shorten (the account's name ends in an ellipsis) so the
+   window controls stay on screen down to the 900 px minimum; the group never grows past its column, so it can
+   never cover the switcher. */
+@media (max-width: 1365px) {
+  .topbar { grid-template-columns: max-content auto minmax(0, 1fr); }
+  .topbar-right { min-width: 0; max-width: 100%; overflow: hidden; }
+  .topbar-right > * { flex-shrink: 0; }
+  .topbar-right > .acct-switch { flex-shrink: 1; min-width: 44px; }
+  .topbar-right > .usage { flex-shrink: 1; min-width: 56px; overflow: hidden; }
+}
 .kbd { display: inline-flex; align-items: center; height: 17px; padding: 0 4px; background: var(--kbd-bg); border: 1px solid var(--kbd-border); border-radius: 4px; font-size: 11px; font-weight: 500; line-height: 1; }
 .kbd-plus { font-size: 10px; margin: 0 -2px; }
 .kbd-part { display: inline-flex; align-items: center; gap: 6px; }

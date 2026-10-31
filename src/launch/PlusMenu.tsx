@@ -13,6 +13,7 @@ import { useState, type CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import AgentMark from "../marks/AgentMark";
 import { Kbd, useLabel } from "../keys/KeymapContext";
+import { agents as AGENT_NAMES } from "../keys/actions";
 import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
 import { openIn, openLabel, openTitle, useEditors, type Editor } from "./editors";
 import { markFor } from "./paneMark";
@@ -35,9 +36,13 @@ export function shellWord(path: string): string {
   return ({ pwsh: "PowerShell 7", powershell: "Windows PowerShell", cmd: "Command Prompt" } as Record<string, string>)[stem] ?? stem;
 }
 
-/** The pane-header word for what runs in a pane. */
-export function programWord(agent: Agent): string {
-  return agent === "claude" ? "Claude" : agent === "codex" ? "Codex" : "PowerShell";
+/** The pane-header word for what runs in a pane. Review of PR #16 (b): an agent with no vendor mark of its own
+ *  (Gemini, Grok, Devin...; board/chip.ts paneAgent names it by its catalogue id) is called by its name. */
+export function programWord(agent: Agent | string): string {
+  if (agent === "claude") return "Claude";
+  if (agent === "codex") return "Codex";
+  if (agent === "shell") return "PowerShell";
+  return AGENT_NAMES.find(([id]) => id === agent)?.[1] ?? agent;
 }
 
 type Props = {

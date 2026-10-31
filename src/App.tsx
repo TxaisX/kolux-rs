@@ -166,9 +166,9 @@ import FloorView from "./floor/FloorView";
 import SpaceView from "./space/SpaceView";
 import { nameSeats, nameUsage, towerRows, usageByAccount } from "./tower/tower";
 import { useTowerBridge } from "./tower/TowerWindow";
-import { LANES, chipOf, forget, needsAttention, paneAgent, paneStatus, promptReturned } from "./board/chip";
+import { LANES, chipOf, forget, hooksMuted, needsYou, paneAgent, paneStatus, promptReturned, ringsBell } from "./board/chip";
 import { reviewTab } from "./board/review";
-import { commandRows, forceReload, windowCommand } from "./keys/commands";
+import { commandRows, forceReload, reloadAsk, windowCommand } from "./keys/commands";
 import { SCREEN_OF, screenRows } from "./chrome/reach";
 import Ring from "./usage/Ring";
 import { capOn, codexOf, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
@@ -358,6 +358,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [liveIds, setLiveIds] = useState<Record<number, Identity>>({}); // TERM-058: terminal panes' running program, from the shell marks
   const liveRef = useRef(liveIds);
   liveRef.current = liveIds;
+  // Review of PR #16 (d): plain terminal panes whose hand-started agent has gone; their hook words are ignored.
+  const muteRef = useRef<Record<number, boolean>>({});
   const [guess, setGuess] = useState<Record<number, AgentState | null>>({}); // T-608: each pane's title guess, as its header shows it
   // T-608: the one status the Board, the Tower, the Inbox, the needs strip and the bell read (board/chip.ts).
   const agentOf = (p: Pane) => paneAgent(p, liveIds[p.key]); // ACCT-050: a hand-started agent counts, as its tab icon shows it
@@ -570,7 +572,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
   // ux fix 2: one count of waiting panes feeds the bell and the window title. Review of PR #16: a stop (blocked, interrupted) still counts, as on main.
-  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(panes.filter((p) => needsAttention(statusOf(p))).map((p) => p.key)));
+  // Review of PR #16 (c): the bell also rings for a pane whose header flags it, a failed start included, as on main.
+  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(panes.filter((p) => ringsBell(statusOf(p), needs[p.key] ?? false)).map((p) => p.key)));
   useEffect(() => {
     document.title = windowTitle(info, needing);
   }, [info, needing]);
@@ -908,8 +911,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           break;
         case "terminals.focusNextNeedsYou": {
           // TERM-030: cycle through the panes waiting on the user in grid order, across workspaces;
-          // with none waiting, focus stays where it is.
-          const k = nextNeedsYou(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)), focused);
+          // with none waiting, focus stays where it is. DT-C52: a permission or a question only (the one status).
+          const k = nextNeedsYou(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(panes.filter((p) => needsYou(statusOf(p))).map((p) => p.key)), focused);
           if (k === null) return;
           openPane(k); // EDIT-041: the same jump as Open in Code
           break;
@@ -970,8 +973,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               setSidebarOpen(true);
               setRenameRequest((n) => n + 1);
             },
-            // Review of PR #16: unsaved editor text is asked about first (native confirm), else it reloads at once.
-            reload: () => void forceReload(unsaved.current, (q) => window.confirm(q), () => location.reload()),
+            // Review of PR #16 (a): unsaved editor text is asked about first, in the app's own question, else it reloads at once.
+            reload: () => void forceReload(unsaved.current, setReloadAsk, () => location.reload()),
           })) break;
           // TERM-041: one unbound command per installed agent, `tab.newAgent.<id>`.
           const id = hit.id.startsWith("tab.newAgent.") ? hit.id.slice("tab.newAgent.".length) : null;
@@ -1537,6 +1540,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // and asks, so nothing is lost without the user saying so.
   // T-182 (APP-006): agents still running are asked about too (while TERM-045's switch is on).
   const [quitAsk, setQuitAsk] = useState<Losable | null>(null);
+  const [reloadAsking, setReloadAsk] = useState<string[] | null>(null); // Review of PR #16 (a): Force Reload's question
   const unsaved = useRef<string[]>([]);
   unsaved.current = panes.filter((p) => dirty[p.key]).map((p) => baseName(p.path ?? p.title ?? "Untitled"));
   const busyAgents = useRef<string[]>([]);
@@ -1618,7 +1622,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         label: tabName(p, titles),
         hint: p.cwd ? folderName(p.cwd) : "Home",
         // VIEW-040: the tab's own badge, with how long it has been in that state.
-        ...(!p.kind ? { mark: tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key]), since: stamp[p.key]?.at ?? 0 } : {}),
+        ...(!p.kind ? { mark: tabBadge(p.agent, running[p.key], needsYou(statusOf(p)), unreadPanes.has(p.key), hook[p.key]), since: stamp[p.key]?.at ?? 0 } : {}),
         dir: p.cwd ?? undefined,
         run: () => {
           setScreen("terminals");
@@ -2055,7 +2059,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   }, [timed]);
   const sources: Source[] = panes
     .filter((p) => !p.kind && !p.seats)
-    .map((p) => sourceOf(p, tabName(p, titles), statusOf(p), running[p.key], stamp[p.key]));
+    // Review of PR #16 (b): the agent the pane carries (agentOf), so the Inbox names Gemini, not PowerShell.
+    .map((p) => sourceOf({ ...p, agent: agentOf(p) }, tabName(p, titles), statusOf(p), running[p.key], stamp[p.key]));
   // T-035-b: the Inbox sees an exited pane's open prompt; a restart, a closed pane or a fresh hook state drops it.
   const inboxSeen = inboxOverlay(sources, exitedPrompt.current, hook);
   exitedPrompt.current = inboxSeen.kept;
@@ -2373,7 +2378,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const report = useRef(reportLayout);
   report.current = reportLayout;
   useEffect(() => report.current());
-  const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+  const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir, muted: muteRef });
   useRestoredStatus({ panes, hookRef, setHook, setStale, setCrew, setTurn });
   useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
   // STAT-044: a clicked notification focuses the pane that raised it (notification_clicked emits the pane).
@@ -2521,6 +2526,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               void getCurrentWindow().close();
             }}
           />
+        )}
+        {reloadAsking && (
+          <Ask {...reloadAsk(reloadAsking)} cancel="Keep working" onCancel={() => setReloadAsk(null)} onConfirm={() => location.reload()} />
         )}
         {switcher && (
           <div className="menu tab-switcher" role="listbox" aria-label="Switch tab">
@@ -2979,7 +2987,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                               </span>
                             )}
                             {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, creditedLive(launchedAgent(p), liveIds[p.key] ?? IDLE))} size={12} />}
-                            {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
+                            {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needsYou(statusOf(p)), unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), capOn(settings)) ?? {})} />}
                             {renamingTab === p.key ? (
                               <NameField value={tabName(p, titles, labelOf(p), liveIds)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
@@ -3111,7 +3119,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onIdentity={(l) => {
-                      // Review of PR #16: a hand-started agent quit and the prompt is back: its last word and guess go with it.
+                      // Review of PR #16: a hand-started agent quit and the prompt is back: its last word and guess go with it,
+                      // and (d) a late hook word from it is ignored until a new agent starts in the pane.
+                      const muted = muteRef.current[p.key] ?? false;
+                      const mute = hooksMuted(muted, p, liveRef.current[p.key], l);
+                      if (mute !== muted) muteRef.current = { ...muteRef.current, [p.key]: mute };
                       if (promptReturned(p, liveRef.current[p.key], l)) {
                         setHook((h) => forget(h, p.key));
                         setGuess((g) => forget(g, p.key));

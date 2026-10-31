@@ -75,10 +75,11 @@ test("PROJ-062: the Card details chooser has a real heading and a tick-box per d
   change(byLabel(draw(), "card shows pull request"), { checked: false });
   expect(st.s.now[CARD_DETAILS_FIELD]).toEqual(["status", "agents", "changes", "note"]);
   expect(byLabel(draw(), "card shows pull request").props.checked).toBe(false);
-  change(byLabel(draw(), "card shows changed files"), { checked: false });
   change(byLabel(draw(), "card shows note"), { checked: false });
-  expect(readCardDetails(st.s.now), "back to the Default set").toEqual({ shown: ["status", "agents"], density: "default" });
+  expect(readCardDetails(st.s.now), "back to the Default set (T-609: it keeps the changed-file count)").toEqual({ shown: ["status", "agents", "changes"], density: "default" });
   expect(st.s.now[CARD_DETAILS_FIELD], "saved as the preset, not a frozen list").toEqual(["preset:default"]);
+  change(byLabel(draw(), "card shows changed files"), { checked: false });
+  expect(readCardDetails(st.s.now).density).toBe("custom");
   change(byLabel(draw(), "card shows agent summary"), { checked: false });
   expect(readCardDetails(st.s.now).density).toBe("compact");
   change(byLabel(draw(), "card shows automation"), { checked: true });

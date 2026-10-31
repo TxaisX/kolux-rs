@@ -3,8 +3,10 @@
 import { groupOf } from "../terminal/grid";
 import { sameDir } from "../workspaces";
 
-/** T-609: only finished work is offered for review: a Done card (VIEW-023) and a Done today row (STAT-050). */
-export const canReview = (laneOrGroup: string): boolean => laneOrGroup === "done";
+/** T-609: only finished work is offered for review: a Done card (VIEW-023) and a Done today row (STAT-050). DT-C52: an
+ *  Inbox row Stopped because its program exited is offered it too once its worktree is known to hold changes
+ *  (`changed`, the detail's git count; null while unread). */
+export const canReview = (laneOrGroup: string, changed: number | null = null): boolean => laneOrGroup === "done" || (laneOrGroup === "stopped" && (changed ?? 0) > 0);
 
 type Tab = { key: number; cwd: string | null; branch: string | null; kind?: string; group?: number };
 

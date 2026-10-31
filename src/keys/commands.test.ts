@@ -3,9 +3,10 @@
 // runs; the commands that had no handler (the audit's five, plus Force Reload and Hard Reload, whose
 // chords nothing in the window answered) now each do something, or are gone.
 import { expect, test } from "vitest";
+import app from "../App.tsx?raw";
 import { actions, actionById, sameAs } from "./actions";
 import { matchEvent, resolve, type KeyLike } from "./keymap";
-import { commandRows, forceReload, renameTarget, windowCommand } from "./commands";
+import { commandRows, forceReload, reloadAsk, renameTarget, windowCommand } from "./commands";
 import { runCommand } from "./runCommand";
 import { heldByTerminal } from "./terminalPolicy";
 import { SCREEN_OF } from "../chrome/reach";
@@ -150,18 +151,22 @@ test("review of PR #16: a command whose place is not open says so instead of doi
 });
 
 test("review of PR #16: Force Reload asks first when an editor holds unsaved changes, and reloads at once when none does", () => {
-  const asked: string[] = [];
+  const asked: string[][] = [];
   let reloads = 0;
   const reload = () => void reloads++;
   // Nothing unsaved: no question, it reloads.
-  expect(forceReload([], (q) => (asked.push(q), false), reload)).toBe(true);
+  expect(forceReload([], (files) => void asked.push(files), reload)).toBe(true);
   expect([asked.length, reloads]).toEqual([0, 1]);
-  // Unsaved text, the user says no: nothing reloads.
-  expect(forceReload(["notes.md"], (q) => (asked.push(q), false), reload)).toBe(false);
-  expect(asked).toEqual(["Reload Kolux? Unsaved changes in notes.md will be lost."]);
+  // Unsaved text: the app's own question opens and nothing reloads until its Reload button is pressed.
+  expect(forceReload(["notes.md"], (files) => void asked.push(files), reload)).toBe(false);
+  expect(asked).toEqual([["notes.md"]]);
   expect(reloads).toBe(1);
-  // The user says yes: it reloads.
-  expect(forceReload(["a.ts", "b.ts", "c.ts", "d.ts"], (q) => (asked.push(q), true), reload)).toBe(true);
-  expect(asked[1]).toBe("Reload Kolux? Unsaved changes in a.ts, b.ts, c.ts and 1 more will be lost.");
-  expect(reloads).toBe(2);
+  expect(reloadAsk(["notes.md"])).toEqual({ title: "Reload with unsaved changes?", body: "Reload Kolux? Unsaved changes in notes.md will be lost.", confirm: "Reload without saving" });
+  expect(reloadAsk(["a.ts", "b.ts", "c.ts", "d.ts"]).body).toBe("Reload Kolux? Unsaved changes in a.ts, b.ts, c.ts and 1 more will be lost.");
+});
+
+test("review of PR #16 (a): Force Reload's question is the app's own dialog (chrome/Ask), never the browser's confirm", () => {
+  expect(app.includes("window.confirm("), "App.tsx asks nothing through window.confirm").toBe(false);
+  expect(app).toMatch(/forceReload\(unsaved\.current, setReloadAsk,/);
+  expect(app).toMatch(/<Ask \{\.\.\.reloadAsk\(reloadAsking\)\}/);
 });

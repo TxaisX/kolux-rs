@@ -155,3 +155,7 @@ test("the global needs-you count is the panes waiting that are still open (ux fi
   expect(needsYouCount([1, 2, 3], new Set([9]))).toBe(0);
   expect(needsYouCount([], new Set())).toBe(0);
 });
+
+test("DT-C52: the Stopped tip covers a blocked agent whose program still runs and one whose program ended", () => {
+  expect(VOCAB.stopped.explain).toBe("Stopped: waiting on a limit or sign-in, or the program has ended.");
+});

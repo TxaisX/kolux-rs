@@ -34,16 +34,6 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
-- [product-ux] 2026-10-30 · Question (T-608): should a pane that is blocked (a limit or a sign-in) still count as
-  needing you, or only permissions and questions? Today the Inbox and the bell still count it, as before; the
-  Board and the Tower show it as Stopped.
-- [product-ux] 2026-10-30 · Question (T-608): when an agent's program has exited, the Board and Tower say "Stopped"
-  but the Inbox lists it under "Done today", because the window does not keep the program's exit code. Should the
-  Inbox say "Stopped" too? Until you answer, it stays as it is.
-- [product-ux] 2026-10-30 · Question (T-608): the Ctrl+J jump between panes that need you, and the little badges on
-  tabs, still use each pane's own "needs attention" flag, which also lights up when a pane is blocked or was
-  interrupted. Everywhere else, "Needs you" now means only a permission request or a question. Should Ctrl+J and the
-  tab badges follow that same rule? Until you answer, they stay as they are.
 - [product-ux] 2026-10-30 · Open: live Windows checks for T-608 to T-612 (steps in each evidence/T-6xx.txt):
   the consent line on a fresh profile and the one-time card on an old one; a hand-started Claude asking permission
   shows Needs you on the Board, Tower, Inbox, needs strip, bell and sidebar; Review changes from a Done card and an
@@ -184,11 +174,6 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [release] T-185-a · The installed CLI is a kolux.exe plus kolux.cmd shim in the install's bin folder, built only by the release script; only a refused connection means the app is down, lost answers print an exact --retry-request command, and reset takes exactly one scope (DT-R27).
 ## Follow-ups (not built yet)
 
-- 2026-10-30 · [product-ux] T-609 · Not built: the sidebar's changed-files count on by default. First give the
-  count a real source: src/projects/ProjectsPanel.tsx (around line 1628) feeds RowInfo.changed, which is a timestamp
-  (App.tsx sets changed: Date.now()), as the number of changed files. Then set src/look/cards.ts PRESETS.default
-  to ["status", "agents", "changes"], update its note, and update src/look/cards.test.ts and
-  src/look/clickThrough.test.ts.
 - 2026-10-30 · [product-ux] T-608 / T-612 · Docs not updated (not this lane's files): docs/guide/settings.md
   (lines 181, 187, 193), docs/guide/getting-started.md (12-14, 39) and docs/guide/board-agents-inbox.md (118)
   should describe the consent line, "Open a session" asking for a folder when there is no workspace, and a blocked
@@ -218,14 +203,6 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-30 · [safety] T-606 · Review of PR #15: a writer installed as a non-npm .cmd/.bat script refuses a multi-line
   prompt with a plain message (cmd.exe cannot take a line break); a typed or file hand-over would lift that.
 
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (a) Force Reload's unsaved-work question uses window.confirm;
-  switch it to the app's own close question, or to the dialog plugin's ask() with dialog:allow-ask.
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (b) programWord (src/launch/PlusMenu.tsx:39) labels agents
-  without a vendor mark "PowerShell".
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (c) a pane whose program failed to start no longer rings the
-  bell (needsAttention leaves out "failed"), unlike main before PR #16.
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (d) a late Stop/done hook that arrives after the prompt mark
-  can bring a stale status word back.
 
 - 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: the protected-delete rule does not cover
   `[IO.Directory]::Delete`, `find -delete`, `rimraf` or `robocopy /MIR`.
@@ -236,6 +213,12 @@ recorded default until told otherwise; nothing here blocks a pass.
   live on Windows, and ask on any PowerShell wildcard in a delete folder if it can match `..`.
 - 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8): a user whose own environment sets CDPATH is asked about
   every relative `cd ... && rm -rf ...` (an extra question, not a hole).
+
+- 2026-10-31 · [product-ux-2] T-609 · The sidebar's changed-files count reads scm_status (git status with untracked files)
+  as foreground work, now on by default for every workspace (src/look/cardChanges.ts:344, ponytail); give it a
+  count-only background command or a longer cache.
+- 2026-10-31 · [product-ux-2] T-608b · Docs: docs/guide/board-agents-inbox.md still describes three Inbox groups; add
+  Stopped.
 
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt
