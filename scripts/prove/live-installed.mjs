@@ -40,12 +40,22 @@ export const run = (file, a, opt = {}) =>
  * True when this process is itself running inside a Kolux terminal.
  *
  * start/stop close every kolux-rs window, so running them from a Kolux terminal kills the app, the
- * terminal service under it, and the proof — taking the caller's own session with it. A proof is
+ * terminal service under it, and the proof, taking the caller's own session with it. A proof is
  * started from a plain Windows Terminal or PowerShell window instead, which is why this guard exists
- * rather than a comment. Walks the parent chain because no environment variable marks the case.
+ * rather than a comment.
+ *
+ * The pane marker is the first and reliable check: every terminal Kolux starts carries KOLUX_APP_DIR
+ * in its own environment (terminal.rs, CLI-007), and every child inherits it. That survives the
+ * restarts this guard is about, which the parent walk does not: a pane taken back from a previous
+ * copy (SESS), or a shell an agent re-parented, has no kolux-rs.exe left in its ancestry. The walk
+ * stays as the fallback for an older pane that predates the marker.
+ *
+ * Only PROVE_REAL=1 needs this guard (see the refusal below): a scratch-home proof runs as a
+ * second copy on its own profile and closes nothing of the app that hosts the terminal.
  */
 async function insideKoluxTerminal() {
   if (process.platform !== 'win32') return false;
+  if (process.env.KOLUX_APP_DIR) return true;
   const ps = [
     `$p = ${process.pid}`,
     `for ($i = 0; $i -lt 12; $i++) {`,
@@ -117,7 +127,7 @@ export function launch(paths, { keep = false } = {}) {
     CLAUDE_CONFIG_DIR: paths.claude,
     CODEX_HOME: paths.codex,
   });
-  for (const k of ['KOLUX_TERMINAL_SERVICE', 'KOLUX_DEV_REPO_ROOT', 'KOLUX_CLI_COMMAND', 'KOLUX_RELEASE_CHECKOUT', 'CARGO_TARGET_DIR']) delete env[k];
+  for (const k of ['KOLUX_TERMINAL_SERVICE', 'KOLUX_DEV_REPO_ROOT', 'KOLUX_CLI_COMMAND', 'KOLUX_RELEASE_CHECKOUT', 'KOLUX_APP_DIR', 'KOLUX_USER_DATA_PATH', 'CARGO_TARGET_DIR']) delete env[k];
   const child = spawn(EXE, [], { env, detached: true, stdio: 'ignore', windowsHide: false });
   child.unref();
   return child.pid;
@@ -210,30 +220,58 @@ export async function ready(page) {
     page.eval(`!!document.querySelector('.topbar, .switcher, .wizard, .onboard, .first-run, main')`), 60000);
 }
 
-/** The app allows one copy: close it the way the X button does and wait for it to go. */
+/** The profile folder this harness runs its copy on: the scratch home, or the real one with PROVE_REAL=1. */
+export function profileDir() {
+  return REAL
+    ? join(process.env.APPDATA ?? '', 'com.txaisxiong.kolux-rs')
+    : join(BASE, 'home', 'AppData', 'Roaming', 'com.txaisxiong.kolux-rs');
+}
+
+/** The pid of the copy running on this profile, from its own startup file; 0 when none is running. */
+function runningPid() {
+  try {
+    const j = JSON.parse(readFileSync(join(profileDir(), 'cli.json'), 'utf8'));
+    return Number(j.pid) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The app allows one copy PER PROFILE, so a proof on a scratch home runs beside the real app and
+ * only the copy on this profile has to go. That copy is found by the startup file in its own folder
+ * (`cli.json`, which carries its pid), with the terminal service's command line as the fallback for
+ * a copy whose file is gone. Nothing else on the machine is touched.
+ */
 export async function closeRunning() {
+  const pid = runningPid();
+  const dir = profileDir().replace(/'/g, "''");
   const n = await run('powershell', ['-NoProfile', '-Command', `
-    $app = { @(Get-CimInstance Win32_Process -Filter "Name='kolux-rs.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -notmatch '--terminal-service' }) }
-    foreach ($x in (& $app)) { $p = Get-Process -Id $x.ProcessId -ErrorAction SilentlyContinue; if ($p -and $p.MainWindowHandle -ne 0) { $p.CloseMainWindow() | Out-Null } }
+    $mine = '${dir}'
+    $targets = @()${pid ? ` + ${pid}` : ''}
+    $svc = @(Get-CimInstance Win32_Process -Filter "Name='kolux-rs.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match '--terminal-service' -and $_.CommandLine -like "*$mine*" })
+    $targets += @($svc | ForEach-Object { $_.ParentProcessId })
+    $alive = @($targets | Sort-Object -Unique | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue } | Where-Object { $_.ProcessName -eq 'kolux-rs' -and $_.MainWindowHandle -ne 0 })
+    foreach ($p in $alive) { $p.CloseMainWindow() | Out-Null }
     $end = (Get-Date).AddSeconds(30)
-    while ((Get-Date) -lt $end -and (& $app).Count -gt 0) { Start-Sleep -Milliseconds 300 }
-    (& $app).Count
+    while ((Get-Date) -lt $end -and @($alive | Where-Object { -not $_.HasExited }).Count -gt 0) { Start-Sleep -Milliseconds 300 }
+    @($alive | Where-Object { -not $_.HasExited }).Count
   `]).then((r) => Number(r.stdout.trim())).catch(() => -1);
   if (n > 0) throw new Error(`${n} kolux-rs window process(es) still run after a graceful close; use PROVE_KILL=1 to force`);
   if (n === 0) await sleep(1500);
   return n;
 }
 
-const PIDFILE = join(BASE, 'app.pid');
 const cmd = process.argv[2];
 
-// A proof that closes the app cannot run from a terminal the app is hosting: it would kill the
-// terminal service, the proof, and the caller's own session. Say so instead of doing it.
-if (isMain && (cmd === 'start' || cmd === 'stop') && (await insideKoluxTerminal())) {
+// A proof on the real profile (PROVE_REAL=1) cannot run from a terminal the app is hosting: it
+// would close the app, its terminal service, the proof and the caller's own session. Say so instead
+// of doing it. A scratch-home proof is a second copy on its own profile and is safe from inside.
+if (isMain && (cmd === 'start' || cmd === 'stop') && REAL && (await insideKoluxTerminal())) {
   console.error(
-    'refusing: start/stop close every Kolux window, and this process is running inside a Kolux\n' +
-      'terminal. That would end the session running the proof. Run it from a plain Windows Terminal\n' +
-      'or PowerShell window instead:  node scripts/prove/live-installed.mjs start',
+    'refusing: PROVE_REAL=1 closes the app on your real profile, and this process is running\n' +
+      'inside a Kolux terminal, so it would end the session running the proof. Run it from a plain\n' +
+      'Windows Terminal or PowerShell window instead, or drop PROVE_REAL=1 to use a scratch profile.',
   );
   process.exit(2);
 }

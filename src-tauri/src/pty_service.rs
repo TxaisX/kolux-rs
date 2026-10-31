@@ -1,9 +1,10 @@
 //! T-075-b (APP-052, CLI-011; DT-C27 reversed by Txais 2026-10-20: terminals keep running after
-//! quit): the background terminal service. One process per user and app identifier owns the
-//! terminals (the same `PtySession`s a window runs, one job per pane), so they outlive the window.
+//! quit): the background terminal service. One process per user, app identifier and profile folder
+//! owns the terminals (the same `PtySession`s a window runs, one job per pane), so they outlive the
+//! window.
 //!
 //! - One copy: a named mutex in the session-local namespace (`lifecycle::claim_named`), per
-//!   identifier, so a lane or trial build never blocks the installed app's service.
+//!   identifier and profile, so a lane, trial or proof copy never blocks the installed app's service.
 //! - Reaching it: the local command line's way (CLI-004): a TCP listener on 127.0.0.1 only and a
 //!   random token in `terminals.json` inside the user's own data folder, which only that user can
 //!   read. Every connection starts with a hello carrying the token; anything else is refused.
@@ -48,14 +49,14 @@ pub const START_LIMIT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------- one copy
 
-/// The mutex name of the terminal service for one app identifier.
-pub fn lock_name(identifier: &str) -> String {
-    format!("Local\\{identifier}.terminals")
+/// The mutex name of the terminal service for one app identifier on one profile folder.
+pub fn lock_name(identifier: &str, profile: &Path) -> String {
+    format!("Local\\{identifier}.terminals-{}", crate::lifecycle::profile_suffix(profile))
 }
 
-/// The service's claim, held for its whole life; `None` when another copy already runs.
-pub fn lock(identifier: &str) -> Option<Instance> {
-    match claim_named(&lock_name(identifier)) {
+/// The service's claim, held for its whole life; `None` when another service for the same profile runs.
+pub fn lock(identifier: &str, profile: &Path) -> Option<Instance> {
+    match claim_named(&lock_name(identifier, profile)) {
         Claim::First(held) => Some(held),
         Claim::Second => None,
     }
@@ -497,7 +498,8 @@ pub fn main(args: &[String]) -> i32 {
         eprintln!("usage: {FLAG} <identifier> <data folder>");
         return 2;
     };
-    let Some(_held) = lock(identifier) else { return crate::lifecycle::DUPLICATE_EXIT };
+    let dir = PathBuf::from(dir);
+    let Some(_held) = lock(identifier, &dir) else { return crate::lifecycle::DUPLICATE_EXIT };
     // TERM-115: the service is started in its own process group, which hands "ignore Ctrl+C" down to
     // every shell it starts; cleared before the first one, so a pane's Ctrl+C reaches its program.
     #[cfg(windows)]
@@ -505,7 +507,6 @@ pub fn main(args: &[String]) -> i32 {
     unsafe {
         windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0);
     }
-    let dir = PathBuf::from(dir);
     let listener = match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(l) => l,
         Err(e) => {
@@ -810,17 +811,20 @@ mod tests {
     }
 
     #[test]
-    fn t075b_one_service_per_identifier_and_the_lock_frees_when_it_ends() {
+    fn t075b_one_service_per_identifier_and_profile_and_the_lock_frees_when_it_ends() {
         let id = format!("kolux-rs.t075b-test-{}", std::process::id());
-        assert_eq!(lock_name("com.x"), "Local\\com.x.terminals");
-        let first = lock(&id).expect("the first copy holds the lock");
+        let real = Path::new(r"C:\Users\me\AppData\Roaming\com.x");
+        let scratch = Path::new(r"G:\Temp\live-installed\home\AppData\Roaming\com.x");
+        assert!(lock_name("com.x", real).starts_with("Local\\com.x.terminals-"));
+        let first = lock(&id, real).expect("the first copy holds the lock");
         if cfg!(windows) {
-            assert!(lock(&id).is_none(), "a second copy is refused while the first runs");
-            // Another identifier (a lane or trial build) is not blocked.
-            assert!(lock(&format!("{id}.other")).is_some());
+            assert!(lock(&id, real).is_none(), "a second copy of the same profile is refused while the first runs");
+            // Another identifier (a lane or trial build) and another profile (a proof copy) are not blocked.
+            assert!(lock(&format!("{id}.other"), real).is_some());
+            assert!(lock(&id, scratch).is_some(), "a proof copy on its own profile runs beside the real app");
         }
         drop(first);
-        assert!(lock(&id).is_some(), "the lock is free again once the first copy ends");
+        assert!(lock(&id, real).is_some(), "the lock is free again once the first copy ends");
     }
 
     #[test]

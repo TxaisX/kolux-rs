@@ -85,27 +85,35 @@ the app kills the proof, the terminal and the session that asked for it.</p>
       └─ opencode.exe
           └─ kolux-rs.exe --terminal-service     ← closeRunning() would end here
 </code></pre>
-<p><strong>Fix.</strong> A guard that walks the parent chain for <code>kolux-rs.exe</code> and refuses before touching
-anything:</p>
+<p><strong>Fix.</strong> A guard that reads the pane marker first, falls back to the parent chain for
+<code>kolux-rs.exe</code>, and refuses before touching anything:</p>
 <pre><code>$ node scripts/prove/live-installed.mjs start
 refusing: start/stop close every Kolux window, and this process is running inside a Kolux
 terminal. That would end the session running the proof. Run it from a plain Windows Terminal
 or PowerShell window instead:  node scripts/prove/live-installed.mjs start
 </code></pre>
 <p>Exit code 2, app untouched.</p>
-<p>No environment variable marks this case — <code>KOLUX_TERMINAL_SERVICE</code>, <code>KOLUX_CLI_COMMAND</code> and
-<code>KOLUX_DEV_REPO_ROOT</code> are all empty in a Kolux terminal — so the check has to walk the process
-tree. If it cannot tell, it allows the run: a guard that blocks legitimate proofs is worse than
-no guard.</p>
-<h2>Consequence, stated plainly</h2>
-<p><strong>The live proofs cannot be run from inside Kolux.</strong> That is every terminal this session has. The
-remaining P0 cards still need one run from an ordinary Windows Terminal window:</p>
+<p>The reliable check is the pane marker. A terminal Kolux starts carries <code>KOLUX_APP_DIR</code> in its own
+environment (CLI-007), every child inherits it, and it outlives the restarts that break the
+process tree: a pane taken back from an earlier copy, or a shell an agent re-parented, no longer
+has <code>kolux-rs.exe</code> anywhere in its ancestry. That is how the same loop came back after this guard
+landed. The parent walk stays as the fallback for a pane older than the marker. Neither refuses on
+a guess: if the walk cannot tell, the run is allowed, because a guard that blocks legitimate
+proofs is worse than no guard.</p>
+<h2>Consequence, revised the same day</h2>
+<p>The guard was the stopgap. The fix is <strong>one copy per profile</strong>: <code>lifecycle::mutex_name_for</code> and
+<code>pty_service::lock_name</code> key the copy test and the terminal service&#39;s own lock on the profile
+folder, so a proof on its scratch home is a first copy and runs beside the installed app.
+<code>closeRunning()</code> now closes only the copy on its own profile, found by the pid in that profile&#39;s
+<code>cli.json</code>, with the terminal service&#39;s command line as the fallback. Nothing else on the machine
+is touched.</p>
+<p><code>PROVE_REAL=1</code> is the one mode that still closes the real app, and the one mode the guard refuses
+to start from inside a Kolux terminal. Everything else can be run where the work happens:</p>
 <pre><code class="language-powershell">cd G:\Dev\kolux-rs
 node scripts/prove/live-installed.mjs start
 node scripts/prove/live-checks.mjs b7     # BROW-008 box 2
 node scripts/prove/live-installed.mjs stop
 </code></pre>
-<p>The guard makes this a refusal instead of a lost session, which is the point.</p>
 <h2>Verified</h2>
 <table>
 <thead>
@@ -119,12 +127,16 @@ node scripts/prove/live-installed.mjs stop
 <td>no longer <code>ReferenceError</code>; reaches CDP attach</td>
 </tr>
 <tr>
-<td><code>node scripts/prove/live-installed.mjs start</code></td>
-<td>exit 2 with the refusal message</td>
+<td><code>app001_one_copy_per_profile_and_two_profiles_run_side_by_side</code></td>
+<td>passes: one name per profile, case-insensitive, two profiles differ</td>
 </tr>
 <tr>
-<td>The running app after the refusal</td>
-<td>still alive, pid 33080</td>
+<td><code>t075b_one_service_per_identifier_and_profile...</code></td>
+<td>passes: a second copy of the same profile is refused, another profile is not</td>
+</tr>
+<tr>
+<td><code>node scripts/prove/live-installed.mjs stop</code> with <code>KOLUX_APP_DIR</code> set</td>
+<td>exit 2, app untouched</td>
 </tr>
 </tbody></table>
 

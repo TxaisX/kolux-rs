@@ -1,8 +1,9 @@
 //! T-182: the app's life on the desktop.
-//! APP-001: one copy runs. The first copy holds a named mutex for its whole life; a second launch
-//! finds the running copy through its startup file, grants it foreground rights, asks it over the
-//! command-line port to come to the front, raises its window itself as a second road, and ends
-//! with `DUPLICATE_EXIT`, never zero.
+//! APP-001: one copy runs per profile folder. The first copy holds a named mutex for its whole life;
+//! a second launch of the same profile finds the running copy through its startup file, grants it
+//! foreground rights, asks it over the command-line port to come to the front, raises its window
+//! itself as a second road, and ends with `DUPLICATE_EXIT`, never zero. A launch on another profile
+//! (a proof run's scratch home) is a first copy and runs beside it.
 //! APP-002: the terminals run in this process (no separate service to wait on); the window's own
 //! fallback show at 5 s stays in lib.rs (SET-004), so nothing at startup can keep it hidden.
 //! APP-006: the page decides whether a close needs confirming (unsaved editor text, running
@@ -73,13 +74,29 @@ pub enum Claim {
 }
 
 /// The mutex name for this build: per identifier, so a lane or trial build never blocks the
-/// installed app, and in the session-local namespace (one user's desktop).
+/// installed app, and in the session-local namespace (one user's desktop). Used only when the
+/// profile folder cannot be read; the copy test is `mutex_name_for`.
 pub fn mutex_name(identifier: &str) -> String {
     format!("Local\\{identifier}.instance")
 }
 
-pub fn claim(identifier: &str) -> Claim {
-    claim_named(&mutex_name(identifier))
+/// The folder part of a per-profile lock name. The folder is lowercased because Windows paths are
+/// case-insensitive, and hashed with a fixed function (not `DefaultHasher`, which may change
+/// between builds) so every copy that could run at the same time agrees on the name.
+pub fn profile_suffix(profile: &Path) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in profile.to_string_lossy().to_lowercase().as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// The mutex name for this build on one profile folder: two copies on different profiles never
+/// block each other, while two copies on the same profile still do. One profile is one app, because
+/// everything the app keeps (settings, terminals, crash records, the CLI handshake) lives there.
+pub fn mutex_name_for(identifier: &str, profile: &Path) -> String {
+    format!("Local\\{identifier}.instance-{}", profile_suffix(profile))
 }
 
 /// Claims `name`. A claim the system refuses outright (no handle at all) counts as first: a fault
@@ -259,13 +276,18 @@ pub fn forward_to(dir: &Path) -> Forwarded {
 /// app's managed state; a second launch forwards and ends with `DUPLICATE_EXIT`.
 pub fn claim_or_forward<R: tauri::Runtime>(app: &tauri::App<R>) {
     crate::procs::wait_for_restarted_from(); // T-592: a restarted copy lets the old one finish exiting
-    match claim(&app.config().identifier) {
+    let dir = app.path().app_data_dir().ok();
+    let name = match &dir {
+        Some(d) => mutex_name_for(&app.config().identifier, d),
+        None => mutex_name(&app.config().identifier),
+    };
+    match claim_named(&name) {
         Claim::First(instance) => {
             app.manage(instance);
             queue_open(&launch_markdown());
         }
         Claim::Second => {
-            if let Ok(dir) = app.path().app_data_dir() {
+            if let Some(dir) = dir {
                 let did = forward_to(&dir);
                 crate::diag::write(&dir, &did.line());
             }
@@ -774,6 +796,21 @@ mod tests {
         assert_ne!(DUPLICATE_EXIT, 0);
         assert_eq!(mutex_name("com.txaisxiong.kolux-rs.shell"), "Local\\com.txaisxiong.kolux-rs.shell.instance");
         assert_ne!(mutex_name("a"), mutex_name("b"), "a lane build never blocks the installed app");
+    }
+
+    #[test]
+    fn app001_one_copy_per_profile_and_two_profiles_run_side_by_side() {
+        let id = "com.txaisxiong.kolux-rs";
+        let real = Path::new(r"C:\Users\me\AppData\Roaming\com.txaisxiong.kolux-rs");
+        let scratch = Path::new(r"G:\Temp\live-installed\home\AppData\Roaming\com.txaisxiong.kolux-rs");
+        assert_eq!(mutex_name_for(id, real), mutex_name_for(id, real), "the same profile keeps its name");
+        assert_eq!(
+            mutex_name_for(id, real),
+            mutex_name_for(id, Path::new(r"c:\users\ME\appdata\roaming\COM.TXAISXIONG.KOLUX-RS")),
+            "Windows paths are case-insensitive: one profile is still one copy"
+        );
+        assert_ne!(mutex_name_for(id, real), mutex_name_for(id, scratch), "a proof copy on its own profile never blocks the real app");
+        assert!(mutex_name_for(id, real).starts_with("Local\\com.txaisxiong.kolux-rs.instance-"), "the name stays in the build's namespace");
     }
 
     #[cfg(windows)]
