@@ -2,26 +2,51 @@
 // buffer: what is typed in one is copied into the others, so two split panes edit one text; the
 // buffer remembers what is on disk, so a tab is unsaved only while its text differs from that by
 // more than trailing whitespace; a save writes the file once and leaves every view clean.
-import { Annotation, Compartment, EditorState, Text, type Extension, type StateEffect, type Transaction, type ChangeSet } from "@codemirror/state";
-import { isolateHistory } from "@codemirror/commands";
+//
+// The first frame loads this module (FloatingLayer asks isDirty, the window asks keyOf and
+// baseName), so it carries no CodeMirror: the five values it cannot make itself — the annotation
+// that marks Kolux's own change and the read of it, the undo grouping a reload gets, the line
+// separator of a view, and the text split into lines — are installed by editor/editors.ts, the
+// CodeMirror side, which loads with the editor.
+import type { Annotation, ChangeSet, EditorState, StateEffect, Text, Transaction } from "@codemirror/state";
 
-/** Marks a change Kolux made itself (a copy from the twin view, a reload), not the user's typing. */
-export const synced = Annotation.define<boolean>();
+/** What the CodeMirror side gives the store; editor/editors.ts builds it from @codemirror/state and
+ *  @codemirror/commands and installs it before any view is attached. */
+type CodeMirror = {
+  /** marks a change Kolux made itself (a copy from the twin view, a reload) */
+  mark: () => Annotation<boolean>;
+  /** whether a transaction carries that mark */
+  marked: (tr: Transaction) => boolean;
+  /** makes the transaction one undo step of its own, apart from the typing before it */
+  isolate: () => Annotation<unknown>;
+  /** the effect that switches a view's line separator */
+  ends: (end: string) => StateEffect<unknown>;
+  /** text already split into lines, as a view splits them */
+  lines: (text: string, end: string) => Text;
+};
 
-// A file with Windows line ends is shown and saved with them. The editor splits text on its separator only, so
-// T-603: the separator sits in a compartment that a reload using other line ends throughout switches (replaceAll), and
-// text the rich view or the notebook view hands the editor gets the editor's own line breaks (withLineBreaks).
-const lineEnds = new Compartment();
-const lineEndOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
+let codeMirror: CodeMirror | null = null;
+
+/** Installs the CodeMirror values, once, as editor/editors.ts loads (it is the module the editor and
+ *  the buffers' own tests import; nothing on the first frame calls a view's dispatch). */
+export function useCodeMirror(cm: CodeMirror): void {
+  codeMirror = cm;
+}
+
+function cm(): CodeMirror {
+  if (!codeMirror) throw new Error("editor/buffers: the CodeMirror side is not loaded (import editor/editors before attaching a view)");
+  return codeMirror;
+}
+
+// A file with Windows line ends is shown and saved with them. T-603: the separator sits in a
+// compartment (editor/editors.ts) that a reload using other line ends throughout switches
+// (replaceAll), and text the rich view or the notebook view hands the editor gets the editor's own
+// line breaks (withLineBreaks).
 /** T-603: the one line end `text` uses throughout, or null when it has none or mixes CRLF with bare LF. */
 const soleLineEnd = (text: string): string | null => {
   const crlf = text.includes("\r\n");
   return crlf === /(^|[^\r])\n/.test(text) ? null : crlf ? "\r\n" : "\n";
 };
-/** The line separator of an editor showing `text` (EditorPane, DiffPane). */
-export const lineEndsFor = (text: string): Extension => lineEnds.of(EditorState.lineSeparator.of(lineEndOf(text)));
-/** T-603 (F01-editor.2): a change worked out on doc.toString() (lines joined with \n), its line breaks as `state` splits them. */
-export const withLineBreaks = <C extends { insert: string }>(state: EditorState, c: C): C => ({ ...c, insert: c.insert.replace(/\r?\n/g, state.lineBreak) });
 
 /** The part of an editor view a buffer needs; EditorView fits it, and the tests use plain states. */
 export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string | Text }; effects?: StateEffect<unknown> | readonly StateEffect<unknown>[]; annotations: Annotation<unknown> | readonly Annotation<unknown>[] }) => void };
@@ -77,7 +102,7 @@ export function attach(path: string, view: View, disk: string): void {
   b.views.add(view);
   if (twin && (twin.state.lineBreak !== view.state.lineBreak || twin.state.sliceDoc() !== view.state.sliceDoc())) {
     const end = twin.state.lineBreak;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: twin.state.doc }, effects: view.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations: synced.of(true) });
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: twin.state.doc }, effects: view.state.lineBreak === end ? [] : cm().ends(end), annotations: cm().mark() });
   }
   tell(b);
 }
@@ -92,7 +117,7 @@ export function detach(path: string, view: View): void {
 export function relay(path: string, from: View, tr: Transaction): void {
   if (!tr.docChanged) return;
   const b = buf(path);
-  if (!tr.annotation(synced)) for (const v of b.views) if (v !== from) v.dispatch({ changes: tr.changes, annotations: synced.of(true) });
+  if (!cm().marked(tr)) for (const v of b.views) if (v !== from) v.dispatch({ changes: tr.changes, annotations: cm().mark() });
   tell(b);
 }
 
@@ -137,12 +162,12 @@ export async function save(path: string, write: (text: string, loadedHash?: stri
 export function replaceAll(path: string, text: string, undoable = false): void {
   const b = buf(path);
   b.disk = text;
-  const annotations = undoable ? [synced.of(true), isolateHistory.of("full")] : synced.of(true);
+  const annotations = undoable ? [cm().mark(), cm().isolate()] : cm().mark();
   const sole = soleLineEnd(text);
   for (const v of b.views) {
     if (v.state.sliceDoc() === text) continue;
     const end = sole ?? v.state.lineBreak;
-    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: Text.of(text.split(end)) }, effects: v.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations });
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: cm().lines(text, end) }, effects: v.state.lineBreak === end ? [] : cm().ends(end), annotations });
   }
   tell(b);
 }

@@ -23,7 +23,7 @@ import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
-import { attach, baseName, detach, heldOf, isDirty, lineEndsFor, opening, relay, replaceAll, subscribe, textOf, type Held } from "./buffers";
+import { attach, baseName, detach, heldOf, isDirty, lineEndsFor, opening, relay, replaceAll, subscribe, textOf, type Held } from "./editors";
 import { confirmed } from "./fileMoved";
 import { keepUnsaved, keptToast } from "./unsavedCopy";
 import { copiers, editors, look, saveFile, StaleNotice } from "./EditorPane";

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { attach, detach, isDirty, lineEndsFor, opening, relay, replaceAll, save, textOf, type View } from "./buffers";
+import { attach, detach, isDirty, lineEndsFor, opening, relay, replaceAll, save, textOf, type View } from "./editors";
 import { followStep, followTick, type FollowIo } from "./logFollow";
 
 test("EDIT-026: lines appended to the log show; nothing new shows nothing", () => {
