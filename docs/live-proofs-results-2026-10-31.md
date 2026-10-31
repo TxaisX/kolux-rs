@@ -1,0 +1,54 @@
+# Live proofs on Windows — results of the first real run (2026-10-31)
+
+This is `docs/live-proofs-windows.md` filled in from an actual run, not a plan. The difference this
+time: the previous cycles were run by agents on a cloud machine that could not touch this PC, so
+every cycle ended with "the 20 open P0 cards need a run on your Windows PC". This run used that PC.
+
+How it was run: `scripts/prove/live-installed.mjs` launches the **installed** release build
+(0.1.2) under a throwaway home, so a "profile that has never run Kolux RS" is real without
+uninstalling anything, and drives its own WebView2 over the debugging port. Named checks live in
+`scripts/prove/live-checks.mjs`. Raw evidence: `evidence/live-installed-2026-10-31.txt`.
+
+## Results so far
+
+| Item | Card / task | Result | Evidence |
+|---|---|---|---|
+| A-2 | T-608, consent line for status hooks | **PASS** — the line is on the first-run Status step, the switch starts on, and Claude's settings file gains Kolux's hook entries only after Done | `.onb-ping` switch `checked=true`; hooks in the scratch `settings.json` |
+| B-1 | VIEW-002 box 1, the screen chord | **PASS** — Ctrl+Alt+V went Agents → Board → Terminals → Tower → Agents, twice | card box ticked; P0 count 208 → 209 |
+| C-13 (box 1) | APP-070, no telemetry | **PASS so far** — a normal session's only non-loopback connections came from `msedgewebview2.exe` (the WebView2 runtime the Privacy page names); `kolux-rs.exe` held only loopback connections | 3-minute session watch, endpoints listed in the evidence |
+| A-1 | T-594, kolux on PATH | **FAILS, as the list expected** — the saved user Path is 1,815 characters and holds no Kolux RS entry; this build predates the fix. Re-run after 0.1.3 | Path length, entry list, absent `kolux-path-pending.txt` |
+| — | Release feed | **PASS** — 0.1.2 is public, signed, and `latest.json` points at the GitHub-stored installer name (the dots fix) | `gh release view`, manifest |
+
+## What also turned up
+
+- **Three dead Path entries** from the old app still sit on the saved user Path, pointing at folders
+  that no longer exist (`...\Programs\kolux\resources\bin` and two `G:\Dev\kolux-workspaces\...`
+  copies). They keep the Path above the 1,024-character installer limit. Removing them belongs to
+  the reclaim step and is Txais's call.
+- **The installed 0.1.2 predates cycle 2.** The PATH fix (PR #19), the delete-safety work (PR #21)
+  and the App split (PR #22) are all on main but not in the build on this PC. The next release
+  carries them.
+
+## Still to run (blocked, in order)
+
+Everything below needs the PC, and most of it needs the app closed or a real install:
+
+1. **Part B on the running app** — B-2, B-3 (palette rows and commands), B-4 (Escape), B-5
+   (`kolux open`), B-7 (broken certificate), B-9 (three relaunches: APP-052 marker, T-566 restored
+   chip, T-612 Tip).
+2. **Part C with an agent** — C-1 (Ctrl+J), C-2 (hand-started Claude needs you everywhere), C-3
+   (Review changes), C-4 (Pair handoff notes), C-5 (force-push ask), C-6 (stopped sub-agent),
+   C-7 (closed tab status), C-8 (empty Stop list).
+3. **Part D install, update, restart** — A-1 and D-1 on the next installer, then D-2/D-3/D-4 with
+   0.1.1 → 0.1.3 (both installers are already downloaded to `G:/Temp/installers`).
+4. **Part A's Codex and Gemini items** (A-4, A-5) — these need those CLIs signed in.
+
+## Not runnable, and why (unchanged)
+
+- APP-059 box 1 and APP-060 box 1: CI is not used (DT-C54), so these are not applicable.
+- CLI-007 box 2: needs an older `kolux` registered machine-wide; the old app is gone.
+- EDIT-053 box 2: needs Linux. TERM-030 box 2 (Mac half): needs a Mac.
+- USAGE-021 box 3: Kolux asks no usage service today (DT-C14); waits on T-547.
+- TERM-068 box 2 and SAFE-004 box 3: no way to cause the condition by hand. TERM-068 needs a code
+  change first (the Edit-menu paste path has no such check).
+- T-592's safe-graphics restarts: only reachable after a graphics crash.

@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 719 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 719 / 775 tasks  ·  P0 cards passing: 209 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -34,6 +34,16 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
+- [coordinator] 2026-10-31 · **Live proofs have started on the real PC.** `docs/live-proofs-results-2026-10-31.md`
+  holds the first results: VIEW-002 box 1 passes (P0 208 → 209), T-608's consent line passes on a fresh profile,
+  and APP-070 box 1 passes so far. The rest need the app closed in bursts; Txais asked to keep using it for now.
+- [coordinator] 2026-10-31 · **The installed 0.1.2 predates cycle 2.** The PATH fix (PR #19), delete safety
+  (PR #21) and the App split (PR #22) are on main but not in the build on this PC. The next release (0.1.3)
+  carries them and is what A-1, D-1, D-2, D-3 and D-4 are then proven on.
+- [coordinator] 2026-10-31 · **Three dead Path entries, Txais's call.** The saved user Path holds
+  `...\Programs\kolux\resources\bin` and two `G:\Dev\kolux-workspaces\...\resources\bin` entries, all naming
+  folders that no longer exist; they keep the Path at 1,815 characters, above the installer's 1,024 limit.
+  Removing them is reclaim work, not a build change.
 - [product-ux] 2026-10-30 · Open: live Windows checks for T-608 to T-612 (steps in each evidence/T-6xx.txt):
   the consent line on a fresh profile and the one-time card on an old one; a hand-started Claude asking permission
   shows Needs you on the Board, Tower, Inbox, needs strip, bell and sidebar; Review changes from a Done card and an
