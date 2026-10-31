@@ -5,7 +5,7 @@
 import { history, undo } from "@codemirror/commands";
 import { EditorState, type Transaction } from "@codemirror/state";
 import { afterAll, describe, expect, test } from "vitest";
-import { attach, detach, hashOf, isDirty, loadText, relay, replaceAll, save, textOf, type View } from "../buffers";
+import { attach, detach, hashOf, isDirty, loadText, relay, replaceAll, save, textOf, type View } from "../editors";
 import { beginSave, canUndo, checkOnce, endSave, forget, POLL_MS, reloadNow, remember, type Io, type Stamp } from "../diskChange";
 import { editors } from "../EditorPane";
 import { add, empty, KEY_BASE, route, saveTarget } from "../../floating/panel";

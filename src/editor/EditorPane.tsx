@@ -37,7 +37,7 @@ import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { clampView, keepView, takeView } from "../terminal/viewKeep";
-import { attach, baseName, detach, diskOf, docText, fileTextOf, hashOf, isDirty, isStale, lineEndsFor, loadText, opening, relay, replaceAll, save, subscribe, textOf, withLineBreaks } from "./buffers";
+import { attach, baseName, detach, diskOf, docText, fileTextOf, hashOf, isDirty, isStale, lineEndsFor, loadText, opening, relay, replaceAll, save, subscribe, textOf, withLineBreaks } from "./editors";
 import { keepUnsaved, keptToast } from "./unsavedCopy";
 import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";

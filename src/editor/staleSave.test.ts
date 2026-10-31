@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { attach, detach, hashOf, isDirty, type View } from "./buffers";
+import { attach, detach, hashOf, isDirty, type View } from "./editors";
 
 // EDIT-003 (T-073-c): the save that editor tabs and unstaged diff tabs share. The write carries
 // the hash of the text the tab loaded, and a stale refusal opens the Reload / Keep mine choice

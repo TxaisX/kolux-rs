@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { attach, detach, takeCarried, type View } from "./buffers";
+import { attach, detach, takeCarried, type View } from "./editors";
 import { movingNow } from "./autosave";
 import { announceMoves, confirmed, MOVED_EVENT, movedPath, type Move } from "./fileMoved";
 
