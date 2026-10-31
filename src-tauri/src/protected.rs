@@ -188,11 +188,16 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, how: H
         // T-604b (c): find's -delete (its own word, among its own arguments) removes what matches
         // under each start point, never the start point's folder above it, so a start point inside
         // the workspace runs, the workspace root included; its .git and anything outside ask.
-        // ponytail: a -delete after an escaped `\(` group lands in a part the reading split off and is not seen.
+        // T-604b (e): the reading keeps an escaped `\(` group whole, so its start points are seen.
         if p == "find" && args.contains(&"-delete") {
+            // T-604b (e): -L (and its older name -follow) follows links found inside the tree too,
+            // where no reading can tell where they lead, so a delete under it asks outright.
+            if args.iter().any(|a| *a == "-L" || *a == "-follow") {
+                return true;
+            }
             let ws = base.workspace.as_deref().or(base.cwd.as_deref()).map(norm);
             let root = |t: &str| ws.is_some() && locate(t, here.as_deref(), base) == ws;
-            if find_targets(&args).iter().any(|t| unclear_target(t) || (risky(t, here.as_deref(), base) && !root(t))) {
+            if find_targets(&args).iter().any(|t| unclear_target(t) || start_links_out(t, here.as_deref(), base) || (risky(t, here.as_deref(), base) && !root(t))) {
                 return true;
             }
             continue;
@@ -298,8 +303,19 @@ fn find_targets(args: &[&str]) -> Vec<String> {
             _ => break,
         }
     }
-    let starts: Vec<String> = args[i.min(args.len())..].iter().take_while(|a| !(a.starts_with(['-', '(', ')', '!', ',']) || a.is_empty())).map(|a| a.to_string()).collect();
+    let starts: Vec<String> = args[i.min(args.len())..].iter().take_while(|a| !(a.is_empty() || a.trim_start_matches('\\').starts_with(['-', '(', ')', '!', ',']))).map(|a| a.to_string()).collect();
     if starts.is_empty() { vec![".".to_string()] } else { starts }
+}
+
+/// T-604b (e): find follows a symbolic link named as a start point (POSIX requires it), so one
+/// that resolves outside the workspace asks even when its text lies inside.
+/// ponytail: a start point that is not there is left to the text check; find errors on a dangling
+/// link and deletes nothing.
+fn start_links_out(t: &str, dir: Option<&str>, base: &Base) -> bool {
+    let Some(ws) = base.workspace.as_deref().or(base.cwd.as_deref()) else { return false };
+    let Some(path) = locate(t, dir, base) else { return false };
+    let (Ok(real), Ok(root)) = (std::fs::canonicalize(&path), std::fs::canonicalize(ws)) else { return false };
+    !real.starts_with(&root)
 }
 
 /// T-604b (c): what `robocopy <source> <destination> ... /MIR` (or /PURGE) deletes: the files of the
@@ -849,7 +865,11 @@ fn split(text: &str, r: Reading, open: &mut bool) -> Vec<String> {
     let mut parts = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
+    // T-604b (e): an odd run of backslashes before a bracket escapes it (`\(` is find's own group),
+    // so it is not a command separator.
+    let mut slashes = 0u32;
     for c in text.chars() {
+        let escaped = slashes % 2 == 1;
         match quote {
             Some(q) if c == q => {
                 quote = None;
@@ -860,9 +880,11 @@ fn split(text: &str, r: Reading, open: &mut bool) -> Vec<String> {
                 quote = Some(c);
                 cur.push(c);
             }
+            None if escaped && matches!(c, '(' | ')' | '{' | '}') => cur.push(c),
             None if matches!(c, ';' | '&' | '|' | '\n' | '(' | ')' | '{' | '}') => parts.push(std::mem::take(&mut cur)),
             None => cur.push(c),
         }
+        slashes = if quote.is_none() && c == '\\' { slashes + 1 } else { 0 };
     }
     *open |= quote.is_some();
     parts.push(cur);
@@ -4365,7 +4387,7 @@ mod tests {
     #[test]
     fn t604b_find_is_judged_by_its_own_delete_word_and_where_it_starts() {
         let mut missed: Vec<String> = Vec::new();
-        for c in ["find .. -delete", "find / -name x -delete", "find ~ -delete"] {
+        for c in ["find .. -delete", "find / -name x -delete", "find ~ -delete", "find -L . -name '*.log' -delete", "find . -follow -name x -delete", "find -L build -delete"] {
             if hit(c) != Some("delete") {
                 missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
             }
@@ -4376,6 +4398,78 @@ mod tests {
             }
         }
         assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (e): an escaped `\(` group is find's own expression, not a new command, so the
+    /// `-delete` after it is read with find's start points; a start point outside still asks.
+    #[test]
+    fn t604b_e_find_delete_after_an_escaped_group_is_judged_by_its_start_points() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in [
+            r"find .. \( -name x -o -name y \) -delete",
+            r"find ~ \( -name '*.log' \) -delete",
+            r"cd .. && find . \( -name x \) -delete",
+            r"find / \( -name x \) -delete",
+        ] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in [
+            r"find . \( -name '*.pyc' -o -name '*.log' \) -delete",
+            r"find build \( -name x \) -delete",
+            r"find . -name x \( -delete \)",
+            r"echo find .. \( -name x \) -delete",
+        ] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (e): find follows a link named as a start point, so one inside the workspace that
+    /// leads out of it asks, while one that stays inside still runs. A symlink on Unix; a junction
+    /// on Windows, where making a symlink needs a privilege the build machine may not have.
+    fn start_point_link_is_judged_where_it_leads(link: &dyn Fn(&std::path::Path, &std::path::Path)) {
+        let root = std::env::temp_dir().join(format!("krs-t604b-e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let app = root.join("app");
+        let other = root.join("other");
+        std::fs::create_dir_all(app.join("sub")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        link(&other, &app.join("out"));
+        link(&app.join("sub"), &app.join("inner"));
+        let b = Base { workspace: Some(app.display().to_string()), cwd: Some(app.display().to_string()), home: Some(root.join("home").display().to_string()), temp: vec![root.join("tmp").display().to_string()] };
+        let h = |c: &str| check(c, &b, &json!({})).map(|r| r.id);
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["find out -delete", "find out/ -delete", "find out -name x -delete", "find out inner/../out -delete"] {
+            if h(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", h(c)));
+            }
+        }
+        for c in ["find . -delete", "find inner -delete", "find sub -name x -delete", "find ./out -print"] {
+            if h(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", h(c)));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn t604b_e_a_find_start_point_that_is_a_link_is_judged_where_it_leads() {
+        start_point_link_is_judged_where_it_leads(&|target, at| std::os::unix::fs::symlink(target, at).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn t604b_e_a_find_start_point_that_is_a_junction_is_judged_where_it_leads() {
+        start_point_link_is_judged_where_it_leads(&|target, at| {
+            let made = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path $env:KOLUX_J_AT -Target $env:KOLUX_J_TARGET | Out-Null"]).env("KOLUX_J_AT", at).env("KOLUX_J_TARGET", target).status().is_ok_and(|s| s.success());
+            assert!(made, "could not make a junction at {}", at.display());
+        });
     }
 
     /// T-604b (d), review of PR #15 round 8: how PowerShell's wildcards treat `..` is unproven, so a
