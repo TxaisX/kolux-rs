@@ -1,0 +1,38 @@
+Video skill for Kolux (HyperFrames + Higgsfield)
+Date: 2026-10-31
+Lane: lane/video-skill
+Base: 282ae0be (origin/main)
+
+Why
+Kolux agents had no bundled guide for making a product film, demo clip, title card or generated
+image. The tools exist on this machine (HyperFrames via npx, Higgsfield CLI authenticated), but an
+agent starting from zero had to rediscover the whole pipeline. The user asked to combine
+HyperFrames and Higgsfield into the Kolux skill set.
+
+What changed
+- src-tauri/skills/video/SKILL.md: the video skill. Three engines (HyperFrames for real UI and
+  type, Higgsfield for generated stills/shots/audio, the real app for the product), a 7-step
+  pipeline, the 30-second beat shape and the rules that save a render.
+- src-tauri/skills/video/references/hyperframes.md: the minimal composition contract, commands,
+  media rules and determinism rules.
+- src-tauri/skills/video/references/higgsfield.md: the model picks, commands, prompt rules,
+  cost note and the remote MCP endpoint https://mcp.higgsfield.ai/mcp.
+- src-tauri/src/local_cli.rs: a bundled Skill entry named video with aliases hyperframes,
+  higgsfield, film and media. The Skills page shows it as Built into Kolux; `kolux skills get
+  video` prints it with the app closed.
+- The existing skills test now checks the five bundled names, the alias, the reference list and
+  the MCP endpoint.
+
+Proof
+- cargo test --lib cli::local_cli::tests: 3 passed, 0 failed. The bundled test checks names,
+  descriptions, alias resolution, references and the Higgsfield MCP URL.
+- pnpm check: pass (plan, workflow and invoke contract OK).
+- cargo clippy --lib -- -D warnings: clean.
+- Higgsfield access on this machine at build time: higgsfield 1.1.24, account txiong530@gmail.com,
+  starter plan, 215.15 credits. The guide tells a new machine to run `higgsfield auth login`.
+
+Use
+- In the app: Skills > Built into Kolux > video.
+- In any terminal: kolux skills list; kolux skills get video; kolux skills get video --reference
+  higgsfield.
+- A remote-MCP client can add https://mcp.higgsfield.ai/mcp; the CLI remains the fallback.
