@@ -383,6 +383,11 @@ input { font: inherit; }
 .grid .pane > * { transition: opacity 140ms ease; }
 .grid .pane:not(.focused) > * { opacity: var(--pane-dim, 1); }
 .strip .newtab { margin-left: auto; margin-right: 12px; height: 28px; }
+/* Total tokens and estimated cost, immediately left of Preview at the strip's right end. */
+.strip-right { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.strip-totals { font: 11px/1 var(--mono-font); color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.strip-totals b { color: var(--fg); font-weight: 500; }
+.strip-totals .sep { color: var(--fg-faint); }
 /* a cell holds tabs (TERM-040); on the New (clean) look the tab strip shows only for two tabs or more,
    on Classic always (TERM-028) */
 .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 4px; }
