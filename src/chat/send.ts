@@ -88,10 +88,6 @@ export function hearStates(listen: Listen): Promise<unknown> {
   return hearing;
 }
 export const heardOf = (key: number) => heard.get(key)?.state;
-/** SAFE-004 box 3: when pane `key`'s newest status reading arrived, or undefined when none has. A
- *  status source that never updates leaves this still; Request changes tells a stuck status from one
- *  that keeps reporting by it. */
-export const heardAt = (key: number) => heard.get(key)?.at;
 /** The time a card answer starts at, on the clock the readings are stamped with (see answered). */
 export const hearingNow = () => clock();
 /** Council FIX-2 (FS3), FIX-3 (FS2 of e5412ff): an Approve or Deny on a card, started at `since`,

@@ -8,7 +8,7 @@ import type { useSettingsPlumbing } from "../settings/useSettingsPlumbing";
 import type { launchActions } from "../launch/launchActions";
 import type { WindowLate } from "../shell/windowLate";
 import { answeredElsewhere } from "../chat/ask";
-import { answered as cardAnswered, heardAt, hearingNow, outcomeNote, pasteToPane, writeTerminal } from "../chat/send";
+import { answered as cardAnswered, hearingNow, outcomeNote, pasteToPane, writeTerminal } from "../chat/send";
 import type { AgentState } from "../projects/rows";
 import { bracketed } from "../terminal/paste";
 import { draftKey, feedbackMessage, startFeedback, stillPending } from "../terminal/planReview";
@@ -80,10 +80,6 @@ export function reviewActions(s: WindowState, p: ReturnType<typeof useSettingsPl
         );
       },
       asking: () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission",
-      // SAFE-004 box 3: when this pane's newest status reading arrived, over the same agent-status
-      // events that set its state. It stops while the pane's status never updates, and Request changes
-      // then gives up waiting at 3 seconds and sends the feedback anyway.
-      reads: () => heardAt(p.key) ?? 0,
       type: (text) => write(bracketed(text)),
       enter: () => write("\r"),
       alive: () => ptys.current[p.key] !== undefined && late.panesRef.current.some((x) => x.key === p.key),

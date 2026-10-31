@@ -101,20 +101,14 @@ test("SAFE-002, SAFE-004: the sheet shows one block per section with its comment
 type Log = string[];
 const steps = (log: Log, o: { deny?: boolean; askingFor?: number; alive?: boolean; onWait?: () => void } = {}) => {
   let asks = o.askingFor ?? 0;
-  let reads = 0;
   return {
     deny: async () => (log.push("no"), o.deny ?? true),
     asking: () => asks > 0,
-    // SAFE-004 box 3: here every wait brings a fresh status reading, so this fake is a pane whose
-    // readings keep arriving and cannot be mistaken for a stuck status. A reading that never changes
-    // is the box-3 test in __cards__/SAFE-004.test.ts.
-    reads: () => reads,
     type: async (t: string) => void log.push(`type:${t}`),
     enter: async () => void log.push("enter"),
     alive: () => o.alive ?? true,
     wait: async (ms: number) => {
       log.push(`wait:${ms}`);
-      reads++;
       if (asks > 0) asks--;
       o.onWait?.();
     },
