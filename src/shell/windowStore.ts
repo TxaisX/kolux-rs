@@ -202,3 +202,7 @@ export function useWindowStoreTail({ accountSwitcher, ptys, setNotice }: Pick<Wi
     setAskName, renamingTab, setRenamingTab, nextKey, restoredKeys, runPanes, runTabs,
   };
 }
+
+export type WindowStoreTail = ReturnType<typeof useWindowStoreTail>;
+/** Everything the two store hooks hand the window. */
+export type WindowState = WindowStore & WindowStoreTail;

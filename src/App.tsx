@@ -19,12 +19,11 @@
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { saveChanged } from "./settings/saveChanged";
-import { applySetting, applySettings, rebaseSettings } from "./projects/settingWrite";
+import { applySetting, applySettings } from "./projects/settingWrite";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { emit, listen } from "@tauri-apps/api/event";
-import { windowTitle, type AppInfo } from "./app-info";
+import { listen } from "@tauri-apps/api/event";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
@@ -45,8 +44,7 @@ import { chooserClosable } from "./launch/chooserClosable";
 import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS } from "./terminal/tabColor";
 import { forgetView } from "./terminal/viewKeep";
 import { classify, shellInAgentPane } from "./terminal/remove";
-import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
-import { applyWindowBlur } from "./chrome/appLook";
+import { showScreen, zoomTerm } from "./theme";
 import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
 import { watchCodexSignIn } from "./settings/codexSignInScan";
@@ -55,21 +53,19 @@ import RecoveryMount from "./recovery/RecoveryMount";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, saveLayout, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
 import { startFields, startTail } from "./projects/startArgs";
-import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
+import { openSettings, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
 import { pasteHosts } from "./tasks/pasteHosts";
 import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
 import FolderRenameAsk from "./projects/FolderRenameAsk";
 import AboutPanel from "./shell/AboutPanel";
-import { ABOUT_MENU_ID, openAbout } from "./shell/about";
 import LinkAskHost from "./shell/LinkAskDialog";
 import TabSearch from "./shell/TabSearch";
 import { openTabSearch, tabSearchCommand } from "./shell/findTab";
 import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
-import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
-import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
+import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
+import BrowserPane, { openInBrowser } from "./browser/BrowserPane";
 import PreviewButton from "./browser/PreviewButton";
-import { chordPlan } from "./browser/chord";
 import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
 import { closedPanes, folderKind, paneFor, placement } from "./chrome/reopenTab";
 import { writerOf } from "./scm/generate";
@@ -79,8 +75,8 @@ import FloatingLayer, { floatingKeys } from "./floating/FloatingLayer";
 import { baseName, keyOf } from "./editor/buffers";
 import { useDesktopDrops } from "./editor/desktopDrops";
 import { NOTHING_TO_SEND, sendRoute } from "./editor/noteCommands";
-import { noteTarget, plainNote, useRepoless } from "./editor/fileNotes";
-import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
+import { noteTarget, plainNote } from "./editor/fileNotes";
+import { clearDelivered, markSent, noteBlocks } from "./editor/diffNotes";
 import LineNotes from "./scm/LineNotes";
 import AgentStartHost from "./agentstart/AgentStartHost";
 import ChecksPanel from "./scm/ChecksPanel";
@@ -112,15 +108,14 @@ import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
 import AgentsPanel from "./sessions/AgentsPanel";
 import { BELL_NOTE } from "./terminal/bellNote";
-import { FOLDER_TAB_KEY, offeredTabs, rememberTab, tabFor } from "./sessions/folderTabs";
-import { useWorkspaceKind } from "./sessions/useWorkspaceKind";
+import { FOLDER_TAB_KEY, rememberTab } from "./sessions/folderTabs";
 import { AttachedWorktreesTab, FolderChecksTab } from "./projects/AttachedTabs.tsx"; // the extension: attachedTabs.ts (logic) differs only in case
 import { useWindowSync } from "./sessions/windowSync";
 import type { ResumePlan } from "./sessions/resume";
 import type { Session } from "./sessions/model";
 import { livePane } from "./sessions/livePane";
 import { sessionNameFor, useSessionNames } from "./sessions/tabTitles";
-import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
+import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, RIGHT_KEYS } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup } from "./terminal/grid";
 import { gpuOn } from "./terminal/renderer";
@@ -133,9 +128,9 @@ import { cardPanes, pickSession, railGroups, rowStatus } from "./agents/rail";
 import UpdateCenter from "./update/UpdateCenter";
 import FeedbackDialog from "./feedback/FeedbackDialog";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
-import { chromeShown, menuBarState, menuEdit, menuScreen, menuSettingFlip } from "./chrome/chromeItems";
+import { chromeShown } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
-import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/TerminalPane";
+import TerminalPane, { type PaneNotice } from "./terminal/TerminalPane";
 import { accountLabel, accountPrompt, codexSetup, setupChanged } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
@@ -149,9 +144,9 @@ import { aiControlsShown } from "./scm/rules";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { seatDefault, seatStart } from "./launch/defaultSeat";
-import { allSwitchedOff, DEFAULT_AGENT_KEY, menuAgents } from "./launch/agents";
+import { allSwitchedOff, menuAgents } from "./launch/agents";
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
-import { VOCAB, needsYouCount, nextNeedsYou } from "./terminal/status";
+import { VOCAB, nextNeedsYou } from "./terminal/status";
 import { followedTitle, IDLE, shownAgent, type Identity } from "./terminal/shellMarks";
 import type { KindKey } from "./settings/notifications";
 import { tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
@@ -166,7 +161,7 @@ import FloorView from "./floor/FloorView";
 import SpaceView from "./space/SpaceView";
 import { nameSeats, nameUsage, towerRows, usageByAccount } from "./tower/tower";
 import { useTowerBridge } from "./tower/TowerWindow";
-import { LANES, chipOf, forget, hooksMuted, needsYou, promptReturned, ringsBell } from "./board/chip";
+import { LANES, chipOf, forget, hooksMuted, needsYou, promptReturned } from "./board/chip";
 import { reviewTab } from "./board/review";
 import { commandRows, forceReload, reloadAsk, windowCommand } from "./keys/commands";
 import { SCREEN_OF, screenRows } from "./chrome/reach";
@@ -177,7 +172,7 @@ import { readoutOf } from "./terminal/headerUsage";
 import { useCodexPaneFigures } from "./usage/paneFigures";
 import ChooserPane from "./launch/ChooserPane";
 import { chooserTabName } from "./launch/chooserTab";
-import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
+import { defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
@@ -190,13 +185,16 @@ import { heldByTerminal } from "./keys/terminalPolicy";
 import { scopesFor } from "./keys/keyScopes";
 import { useAgentEvents } from "./status/useAgentStatus";
 import { useWindowStore, useWindowStoreTail } from "./shell/windowStore";
+import { useWindowStart } from "./shell/useWindowStart";
+import { useSettingsPlumbing } from "./settings/useSettingsPlumbing";
+import { useWindowChrome } from "./chrome/useWindowChrome";
+import { useBrowserChords } from "./browser/useBrowserChords";
 import { useRestoredStatus } from "./status/useRestoredStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
 import { creditedLive, launchedAgent, launchedName } from "./status/credit";
 import { useWorkspaceActions } from "./projects/useWorkspaces";
-import { useMenuBar } from "./chrome/useChrome";
-import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
+import { stepZoom, zoomFactor } from "./settings/zoom";
 import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./onboarding/hooksOn";
 import ToolNotices from "./launch/ToolNotices";
@@ -206,7 +204,6 @@ import { savedArgs } from "./chat/controls";
 import { fileJump, linksOpenInKolux } from "./chat/chatLinks";
 import { deliverPrompt, startWatch } from "./launch/startWatch";
 import { answered as cardAnswered, hearStates, hearingNow, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
-import { editChatBox } from "./chat/menuEdit";
 import PlanSheet from "./terminal/PlanSheet";
 import { bracketed } from "./terminal/paste";
 import EditMenuHost from "./editmenu/EditMenuHost";
@@ -287,229 +284,30 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     renamingTab, setRenamingTab, nextKey, restoredKeys, runPanes, runTabs
   } = useWindowStoreTail({ accountSwitcher, ptys, setNotice }, layout, read);
 
-  useEffect(() => {
-    invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
-    refreshAgents();
-    invoke<ShellInfo[]>("shell_list").then(setShells, () => setShells([]));
-    // SET-027: Refresh on the Agents page looks again; the window takes the list it found, so
-    // one refresh is one search (SESS-002).
-    // An install that finished (SET-026) says so with no list: the window searches once for everyone.
-    const offAgents = listen<AgentInfo[] | null>("agents-changed", (e) => {
-      if (!Array.isArray(e.payload)) return refreshAgents();
-      setAgents(e.payload);
-      setAgentPass({ looking: false, done: true, error: null });
-    });
-    // SET-001: the saved look is put on the window every time the settings are read.
-    const readSettings = () =>
-      void invoke<Record<string, unknown>>("get_settings")
-        .then((s) => {
-          setSettings(s);
-          setSettingsRead(true);
-          applyAppearance(readAppearance(s));
-          applyWindowBlur(s);
-          // after-list #39 / row 789: the fallback sentence is told by RecoveryMount now (its own notice, not the single slot the shortcuts file overwrote)
-        })
-        .catch(() => setSettings({}));
-    readSettings();
-    const off = listen("settings-saved", () => (readSettings(), invoke<ShellInfo[]>("shell_list").then(setShells, () => {}))); // SET-026: the chosen default shell leads the list
-    return () => {
-      void off.then((u) => u()).catch(() => {});
-      void offAgents.then((u) => u()).catch(() => {});
-    };
-  }, []);
-
-  // SESS-002: one refresh is one search. An errored search keeps the last list but blocks
-  // launching until a search succeeds; nothing counts as missing before the first one is done.
-  function refreshAgents() {
-    setAgentPass((p) => ({ ...p, looking: true }));
-    invoke<AgentInfo[]>("agent_list").then(
-      (list) => {
-        setAgents(list);
-        setAgentPass({ looking: false, done: true, error: null });
-        void emit("agents-changed", list).catch(() => {});
-      },
-      (err) => setAgentPass((p) => ({ ...p, looking: false, error: String(err) || "the search failed" })),
-    );
-  }
-  // SESS-002 / SESS-003: once a search is done, a seat whose agent is gone (or switched off) is
-  // emptied for good, never refilled when the agent comes back.
-  const offeredKey = installedIds.join(",");
-  useEffect(() => {
-    if (!agentPass.done || agentPass.error) return;
-    setPanes((ps) => {
-      let changed = false;
-      const next = ps.map((p) => {
-        if (!p.seats) return p;
-        const seats = clearMissing(p.seats, installedIds);
-        if (seats.every((s, i) => s === p.seats![i])) return p;
-        changed = true;
-        return { ...p, seats };
-      });
-      return changed ? next : ps;
-    });
-  }, [agentPass, offeredKey]);
-
-  // GIT-036: a page asked for in the built-in browser opens as a new tab in the focused split.
-  useEffect(() => {
-    const show = (e: Event) => {
-      // T-242 (BROW-067): the Preview button names its tab "Preview host:port".
-      const { url, title } = openDetail((e as CustomEvent<OpenInBrowser>).detail);
-      const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
-      const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "browser", url, title }]);
-      setFocused(key);
-    };
-    window.addEventListener(OPEN_IN_BROWSER, show);
-    return () => window.removeEventListener(OPEN_IN_BROWSER, show);
-  }, [panes, focused, activeDir]);
-  // GIT-040 / GIT-041: review notes on diff lines, kept per workspace in settings. A save that fails
-  // puts the notes back as they were and says so.
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
-  // GIT-041 (T-034-b): a folder workspace without Git keeps its notes too, made on a file's selection.
-  const repoless = useRepoless(activeDir);
-  const notesFor = (dir: string | null) => lineNotesOf(settingsRef.current[LINE_NOTES_KEY], dir);
-  const saveNotes = (dir: string, notes: LineNote[]) => {
-    const was = settingsRef.current;
-    const next = { ...was, [LINE_NOTES_KEY]: withLineNotes(was[LINE_NOTES_KEY], dir, notes) };
-    settingsRef.current = next;
-    setSettings(next);
-    saveChanged(was, next).catch((err) => {
-      setSettings((s) => ({ ...s, [LINE_NOTES_KEY]: was[LINE_NOTES_KEY] }));
-      setToast(`The review note was not saved, so the change was undone: ${String(err)}`);
-    });
-  };
-  const putNote = (dir: string, n: LineNote) => saveNotes(dir, [...notesFor(dir).filter((x) => x.id !== n.id), n]);
-  const dropNotes = (dir: string, ids: string[]) => saveNotes(dir, notesFor(dir).filter((x) => !ids.includes(x.id)));
-  // Row 794: built on the latest settings, so writes before the next render (Clear filters, then a tick) all land.
-  const saveSetting = (key: string, value: unknown) => {
-    const { was, next } = applySetting(settingsRef, key, value);
-    setSettings(next);
-    saveChanged(was, next).catch((err) => setNotice(String(err)));
-  };
-  // Row 794-b: a page hands back the whole settings it built from its last render; only what it changed lands on the latest.
-  const savePageSettings = (rendered: Record<string, unknown>, built: Record<string, unknown>) => {
-    const { was, next } = rebaseSettings(settingsRef, rendered, built);
-    setSettings(next);
-    saveChanged(was, next).catch((err) => setNotice(String(err)));
-  };
-  // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
-  // VIEW-057 (T-146-g): a folder workspace (a project without Git) offers Attached and PR Checks instead of the git tabs.
-  const kindProject = activeDir ? (Object.entries(owner).find(([d]) => sameDir(d, activeDir))?.[1] ?? null) : null;
-  const wsKind = useWorkspaceKind(kindProject, activeDir, refresh);
-  const offeredRight = offeredTabs(wsKind.folder);
-  const savedRight = readRight(settings);
-  const right = { ...savedRight, tab: tabFor(settings[FOLDER_TAB_KEY], activeDir, savedRight.tab, offeredRight) };
-  const leftWidth = dragLeft ?? readLeft(settings);
-  const explorerOpen = right.open && right.tab === "explorer";
-  const scmOpen = right.open && right.tab === "scm";
-  const saveRight = (patch: Partial<Record<keyof typeof RIGHT_KEYS, unknown>>) => {
-    const was = settingsRef.current;
-    const next = { ...was };
-    for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
-    settingsRef.current = next;
-    setSettings(next);
-    saveChanged(was, next).catch((err) => setNotice(String(err)));
-  };
-  const showRight = (tab: RightTab) => {
-    setScreen("terminals");
-    saveRight({ open: true, tab });
-  };
-  const toggleExplorer = () => {
-    if (explorerOpen && document.activeElement?.closest(".explorer")) return saveRight({ open: false });
-    showRight("explorer");
-    setExplorerFocus((n) => n + 1);
-  };
-  // APP-009 / T-248-a: the menu mirrors the screen, the look, the chrome switches and the shortcuts;
-  // a menu click the page carries out runs the same code as its shortcut.
-  useMenuBar(menuBarState(settings, screen, (id) => keymap.bindings.get(id)?.chords, classic), (id) => {
-    // CHAT-017: with the chat's message box on screen, Select All and Paste act on it (menuEdit.ts); anything else falls through.
-    if ((id === "edit.selectAll" || id === "edit.paste") && editChatBox(id === "edit.paste" ? "paste" : "selectAll", document as never, () => navigator.clipboard.readText())) return;
-    const flip = menuSettingFlip(settings, id);
-    const to = menuScreen(id);
-    const el = document.activeElement;
-    const inField = !!el && !el.closest(".xterm") && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable);
-    const ed = menuEdit(id, inField);
-    if (flip) saveSetting(flip[0], flip[1]);
-    else if (to) setScreen(classic ? "terminals" : to);
-    else if (ed && "field" in ed) document.execCommand(ed.field);
-    else if (ed) focusedTerminalEdit.current?.(ed.terminal);
-    else if (id === "zoom.in" || id === "zoom.out" || id === "zoom.reset") void stepZoom(id.slice(5) as ZoomStep).catch(() => {});
-    else if (id === ABOUT_MENU_ID) openAbout(); // VIEW-106
-    else if (id === "app.settings") {
-      setSettingsAt((a) => ({ target: null, n: a.n }));
-      setSettingsOpen(true);
-    } else if (id === "sidebar.left.toggle") setSidebarOpen((o) => !o);
-    else if (id === "sidebar.right.toggle") {
-      if (screen === "terminals" && right.open) saveRight({ open: false });
-      else showRight(right.tab);
-    }
-    // edit.paste: the core lane's attachPaste paste(). help.*: T-248-b.
+  // App info, agents, shells and settings, read at start (shell/useWindowStart.ts).
+  const {
+    refreshAgents
+  } = useWindowStart({
+    activeDir, agentPass, focused, installedIds, nextKey, panes, setAgentPass, setAgents, setFocused, setInfo, setPanes, setSettings, setSettingsRead,
+    setShells
   });
-  // SESS-004: the default agent is a settings key; the plus menu lists it first.
-  const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
-  // ux fix 2: one count of waiting panes feeds the bell and the window title. Review of PR #16: a stop (blocked, interrupted) still counts, as on main.
-  // Review of PR #16 (c): the bell also rings for a pane whose header flags it, a failed start included, as on main.
-  const needing = needsYouCount(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(panes.filter((p) => ringsBell(statusOf(p), needs[p.key] ?? false)).map((p) => p.key)));
-  useEffect(() => {
-    document.title = windowTitle(info, needing);
-  }, [info, needing]);
-  // BROW-001: a browser tab is named after its page.
-  useEffect(() => {
-    const off = listen<{ id: number; title: string }>("browser-title", (e) => setTitles((t) => ({ ...t, [e.payload.id]: e.payload.title })));
-    return () => void off.then((u) => u());
-  }, []);
+  // The settings writes, review notes, the right sidebar and the menu bar (settings/useSettingsPlumbing.ts).
+  const {
+    settingsRef, repoless, notesFor, saveNotes, putNote, dropNotes, saveSetting, savePageSettings, wsKind, offeredRight, right,
+    leftWidth, explorerOpen, scmOpen, saveRight, showRight, toggleExplorer, setDefault
+  } = useSettingsPlumbing({
+    activeDir, classic, dragLeft, keymap, owner, refresh, screen, setExplorerFocus, setNotice, setScreen, setSettings, setSettingsAt, setSettingsOpen,
+    setSidebarOpen, setToast, settings
+  });
+  // The title's waiting count, page titles, the shortcuts notice, Classic and Settings links (chrome/useWindowChrome.ts).
+  const {
+    needing, keymapNotice
+  } = useWindowChrome({ classic, info, keymap, needs, panes, setNotice, setScreen, setSettingsAt, setSettingsOpen, setTitles, statusOf });
 
-  // T-005: the shortcuts file is read at start; what it got wrong is said once, in the notice.
-  const keymapNotice = keymap.errors.join(" ");
-  useEffect(() => {
-    if (keymapNotice) setNotice(keymapNotice);
-  }, [keymapNotice]);
-  // SET-037: under Classic there is only the Terminals screen.
-  useEffect(() => {
-    if (classic) setScreen("terminals");
-  }, [classic]);
-  // SET-006: a link anywhere in the app opens Settings at its page and section.
-  useEffect(() => {
-    const open = (e: Event) => {
-      setSettingsAt((a) => ({ target: (e as CustomEvent<SettingsTarget>).detail, n: a.n + 1 }));
-      setSettingsOpen(true);
-    };
-    window.addEventListener(OPEN_SETTINGS, open);
-    return () => window.removeEventListener(OPEN_SETTINGS, open);
-  }, []);
-
-  // BROW-003, BROW-005: a browser chord for one tab, pressed in the app or forwarded by the page
-  // itself when the keyboard was inside it (T-012-b-fix; the back end's `browser-chord` event).
-  const browserAction = (key: number, what: string) => {
-    const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${key}"] ${sel}`);
-    if (what === "focusAddressBar") {
-      const bar = inBrowser(".address") as HTMLInputElement | null;
-      bar?.focus();
-      bar?.select();
-    } else if (what === "reload") void invoke("browser_go", { id: key, what: "reload" });
-    else inBrowser(`[data-go="${what}"]`)?.click();
-  };
-  const chord = useRef(browserAction);
-  chord.current = browserAction;
-  useEffect(() => {
-    // A chord from inside a page also makes that page's split the focused one: a click into the
-    // page never reaches the app, so the app may still think another split has the keyboard.
-    // Council FIX-3: only a chord pressed in the page (the app's window does not hold the
-    // keyboard) does that or moves the keyboard; one the page's script sent runs page-only actions.
-    // Council FIX-4: nor while the user is in another program, and at most once a second per tab.
-    const un = listen<{ id: number; what: string }>("browser-chord", async (e) => {
-      const { id, what } = e.payload;
-      const plan = await chordPlan(id, what);
-      if (plan.focusPane) setFocused(id);
-      const run = () => plan.run && chord.current(id, what);
-      if (plan.takeKeyboard) void invoke("browser_go", { id, what: "focusApp" }).catch(() => {}).then(run);
-      else run();
-    });
-    return () => {
-      un.then((u) => u());
-    };
-  }, []);
+  // BROW-003, BROW-005: the browser chords (browser/useBrowserChords.ts).
+  const {
+    browserAction
+  } = useBrowserChords({ setFocused });
 
   // Global-scope shortcuts are pressed here, wherever focus is; with Terminal first (SET-014) a
   // focused terminal keeps every chord that is not marked safe for terminals. Only actions that exist today do something; the rest are matched and left alone.
