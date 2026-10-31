@@ -26,6 +26,8 @@ const PORT = Number(process.env.PROVE_CDP || 9333);
 const BASE = process.env.PROVE_BASE || 'G:/Temp/live-installed';
 const EXE = process.env.PROVE_EXE || join(process.env.LOCALAPPDATA, 'Kolux RS', 'kolux-rs.exe');
 const REAL = process.env.PROVE_REAL === '1';
+const PIDFILE = join(BASE, 'app.pid');
+const CLOSE_REAL = process.env.PROVE_CLOSE_REAL === '1';
 
 export const run = (file, a, opt = {}) =>
   new Promise((resolve, reject) =>
