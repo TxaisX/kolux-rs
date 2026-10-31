@@ -5,14 +5,22 @@
 ; again. The rules are cli_register.rs's (CLI-008): the variable keeps its name and is written as
 ; REG_EXPAND_SZ (a PATH stored as REG_SZ comes back as REG_EXPAND_SZ, which Windows reads the same way),
 ; the change is read back before it is reported, and no other entry is ever touched.
-; ponytail: NSIS strings hold 1024 characters, so a PATH too long to change safely is left as it is and the
-; log says so (Settings > CLI > Register has no such limit); upgrade: read and write the value through the
-; System plugin into a buffer of its own size.
+; T-594, a PATH over the NSIS limit: NSIS strings hold 1024 characters, so the installer cannot read or write
+; a longer PATH (real ones are often longer; Txais's is 1,815). It leaves that PATH exactly as it is and drops
+; a hand-off file, ${KOLUX_PATH_PENDING}, in the install folder instead; Kolux adds the bin folder when it next
+; starts and deletes the file first, so this happens once per install (cli_register.rs path_at_start). On
+; uninstall the app itself runs first (<app>.exe --uninstall-path, cli_register.rs path_at_uninstall), which
+; takes off exactly our entry at any length; the NSIS removal below then finds nothing of ours, and only does
+; the work when the app could not run.
+; ponytail: the long-PATH work is done by the app's own Rust code, not NSIS; upgrade, if the app could ever
+; be missing at uninstall: the same steps through the System plugin into a buffer of the value's own size.
 !include LogicLib.nsh
 !include WinMessages.nsh
 
 ; The longest string NSIS holds, its terminating zero left out.
 !define /math KOLUX_STRLEN_MAX ${NSIS_MAX_STRLEN} - 1
+; T-594: the hand-off file's name (cli_register.rs PATH_PENDING).
+!define KOLUX_PATH_PENDING "kolux-path-pending.txt"
 
 ; $R9: the name the PATH variable goes by in HKCU\Environment (Path, PATH, ...), or "" when there is none.
 ; The walk ends only on the error flag, which EnumRegValue sets past the last value: a value with an empty
@@ -102,6 +110,20 @@
   Pop $R0
 !macroend
 
+; T-594: the PATH is too long for NSIS. It is left exactly as it is, and the hand-off file asks Kolux to add
+; the bin folder on its next start (once; Kolux deletes the file before it changes anything). Uses $R5 only.
+!macro KOLUX_PATH_HANDOFF
+  ClearErrors
+  FileOpen $R5 "$INSTDIR\${KOLUX_PATH_PENDING}" w
+  ${If} ${Errors}
+    DetailPrint "Your PATH was left as it is: it is too long for the installer to change. Settings > CLI > Register adds kolux."
+  ${Else}
+    FileWrite $R5 "Kolux adds $INSTDIR\bin to your PATH when it next starts, then deletes this file.$\r$\n"
+    FileClose $R5
+    DetailPrint "Your PATH is too long for the installer to change; Kolux adds $INSTDIR\bin to it when it opens"
+  ${EndIf}
+!macroend
+
 !macro KOLUX_PATH_ADD
   !insertmacro KOLUX_SAVE
   ${If} ${FileExists} "$INSTDIR\bin\kolux.exe"
@@ -114,7 +136,7 @@
       ReadRegStr $R0 HKCU "Environment" $R9
     ${EndIf}
     ${If} ${Errors}
-      DetailPrint "Your PATH was left as it is: it is too long for the installer to change safely. Settings > CLI > Register adds kolux."
+      !insertmacro KOLUX_PATH_HANDOFF
     ${Else}
       ; ponytail: only the plain spelling counts as there, so an entry the user wrote with %VARIABLES% gets
       ; a second, plain one beside it (harmless); upgrade: compare through ExpandEnvironmentStrings.
@@ -136,7 +158,7 @@
         StrLen $R4 "$INSTDIR\bin"
         IntOp $R3 $R3 + $R4
         ${If} $R3 >= ${KOLUX_STRLEN_MAX}
-          DetailPrint "Your PATH was left as it is: it is too long for the installer to change safely. Settings > CLI > Register adds kolux."
+          !insertmacro KOLUX_PATH_HANDOFF
         ${Else}
           ${If} $R1 == ""
             StrCpy $R1 "$INSTDIR\bin"
@@ -176,7 +198,8 @@
     ClearErrors
     ReadRegStr $R8 HKCU "Environment" $R9
     ${If} ${Errors}
-      DetailPrint "Your PATH was left as it is: it is too long for the uninstaller to change safely. Remove $INSTDIR\bin from it in Windows settings."
+      ; Over the NSIS limit: the app's own step (KOLUX_PATH_APP_REMOVE) has already done this when it could run.
+      DetailPrint "Your PATH is too long for the uninstaller to read; if $INSTDIR\bin is still on it, remove it in Windows settings."
     ${Else}
       !insertmacro KOLUX_PATH_CUT
       ${If} $R6 > 0
@@ -203,6 +226,37 @@
     ${EndIf}
   ${EndIf}
   !insertmacro KOLUX_RESTORE
+!macroend
+
+; T-594: before the files go, the app takes its bin folder off the user PATH itself, at any length (the
+; uninstall was already confirmed: Tauri inserts this at the start of the uninstall section). Exit 0: taken
+; off; 2: nothing of ours there; anything else: not done (the NSIS step after the files go tries for a short
+; PATH). The hand-off file is deleted too, so the install folder can go.
+!macro KOLUX_PATH_APP_REMOVE
+  ; The template's running-app check first (it runs it again after this hook): a user who cancels at its
+  ; prompt aborts the uninstall here, before the PATH entry is touched. It uses $R0-$R3, as the template's
+  ; own call does.
+  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  Push $R0
+  ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    ClearErrors
+    ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --uninstall-path' $R0
+    ${If} ${Errors}
+      DetailPrint "Kolux could not be run to check your PATH"
+    ${ElseIf} $R0 = 0
+      DetailPrint "Took $INSTDIR\bin off your PATH"
+    ${ElseIf} $R0 = 2
+      DetailPrint "$INSTDIR\bin was not on your PATH"
+    ${Else}
+      DetailPrint "Kolux could not take $INSTDIR\bin off your PATH"
+    ${EndIf}
+  ${EndIf}
+  Delete "$INSTDIR\${KOLUX_PATH_PENDING}"
+  Pop $R0
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  !insertmacro KOLUX_PATH_APP_REMOVE
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
