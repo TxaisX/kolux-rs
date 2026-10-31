@@ -210,7 +210,7 @@ Rules: the order follows the left-to-right order of the labels in the top-bar sw
   current; the chord printed in the menu is only a label; the key press is handled inside the
   window, not by the menu.
 Acceptance:
-  - [ ] New look, on Agents, press the chord four times → Board, Terminals, Tower, Agents.
+  - [x] New look, on Agents, press the chord four times → Board, Terminals, Tower, Agents.
         (Reworded per Txais 2026-10-28 decisions file, A: Tower stays in the cycle.)
   - [x] Classic look, press the chord → nothing changes. (cards live; evidence/cards-VIEW-002.txt)
   - [x] Switch to Board with the mouse, open the menu → Board is checked. (cards; evidence/cards-VIEW-002.txt)
