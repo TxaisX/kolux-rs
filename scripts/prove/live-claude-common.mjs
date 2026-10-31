@@ -13,7 +13,7 @@ export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A, BASE } from "./live-co
 export const CLAUDE_EXE = join(process.env.USERPROFILE || homedir(), ".local", "bin", "claude.exe");
 export const DATE = "2026-10-28";
 const MARK = (id) => `<<live-v13:${id}>>`;
-const redact = (s) => String(s).replace(/[\w.+-]+@[\w.-]+\.\w+/g, "<account-a>").replace(/C:[\\/]+Users[\\/]+XiongT/gi, "<home>").replace(/Users[\\/]+txais/gi, "<home>");
+const redact = (s) => String(s).replace(/[\w.+-]+@[\w.-]+\.\w+/g, "<account-a>").replace(/[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"']+/gi, "<home>").replace(/Users[\\/]+[^\\/\s"']+/gi, "<home>");
 
 // Batch 13 counts every claude.exe start, so the version is read from the install folder (the versioned copy with the same size), never by running --version.
 export const claudeVersion = () => {

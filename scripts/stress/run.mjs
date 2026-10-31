@@ -10,6 +10,7 @@ import { run as sh } from "../evidence/app-launch.mjs";
 import { Checks, newApp, removeTemp } from "./lib.mjs";
 
 // The launching shell may be a pane of another Kolux build; none of its KOLUX_* variables may reach the app under test.
+const slots = process.env.KOLUX_SLOTS;
 for (const k of Object.keys(process.env)) if (k.startsWith("KOLUX_")) delete process.env[k];
 
 const root = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
@@ -35,7 +36,7 @@ try {
   /* not a git checkout */
 }
 // A slot held for an hour counts as stale: keep the lane's slot fresh while the long scenarios run.
-const slot = "G:/Dev/kolux-rs-slots/slot.mjs";
+const slot = slots ? join(slots, "slot.mjs") : join(root, "..", "kolux-rs-slots", "slot.mjs");
 const keepSlot = existsSync(slot) ? setInterval(() => sh(process.execPath, [slot, "acquire", "stress"]).catch(() => {}), 10 * 60_000) : null;
 keepSlot?.unref();
 
