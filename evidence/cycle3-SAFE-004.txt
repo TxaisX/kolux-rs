@@ -1,0 +1,97 @@
+SAFE-004 box 3: a pane whose status never updates gets the Request changes feedback after about
+3 seconds. Lane c3-p0-gaps, 2026-10-31.
+
+WHAT WAS WRONG
+startFeedback (planReview.ts) waited up to 3 seconds for the pane to leave plan-approval, then
+returned "still-asking" and typed nothing. When the pane's status source stops reporting while it
+still reads as asking, the wait never succeeded, so the feedback was never delivered at all: the sheet
+closed with "The agent is still asking. Answer it in its terminal; your feedback was not typed." The
+card's fallback ("if the state never changes the feedback goes anyway after about 3 seconds") was not
+implemented.
+
+WHAT CHANGED
+planReview.ts: SendSteps gains reads(), a number that advances with every status reading the pane's
+source reports (even one that repeats the same word). startFeedback samples it through the 3-second
+wait and tells two cases apart:
+  - still asking with fresh readings arriving -> "still-asking", nothing typed. The agent really is
+    still asking, and an Enter would pick the menu's pre-picked default, Yes.
+  - still asking with no new reading at all -> a stuck status. The message is typed and Enter is
+    pressed: the feedback goes in anyway at the 3-second mark (30 x 100 ms), then the usual 300 ms
+    check. A reading that turns up while the paste goes in makes the status live again and holds
+    Enter back.
+  - asking false at the first check -> straight away, no 3-second wait.
+chat/send.ts: new heardAt(paneKey), the time of the pane's newest agent-status reading, fed by the
+window's one listener over the same agent-status events that set the pane's state (hearStates). It
+keeps advancing when the state word repeats, which is exactly what "the status never updates" means.
+editor/reviewActions.ts: Request changes passes reads: () => heardAt(p.key) ?? 0.
+
+FAILING TEST FIRST
+src/terminal/__cards__/SAFE-004.test.ts gained three tests: a status source that never changes with a
+fake clock (message typed at 3 s, not never and not instantly), a pane that had already left the
+prompt (typed at once), and a pane that keeps asking while fresh readings keep arriving (nothing
+typed). Run before the fix:
+
+  pnpm exec vitest run src/terminal/__cards__/TERM-068.test.ts src/terminal/__cards__/SAFE-004.test.ts
+  FAIL  src/terminal/__cards__/SAFE-004.test.ts > box 3: a pane whose status never updates gets the feedback after about 3 seconds, not never and not at once
+  AssertionError: expected { outcome: 'still-asking', …(2) } to deeply equal { outcome: 'sent', …(2) }
+  - Expected
+  + Received
+    {
+      "answered": true,
+  -   "outcome": "sent",
+  -   "typed": true,
+  +   "outcome": "still-asking",
+  +   "typed": false,
+    }
+   ❯ src/terminal/__cards__/SAFE-004.test.ts:58:26
+
+PASSING RUN
+  pnpm exec vitest run src/terminal/__cards__/SAFE-004.test.ts src/terminal/planReview.test.ts src/terminal/PlanSheet.test.ts src/terminal/PlanSheet.close.test.ts src/chat/send.test.ts src/terminal/__cards__/TERM-068.test.ts src/terminal/paste.test.ts
+  Test Files  7 passed (7)
+        Tests  55 passed (55)
+
+  Verbose lines for the box:
+  ✓ box 3: a pane whose status never updates gets the feedback after about 3 seconds, not never and not at once 2ms
+  ✓ box 3: a pane that had already left the plan prompt gets the feedback straight away 1ms
+  ✓ box 3: a pane that keeps asking while fresh readings keep arriving types nothing (the fallback is for a stuck status alone) 0ms
+  ✓ chat/send.test.ts > SAFE-004 box 3: a pane's newest reading time advances with every agent-status event, even when the state word repeats 0ms
+
+The test's fake clock asserts typedAt === 3000 (after exactly 30 waits of 100 ms, not at 0) and
+"enter@3300" (the 300 ms post-paste check, then Enter); the already-left case asserts typedAt === 0
+and the log ["type:keep it short", "wait:300", "enter@300"].
+
+The existing test "SAFE-004: a failed answer, a pane that keeps asking, or a closed pane types nothing"
+is unchanged in what it asserts; its stand-in clock now also advances a status reading on every wait
+(a live source), which is what keeps its "keeps asking" leg meaning a pane that is really still asking.
+
+GATES (this worktree, final tree)
+  pnpm exec tsc
+  (no output: clean)
+
+  pnpm exec vitest run src/terminal
+  Test Files  95 passed (95)
+        Tests  596 passed (596)
+
+  pnpm exec vitest run src/terminal/__cards__/SAFE-004.test.ts src/terminal/planReview.test.ts src/terminal/PlanSheet.test.ts src/terminal/PlanSheet.close.test.ts src/chat/send.test.ts src/terminal/__cards__/TERM-068.test.ts src/terminal/paste.test.ts
+  Test Files  7 passed (7)
+        Tests  55 passed (55)
+
+  pnpm test  -- three full runs on this PC, each with a different load-sensitive timeout:
+  Run A (item-1 tree): Test Files 1 failed | 701 passed (702); Tests 1 failed | 5135 passed (5136)
+    src/editor/editPlacement.test.ts > 60-paragraph case: "Error: Test timed out in 5000ms"
+  Run B (final tree):  Test Files 4 failed | 698 passed (702); Tests 4 failed | 5136 passed (5140)
+    outputFlood (xterm parses 48 MB), editPlacement (60 paragraphs), PreviewPane (mermaid diagram),
+    release.test.mjs (release job with gh stubbed) -- all "Error: Test timed out in 5000ms"
+  Run C (final tree):  Test Files 1 failed | 701 passed (702); Tests 1 failed | 5139 passed (5140)
+    src/update/__cards__/APP-058-060.test.ts > APP-058 > box 1: "Error: timed out waiting for the
+    release job's failure in its log" after 68.8 s
+  Every failure is in a file this lane does not touch, and each passes on its own under the same tree,
+  run one at a time:
+    src/terminal/outputFlood.test.ts :: Test Files 1 passed (1) | Tests 2 passed (2)
+    src/editor/editPlacement.test.ts :: Test Files 1 passed (1) | Tests 43 passed (43)
+    src/editor/PreviewPane.test.ts :: Test Files 1 passed (1) | Tests 7 passed (7)
+    scripts/release.test.mjs :: Test Files 1 passed (1) | Tests 25 passed (25)
+    src/update/__cards__/APP-058-060.test.ts :: Test Files 1 passed (1) | Tests 6 passed (6)
+  The PC is shared with other lanes (CPU measured at 72% mid-run); these are load-sensitive timeouts,
+  not regressions from this lane: none of the failing files imports anything this lane changed.
+

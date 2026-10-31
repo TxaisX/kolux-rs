@@ -75,6 +75,11 @@ export type SendSteps = {
   deny: () => Promise<boolean>;
   /** Whether the pane still sits in its plan-approval ask. */
   asking: () => boolean;
+  /** SAFE-004 box 3: when the pane's newest status reading arrived (any number that advances with
+   * each reading the pane's status source reports, even one that repeats the same word). A source
+   * that never updates leaves this still, which is how a stuck status is told apart from an agent
+   * that keeps asking with fresh readings. */
+  reads: () => number;
   /** Types the message into the pane as one bracketed paste; false when the write did not reach
    * the pane (stand-in review of lane/marks 243736d, AFTER 11). */
   type: (text: string) => Promise<boolean | void>;
@@ -92,8 +97,11 @@ export type PendingSend = { cancel: () => void; done: Promise<SendResult> };
 
 /** SAFE-004 / T-032-b: Request changes as a job. It says no, waits up to 3 seconds (30 steps of
  * 100 ms) for the pane to leave the ask, pastes the message, waits 300 ms and presses Enter only if
- * the pane is not asking again. An Enter while the menu is still open would pick its default, Yes,
- * so a pane that keeps asking gets nothing typed (council re-review of chat a969502). `cancel` is
+ * the pane is not asking again. An Enter while the menu is still open would pick its default, Yes.
+ * SAFE-004 box 3: a pane whose status never updates (no new reading through that wait) is a stuck
+ * reading, not an open menu, so the feedback goes in anyway at the 3-second mark, text and Enter; a
+ * pane that keeps asking while fresh readings keep arriving is really still asking and gets nothing
+ * typed, and a pane that had already left the prompt gets the feedback straight away. `cancel` is
  * safe at any point: nothing more goes out after it, and Enter is never pressed once it is called.
  * In the window the no has always gone out before a click can land (the sheet's Cancel shows only
  * after a re-render), and the window marks the pane working once the no is sent, so the wait
@@ -109,12 +117,22 @@ export function startFeedback(text: string, s: SendSteps): PendingSend {
     if (cancelled) return end("cancelled");
     if (!(await s.deny())) return end("no-answer");
     answered = true;
+    // SAFE-004 box 3: the status is watched for up to 3 seconds; `reads` says whether a new reading
+    // arrived meanwhile, so a source that stopped updating is told apart from one that keeps asking.
+    let seen = s.reads();
+    let updated = false;
     for (let i = 0; i < 30 && s.asking(); i++) {
       if (cancelled) return end("cancelled");
       await s.wait(100);
+      const now = s.reads();
+      if (now > seen) {
+        updated = true;
+        seen = now;
+      }
     }
     if (cancelled) return end("cancelled");
-    if (s.asking()) return end("still-asking");
+    // Still asking with fresh readings: the agent really is still asking. Nothing is typed.
+    if (s.asking() && updated) return end("still-asking");
     if (!s.alive()) return end("gone");
     // A paste that did not reach the pane is never followed by Enter, which would send whatever
     // sits in the prompt.
@@ -123,7 +141,9 @@ export function startFeedback(text: string, s: SendSteps): PendingSend {
     if (!typed) return end("write-failed");
     await s.wait(300);
     if (cancelled) return end("cancelled");
-    if (s.asking()) return end("still-asking");
+    // A reading that arrived while the paste went in makes the status live again: if it now asks,
+    // Enter is held back. A status that was stuck and stayed stuck is the box-3 fallback, which sends.
+    if (s.asking() && (updated || s.reads() > seen)) return end("still-asking");
     if (!s.alive()) return end("gone");
     return end((await s.enter()) === false ? "write-failed" : "sent");
   };

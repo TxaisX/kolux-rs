@@ -2,6 +2,10 @@
 // that has focus, and the browser hands over the clipboard in the same tick, so there is no
 // moment in which the target could change. A paste made while the opening prompt is still owed
 // (SESS-051) waits and goes in after it. Pure enough to test with a bare EventTarget.
+// TERM-068 box 2: the click and menu routes read the clipboard themselves, asynchronously; a pane
+// switch while that read is still running cancels the paste instead of typing it into the pane the
+// user switched to (pasteFromClipboard), and a read that finishes after focus came back to the same
+// pane still goes in.
 // TERM-071: a large paste goes to the program in CHUNK-sized pieces, each sent only after the one
 // before it landed, so the page stays clickable while a multi-megabyte block is fed; text over
 // LIMIT is refused with a message and nothing is sent.
@@ -150,4 +154,57 @@ export function attachPaste(
       chunks.length = 0;
     },
   };
+}
+
+/** TERM-068 box 2: the clipboard, read by the pane's own click and menu routes. */
+export type ClipboardRead<I> = {
+  /** The clipboard's text; rejects when the platform refused to hand it over. */
+  read: () => Promise<string>;
+  /** The clipboard's image, tried when it holds no text (TERM-070). */
+  image: () => Promise<I | null>;
+  /** Types text into this pane through the same checks and asks as the paste chord. */
+  pasteText: (text: string) => void;
+  pasteImage: (image: I) => void;
+  /** Whether this pane is still the focused one; asked after every await. */
+  focused: () => boolean;
+  /** The text read was refused and no image was found: says why in the pane's header. */
+  refused: (error: unknown) => void;
+};
+
+/** How an asynchronous clipboard paste ended. */
+export type ClipboardPasteEnd = "text" | "image" | "cancelled" | "nothing";
+
+/**
+ * TERM-068 box 2: a paste whose clipboard is read asynchronously lands only while the pane it was
+ * asked for is still the focused one. If another pane takes focus while the read is still running,
+ * the paste is cancelled rather than sent elsewhere; a brief loss of focus that comes back to the
+ * same pane before the text arrives is not a switch, and the text still goes in. The check runs
+ * after each await (the text, then the image fallback), so an image read that outlives the pane is
+ * cancelled the same way.
+ */
+export async function pasteFromClipboard<I>(d: ClipboardRead<I>): Promise<ClipboardPasteEnd> {
+  let text: string;
+  try {
+    text = await d.read();
+  } catch (e) {
+    // No text and a refused read: an image may still be there, and it may take its own time.
+    const image = await d.image();
+    if (!d.focused()) return "cancelled";
+    if (image !== null) {
+      d.pasteImage(image);
+      return "image";
+    }
+    d.refused(e);
+    return "nothing";
+  }
+  if (!d.focused()) return "cancelled";
+  if (text) {
+    d.pasteText(text);
+    return "text";
+  }
+  const image = await d.image();
+  if (!d.focused()) return "cancelled";
+  if (image === null) return "nothing";
+  d.pasteImage(image);
+  return "image";
 }

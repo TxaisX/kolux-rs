@@ -126,8 +126,8 @@ Rules: Cmd+V on macOS; Ctrl+V, Ctrl+Shift+V and Shift+Insert on Windows/Linux; t
   focus during the clipboard read, with focus returning to the same pane, does not cancel the paste.
 Acceptance:
   - [x] Pasting with a split focused on pane B never types into pane A. (cards; evidence/cards-TERM-068.txt)
-  - [ ] Switching to another pane while the clipboard is still being read cancels the paste instead
-      of typing into the new pane.
+  - [x] Switching to another pane while the clipboard is still being read cancels the paste instead
+      of typing into the new pane. (cards; evidence/cycle3-TERM-068.txt)
 Compat: keybinding id terminal.paste.
   (Kolux RS, T-010-fix: the pane-only and wait-for-the-prompt rules are tested in
   `src/terminal/paste.test.ts` and proved live in `evidence/T-010-fix-paste.png`.)
