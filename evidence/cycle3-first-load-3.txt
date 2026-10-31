@@ -1,55 +1,199 @@
-Cycle 3, item 1 (the wall) — first load from 1,864,072 to 1,471,768 bytes, under the 1.5 MB bar
-================================================================================================
-Worktree G:\Dev\kolux-rs-lanes\c3-first-load-3, branch lane3/first-load-3.
-Base: main e41d2171. Finished and committed by the connected session after the loop's coordinator
-exited mid-task (the work below was completed in the working tree but never committed).
+Cycle 3, the first-load bar — from 1,864,072 to 1,471,768 bytes: the buffers stop carrying
+CodeMirror, and the Help menu's guide loads when the menu opens
+Worktree G:\Dev\kolux-rs-lanes\c3-first-load-3, branch lane3/first-load-3, based on main 7f691d76.
+Windows, Node, pnpm, Vite. No cargo was run (front-end lane; a release build holds the Rust target).
 
-Two causes, both removed
-------------------------
-  1. src/editor/buffers.ts carried CodeMirror at runtime. It is the document store; it needed the
-     undo annotation from @codemirror/commands, which drags in @codemirror/view and language — a
-     315,352-byte chunk that the first frame paid for even when no editor was ever opened.
-     The CodeMirror side moved to src/editor/editors.ts (62 lines), and buffers.ts no longer
-     imports it. The T-603 helpers stayed put: lineEndsFor and fileText are still in buffers, and
-     isDirty still compares fileText(view.state) against the disk text, not sliceDoc.
-  2. The Help menu's sheet pulled in the whole guide: its steps, its ring, the tour catalogue and
-     five small modules reachable only through it. The menu is now a button (src/onboarding/
-     HelpMenu.tsx) and the sheet (src/onboarding/HelpSheet.tsx) is a deferred() page loaded the
-     first time the button is clicked.
+Commits
+  acf379da  Cycle 3: Kolux's window no longer loads the code editor's engine to show a terminal
+            (first load 1,864,072 to 1,525,286 bytes)                                [cut 1]
+  (this commit) Cycle 3: the Help menu's guide, its tips and its tours load when the menu opens, not
+            when Kolux starts (first load 1,525,286 to 1,471,768 bytes); the ceiling drops to 1,485,000
+            and this file.                                                             [cut 2]
 
-Measured
---------
-  $ pnpm build && node scripts/bundle-budget.mjs
-  bundle-budget: first load 1471768 bytes in 38 chunks (ceiling 1485000)
-  bundle-budget: OK
+== 1. Before, on 7f691d76 (this worktree, no change)
 
-  Baseline in this worktree, before any change:  1,864,072 bytes in 41 chunks
-  After the buffers/CodeMirror split (acf379da):  1,525,286 bytes
-  After the Help menu's sheet moved behind import: 1,471,768 bytes in 38 chunks
+$ pnpm build && node scripts/bundle-budget.mjs
+bundle-budget: first load 1864072 bytes in 41 chunks (ceiling 1880000)
+bundle-budget: OK
 
-  1,471,768 is 28,232 bytes under the 1,500,000-byte bar the last two cycles were aiming at.
-  This is the first time A-condition 4's "first load < 1.5 MB" has been met.
+The task quoted main's own run at 1,862,966; this worktree builds 1,864,072, 1,106 bytes more, and the
+same tree measured 1,864,072 before anything changed, so every cut below is this worktree's own delta.
 
-The ceiling
------------
-scripts/bundle-budget.mjs CEILING drops 1,880,000 -> 1,485,000 (about 1% above the measured size,
-as the file already allowed). The old number would have let the first frame grow 379 kB before
-anything complained.
+The chunks that carry the two causes, largest first (sizes as vite printed them):
+  1,019.19 kB  App-9rE4H4e6.js     the window itself
+    315.35 kB  dist-BCxUsHlj.js    @codemirror/commands + view + language + state, one chunk
+    310.32 kB  index-DxLEMx-B.js   React 19 + main.tsx
+    183.16 kB  EditorPane-BG1XdWUt.js
 
-scripts/bundle-budget.test.mjs changes with it. Its old assertion — CEILING > 1,500,000, which
-protected the bar while the bar was not yet met — becomes CEILING <= 1,500,000 plus
-CEILING > 1,450,000. That is a stronger claim, not a weaker one: the ceiling can no longer be
-raised back over the bar it is meant to hold.
+== 2. Cut 1 (acf379da): where the 315,352 bytes come from
 
-The T-603 tests were not weakened
----------------------------------
-  src/editor/mixedLineEnds.test.ts  +3 lines: one added import ("./editors"), which installs the
-                                    CodeMirror side the store calls into. No assertion changed.
-  src/editor/buffers.test.ts        1 line: the import moved from "./buffers" to "./editors".
-  All other editor tests:           1 line each, the same import move.
+Cause: src/editor/buffers.ts had one runtime import that a document store does not need —
+  import { isolateHistory } from "@codemirror/commands";
+isolateHistory groups a reload as one undo step of its own. @codemirror/commands imports
+@codemirror/view and @codemirror/language, so all four packages landed in one 315,352-byte chunk that
+the first frame pulled through editor/buffers.ts (FloatingLayer asks isDirty, the window asks keyOf and
+baseName, terminal/paneActions asks keyOf). @codemirror/state added 49,171 bytes on top (the lane's
+measurement: dropping only the commands import left a 49,171-byte chunk and 1,573,821 bytes first
+load, still over the bar), which is why the store drops CodeMirror entirely.
 
-Gates on this worktree
-----------------------
-  pnpm exec tsc                     exit 0, no output
-  pnpm test                         708 files / 5,157 tests passed, 131.02 s
-  pnpm build + bundle-budget        1,471,768 bytes in 38 chunks, within ceiling, OK
+After cut 1:
+$ pnpm build && node scripts/bundle-budget.mjs
+bundle-budget: first load 1525286 bytes in 40 chunks (ceiling 1880000)
+bundle-budget: OK
+
+  dist-BCxUsHlj.js (315.35 kB)  gone from the first load
+  App 1,019.19 -> 1,019.14 kB   EditorPane 183.16 -> 185.28 kB   index 310.32 -> 310.29 kB
+  cut: 1,864,072 - 1,525,286 = 338,786 bytes
+
+What changed — the seam:
+- editor/buffers.ts keeps the documents (open text per file, dirty state, save, line endings,
+  carry-over, held text, opening) and its whole public API, and carries no CodeMirror import at all:
+  its one @codemirror/state import is `import type`, so it erases.
+- New editor/editors.ts is the CodeMirror side. It builds the values the store cannot make itself and
+  installs them with useCodeMirror(): `mark` (the annotation that marks Kolux's own change) and `marked`
+  (reading it), `isolate` (isolateHistory.of("full")), `ends` (the separator Compartment),
+  `lines` (Text.of split as the view splits), and for T-603 `setEnds`, `endsOfState`, `lineEndsFor`,
+  `fileText`. It re-exports ./buffers, so every caller imports one module and the values are installed
+  before any view can be attached; a missing install throws by name instead of mis-grouping undo.
+- EditorPane.tsx and DiffPane.tsx import from ./editors; eight test files (buffers, carryOver,
+  diskChange, drafts, fileMoved, logFollow, staleSave, __cards__/EDIT-001-003) changed one import line
+  from ./buffers to ./editors. mixedLineEnds.test.ts keeps its named imports from ./buffers — the T-603
+  helpers the job asked to stay there — and adds `import "./editors"` so the CodeMirror side they call
+  into is loaded, exactly as EditorPane does before it builds a view. No test was weakened or deleted.
+
+== 3. T-603 across the seam (the part that broke the last attempt)
+
+Kept in buffers.ts (plain text work, `import type` only):
+  mixedEnds, docText, endsOf, mapEnds, soleLineEnd, withLineBreaks
+Moved to editors.ts (values from @codemirror/state):
+  the endsField (StateField.define, updating through mapEnds), the setEnds effect, the separator
+  Compartment and lineEndOf (a mixed file splits on LF; a file with only CRLF keeps CRLF).
+Reached through the installed interface:
+  lineEndsFor(text) and fileText(state) are thin calls exported from buffers.ts (so the T-603 test
+  imports them from ./buffers); setEnds and endsOfState are used inside the store.
+Rules held:
+  isDirty, save, carryOver and heldOf compare and write fileText(state), never sliceDoc();
+  attach carries a twin's endings with endsOfState;
+  replaceAll inserts cm().lines(end === "\r\n" ? text : docText(text), end) and dispatches
+  setEnds(endsOf(text)); textOf() stays the drawn text (a mixed file's text has no CRs) and
+  fileTextOf() stays what a save would write.
+
+Red run, before the fix in this worktree. The saved attempt (G:\Temp\c3-buffers-merge) had the seam but
+took the saved text from sliceDoc() in save/carryOver/heldOf, so a mixed file's CRLFs were dropped on
+the way out:
+
+$ pnpm exec vitest run src/editor/mixedLineEnds.test.ts src/editor/buffers.test.ts src/editor/logFollow.test.ts
+ FAIL  src/editor/buffers.test.ts > line ends survive the rich view and a rewrite on disk (T-603) >
+       a second tab of a log that stayed LF through such a reload ... takes the first tab's lines
+ FAIL  src/editor/mixedLineEnds.test.ts > ... > opens with every line on its own and saves the very
+       bytes it was read from
+ FAIL  src/editor/mixedLineEnds.test.ts > ... > keeps each line's own ending while a line is edited and
+       a line is added
+ AssertionError: expected [ Array(1) ] to deeply equal [ Array(1) ]
+ -   "alpha line\r\nbeta line\ngamma line\r\ndelta line\n"
+ +   "alpha line\nbeta line\ngamma line\ndelta line\n"
+ (the CRs are shown as \r here; vitest printed them as raw bytes, which is why the diff reads as an
+ invisible difference on three lines)
+ Test Files  2 failed | 1 passed (3)
+      Tests  3 failed | 23 passed (26)
+
+After the fix — every read of the saved text goes through fileText:
+$ pnpm exec vitest run src/editor/mixedLineEnds.test.ts src/editor/buffers.test.ts src/editor/logFollow.test.ts
+ Test Files  3 passed (3)
+      Tests  26 passed (26)
+
+The file has both endings, is edited on two lines and given a new one, and is saved with
+"alpha\r\nbeta (edited)\ngamma\r\ndelta\nnew line\n" — each line keeps its own ending, byte for byte;
+the separator of a mixed file stays LF and a file with only CRLF keeps CRLF (buffers.test.ts:
+"a CRLF note emptied or cut to one line on disk stays CRLF ...").
+
+== 4. Cut 2 (this commit): the Help menu's sheet
+
+Cause: the help button sits in the sidebar footer at start, and onboarding/HelpMenu.tsx statically
+imported the whole guide: the guide window with its ring and live step read, the tour catalogue, the
+step panels, the stop cards, the CLI setup, the integrations panel and the star prompt.
+
+After cut 2:
+$ pnpm build && node scripts/bundle-budget.mjs
+bundle-budget: first load 1471768 bytes in 38 chunks (ceiling 1880000)
+bundle-budget: OK
+
+  App 1,019.14 -> 971.98 kB (971,985 bytes)   index 310.29 -> 310.22 kB (310,222 bytes)
+  EditorPane unchanged at 185.28 kB
+  new on-demand chunk: HelpSheet-z3wFBd7p.js 1.46 kB (not in the first load)
+  cut: 1,525,286 - 1,471,768 = 53,518 bytes
+  total: 1,864,072 -> 1,471,768 = 392,304 bytes, and 28,232 bytes under the 1,500,000 bar
+
+What changed: HelpMenu.tsx is the button only; the menu is onboarding/HelpSheet.tsx, deferred through
+lazy/pages like the guide and the wizard, so it loads the first time Help is clicked (prefetch() reads
+it after the first frame). Same items, same order, same backdrop, Escape and autoFocus: Getting
+Started, Explore Kolux, Onboarding, Milestones with its ring while a core step is unfinished, and every
+tour by name. useGuideState(true) reads the steps when the sheet mounts, as useGuideState(at !== null)
+did when the menu opened. The first load still carries onboarding/guide.ts (8,159 bytes) because the
+sidebar's own start row reads STEPS and ring from it; that is not the help menu.
+
+The ceiling: scripts/bundle-budget.mjs CEILING 1,880,000 -> 1,485,000 (measured 1,471,768 plus about
+1%). scripts/bundle-budget.test.mjs's old assertion protected the bar while it was not yet met
+(CEILING > 1,500,000, < 2,000,000); it now asserts CEILING <= 1,500,000 and > 1,450,000 — a stronger
+claim, not a weaker one.
+
+== 5. isolateHistory identity proof (it is compared by identity with history(), so a copy is silent)
+
+EDIT-001-003's box 2 builds a real history() extension, reloads through replaceAll(..., undoable), then
+calls undo() and expects the typed text back.
+
+$ pnpm exec vitest run src/editor/__cards__/EDIT-001-003.test.ts -t "box 2"
+ Test Files  1 passed (1)
+      Tests  1 passed | 5 skipped (6)
+
+editor/editors.ts with isolate swapped for a local stand-in (Annotation.define<unknown>().of("full")):
+
+$ pnpm exec vitest run src/editor/__cards__/EDIT-001-003.test.ts -t "box 2"
+ FAIL  ... > EDIT-003 > box 2: Reload makes the buffer match disk and offers undo; undo brings the edits back
+ AssertionError: expected 'disk one\n' to be 'mine disk one\n'
+ Test Files  1 failed (1)
+      Tests  1 failed | 5 skipped (6)
+
+editor/editors.ts put back byte for byte (git sees no change), the same test again: 1 passed. The
+annotation still comes from @codemirror/commands, never a copy.
+
+== 6. Gates (all run in this worktree, after both cuts and the ceiling)
+
+$ pnpm exec tsc
+(no output — exit 0)
+
+$ pnpm exec vitest run src/editor src/onboarding src/lazy src/main.slowStart.test.ts scripts/bundle-budget.test.mjs
+ Test Files  120 passed (120)
+      Tests  1354 passed (1354)
+ Duration  28.04s
+
+$ pnpm test
+ Test Files  708 passed (708)
+      Tests  5157 passed (5157)
+(run twice: after cut 1 alone, and again after cut 2 with the ceiling change — both green; no test
+needed a lone re-run)
+
+$ pnpm build && node scripts/bundle-budget.mjs
+bundle-budget: first load 1471768 bytes in 38 chunks (ceiling 1485000)
+bundle-budget: OK
+
+$ pnpm exec vitest run scripts/bundle-budget.test.mjs
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+
+== 7. Files
+
+cut 1: src/editor/buffers.ts, src/editor/editors.ts (new), src/editor/EditorPane.tsx,
+src/editor/DiffPane.tsx, and one import line each in src/editor/buffers.test.ts,
+src/editor/carryOver.test.ts, src/editor/diskChange.test.ts, src/editor/drafts.test.ts,
+src/editor/fileMoved.test.ts, src/editor/logFollow.test.ts, src/editor/staleSave.test.ts,
+src/editor/__cards__/EDIT-001-003.test.ts; src/editor/mixedLineEnds.test.ts adds the side-effect
+import of ./editors and keeps its named imports from ./buffers.
+cut 2: src/onboarding/HelpMenu.tsx (button only), src/onboarding/HelpSheet.tsx (new),
+src/lazy/pages.tsx (HelpSheet deferred), scripts/bundle-budget.mjs (ceiling 1,485,000),
+scripts/bundle-budget.test.mjs (assertion strengthened), evidence/cycle3-first-load-3.txt.
+
+Nothing unfinished on this job: the first load is 1,471,768 bytes, 28,232 under the bar, and the
+ceiling now bites at 1,485,000. What still sets the floor, for the next pass: App's own shell
+(971,985), React and main.tsx (310,222), xterm (through App), and the two sidebars drawn with the
+first frame.
