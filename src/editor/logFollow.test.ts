@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { attach, detach, isDirty, lineEndsFor, opening, relay, replaceAll, save, textOf, type View } from "./buffers";
+import { attach, detach, docText, isDirty, lineEndsFor, opening, relay, replaceAll, save, textOf, type View } from "./buffers";
 import { followStep, followTick, type FollowIo } from "./logFollow";
 
 test("EDIT-026: lines appended to the log show; nothing new shows nothing", () => {
@@ -27,7 +27,7 @@ test("EDIT-026: an emptied, rotated or cut log starts again from the top", () =>
 function tabs(path: string, disk: { text: string; stamp: string }) {
   const editorOf = (text: string): View & { type: (at: number, s: string) => void } => {
     const v = {
-      state: EditorState.create({ doc: text, extensions: lineEndsFor(text) }),
+      state: EditorState.create({ doc: docText(text), extensions: lineEndsFor(text) }),
       dispatch(spec: Parameters<View["dispatch"]>[0]) {
         const tr = v.state.update(spec);
         v.state = tr.state;

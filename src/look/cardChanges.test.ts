@@ -2,8 +2,9 @@
 // (scm_status, as the Source Control panel and the Inbox read it), not the row's last-change time.
 import { expect, test, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-const { CardChanges, changedCount } = await import("./cardChanges");
+const { CardChanges, askBackEnd, changedCount } = await import("./cardChanges");
 const { cardLine, readCardDetails } = await import("./cards");
+const { invoke } = await import("@tauri-apps/api/core");
 
 const c = (path: string) => ({ path, status: "M", from: null });
 
@@ -61,4 +62,48 @@ test("T-609: the sidebar feeds the card the git count, never RowInfo.changed", a
   const panel = (await import("../projects/ProjectsPanel.tsx?raw")).default;
   expect(panel).toMatch(/changed: cardChanges\.countFor\(w\.path\)/);
   expect(panel).not.toMatch(/changed: info\.changed/);
+});
+
+test("PROJ-062: the count asks the back end's count-only background command, not the panel's status read", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce(7);
+  expect(await askBackEnd("G:\\r\\a")).toBe(7);
+  expect(invoke).toHaveBeenCalledWith("scm_count", { worktree: "G:\\r\\a" });
+  const card = (await import("./cardChanges.ts?raw")).default;
+  expect(card, "the window asks the count command").toMatch(/"scm_count"/);
+  expect(card, "never the panel's list read").not.toMatch(/"scm_status"/);
+});
+
+test("PROJ-062: the count is read on the background lane without the panel's work", async () => {
+  const rust = (await import("../../src-tauri/src/scm.rs?raw")).default;
+  const at = rust.indexOf("pub async fn scm_count");
+  expect(at).toBeGreaterThan(0);
+  const body = rust.slice(at, rust.indexOf("fn count(", at));
+  expect(body, "off the window thread").toMatch(/spawn_blocking/);
+  expect(body, "never the panel's foreground lane").not.toMatch(/foreground/);
+  expect(body, "one count-only read").toMatch(/count\(Path::new\(&worktree\)\)/);
+  const lib = (await import("../../src-tauri/src/lib.rs?raw")).default;
+  expect(lib).toContain("scm::scm_count");
+});
+
+test("PROJ-062: a slow or blocked git count never stops the card drawing; the last count shows until the answer comes", async () => {
+  let release = (_n: number) => {};
+  let bumps = 0;
+  const cache = new CardChanges(
+    () => new Promise<number>((resolve) => (release = resolve)),
+    () => void bumps++,
+  );
+  const { shown } = readCardDetails({});
+  const line = () => cardLine(shown, { agents: 1, state: "working", pr: null, changed: cache.countFor("G:/r/slow"), note: null });
+  const first = cache.load(["G:/r/slow"]);
+  release(2);
+  await first;
+  expect(line()).toBe("1 agent · Working · 2 changed files");
+  // A second read is out and never answers: the card still draws the last count, without waiting.
+  const second = cache.load(["G:/r/slow"], true);
+  expect(line()).toBe("1 agent · Working · 2 changed files");
+  expect(bumps).toBe(1);
+  release(5);
+  await second;
+  expect(line()).toBe("1 agent · Working · 5 changed files");
+  expect(bumps).toBe(2);
 });

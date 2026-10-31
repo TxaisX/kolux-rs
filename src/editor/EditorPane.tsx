@@ -37,7 +37,7 @@ import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { clampView, keepView, takeView } from "../terminal/viewKeep";
-import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, lineEndsFor, loadText, opening, relay, replaceAll, save, subscribe, textOf, withLineBreaks } from "./buffers";
+import { attach, baseName, detach, diskOf, docText, fileTextOf, hashOf, isDirty, isStale, lineEndsFor, loadText, opening, relay, replaceAll, save, subscribe, textOf, withLineBreaks } from "./buffers";
 import { keepUnsaved, keptToast } from "./unsavedCopy";
 import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";
@@ -339,9 +339,9 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
       ({ text, shown, base, draftMoved }) => {
         if (!alive) return;
         made = new EditorView({
-          doc: shown,
+          doc: docText(shown),
           parent: host.current!,
-          // A file with Windows line ends is saved with them.
+          // T-603 (DT-C57): a file with one kind of line end is saved with it; a mixed file draws every line and keeps each ending.
           extensions: [lineEndsFor(text), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, isMarkdown(path) ? sourceLinks(() => ({ note: path, root, files: () => { if (!wikiAsked.current && root) { wikiAsked.current = true; void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined); } return wikiFiles.current; }, onLink: (a, shift) => report.current.onLink?.(a, shift), onToast: (t) => report.current.onToast?.(t) })) : [], pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
             u.transactions.forEach((tr) => relay(path, u.view, tr));
             if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
@@ -363,7 +363,7 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
         }
         attach(path, made, base);
         // A twin pane already holds this file: its stamp stays the one its copy came from.
-        if (textOf(path) === text) remember(path, loaded);
+        if (fileTextOf(path) === text) remember(path, loaded);
         setNoteText(shown);
         // EDIT-004: a draft over a disk copy that moved on comes back with the banner up.
         if (draftMoved) {
@@ -419,7 +419,7 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
       }),
     read: () => invoke<string>("file_read", { path }),
     dirty: () => isDirty(path),
-    current: () => textOf(path),
+    current: () => fileTextOf(path),
     apply: (text, undoable) => replaceAll(path, text, undoable),
   };
   useEffect(() => {

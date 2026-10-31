@@ -2631,6 +2631,31 @@ pub async fn scm_status(worktree: String) -> Result<Status, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// PROJ-062 (T-609, cycle 3): the sidebar card's changed-file count. A count-only read in the background
+/// lane: one `git status`, no file lists, no line counts, and no `git::foreground`, so a slow count on one
+/// workspace waits behind the panel and the editor's reads instead of holding them up (GIT-070).
+#[tauri::command]
+pub async fn scm_count(worktree: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || count(Path::new(&worktree))).await.map_err(|e| e.to_string())?
+}
+
+/// PROJ-062: how many files differ from HEAD in `worktree`, each path once wherever git lists it. The same
+/// status read the panel makes, without the numstat diff, the untracked line counts or the upstream look.
+fn count(worktree: &Path) -> Result<usize, String> {
+    let out = output(&["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"], Some(worktree))?;
+    Ok(count_paths(&parse_status(&String::from_utf8_lossy(&out))))
+}
+
+/// PROJ-062: each changed path once across staged, changed, untracked and conflicted files. The window's
+/// `changedCount` (src/look/cardChanges.ts) has the same rule; this is its back-end twin.
+fn count_paths(st: &Status) -> usize {
+    let mut paths = std::collections::HashSet::new();
+    for c in st.staged.iter().chain(&st.changed).chain(&st.untracked).chain(&st.conflicts) {
+        paths.insert(c.path.as_str());
+    }
+    paths.len()
+}
+
 /// GIT-012: the cut-short banner's offer; only inside a project or worktree (ACCT-055, fence.rs).
 #[tauri::command]
 pub async fn scm_ignore_heavy(worktree: String, folders: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
@@ -2826,6 +2851,37 @@ mod tests {
         assert_eq!((small.cut, small.heavy.len()), (0, 0));
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&fresh);
+    }
+
+    /// PROJ-062 (T-609, cycle 3): the card's count is each changed path once, across staged, changed,
+    /// untracked and conflicted files (the window's changedCount has the same rule), read from one git
+    /// status on a real worktree.
+    #[test]
+    fn proj062_the_card_count_is_each_changed_path_once_and_matches_the_panel() {
+        let dir = temp_repo("card-count");
+        fs::write(dir.join("README.md"), "hello again\n").unwrap();
+        fs::write(dir.join("new.md"), "new\n").unwrap();
+        fs::write(dir.join("staged.md"), "staged\n").unwrap();
+        run(&["add", "staged.md"], Some(&dir)).unwrap();
+        fs::write(dir.join("staged.md"), "staged and changed\n").unwrap();
+        let panel = status(&dir).unwrap();
+        assert_eq!(count(&dir).unwrap(), 3, "{:?} {:?} {:?}", panel.staged, panel.changed, panel.untracked);
+        assert_eq!(count(&dir).unwrap(), count_paths(&panel), "the count is the panel's rule without the lists");
+        let c = |path: &str| Change { path: path.into(), status: "M".into(), from: None };
+        assert_eq!(count_paths(&Status { staged: vec![c("a")], changed: vec![c("a")], ..Status::default() }), 1, "a path listed twice counts once");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// PROJ-062: the count reads in the background lane. It never wraps its read in `git::foreground`, so a
+    /// waiting count goes behind the panel on screen and the editor's reads on the same worktree (GIT-070).
+    #[test]
+    fn proj062_the_card_count_reads_in_the_background_lane() {
+        let dir = temp_repo("card-count-lane");
+        assert!(!crate::git::foreground_lane(), "a plain thread is background work");
+        assert_eq!(count(&dir).unwrap(), 0);
+        assert!(!crate::git::foreground_lane(), "the count must not enter the foreground lane");
+        crate::git::foreground(|| assert!(crate::git::foreground_lane(), "the lane hook works"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

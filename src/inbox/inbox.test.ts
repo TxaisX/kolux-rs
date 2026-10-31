@@ -82,5 +82,9 @@ test("DT-C52: an agent whose program has exited is listed as Stopped, after Done
     [4, "stopped", "Stopped", "stopped"],
   ]);
   expect(GROUPS.map((g) => g.title)).toEqual(["Needs you", "Waiting on agent", "Done today", "Stopped"]);
+  // The heading's hover line says why a session is in that group, so Done and Stopped cannot be confused.
+  expect(GROUPS.every((g) => g.about.trim() !== "")).toBe(true);
+  expect(GROUPS.find((g) => g.id === "stopped")!.about).toMatch(/program exited/);
+  expect(GROUPS.find((g) => g.id === "done")!.about).toMatch(/still running/);
   expect(inboxItems(Array.from({ length: 25 }, (_, i) => src(i + 1, "done", { running: false, finishedAt: now - i * 1000 })), now)).toHaveLength(DONE_LIMIT);
 });

@@ -115,13 +115,18 @@ Use it to see everything that wants your attention. Press the bell in the top ba
 
 | Group | Contents |
 |---|---|
-| Needs you | Rows labelled Permission, Question or Blocked |
+| Needs you | Rows labelled Permission, Question or Blocked. A blocked session — a limit, a sign-in or an error — stays here, though the Board and the Tower show it as Stopped |
 | Waiting on agent | Rows labelled Running or Queued |
-| Done today | The 20 newest sessions that finished in the last 30 minutes. Interrupted ones are left out |
+| Done today | The 20 newest sessions that finished their turn in the last 30 minutes and whose program is still running. Interrupted ones are left out |
+| Stopped | The 20 newest sessions whose program exited in the last 30 minutes. A program that has exited cannot say its work finished, so its session is never listed under Done today |
 
 When nothing needs you the page says "All clear. Nothing needs you." With no sessions at all it says "Sessions show up here as they ask, run and finish."
 
-Up and Down walk the rows. Enter or a double-click opens that session's pane. A detail panel shows the Agent, Branch, Workspace, Changes ("N files changed, M staged" or "No files changed") and the last Prompt. Its button reads "Answer in Code" for a session that needs you and "Open in Code" otherwise. The Inbox does not answer for you; it takes you to the pane.
+Up and Down walk the rows. Enter or a double-click opens that session's pane. A detail panel shows the Agent, Branch, Workspace, Changes ("N files changed, M staged" or "No files changed") and the last Prompt, and puts the session's own status word beside its name (Permission, Question, Blocked, Running, Queued, Done or Stopped).
+
+The detail's first button reads "Answer in Code" for a session that needs you and "Open in Code" otherwise, and opens that session's pane. When the agent's terminal is still running, the detail also reads the open prompt off its screen and offers the answers as buttons: one click types the chosen answer into the agent. If the prompt cannot be read for sure, it offers only Answer in Code. When the terminal has already exited, a line says so ("Its terminal has exited, so the prompt cannot be answered from here. Answer in Code to see it in the pane."); a stopped session that needs you gets "The agent stopped and its terminal has exited. Open its pane in Code to see why." instead.
+
+A Done today row offers **Review changes** when its workspace is known; a Stopped row offers it once that workspace is known to hold changes. Either opens the workspace's All Changes.
 
 ## The Tower
 
@@ -207,4 +212,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". Click it to open Settings at Accounts & keys, on the AI connections section. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/chat/ChatView.tsx, src/chat/MessageBox.tsx, src/chat/StepRows.tsx, src/chat/send.ts, src/chat/model.ts, src/chat/composer.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs, src/floor/FloorView.tsx, src/floor/timeline.ts, src-tauri/src/activity.rs, src/automations/RunsDashboard.tsx, src/automations/usage.ts, src-tauri/src/terminal.rs, PLAN.md (T-140-b, T-151-b), src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs at fb0a9d4 -->
+<!-- verified against: src/board/chip.ts, src/board/paneStatus.ts, src/board/review.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/inbox/exitedPrompt.ts, src/terminal/status.ts, src/terminal/notify.ts, src/chat/ChatView.tsx, src/chat/MessageBox.tsx, src/chat/StepRows.tsx, src/chat/send.ts, src/chat/model.ts, src/chat/composer.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs, src/floor/FloorView.tsx, src/floor/timeline.ts, src-tauri/src/activity.rs, src/automations/RunsDashboard.tsx, src/automations/usage.ts, src-tauri/src/terminal.rs, PLAN.md (T-140-b, T-151-b), src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs at 8bf4d909; the Inbox section checked again at 8bf4d909 against src/inbox/InboxView.tsx, src/inbox/inbox.ts, src/board/review.ts (T-035-c, T-609, DT-C52) -->
