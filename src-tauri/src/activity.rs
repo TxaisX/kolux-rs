@@ -315,6 +315,10 @@ pub fn activity_counts() -> Counts {
 
 const WORKSPACE_KEY: &str = "workspaceActivity";
 
+/// The workspace folders one store keeps stamps for. Every touch reads and rewrites the whole map,
+/// so it must not grow with every folder the user has ever opened.
+const WORKSPACE_KEEP: usize = 2_000;
+
 /// The same key the sidebar's `pathKey` makes: forward slashes, no trailing slash, lower case.
 pub fn key(path: &str) -> String {
     path.replace('\\', "/").trim_end_matches('/').to_lowercase()
@@ -332,6 +336,16 @@ pub fn touch(store: &Store, path: &str) -> Result<(), String> {
     // workspace's still sorts above it.
     let top = map.values().copied().max().unwrap_or(0);
     map.insert(key(path), (top + 1).max(now));
+    // PROJ-051: prune to the folders used most recently. The map is read and rewritten on every
+    // touch, so keeping every folder ever opened makes each stamp slower and the store bigger for
+    // no benefit — the Recent sort only ever shows a handful. Ties break by key so the same map
+    // always prunes the same way.
+    if map.len() > WORKSPACE_KEEP {
+        let mut by_age: Vec<(String, u64)> = map.into_iter().collect();
+        by_age.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        by_age.truncate(WORKSPACE_KEEP);
+        map = by_age.into_iter().collect();
+    }
     store.set(WORKSPACE_KEY, &serde_json::to_string(&map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
@@ -881,6 +895,24 @@ mod tests {
         let map = workspace_times(&Store::open(&dir).unwrap());
         assert_eq!(map.len(), 2, "both spellings of Old share a key: {map:?}");
         assert!(map["c:/repo/old"] > map["c:/repo/new"], "working in Old again moves it above New");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn proj051_keeps_only_the_most_recently_used_folders() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-activity-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = Store::open(&dir).unwrap();
+        // Seed a full map directly. Touching WORKSPACE_KEEP times would rewrite the whole store that
+        // many times, which makes the test about disk speed rather than about the prune.
+        let seeded: BTreeMap<String, u64> = (0..WORKSPACE_KEEP).map(|i| (format!("c:/repo/s{i}"), i as u64 + 1)).collect();
+        s.set(WORKSPACE_KEY, &serde_json::to_string(&seeded).unwrap()).unwrap();
+        touch(&s, "C:\\Repo\\New").unwrap();
+        let map = workspace_times(&Store::open(&dir).unwrap());
+        assert_eq!(map.len(), WORKSPACE_KEEP, "the map is capped at the limit, not one over: {map:?}");
+        assert!(map.contains_key("c:/repo/new"), "the folder just used is kept");
+        assert!(!map.contains_key("c:/repo/s0"), "the oldest stamp falls off");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
