@@ -1,0 +1,74 @@
+Cycle 4 — cli.rs split into a module directory, first slice
+==========================================================
+Worktree G:\Dev\kolux-rs-lanes\c4-rust-split, branch lane4/rust-split, based on main a1c590d0.
+Begun by a delegated subagent that was cut short by environment restarts; completed and verified by
+the connected session.
+
+What moved
+----------
+  before   src-tauri/src/cli.rs                583 KB, one file
+  after    src-tauri/src/cli/mod.rs            484 KB
+           src-tauri/src/cli/args.rs            42 KB
+           src-tauri/src/cli/text.rs            36 KB
+           src-tauri/src/cli/help.rs            23 KB
+
+  101 KB of the 583 KB is now in three focused modules; mod.rs keeps the remainder. This is the
+  first slice, not the whole split — the file is far too large to move in one pass safely.
+
+It is a pure move, checked rather than asserted
+-----------------------------------------------
+Every `fn` in the old file was matched against every `fn` in the new modules:
+
+  old fn count: 271
+  new fn count: 271
+  functions removed: 0
+  functions added:   0
+
+  (A first pass reported 26 "missing". They were `pub(super) fn` — the cross-module visibility the
+  split requires — and the matcher had only allowed `pub fn`. Re-run with the wider form: 271/271.)
+
+No logic was edited, no error string changed, no output reordered. Items that other modules reach
+through `cli::…` stay reachable through `cli/mod.rs`'s re-exports, so no caller changed.
+
+No new warnings:
+  $ cargo check
+      Checking kolux-rs v0.1.0 (G:\Dev\kolux-rs-lanes\c4-rust-split\src-tauri)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.11s
+
+Tests
+-----
+The cli module's own tests, which is the surface this change touches:
+
+  $ cargo test --lib cli::
+  running 164 tests
+  test result: ok. 164 passed; 0 failed; 0 ignored; 0 measured; 2487 filtered out; finished in 28.22s
+
+The full suite, for the record. An earlier full run in this worktree gave:
+
+  $ cargo test
+  test result: FAILED. 2644 passed; 2 failed; 5 ignored; 0 measured; 0 filtered out; finished in 261.75s
+  failures:
+    browser::engine::tests::t607_every_tab_and_every_popup_hooks_the_frame_rule
+    scm::writers::tests::t606_the_claude_writer_runs_from_an_empty_folder_of_its_own_with_only_the_users_settings
+
+  Both are environment-caused and neither mentions cli:
+
+  - t607 reads its own source with include_str! and searches for a literal "\n    }\n". This
+    worktree has core.autocrlf=true, so the working file has CRLF and the search finds nothing:
+      working tree (CRLF): "fn frames(" at 7663, pattern at -1   -> the test's unwrap panics
+      HEAD blob (LF):      "fn frames(" at 7550, pattern at 974   -> the test passes
+  - t606 runs a generated .cmd whose last line is `dir /b /a 2>nul | find /c /v ""`. In the empty
+    folder it creates, that prints 0 and find exits 1, so the batch exits 1 and scm.rs turns a
+    non-zero exit into "The agent failed". Reproduced by hand: exit=1.
+
+  A repeat of the full suite was interrupted by server restarts before it finished, so this file
+  does not claim a green full run. The cli-module run above did finish, and it is the affected
+  surface.
+
+Honest summary
+--------------
+  compiles              yes, no new warnings
+  cli tests             164/164 passed
+  pure move             yes, 271 functions in and 271 out
+  full suite            not confirmed green here; 2 pre-existing environment failures recorded above
+  left to do            mod.rs is still 484 KB — the remaining slices
