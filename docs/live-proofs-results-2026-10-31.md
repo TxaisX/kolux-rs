@@ -16,7 +16,7 @@ uninstalling anything, and drives its own WebView2 over the debugging port. Name
 | A-2 | T-608, consent line for status hooks | **PASS** — the line is on the first-run Status step, the switch starts on, and Claude's settings file gains Kolux's hook entries only after Done | `.onb-ping` switch `checked=true`; hooks in the scratch `settings.json` |
 | B-1 | VIEW-002 box 1, the screen chord | **PASS** — Ctrl+Alt+V went Agents → Board → Terminals → Tower → Agents, twice | card box ticked; P0 count 208 → 209 |
 | C-13 (box 1) | APP-070, no telemetry | **PASS so far** — a normal session's only non-loopback connections came from `msedgewebview2.exe` (the WebView2 runtime the Privacy page names); `kolux-rs.exe` held only loopback connections | 3-minute session watch, endpoints listed in the evidence |
-| A-1 | T-594, kolux on PATH | **FAILS, as the list expected** — the saved user Path is 1,815 characters and holds no Kolux RS entry; this build predates the fix. Re-run after 0.1.3 | Path length, entry list, absent `kolux-path-pending.txt` |
+| A-1 | T-594, kolux on PATH | **PASS on 0.1.3** — the installer left the 1,815-character Path alone, the app added `<install>\bin` once at its next start, no earlier entry was lost, a new terminal resolved `kolux` to 0.1.3, and a second install over the top did not double the entry. On 0.1.2 it failed exactly as predicted. | `evidence/live-A-1-T-594.txt` |
 | — | Release feed | **PASS** — 0.1.2 is public, signed, and `latest.json` points at the GitHub-stored installer name (the dots fix) | `gh release view`, manifest |
 
 ## What also turned up

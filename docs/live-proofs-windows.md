@@ -3,8 +3,8 @@
 **Results are being filled in as they are run: see `docs/live-proofs-results-2026-10-31.md` and the raw
 lines in `evidence/live-installed-2026-10-31.txt`.** Already proven on this PC (do not redo): A-2 (the
 consent line and the switch, on a genuinely fresh profile), B-1 (VIEW-002 box 1, the screen chord) and
-C-13 box 1 (APP-070, three minutes of a live session with no analytics connection). A-1 and D-1 fail on
-0.1.2 as the note below says; they are re-run after 0.1.3, which carries the PATH fix.
+C-13 box 1 (APP-070, three minutes of a live session with no analytics connection). A-1 now **passes** on
+0.1.3 (both halves); it failed on 0.1.2, exactly as the old note predicted. D-1 is still to run.
 
 For Txais. This list holds every check that only a person at a Windows PC can do: the 20 P0 cards that are not yet
 passing, and the tasks whose code is done but whose live proof is still pending. Each item says what to set up, what
@@ -48,7 +48,9 @@ Some items cannot be run now. They are listed at the end, under "Not runnable ye
 characters long, and kolux was not on the saved PATH outside Kolux. Do the steps and write what you see, but leave the
 box empty until the integrator says the fix is in and a re-run passes.
 
-- [ ] Run (tick only after the fix)
+- [x] Run — **PASS on 0.1.3** (2026-10-31): the installer left the 1,815-character Path alone, the app added
+      `<install>\bin` once at its next start, every earlier entry survived, a new terminal resolved `kolux` to
+      0.1.3, and a second install over the top did not double the entry. Evidence: `evidence/live-A-1-T-594.txt`.
 - Set up: no Kolux RS installed.
 - Press: run the newest installer. When it ends, open a new Windows Terminal or PowerShell window (not one that was
   already open) and type `kolux --version`.
