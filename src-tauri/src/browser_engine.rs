@@ -687,14 +687,16 @@ mod tests {
     /// build paths call them.
     #[test]
     fn t607_every_tab_and_every_popup_hooks_the_frame_rule() {
-        let engine = include_str!("browser_engine.rs");
+        // The blob is LF; a Windows checkout with core.autocrlf is CRLF. Compare on one line ending,
+        // or the search for the closing brace fails before any guard is read.
+        let engine = include_str!("browser_engine.rs").replace("\r\n", "\n");
         let attach = &engine[engine.find("pub fn attach(id: u32, controller").expect("imp::attach")..];
         let attach = &attach[..attach.find("\n    }\n").unwrap()];
         assert!(attach.contains("frames(controller, Some(id), "), "every tab hooks the frame rule");
         let frames = &engine[engine.find("fn frames(").expect("imp::frames")..];
         let frames = &frames[..frames.find("\n    }\n").unwrap()];
         assert!(frames.contains("frame_ok(&uri, ") && frames.contains("SetCancel(true)"), "{frames}");
-        let popup = include_str!("browser_popup.rs");
+        let popup = include_str!("browser_popup.rs").replace("\r\n", "\n");
         let open = &popup[popup.find("pub fn open(").unwrap()..popup.find("pub fn close_for(").unwrap()];
         assert!(open.contains("engine::popup_frames(&w, "), "every sign-in popup hooks the frame rule");
     }
