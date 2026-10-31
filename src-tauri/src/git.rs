@@ -253,6 +253,12 @@ pub(crate) fn foreground<T>(read: impl FnOnce() -> T) -> T {
     out
 }
 
+/// GIT-070, for tests: whether this thread's short reads are counted as foreground work.
+#[cfg(test)]
+pub(crate) fn foreground_lane() -> bool {
+    FOREGROUND.get()
+}
+
 /// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
 /// GIT-070: a short read waits for its worktree's turn and is stopped at `SHORT_READ_LIMIT`.
 pub(crate) fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {

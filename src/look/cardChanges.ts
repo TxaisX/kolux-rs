@@ -1,17 +1,18 @@
-// PROJ-062 (T-609): the changed-file count a workspace card shows ("3 changed files"). Its source is the one
-// the Source Control panel and the Inbox detail already use: the back end's `scm_status` for the worktree
-// (git status), counted as distinct paths over staged, changed, untracked and conflicted files. The sidebar
-// asks once per workspace when the cards show the count, again when the window is focused or an agent finishes
-// there, one workspace at a time, and keeps each answer for a short while. A failed read keeps the last answer
-// (or none): a card never shows an error.
-// ponytail: scm_status is the panel's foreground read and returns the file lists, capped (GIT-012); a count-only
-// background command in Rust would be lighter for many workspaces.
+// PROJ-062 (T-609, cycle 3): the changed-file count a workspace card shows ("3 changed files"). It is read by
+// the back end's `scm_count`: one `git status`, counted there (each path once, as the panel counts), on the
+// background git lane. The window used to ask `scm_status`, the Source Control panel's foreground read, which
+// runs the numstat diff and the untracked line counts and goes ahead of background work. The sidebar asks once
+// per workspace when the cards show the count, again when the window is focused or an agent finishes there,
+// one workspace at a time, and keeps each answer for a short while. A failed read keeps the last answer (or
+// none): a card never shows an error. A slow or blocked read never stops the cards drawing: `countFor` reads
+// the last answer, and the render never awaits `load`.
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Status } from "../scm/model";
 import { onFinish } from "../status/finished";
 
-/** How many files differ from HEAD: each path once, wherever git lists it. */
+/** How many files differ from HEAD: each path once, wherever git lists it. The back end counts with the same
+ *  rule (`scm::count_paths`); this stays as the written contract the card's tests read. */
 export const changedCount = (s: Pick<Status, "staged" | "changed" | "untracked" | "conflicts">): number => new Set([...s.staged, ...s.changed, ...s.untracked, ...s.conflicts].map((c) => c.path)).size;
 
 export type ChangesAsk = (path: string) => Promise<number>;
@@ -61,7 +62,8 @@ export class CardChanges {
   }
 }
 
-const askBackEnd: ChangesAsk = (path) => invoke<Status>("scm_status", { worktree: path }).then(changedCount);
+/** The back end's count-only read: one `git status` in the background lane, no file lists (PROJ-062, cycle 3). */
+export const askBackEnd: ChangesAsk = (path) => invoke<number>("scm_count", { worktree: path });
 
 const same = (a: string, b: string) => keyOf(a) === keyOf(b);
 
