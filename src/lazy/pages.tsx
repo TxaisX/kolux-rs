@@ -34,9 +34,10 @@ export const AgentsPanel = deferred(() => import("../sessions/AgentsPanel"));
 type ChatProps = ComponentProps<(typeof import("../chat/ChatView"))["AgentsChat"]>;
 export const AgentsChat = deferred<ChatProps>(() => import("../chat/ChatView").then((m) => ({ default: m.AgentsChat as unknown as ComponentType<ChatProps> })));
 
-// The first-run guide and its wizard.
+// The first-run guide and its wizard, and the help menu's sheet.
 export const Guides = deferred(() => import("../onboarding/Guides"));
 export const Wizard = deferred(() => import("../onboarding/Wizard"));
+export const HelpSheet = deferred(() => import("../onboarding/HelpSheet"));
 
 // The file surfaces: the explorer, the template picker, a project row, the palette, review notes.
 export const Explorer = deferred(() => import("../editor/Explorer"));
