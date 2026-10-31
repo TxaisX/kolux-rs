@@ -19,6 +19,27 @@ uninstalling anything, and drives its own WebView2 over the debugging port. Name
 | A-1 | T-594, kolux on PATH | **PASS on 0.1.3** — the installer left the 1,815-character Path alone, the app added `<install>\bin` once at its next start, no earlier entry was lost, a new terminal resolved `kolux` to 0.1.3, and a second install over the top did not double the entry. On 0.1.2 it failed exactly as predicted. | `evidence/live-A-1-T-594.txt` |
 | — | Release feed | **PASS** — 0.1.2 is public, signed, and `latest.json` points at the GitHub-stored installer name (the dots fix) | `gh release view`, manifest |
 
+## Update proofs: the precondition D-2 and D-4 both need
+
+Attempted on 2026-10-31 with 0.1.3 installed: running the 0.1.2 installer with `/S` over 0.1.3 does
+**not** install — no setup process is left, no error is shown, and the installed version stays 0.1.3
+(the app was closed first, so it was not a running-copy refusal). The run list's own setup line says
+"uninstall Kolux RS first if you skipped D-1", and that is the reason: an NSIS install cannot step down
+a version in place.
+
+So D-1, D-2 and D-3 are one sequence, not three:
+
+1. **D-1** uninstall 0.1.3 (`/S`), then check the saved Path lost exactly the Kolux RS entry and the app
+   is gone;
+2. install **0.1.2**, start it, wait for the "is ready / Restart to update" line (the check runs at
+   start-up), then quit the ordinary way;
+3. **D-2** relaunch and check Help > About shows 0.1.3; **D-3** check the same projects, layout and
+   settings came back.
+
+D-4 is the same setup with "Restart to update" clicked instead of quitting. It needs a second update
+cycle (install 0.1.2 again), so run it after D-2. Do the whole sequence in one sitting with the app
+closed, and put the machine back on the newest release at the end.
+
 ## What also turned up
 
 - **Three dead Path entries** from the old app still sit on the saved user Path, pointing at folders
