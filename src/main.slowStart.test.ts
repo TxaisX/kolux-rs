@@ -5,6 +5,7 @@
 // drawn here, so its save guard is read from its source (as skills/noticeMount.test.ts does).
 import { afterEach, expect, test, vi } from "vitest";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
+import { windowSource } from "./shell/windowSource";
 
 const h = vi.hoisted(() => ({
   drawn: [] as unknown[],
@@ -99,10 +100,9 @@ test("a timely start draws once, with the saved tabs and read true", async () =>
 });
 
 // src has no node types; the builtin comes through process.getBuiltinModule (as skills/noticeMount.test.ts does).
-const nodeFs = (globalThis as unknown as { process: { getBuiltinModule(name: string): { readFileSync(p: string, enc: string): string } } }).process.getBuiltinModule("node:fs");
 
 test("App (evidence/reliability-App.patch): the layout effect writes nothing until the saved tabs are back, even after its own settings read lands", () => {
-  const app = nodeFs.readFileSync("src/App.tsx", "utf8");
+  const app = windowSource;
   const set = app.indexOf("layoutSaver.set(l);");
   const effect = app.slice(app.lastIndexOf("useEffect(() => {", set), set);
   expect(effect).toMatch(/^useEffect\(\(\) => \{\s*if \(!read\) return;/);
@@ -113,7 +113,7 @@ test("App (evidence/reliability-App.patch): a tab opened during a slow start nev
   // Every pane asks the terminal service for the terminal of its key (terminal_attach), and terminals live
   // on across a quit (APP-052). A wait tab with a saved tab's key would take over that tab's running agent,
   // write into its history, and kill it when the window is drawn again with the saved tabs.
-  const app = nodeFs.readFileSync("src/App.tsx", "utf8");
+  const app = windowSource;
   const init = /const nextKey = useRef\((.*)\);/.exec(app)?.[1];
   expect(init).toBeDefined();
   const first = new Function("layout", "read", `return ${init};`) as (layout: SavedLayout | null, read: boolean) => number;

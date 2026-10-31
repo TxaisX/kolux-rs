@@ -3,7 +3,7 @@ import { EXPAND_CAP, insideDir, menuLabel, nextWave, openRow, withExtraMenu } fr
 import { rowMenu } from "./explorerView";
 import { isLog } from "./logFollow";
 import type { Node } from "./Explorer";
-import appSource from "../App.tsx?raw";
+import { windowSource as appSource } from "../shell/windowSource";
 
 const W = "C:\\w";
 const d = (name: string, parent = W): Node => ({ name, path: `${parent}\\${name}`, kind: "dir" });

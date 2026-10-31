@@ -37,12 +37,12 @@ import { losable, quitQuestion, runningAgents, type Losable } from "./shell/clos
 import { returnTab, type Which } from "./terminal/tabClose";
 import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestion } from "./terminal/pin";
 import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
-import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode, type Switcher } from "./terminal/tabCycle";
+import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode } from "./terminal/tabCycle";
 import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
 import { moveToTab, tidyWeights } from "./shell/tidy";
 import { removeShortcutAsk } from "./launch/removeAsk";
 import { chooserClosable } from "./launch/chooserClosable";
-import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
+import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS } from "./terminal/tabColor";
 import { forgetView } from "./terminal/viewKeep";
 import { classify, shellInAgentPane } from "./terminal/remove";
 import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
@@ -52,7 +52,7 @@ import SignInNotice from "./settings/SignInNotice";
 import { watchCodexSignIn } from "./settings/codexSignInScan";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import RecoveryMount from "./recovery/RecoveryMount";
-import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
+import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, saveLayout, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
 import { startFields, startTail } from "./projects/startArgs";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
@@ -90,7 +90,7 @@ import { missingFileToast } from "./editor/linkClicks";
 import TemplatePicker from "./editor/TemplatePicker";
 import ReviewNotes from "./editor/ReviewNotes";
 import { copiers } from "./editor/EditorPane";
-import { notesMarkdown, reviewOn, selections, sendTargets, startChoices, type Note, type Picked } from "./editor/notes";
+import { notesMarkdown, reviewOn, selections, sendTargets, startChoices } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import SkillsPage from "./skills/SkillsPage";
@@ -107,7 +107,7 @@ import AllChangesPane from "./editor/AllChangesPane";
 import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
 import Explorer from "./editor/Explorer";
 import AddProjectRow from "./editor/AddProjectRow";
-import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
+import { discardDraftsOf } from "./editor/useFileMoves";
 import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
 import AgentsPanel from "./sessions/AgentsPanel";
@@ -122,9 +122,9 @@ import { livePane } from "./sessions/livePane";
 import { sessionNameFor, useSessionNames } from "./sessions/tabTitles";
 import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
-import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
+import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup } from "./terminal/grid";
 import { gpuOn } from "./terminal/renderer";
-import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
+import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
 import { windowLoaded } from "./status/manage";
 import { FileCode } from "./chrome/icons";
@@ -136,10 +136,10 @@ import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/sta
 import { chromeShown, menuBarState, menuEdit, menuScreen, menuSettingFlip } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/TerminalPane";
-import { accountLabel, accountPrompt, codexSetup, setupChanged, type CodexAccount } from "./terminal/accountChange";
+import { accountLabel, accountPrompt, codexSetup, setupChanged } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
-import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
+import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab } from "./automations/runTab";
 import RoutingPage from "./settings/RoutingPage";
 import TasksPage from "./tasks/TasksPage";
 import WorkspaceBoard from "./board/WorkspaceBoard";
@@ -149,7 +149,7 @@ import { aiControlsShown } from "./scm/rules";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { seatDefault, seatStart } from "./launch/defaultSeat";
-import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
+import { allSwitchedOff, DEFAULT_AGENT_KEY, menuAgents } from "./launch/agents";
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, needsYouCount, nextNeedsYou } from "./terminal/status";
 import { followedTitle, IDLE, shownAgent, type Identity } from "./terminal/shellMarks";
@@ -166,41 +166,36 @@ import FloorView from "./floor/FloorView";
 import SpaceView from "./space/SpaceView";
 import { nameSeats, nameUsage, towerRows, usageByAccount } from "./tower/tower";
 import { useTowerBridge } from "./tower/TowerWindow";
-import { LANES, chipOf, forget, hooksMuted, needsYou, paneAgent, paneStatus, promptReturned, ringsBell } from "./board/chip";
+import { LANES, chipOf, forget, hooksMuted, needsYou, promptReturned, ringsBell } from "./board/chip";
 import { reviewTab } from "./board/review";
 import { commandRows, forceReload, reloadAsk, windowCommand } from "./keys/commands";
 import { SCREEN_OF, screenRows } from "./chrome/reach";
 import Ring from "./usage/Ring";
 import { capOn, codexOf, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
-import { useAccountSwitcher } from "./switcher/AccountSwitcher";
-import { cycleTarget, paletteRows, pickWithNotice, switcherLabel } from "./switcher/accounts";
+import { cycleTarget, paletteRows, switcherLabel } from "./switcher/accounts";
 import { readoutOf } from "./terminal/headerUsage";
-import { usePlan } from "./usage/plan";
 import { useCodexPaneFigures } from "./usage/paneFigures";
 import ChooserPane from "./launch/ChooserPane";
 import { chooserTabName } from "./launch/chooserTab";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
-import { LAYOUT_FIELD, layoutOf, marksOf, reviveSaved, type SavedLayout } from "./terminal/layout";
+import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { layoutWriter } from "./terminal/layoutSave";
-import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
+import { Kbd, KeymapProvider } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
 import { scopesFor } from "./keys/keyScopes";
-import { installTapReset } from "./shell/inputExtras";
-import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
-import { usePromptScan } from "./status/promptScan";
+import { useAgentEvents } from "./status/useAgentStatus";
+import { useWindowStore, useWindowStoreTail } from "./shell/windowStore";
 import { useRestoredStatus } from "./status/useRestoredStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
 import { creditedLive, launchedAgent, launchedName } from "./status/credit";
-import { useAppSettings } from "./settings/useAppSettings";
-import { applyDensity, installTabWheel } from "./shell/paneChrome";
-import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
-import { useChrome, useMenuBar } from "./chrome/useChrome";
+import { useWorkspaceActions } from "./projects/useWorkspaces";
+import { useMenuBar } from "./chrome/useChrome";
 import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
 import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./onboarding/hooksOn";
@@ -209,14 +204,13 @@ import { AgentsChat } from "./chat/ChatView";
 import { answeredElsewhere } from "./chat/ask";
 import { savedArgs } from "./chat/controls";
 import { fileJump, linksOpenInKolux } from "./chat/chatLinks";
-import { useTeamsHost, withTeams } from "./launch/teams";
 import { deliverPrompt, startWatch } from "./launch/startWatch";
 import { answered as cardAnswered, hearStates, hearingNow, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
 import { editChatBox } from "./chat/menuEdit";
 import PlanSheet from "./terminal/PlanSheet";
 import { bracketed } from "./terminal/paste";
 import EditMenuHost from "./editmenu/EditMenuHost";
-import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
+import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -272,143 +266,26 @@ export function nextScreen(s: Screen): Screen {
 }
 
 function Window({ initial, layout, read }: { initial: Record<string, unknown>; layout: SavedLayout | null; read: boolean }) {
-  const keymap = useKeymap();
-  const [info, setInfo] = useState<AppInfo | null>(null);
-  const [screen, setScreen] = useState<Screen>(() => startScreen(initial)); // SET-037
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [boardOpen, setBoardOpen] = useState(false); // T-142: the workspace board
-  const [settingsAt, setSettingsAt] = useState<{ target: SettingsTarget | null; n: number }>({ target: null, n: 0 }); // SET-006: a link's page and section
-  const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
-  const [zoom, setZoom] = useState<Zoom>({}); // TERM-013: each workspace's expanded cell
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
-  // the grid stays mounted (hidden) behind it.
-  // SET-028: Model routing opens the same way until Settings > Agents exists.
-  const [page, setPage] = useState<Page | null>(() => openPageAt(initial)); // VIEW-011: the page open at quit
-  // GIT-004: a half-written commit message per worktree, kept through closing the panel.
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  // EDIT-033: a bump of explorerFocus moves focus into the explorer's tree.
-  const [explorerFocus, setExplorerFocus] = useState(0);
-  // VIEW-056: the right sidebar's width while its edge is being dragged; saved when let go.
-  const [dragWidth, setDragWidth] = useState<number | null>(null);
-  const [dragLeft, setDragLeft] = useState<number | null>(null); // VIEW-050: the left sidebar mid-drag
-  // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
-  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes.map(reviveSaved) ?? []); // T-543-b: no pane until a workspace is opened
-  useFileMoves(setPanes); // EDIT-032: editor tabs follow a renamed or moved file
-  const [focused, setFocused] = useState(layout?.focused ?? 0);
-  // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
-  // whose active tab was closed falls back to its last tab.
-  const [activeTab, setActiveTab] = useState<Record<number, number>>(layout?.activeTab ?? {});
-  // VIEW-015: the session picked on the Agents screen, kept across screen switches.
-  const [agentSel, setAgentSel] = useState<number | null>(null);
-  useEffect(() => {
-    const p = panes.find((x) => x.key === focused);
-    if (p) setActiveTab((m) => (m[groupOf(p)] === focused ? m : { ...m, [groupOf(p)]: focused }));
-  }, [focused, panes]);
-  useEffect(() => {
-    recentTabs.current = [focused, ...recentTabs.current.filter((k) => k !== focused)].slice(0, 50);
-  }, [focused]);
-  // The workspace the grid shows; null is the home group (panes opened in no workspace).
-  // TERM-062: a half-finished double tap is forgotten when the window loses focus.
-  useEffect(() => installTapReset(), []);
-  const [activeDir, setActiveDir] = useState<string | null>(layout?.activeDir ?? null);
-  const [running, setRunning] = useState<Record<number, boolean>>({});
-  // ACCT-064: the managed Codex accounts and the active one, so panes left on another are asked.
-  const [codex, setCodex] = useState<{ active: string | null; accounts: CodexAccount[] }>({ active: null, accounts: [] });
-  // ACCT-064: per pane, the active account the user chose to keep away from (asked once per change).
-  const [kept, setKept] = useState<Record<number, string | null>>({});
-  // T-139-d: per pane, the Codex setup the user chose to keep it on (asked once per change).
-  const [keptSetup, setKeptSetup] = useState<Record<number, string>>({});
-  useEffect(() => {
-    const read = () => void invoke<{ active: string | null; accounts: CodexAccount[] }>("codex_accounts").then((v) => setCodex({ active: v.active, accounts: v.accounts })).catch(() => {});
-    read();
-    const off = listen("codex-accounts", read);
-    return () => void off.then((u) => u()).catch(() => {});
-  }, []);
-  // SAFE-002..004: the pane whose plan is open for review, and each plan's unsent comments.
-  // SAFE-007: the sheet holds the plan it opened with, so it can tell when the pane moved on.
-  // T-032-b: `send` is a Request changes still waiting to go out, which the sheet can cancel.
-  const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean; send?: PendingSend } | null>(null);
-  const [planDrafts, setPlanDrafts] = useState<Record<string, PlanDraft>>({});
-  const plan = usePlan(); // USAGE-002: the plan figures the pills read
-  const accountSwitcher = useAccountSwitcher(); // T-548: the account new panes use, for the palette rows and the Board and Tower figures
-  const { needs, setNeeds, hook, setHook, stamp, setStamp, turn, setTurn, stale, setStale, context, setContext, crew, setCrew, hookRef, runRef, unreadPanes, setUnreadPanes, unreadDirs, winFocused, markDir } = useAgentStatusState(running);
-  const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
-  const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
-  const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
-  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; confirm?: string } | null>(null);
-  // TERM-046: pinned tab keys live in window state, like the strip order (terminal/pin.ts).
-  const [pinned, setPinned] = useState<Set<number>>(() => marksOf(layout?.panes ?? []).pinned); // after-list #100: saved with the layout
-  const [switcher, setSwitcher] = useState<Switcher | null>(null); // TERM-050: the Ctrl+Tab list while Ctrl is held
-  const switcherRef = useRef<Switcher | null>(null);
-  switcherRef.current = switcher;
-  const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
-  const [tabColors, setTabColors] = useState<TabColors>(() => marksOf(layout?.panes ?? []).colors); // TERM-049: Tab Color, window state like pinned (terminal/tabColor.ts)
-  // TERM-015 / TERM-054: what is being dragged (a tab, or a whole cell by its pane header) and where it would land.
-  const dragging = useRef<{ tab: number } | { cell: number } | null>(null);
-  const [dropHint, setDropHint] = useState<{ group: number; zone?: Zone; tab?: number; half?: "before" | "after" } | null>(null);
-  const recentTabs = useRef<number[]>([]); // TERM-044: panes focused, newest first, so a closed tab returns to the one used before it
-  useEffect(() => {
-    if (!tabMenu) return;
-    const h = (e: KeyboardEvent) => e.key === "Escape" && setTabMenu(null);
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [tabMenu]);
-  const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
-  const [liveIds, setLiveIds] = useState<Record<number, Identity>>({}); // TERM-058: terminal panes' running program, from the shell marks
-  const liveRef = useRef(liveIds);
-  liveRef.current = liveIds;
-  // Review of PR #16 (d): plain terminal panes whose hand-started agent has gone; their hook words are ignored.
-  const muteRef = useRef<Record<number, boolean>>({});
-  const [guess, setGuess] = useState<Record<number, AgentState | null>>({}); // T-608: each pane's title guess, as its header shows it
-  // T-608: the one status the Board, the Tower, the Inbox, the needs strip and the bell read (board/chip.ts).
-  const agentOf = (p: Pane) => paneAgent(p, liveIds[p.key]); // ACCT-050: a hand-started agent counts, as its tab icon shows it
-  const statusOf = (p: Pane) => paneStatus(agentOf(p), hook[p.key], guess[p.key], running[p.key]);
-  const [allAgents, setAgents] = useState<AgentInfo[]>([]);
-  const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
-  const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
-  const { settings, setSettings, settingsRead, setSettingsRead, classic } = useAppSettings(initial);
-  // TERM-026 pane header density from the saved setting; TERM-057 the wheel over the tab strip scrolls it sideways.
-  useEffect(() => void applyDensity(settings), [settings]);
-  useEffect(() => installTabWheel(), []);
-  // SESS-018: on the New look a new session is chosen on a full-page sheet over the workspace,
-  // held here rather than in the grid; Classic keeps the chooser pane (SESS-019).
-  const [sheet, setSheet] = useState<Pane | null>(null);
-  // SET-027: everywhere but Settings, only agents that are switched on are offered.
-  const teamsHost = useTeamsHost();
-  const agents = useMemo(() => withTeams(offeredAgents(allAgents, settings), settings, teamsHost), [allAgents, settings, teamsHost]);
-  const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
-  const [picking, setPicking] = useState<"file" | "markdown" | "change" | "template" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
-  const defaultId = defaultAgentId(settings);
-  const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
-  const [renameRequest, setRenameRequest] = useState(0); // T-611: workspace.rename (PROJ-059) asks the sidebar to rename the workspace in front
-  const { projects, setProjects, owner, setOwner, names, setNames, refresh, setRefresh, deleteRequest, setDeleteRequest, recentDirs, activeRef, createRequest, setCreateRequest, standIns, setStandIns, createName, setCreateName, hist, setHist } = useWorkspaces(activeDir);
-  const [stacked, setStacked] = useState<Record<string, boolean>>(layout?.stacked ?? {}); // TERM-006: a single pane split down makes a stacked pair
-  const { palette, setPalette, notice, setNotice, toast, setToast } = useChrome();
+  // The window's state and its first hooks, in their order (shell/windowStore.ts).
+  const {
+    keymap, info, setInfo, screen, setScreen, settingsOpen, setSettingsOpen, boardOpen, setBoardOpen, settingsAt, setSettingsAt, expanded, setExpanded, zoom,
+    setZoom, sidebarOpen, setSidebarOpen, page, setPage, drafts, setDrafts, explorerFocus, setExplorerFocus, dragWidth, setDragWidth, dragLeft, setDragLeft,
+    panes, setPanes, focused, setFocused, activeTab, setActiveTab, agentSel, setAgentSel, activeDir, setActiveDir, running, setRunning, codex, kept,
+    setKept, keptSetup, setKeptSetup, reviewing, setReviewing, planDrafts, setPlanDrafts, plan, accountSwitcher, needs, setNeeds, hook, setHook, stamp,
+    setStamp, turn, setTurn, stale, setStale, context, setContext, crew, setCrew, hookRef, runRef, unreadPanes, setUnreadPanes, unreadDirs, winFocused,
+    markDir, rowRef, ptys, cliFailed, asking, setAsking, pinned, setPinned, switcher, setSwitcher, switcherRef, tabMenu, setTabMenu, tabColors, setTabColors,
+    dragging, dropHint, setDropHint, recentTabs, titles, setTitles, liveIds, setLiveIds, liveRef, muteRef, guess, setGuess, agentOf, statusOf, allAgents,
+    setAgents, agentPass, setAgentPass, shells, setShells, settings, setSettings, settingsRead, setSettingsRead, classic, sheet, setSheet, agents,
+    dirty, setDirty, picking, setPicking, defaultId, installedIds, renameRequest, setRenameRequest, projects, setProjects, owner, setOwner, names, setNames,
+    refresh, setRefresh, deleteRequest, setDeleteRequest, recentDirs, activeRef, createRequest, setCreateRequest, standIns, setStandIns, createName,
+    setCreateName, hist, setHist, stacked, setStacked, palette, setPalette, notice, setNotice, toast, setToast
+  } = useWindowStore(initial, layout);
   const prRows = usePrRows(palette, (dir) => { setScreen("terminals"); select(dir, null); }); // VIEW-043: pull requests found by number or title, with their checks
-  const switchAccount = useMemo(() => pickWithNotice(accountSwitcher.pick, setNotice), [accountSwitcher.pick, setNotice]); // T-548 FIX-1 (memoised at merge, FIX-3 note): a switch from a key or the palette that fails says why in the notice bar
-  const [weights, setWeights] = useState<Record<string, number[]>>({}); // TERM-010: dragged column / row weights, per folder and pane count
-  const dragRef = useRef<{ gap: Gap; at: number; start: number[]; px: number } | null>(null);
-  const [launching, setLaunching] = useState(false);
-  // GIT-042: review notes on Markdown, kept until copied or cleared.
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [picked, setPicked] = useState<Picked | null>(null);
-  const [sendMenu, setSendMenu] = useState(false);
-  // TERM-027: a Set Title shortcut bumps the pane's counter, which opens its name field.
-  const [askName, setAskName] = useState<Record<number, number>>({});
-  // TERM-048: the tab whose name is being edited in the tab strip.
-  const [renamingTab, setRenamingTab] = useState<number | null>(null);
-  // TERM-048: the tab right-click menu, at the pointer.
-  // T-597: a window drawn before the saved tabs are back (`read` false) hands out keys no saved tab holds:
-  // panes attach to the terminal of their key, and the saved tabs' terminals outlive a quit (APP-052).
-  // Those tabs are never saved, and terminal_prune_history drops their history at the next start.
-  const nextKey = useRef(layout ? Math.max(1, ...layout.panes.map((p) => p.key)) + 1 : read ? 2 : 1_000_000);
-  // TERM-106: the tabs that came back from the saved layout replay their saved output first.
-  const restoredKeys = useRef(new Set((layout?.panes ?? []).filter((p) => !p.chooser).map((p) => p.key))); // a chooser has no terminal to wait for
-  // ORCH-056 (row 219): open prompts read off each pane's screen mark it waiting (src/status/promptScan.ts).
-  usePromptScan(ptys, restoredKeys);
-  const runPanes = useRef<Record<string, number>>({});
-  const runTabs = useRef<RunTabs>({}); // AUTO-011 (T-085-g): the agent tabs automation runs opened, and whether the user touched them
+  // The rest of the window's state (shell/windowStore.ts), after the pull-request rows.
+  const {
+    switchAccount, weights, setWeights, dragRef, launching, setLaunching, notes, setNotes, picked, setPicked, sendMenu, setSendMenu, askName, setAskName,
+    renamingTab, setRenamingTab, nextKey, restoredKeys, runPanes, runTabs
+  } = useWindowStoreTail({ accountSwitcher, ptys, setNotice }, layout, read);
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
