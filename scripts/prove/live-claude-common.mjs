@@ -2,11 +2,15 @@
 // a real signed-in Claude Code pane (startProve in live-common.mjs), the assertions of the script, then writes the evidence section.
 // Nothing here opens a credential file; account A is only named as CLAUDE_CONFIG_DIR for the pane's claude.
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { ACCOUNT_A, CLAUDE, LOGS, NeedsLogin, ROOT, excerpt, reporter, sleep, startProve, waitFor } from "./live-common.mjs";
 import { checker, pickScreen } from "./live-views-dom.mjs";
 
 export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A, BASE } from "./live-common.mjs";
-export const CLAUDE_EXE = "C:/Users/XiongT/.local/bin/claude.exe"; // what the registry PATH resolves (TERM-120, batch 8)
+// What the registry PATH resolves (TERM-120, batch 8), derived from this machine's profile so the
+// script carries no one's home folder.
+export const CLAUDE_EXE = join(process.env.USERPROFILE || homedir(), ".local", "bin", "claude.exe");
 export const DATE = "2026-10-28";
 const MARK = (id) => `<<live-v13:${id}>>`;
 const redact = (s) => String(s).replace(/[\w.+-]+@[\w.-]+\.\w+/g, "<account-a>").replace(/C:[\\/]+Users[\\/]+XiongT/gi, "<home>").replace(/Users[\\/]+txais/gi, "<home>");

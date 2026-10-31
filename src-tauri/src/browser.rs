@@ -1634,7 +1634,10 @@ const DIAGNOSE_WAIT: Duration = Duration::from_secs(4);
 /// What the probe's answer (the JSON `eval_with_callback` hands back) says about the page.
 pub fn probe_result(answer: &str) -> &'static str {
     match serde_json::from_str::<serde_json::Value>(answer) {
-        Ok(serde_json::Value::String(href)) if href.starts_with("chrome-error://") => "error-page",
+        // A certificate the engine refuses leaves the page on about:blank (the navigation never
+        // becomes a document), so it is a failed load, not a live blank page. A real New Tab is in
+        // the blank phase and is never probed.
+        Ok(serde_json::Value::String(href)) if href.starts_with("chrome-error://") || href == "about:blank" => "error-page",
         Ok(serde_json::Value::String(_)) => "page",
         _ => "no-answer",
     }
@@ -3382,7 +3385,8 @@ mod t074_tests {
     fn brow008_the_probe_tells_the_engines_error_page_from_a_page_and_from_silence() {
         assert_eq!(probe_result("\"chrome-error://chromewebdata/\""), "error-page");
         assert_eq!(probe_result("\"https://example.com/a\""), "page");
-        assert_eq!(probe_result("\"about:blank\""), "page");
+        // A certificate failure lands on about:blank; a real New Tab is never probed.
+        assert_eq!(probe_result("\"about:blank\""), "error-page");
         // A dead page's callback (if it comes at all) carries no string.
         assert_eq!(probe_result("null"), "no-answer");
         assert_eq!(probe_result(""), "no-answer");

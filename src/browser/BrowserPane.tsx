@@ -642,7 +642,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     typing.current = false;
     setMenu((m) => menuClosed(m));
     pending.current = null;
-    feed({ t: "navigate" }); // a new address gets its own recovery allowance (BROW-009)
+    feed({ t: "navigate", url }); // a new address gets its own recovery allowance (BROW-009)
     invoke("browser_navigate", { id, url }).catch((err) => setNote(String(err)));
   };
   // BROW-039: the chip's other actions; the front end says why when one cannot run.
