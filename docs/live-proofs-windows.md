@@ -1,5 +1,11 @@
 # Live proofs on Windows: the run list
 
+**Results are being filled in as they are run: see `docs/live-proofs-results-2026-10-31.md` and the raw
+lines in `evidence/live-installed-2026-10-31.txt`.** Already proven on this PC (do not redo): A-2 (the
+consent line and the switch, on a genuinely fresh profile), B-1 (VIEW-002 box 1, the screen chord) and
+C-13 box 1 (APP-070, three minutes of a live session with no analytics connection). A-1 and D-1 fail on
+0.1.2 as the note below says; they are re-run after 0.1.3, which carries the PATH fix.
+
 For Txais. This list holds every check that only a person at a Windows PC can do: the 20 P0 cards that are not yet
 passing, and the tasks whose code is done but whose live proof is still pending. Each item says what to set up, what
 to press, what should happen, and what counts as a fail. Tick the box when you have run it and write what you saw on
