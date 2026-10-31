@@ -51,6 +51,49 @@ fn save(store: &Store, key: &str, list: &[Value]) -> Result<(), String> {
     store.set(key, &Value::Array(list.to_vec()).to_string()).map_err(|e| e.to_string())
 }
 
+/// T-140-d: a run's saved output (a screen's 16 KB, a precheck's 4 KB) lives in its own key, out of
+/// the runs list that every hook status reads and writes; the row only says it has some.
+fn output_key(run_id: &str) -> String {
+    format!("automations.output.{run_id}")
+}
+
+/// Does this run already have saved output (in its own key, or inline from before T-140-d)?
+fn has_output(r: &Value) -> bool {
+    r["outputSaved"] == true || r.get("output").is_some_and(|o| !o.is_null())
+}
+
+/// Moves a row's inline `output` into its own key and leaves `outputSaved` in its place.
+fn stash_output(store: &Store, row: &mut Value) -> Result<(), String> {
+    let Some(text) = row.get("output").and_then(Value::as_str).map(String::from) else { return Ok(()) };
+    let id = row["id"].as_str().unwrap_or_default().to_string();
+    store.set(&output_key(&id), &json!(text).to_string()).map_err(|e| e.to_string())?;
+    if let Some(r) = row.as_object_mut() {
+        r.remove("output");
+        r.insert("outputSaved".into(), json!(true));
+    }
+    Ok(())
+}
+
+/// A row with its saved output put back on it, for the page.
+fn with_output(store: &Store, mut row: Value) -> Value {
+    if row["outputSaved"] == true {
+        let text = row["id"].as_str().and_then(|id| store.get(&output_key(id)).ok().flatten()).and_then(|t| serde_json::from_str::<Value>(&t).ok()).filter(Value::is_string);
+        if let Some(t) = text {
+            row["output"] = t;
+        }
+    }
+    row
+}
+
+/// The saved output of runs that are gone is cleared with them.
+// ponytail: the store has no delete, so a cleared key stays as a 4-byte "null" row; add
+// Store::remove if those ever add up.
+fn drop_outputs(store: &Store, ids: &[String]) -> Result<(), String> {
+    let keys: Vec<String> = ids.iter().map(|id| output_key(id)).collect();
+    let pairs: Vec<(&str, &str)> = keys.iter().map(|k| (k.as_str(), "null")).collect();
+    store.set_all(&pairs).map_err(|e| e.to_string())
+}
+
 /// Every automation and every run, for the page. Each automation also carries its timetable in
 /// words, when it goes next in words, and the preset, time and day the dialog opens with.
 pub fn list(store: &Store) -> Result<Value, String> {
@@ -69,7 +112,8 @@ pub fn list(store: &Store) -> Result<Value, String> {
             // AUTO-013: a run whose worktree folder is gone opens its saved output instead.
             let runs: Vec<Value> = runs
                 .into_iter()
-                .map(|mut r| {
+                .map(|r| {
+                    let mut r = with_output(store, r);
                     if r["worktree"].as_str().is_some_and(|w| !Path::new(w).exists()) {
                         r["worktreeGone"] = json!(true);
                     }
@@ -360,16 +404,18 @@ fn in_progress(r: &Value) -> bool {
 }
 
 /// AUTO-021: keeps an automation's newest 100 runs; a run still in progress is never dropped.
-fn prune(runs: &mut Vec<Value>, id: &str) {
+fn prune(runs: &mut Vec<Value>, id: &str) -> Vec<String> {
     let extra = runs.iter().filter(|r| r["automationId"] == id).count().saturating_sub(KEEP_RUNS);
     let mut old: Vec<usize> = (0..runs.len()).filter(|&i| runs[i]["automationId"] == id && !in_progress(&runs[i])).collect();
     old.sort_by_key(|&i| runs[i]["number"].as_u64().unwrap_or(0));
     let gone: std::collections::HashSet<usize> = old.into_iter().take(extra).collect();
+    let ids = gone.iter().filter_map(|&i| runs[i]["id"].as_str().map(String::from)).collect();
     let mut i = 0;
     runs.retain(|_| {
         i += 1;
         !gone.contains(&(i - 1))
     });
+    ids
 }
 
 /// AUTO-021 on load: an old run without a number is given the next one, and a history saved too
@@ -404,11 +450,17 @@ pub fn tidy(store: &Store, now: u64) -> Result<(), String> {
             row.insert("settleBy".into(), json!(now + SETTLE_MS));
         }
     }
+    // T-140-d: output saved inline before it had its own key moves there.
+    for r in runs.iter_mut() {
+        stash_output(store, r)?;
+    }
     let ids: std::collections::BTreeSet<String> = runs.iter().filter_map(|r| r["automationId"].as_str().map(String::from)).collect();
+    let mut gone = Vec::new();
     for id in &ids {
-        prune(&mut runs, id);
+        gone.extend(prune(&mut runs, id));
     }
     save(store, RUNS_KEY, &runs)?;
+    drop_outputs(store, &gone)?;
     save(store, KEY, &all)
 }
 
@@ -514,6 +566,8 @@ pub fn pane_ended(store: &Store, terminal: u32, code: Option<u32>, now: u64) -> 
         (true, true) => finish(&mut runs[i], "failed", Some(&format!("The agent stopped before it finished{exit}")), now),
         (true, false) => finish(&mut runs[i], "failed", Some(&format!("The agent stopped before it began working{exit}")), now),
     }
+    // T-140-d: only a run its closing pane ended may say its terminal had closed before it ended.
+    runs[i]["paneEnded"] = json!(true);
     let id = runs[i]["id"].as_str().map(String::from);
     save(store, RUNS_KEY, &runs)?;
     Ok(id)
@@ -600,12 +654,13 @@ pub fn keep_output(store: &Store, run_id: &str, text: &str, cut: bool) -> Result
         return Ok(None);
     }
     let mut runs = load(store, RUNS_KEY)?;
-    let Some(r) = runs.iter_mut().find(|r| r["id"] == run_id && !in_progress(r) && r.get("output").is_none_or(Value::is_null)) else { return Ok(None) };
+    let Some(r) = runs.iter_mut().find(|r| r["id"] == run_id && !in_progress(r) && !has_output(r)) else { return Ok(None) };
     if let Some(row) = r.as_object_mut() {
         row.insert("output".into(), json!(text));
         row.insert("outputFrom".into(), json!("screen"));
         row.insert("outputCut".into(), json!(cut));
     }
+    stash_output(store, r)?;
     save(store, RUNS_KEY, &runs)?;
     Ok(Some(run_id.to_string()))
 }
@@ -619,7 +674,7 @@ fn keep_screen(app: &tauri::AppHandle, state: &Mutex<Store>, run_id: &str) {
         .ok()
         .and_then(|s| load(&s, RUNS_KEY).ok())
         .and_then(|runs| runs.into_iter().find(|r| r["id"] == run_id))
-        .filter(|r| !in_progress(r) && r.get("output").is_none_or(Value::is_null))
+        .filter(|r| !in_progress(r) && !has_output(r))
         .and_then(|r| r["terminal"].as_u64())
         .and_then(|t| u32::try_from(t).ok());
     let Some(pane) = pane else { return };
@@ -654,9 +709,10 @@ pub fn delete(store: &Store, id: &str) -> Result<(), String> {
     let mut all = load(store, KEY)?;
     let i = position(&all, id)?;
     all.remove(i);
-    let runs: Vec<Value> = load(store, RUNS_KEY)?.into_iter().filter(|r| r["automationId"] != id).collect();
+    let (gone, runs): (Vec<Value>, Vec<Value>) = load(store, RUNS_KEY)?.into_iter().partition(|r| r["automationId"] == id);
     save(store, KEY, &all)?;
-    save(store, RUNS_KEY, &runs)
+    save(store, RUNS_KEY, &runs)?;
+    drop_outputs(store, &gone.iter().filter_map(|r| r["id"].as_str().map(String::from)).collect::<Vec<_>>())
 }
 
 /// AUTO-013: numbering is per automation, starts at 1 and only goes up (the highest number ever
@@ -670,10 +726,11 @@ fn new_run(store: &Store, id: &str, trigger: &str) -> Result<Value, String> {
     let n = runs.iter().filter_map(|r| r["id"].as_str()?.strip_prefix("run-")?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
     let run = json!({ "id": format!("run-{n}"), "automationId": id, "number": number, "trigger": trigger, "status": "pending", "at": now_ms() });
     runs.push(run.clone());
-    prune(&mut runs, id);
+    let gone = prune(&mut runs, id);
     all[i]["lastRunNumber"] = json!(number);
     save(store, RUNS_KEY, &runs)?;
     save(store, KEY, &all)?;
+    drop_outputs(store, &gone)?;
     Ok(run)
 }
 
@@ -685,8 +742,9 @@ fn patch_run(store: &Store, run_id: &str, fields: Value) -> Result<Value, String
             row.insert(k.clone(), v.clone());
         }
     }
+    stash_output(store, &mut runs[i])?;
     save(store, RUNS_KEY, &runs)?;
-    Ok(runs[i].clone())
+    Ok(with_output(store, runs[i].clone()))
 }
 
 /// What a run needs from the app to start its agent.
@@ -1637,8 +1695,50 @@ mod tests {
         assert_eq!(keep_output(&store, "run-1", "  \n", false).unwrap(), None);
         assert_eq!(keep_output(&store, "run-1", "Done: 3 files changed", false).unwrap().as_deref(), Some("run-1"));
         assert_eq!(keep_output(&store, "run-1", "later text", true).unwrap(), None);
-        let r = load(&store, RUNS_KEY).unwrap().remove(0);
+        let r = list(&store).unwrap()["runs"][0].clone();
         assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool()), (Some("Done: 3 files changed"), Some("screen"), Some(false)));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t140d_run_output_lives_in_its_own_key_and_only_a_closed_pane_says_so() {
+        let dir = temp("outkey");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "codex");
+        claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("codex")).unwrap();
+        on_status(&store, Some(6), 60, "working", false, false, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        let big = "y".repeat(RUN_OUTPUT_CHARS);
+        keep_output(&store, "run-1", &big, true).unwrap();
+        // The runs list every hook status reads stays small; the text sits under the run's own key.
+        let blob = store.get(RUNS_KEY).unwrap().unwrap();
+        assert!(blob.len() < 1000 && !blob.contains("yyyy"), "{} bytes", blob.len());
+        assert_eq!(store.get(&output_key("run-1")).unwrap().unwrap(), json!(big).to_string());
+        // The page still gets it, and a second save is still refused.
+        assert_eq!(list(&store).unwrap()["runs"][0]["output"].as_str().map(str::len), Some(RUN_OUTPUT_CHARS));
+        assert_eq!(keep_output(&store, "run-1", "later", false).unwrap(), None);
+        // A run that finished on its own never says its terminal closed; one its pane ended does.
+        assert!(list(&store).unwrap()["runs"][0].get("paneEnded").is_none());
+        dispatched(&store, &ws, 2, "codex");
+        claim(&store, 7, Some(70), &ws.to_string_lossy(), Some("codex")).unwrap();
+        pane_ended(&store, 7, Some(1), 20).unwrap();
+        let runs = list(&store).unwrap()["runs"].clone();
+        assert_eq!(runs.as_array().unwrap().iter().find(|r| r["id"] == "run-2").unwrap()["paneEnded"], json!(true));
+        // Output saved inline before T-140-d moves to its own key on load.
+        let mut rows = load(&store, RUNS_KEY).unwrap();
+        rows[1]["output"] = json!("old inline text");
+        save(&store, RUNS_KEY, &rows).unwrap();
+        tidy(&store, 30).unwrap();
+        assert!(!store.get(RUNS_KEY).unwrap().unwrap().contains("old inline"));
+        assert_eq!(store.get(&output_key("run-2")).unwrap().unwrap(), json!("old inline text").to_string());
+        // Deleting the automation clears its runs' output with it.
+        delete(&store, "auto-1").unwrap();
+        assert_eq!(store.get(&output_key("run-1")).unwrap().as_deref(), Some("null"));
+        assert_eq!(store.get(&output_key("run-2")).unwrap().as_deref(), Some("null"));
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

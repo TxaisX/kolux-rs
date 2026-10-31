@@ -30,6 +30,7 @@ import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import { CrashDialog, type Report } from "./crash";
 import Ask from "./chrome/Ask";
+import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { returnTab, type Which } from "./terminal/tabClose";
 import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
@@ -41,10 +42,11 @@ import KeyLostNotice from "./settings/KeyLostNotice";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
-import WorktreePalette, { dirMark, type PaletteItem } from "./projects/WorktreePalette";
+import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
 import { navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
+import { pageChord } from "./browser/chord";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors, looks } from "./editor/EditorPane";
 import { baseName, draftOf, keyOf, textOf } from "./editor/buffers";
@@ -63,6 +65,7 @@ import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import Guides from "./onboarding/Guides";
 import { ADD_PROJECT } from "./onboarding/firstRun";
+import { startGridTour } from "./onboarding/tour";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
 import { datedName, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
@@ -77,6 +80,7 @@ import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rows
 import { gpuOn } from "./terminal/renderer";
 import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
+import { windowLoaded } from "./status/manage";
 import { FileCode } from "./chrome/icons";
 import AgentsRail from "./agents/AgentsRail";
 import { cardPanes, pickSession, railGroups, rowStatus } from "./agents/rail";
@@ -112,7 +116,7 @@ import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } 
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, startFailure, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
-import { failureOf, folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type SetupLine, type Worktree } from "./projects/model";
+import { failureOf, folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, underDir, nameOf } from "./workspaces";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -129,13 +133,14 @@ import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./settings/AgentsPage";
 import ToolNotices from "./launch/ToolNotices";
 import { AgentsChat } from "./chat/ChatView";
+import { useTeamsHost, withTeams } from "./launch/teams";
 import PlanSheet from "./terminal/PlanSheet";
-import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
+import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-export type Pane = { movedFrom?: string; key: number; agentName?: string; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number }; start?: Start };
+export type Pane = { movedFrom?: string; key: number; agentName?: string; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number }; start?: Start };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 // APP-002: optional overlays are not loaded at startup; each loads the first time it opens.
@@ -236,7 +241,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   }, []);
   // SAFE-002..004: the pane whose plan is open for review, and each plan's unsent comments.
   // SAFE-007: the sheet holds the plan it opened with, so it can tell when the pane moved on.
-  const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean } | null>(null);
+  // T-032-b: `send` is a Request changes still waiting to go out, which the sheet can cancel.
+  const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean; send?: PendingSend } | null>(null);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanDraft>>({});
   const plan = usePlan(); // USAGE-002: the plan figures the pills read
   const { needs, setNeeds, hook, setHook, stamp, setStamp, turn, setTurn, stale, setStale, context, setContext, crew, setCrew, hookRef, runRef, unreadPanes, setUnreadPanes, unreadDirs, winFocused, markDir } = useAgentStatusState(running);
@@ -278,7 +284,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // held here rather than in the grid; Classic keeps the chooser pane (SESS-019).
   const [sheet, setSheet] = useState<Pane | null>(null);
   // SET-027: everywhere but Settings, only agents that are switched on are offered.
-  const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
+  const teamsHost = useTeamsHost();
+  const agents = useMemo(() => withTeams(offeredAgents(allAgents, settings), settings, teamsHost), [allAgents, settings, teamsHost]);
   const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
   const [picking, setPicking] = useState<"file" | "markdown" | "change" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
   const defaultId = defaultAgentId(settings);
@@ -498,9 +505,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   useEffect(() => {
     // A chord from inside a page also makes that page's split the focused one: a click into the
     // page never reaches the app, so the app may still think another split has the keyboard.
+    // Council FIX-3: only a chord pressed in the page (the app's window does not hold the
+    // keyboard) does that or moves the keyboard; one the page's script sent runs page-only actions.
     const un = listen<{ id: number; what: string }>("browser-chord", (e) => {
-      setFocused(e.payload.id);
-      chord.current(e.payload.id, e.payload.what);
+      const { id, what } = e.payload;
+      const plan = pageChord(what, document.hasFocus());
+      if (plan.focusPane) setFocused(id);
+      const run = () => plan.run && chord.current(id, what);
+      if (plan.takeKeyboard) void invoke("browser_go", { id, what: "focusApp" }).finally(run);
+      else run();
     });
     return () => {
       un.then((u) => u());
@@ -1125,7 +1138,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
   const runSetup = (dir: string, branch: string | null) =>
-    invoke<SetupLine | null>("workspace_setup", { path: dir })
+    trustedSetup(dir)
       .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
       .catch((err) => setNotice(String(err)));
   // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
@@ -1772,27 +1785,33 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   const requestChanges = async (p: Pane, plan: string) => {
     if (!planLive(p, plan)) return;
-    const d = planDrafts[draftKey(p.key, plan)] ?? { comments: [], note: "" };
-    const text = feedbackMessage(d.comments, d.note);
-    setReviewing(null);
-    dropDraft(draftKey(p.key, plan));
-    // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
-    const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
-    if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
-    setHook((h) => ({ ...h, [p.key]: "working" }));
-    // SAFE-004: the feedback is typed only once the agent has left its menu; an Enter while the menu
-    // is still open would pick its default, which is Yes (council re-review of chat a969502).
-    const asking = () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission";
-    for (let i = 0; i < 30 && asking(); i++) await new Promise((r) => setTimeout(r, 100));
-    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not typed.");
-    const id = ptys.current[p.key];
-    if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
-    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
-    await new Promise((r) => setTimeout(r, 300));
-    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not sent.");
-    await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
-    setHook((h) => ({ ...h, [p.key]: "working" }));
-    setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+    const key = draftKey(p.key, plan);
+    const d = planDrafts[key] ?? { comments: [], note: "" };
+    const write = (data: string) => {
+      const id = ptys.current[p.key];
+      return id === undefined ? Promise.resolve() : invoke("terminal_write", { id, data }).then(() => {}, () => {});
+    };
+    // SAFE-004 / T-032-b: the send runs as a job (planReview) that the sheet can cancel until Enter.
+    const job = startFeedback(feedbackMessage(d.comments, d.note), {
+      // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
+      deny: () => invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => (setHook((h) => ({ ...h, [p.key]: "working" })), true), () => false),
+      asking: () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission",
+      type: (text) => write("\x1b[200~" + text + "\x1b[201~"),
+      enter: () => write("\r"),
+      alive: () => ptys.current[p.key] !== undefined && panesRef.current.some((x) => x.key === p.key),
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    });
+    setReviewing((r) => (r && r.key === p.key ? { ...r, send: job } : r));
+    const { outcome, answered, typed } = await job.done;
+    // A cancel before anything went out leaves the sheet open on the draft; any other end closes it.
+    setReviewing((r) => (r?.send === job ? (outcome === "cancelled" && !answered ? { ...r, send: undefined } : null) : r));
+    if (outcome === "sent") {
+      dropDraft(key); // SAFE-004: sending wipes the saved draft; a cancelled send keeps it.
+      setHook((h) => ({ ...h, [p.key]: "working" }));
+      setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+    } else if (outcome === "no-answer") setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
+    else if (outcome === "still-asking") setToast(`The agent is still asking. Answer it in its terminal; your feedback was not ${typed ? "sent" : "typed"}.`);
+    else if (outcome === "cancelled" && answered) setToast(typed ? "Cancelled before sending: your feedback is typed in the agent's prompt but was not sent." : "Cancelled: Claude's plan prompt was dismissed and your feedback was not typed.");
   };
   // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
   // pasted message; a note edited while the send was in flight is not marked sent.
@@ -1988,7 +2007,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             prOf={(d) => Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1].pr ?? null}
             atOf={(d) => {
               const row = Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1];
-              const mark = dirMark(row?.state ?? null, [...unreadDirs].some((x) => sameDir(x, d)));
+              // STAT-024: the radio mark when the folder's working panes only watch background work.
+              const watching = dirMonitoring(panes.filter((p) => sameDir(p.cwd, d)).map((p) => ({ state: hook[p.key], monitoring: turn[p.key]?.monitoring })));
+              const mark = dirMark(row?.state ?? null, [...unreadDirs].some((x) => sameDir(x, d)), watching);
               return mark ? { mark, since: row?.changed ?? 0 } : null;
             }}
             recent={recentDirs.current}
@@ -2026,6 +2047,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
           />
         )}
+        <TrustPrompt />
         {tabMenu && (
           // TERM-049 / TERM-044: close items only; the close question (TERM-045) covers the whole set at once.
           <>
@@ -2196,7 +2218,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               title={nameOf(names, reviewPane.cwd) ?? (reviewPane.cwd ? folderName(reviewPane.cwd) : tabName(reviewPane, titles))}
               plan={reviewing.plan}
               cut={reviewing.cut}
-              closed={!stillPending(hook[reviewPane.key], turn[reviewPane.key], reviewing.plan)}
+              closed={!reviewing.send && !stillPending(hook[reviewPane.key], turn[reviewPane.key], reviewing.plan)}
+              sending={!!reviewing.send}
+              onCancel={() => reviewing.send?.cancel()}
               draft={planDrafts[draftKey(reviewPane.key, reviewing.plan)] ?? { comments: [], note: "" }}
               onDraft={(d) => setPlanDrafts((m) => keepDraft(m, draftKey(reviewPane.key, reviewing.plan), d))}
               onApprove={() => approvePlan(reviewPane, reviewing.plan)}
@@ -2497,6 +2521,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     key={p.key}
                     hidden={!board && p.key !== active}
                     restored={restoredKeys.current.has(p.key)}
+                    resumed={p.resumed}
                     gpu={gpuOn(settings)}
                     card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
                     cwd={p.cwd}
@@ -2508,7 +2533,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     args={p.args}
                     env={p.env}
                     stop={turn[p.key]?.stop}
-                    context={context[p.key] && contextFill(context[p.key], capOn(settings))}
+                    context={context[p.key] ? contextFill(context[p.key], capOn(settings)) : null}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {
@@ -2650,7 +2675,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
               if (activeDir)
                 void startKit(kit, values, assigned, activeDir).then((ok) => {
-                  if (ok && fromWizard) endWizard("completed");
+                  if (ok && fromWizard) endWizard("completed", startGridTour); // ONB-012
                   if (ok && chooser !== null) closePane(chooser);
                 });
             }}
@@ -2710,6 +2735,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
         workspaces={Object.keys(owner)}
         hooks={settingsRead ? hooksOn(settings) : null}
+        loaded={() => windowLoaded(settingsRead, restoredKeys.current, ptys.current, panes)}
       />
       )}
     </div>

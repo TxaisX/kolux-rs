@@ -2,9 +2,14 @@
 //! GitLab's `glab` are probed on the search path with a time limit; the results are kept until a
 //! manual refresh. Which projects GitHub or GitLab hosts is read fresh on every call, so adding one
 //! brings a dismissed notice back. A dismissal is stored with the GitHub project set it was made under.
+//! SESS-039: which outside editors (VS Code, Cursor, Zed, Sublime Text, NeoVim, the JetBrains IDEs)
+//! are installed, for opening a worktree in one; the open itself is `links::editor_open`.
+//! T-552: the main window waits out a quitting Kolux that still holds the WebView2 profile folder,
+//! a start that fails shows a plain native message, and a quit waits briefly for its WebView2 processes.
 use crate::state::Store;
 use serde::Serialize;
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -175,9 +180,303 @@ pub fn tools_dismiss(store: tauri::State<'_, Mutex<Store>>, id: String, under: S
     s.set(KEY_DISMISSED, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
+/// SESS-039: an outside editor a worktree can be opened in. `console` editors (NeoVim) run in a
+/// console window of their own; the rest are windowed apps or their command-line launchers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Editor {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub console: bool,
+}
+
+/// id, name, the command-line names on the search path, the install-relative files to try
+/// under each program folder, and whether it runs in a console.
+type Known = (&'static str, &'static str, &'static [&'static str], &'static [&'static str], bool);
+
+const EDITORS: &[Known] = &[
+    ("vscode", "VS Code", &["code"], &["Microsoft VS Code/bin/code.cmd"], false),
+    ("cursor", "Cursor", &["cursor"], &["cursor/resources/app/bin/cursor.cmd"], false),
+    ("zed", "Zed", &["zed"], &["Zed/bin/zed.exe"], false),
+    ("sublime", "Sublime Text", &["subl"], &["Sublime Text/subl.exe", "Sublime Text 3/subl.exe"], false),
+    ("nvim", "NeoVim", &["nvim"], &["Neovim/bin/nvim.exe"], true),
+];
+
+/// JetBrains IDEs: id, name, the Toolbox's command-line script name, the launcher in the
+/// install's own `bin` folder (SESS-039: located beside the install, not on the search path).
+const JETBRAINS: &[(&str, &str, &str, &str)] = &[
+    ("idea", "IntelliJ IDEA", "idea", "idea64.exe"),
+    ("pycharm", "PyCharm", "pycharm", "pycharm64.exe"),
+    ("webstorm", "WebStorm", "webstorm", "webstorm64.exe"),
+    ("rider", "Rider", "rider", "rider64.exe"),
+    ("goland", "GoLand", "goland", "goland64.exe"),
+    ("clion", "CLion", "clion", "clion64.exe"),
+    ("phpstorm", "PhpStorm", "phpstorm", "phpstorm64.exe"),
+    ("rustrover", "RustRover", "rustrover", "rustrover64.exe"),
+];
+
+/// The launcher `exe` inside `<root>/JetBrains/<install>/bin` or `<root>/<install>/bin` (the
+/// Toolbox's per-user installs), the install folder that sorts last (the newest version) winning.
+pub fn jetbrains_launcher(roots: &[PathBuf], exe: &str) -> Option<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        for parent in [root.join("JetBrains"), root.clone()] {
+            let Ok(rd) = std::fs::read_dir(&parent) else { continue };
+            found.extend(rd.flatten().map(|e| e.path().join("bin").join(exe)).filter(|p| p.is_file()));
+        }
+    }
+    found.sort_by_key(|p| p.to_string_lossy().to_lowercase());
+    found.pop()
+}
+
+/// SESS-039: the editors found, in a fixed order: each by its command-line name on `dirs`,
+/// then at its usual place under one of `roots` (the program folders).
+pub fn editors_in(dirs: &[PathBuf], roots: &[PathBuf]) -> Vec<Editor> {
+    let at = |rels: &[&str]| roots.iter().flat_map(|r| rels.iter().map(move |rel| r.join(rel))).find(|p| p.is_file());
+    let mut out = Vec::new();
+    for (id, name, programs, rels, console) in EDITORS {
+        if let Some(p) = programs.iter().find_map(|p| crate::agents::find_in(dirs, p)).or_else(|| at(rels)) {
+            out.push(Editor { id: id.to_string(), name: name.to_string(), path: p.display().to_string(), console: *console });
+        }
+    }
+    for (id, name, script, exe) in JETBRAINS {
+        if let Some(p) = crate::agents::find_in(dirs, script).or_else(|| jetbrains_launcher(roots, exe)) {
+            out.push(Editor { id: id.to_string(), name: name.to_string(), path: p.display().to_string(), console: false });
+        }
+    }
+    out
+}
+
+/// The program folders an editor installs under on this machine.
+fn program_roots() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+    v.extend(std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("Programs")));
+    v
+}
+
+/// The editors installed here.
+pub fn editors() -> Vec<Editor> {
+    editors_in(&crate::agents::search_dirs(), &program_roots())
+}
+
+/// SESS-039: the outside editors this machine has, for the "Open in" rows.
+// T-304: registered by the coordinator's lib.rs hunk; unused until then.
+#[tauri::command]
+pub async fn editors_list() -> Result<Vec<Editor>, String> {
+    tauri::async_runtime::spawn_blocking(editors).await.map_err(|e| e.to_string())
+}
+
+/// The facts the Agent Teams picker entry depends on (T-191-b): native Windows and WSL never offer
+/// it, and it starts through the Kolux command line found on the system search path.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct TeamsHost {
+    pub windows: bool,
+    pub wsl: bool,
+    pub cli: Option<String>,
+}
+
+/// The host facts from the platform, the WSL markers and the found command line.
+pub fn teams_host_from(windows: bool, distro: Option<&str>, osrelease: &str, cli: Option<PathBuf>) -> TeamsHost {
+    let wsl = !windows && (distro.is_some_and(|d| !d.is_empty()) || osrelease.to_lowercase().contains("microsoft"));
+    let cli = if windows || wsl { None } else { cli.map(|p| p.to_string_lossy().into_owned()) };
+    TeamsHost { windows, wsl, cli }
+}
+
+/// T-191-b: whether this machine may offer Claude Agent Teams, for the picker.
+// T-191-b: registered by the coordinator's lib.rs hunk; unused until then.
+#[tauri::command]
+pub async fn teams_host() -> Result<TeamsHost, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let distro = std::env::var("WSL_DISTRO_NAME").ok();
+        let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        // CLI-007: run by its bare name, which a Kolux pane finds first on its own search path.
+        let cli = if cfg!(windows) { None } else { crate::agents::find_program(crate::orchestration::CLI).map(|_| PathBuf::from(crate::orchestration::CLI)) };
+        teams_host_from(cfg!(windows), distro.as_deref(), &osrelease, cli)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+// T-552: a relaunch right after a quit can find the quitting Kolux's WebView2 processes still
+// holding the profile's user-data folder, and WebView2 then refuses the new window with
+// ERROR_BUSY. The window is retried through a bounded wait, and a start that still fails ends
+// with a plain native message instead of a panic.
+
+/// What the user reads when the window still cannot open after the whole wait.
+pub const STILL_CLOSING: &str = "Kolux is still closing. Try again in a few seconds.";
+/// The waits between tries while the profile folder is busy: 250 ms doubling up to 2 s, 9.75 s in all.
+pub const BUSY_WAITS_MS: [u64; 7] = [250, 500, 1000, 2000, 2000, 2000, 2000];
+/// How long a quit waits for its WebView2 processes to let go of the profile folder.
+pub const WEBVIEW_EXIT_WAIT: Duration = Duration::from_secs(3);
+const WEBVIEW_EXE: &str = "msedgewebview2.exe";
+
+/// Whether a webview creation error is WebView2's ERROR_BUSY (HRESULT 0x800700AA, "The requested
+/// resource is in use"), however the error text spells the number.
+pub fn webview_busy(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    e.contains("0x800700aa") || e.contains("-2147024726")
+}
+
+/// Runs `create` until it works, calling `wait` with each of BUSY_WAITS_MS while it fails busy.
+/// A busy that outlasts the waits gives STILL_CLOSING; any other error comes back at once, not retried.
+pub fn open_retrying<E: std::fmt::Display>(mut create: impl FnMut() -> Result<(), E>, mut wait: impl FnMut(Duration)) -> Result<(), String> {
+    let mut waits = BUSY_WAITS_MS.iter();
+    loop {
+        let e = match create() {
+            Ok(()) => return Ok(()),
+            Err(e) => e.to_string(),
+        };
+        if !webview_busy(&e) {
+            return Err(e);
+        }
+        match waits.next() {
+            Some(ms) => wait(Duration::from_millis(*ms)),
+            None => return Err(STILL_CLOSING.to_string()),
+        }
+    }
+}
+
+/// The native message for a start that failed: the busy case word for word, anything else with its reason.
+pub fn startup_message(reason: &str) -> String {
+    if reason == STILL_CLOSING || webview_busy(reason) {
+        STILL_CLOSING.to_string()
+    } else {
+        format!("Kolux could not start: {reason}")
+    }
+}
+
+/// T-552 (1): a start that failed shows a plain native message, is logged (APP-003), and ends the
+/// process; it never panics.
+pub fn startup_failed(reason: &str) -> ! {
+    native_message("Kolux", &startup_message(reason));
+    crate::diag::fatal(reason)
+}
+
+#[cfg(windows)]
+fn native_message(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND};
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (text, title) = (wide(text), wide(title));
+    // SAFETY: both strings are NUL-terminated UTF-16 buffers that outlive the call; no owner window.
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND) };
+}
+
+#[cfg(not(windows))]
+fn native_message(_title: &str, text: &str) {
+    eprintln!("{text}");
+}
+
+/// T-552: the app's setup, with the config's windows (`labels`, the ones it marks to open) opened
+/// first through the busy wait, then `body`. Any failure ends in startup_failed, so Tauri never
+/// sees an error to panic on.
+pub fn guarded_setup<R: tauri::Runtime>(
+    app: &mut tauri::App<R>,
+    labels: &[String],
+    body: impl FnOnce(&mut tauri::App<R>) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Ok(dir) = app.path().app_data_dir() {
+        crate::diag::set_dir(&dir);
+    }
+    let configs: Vec<_> = app.config().app.windows.iter().filter(|w| labels.contains(&w.label)).cloned().collect();
+    for config in &configs {
+        let handle = app.handle().clone();
+        let open = || tauri::WebviewWindowBuilder::from_config(&handle, config).and_then(|b| b.build()).map(|_| ());
+        if let Err(e) = open_retrying(open, std::thread::sleep) {
+            startup_failed(&e);
+        }
+    }
+    if let Err(e) = body(app) {
+        startup_failed(&e.to_string());
+    }
+    Ok(())
+}
+
+/// The WebView2 processes `root` started: its msedgewebview2.exe children and everything under
+/// them. `table` is (pid, parent pid, exe name).
+pub fn webview_tree(table: &[(u32, u32, String)], root: u32) -> Vec<u32> {
+    let mut found: Vec<u32> = table.iter().filter(|(pid, ppid, name)| *ppid == root && *pid != root && name.eq_ignore_ascii_case(WEBVIEW_EXE)).map(|(pid, _, _)| *pid).collect();
+    let mut i = 0;
+    while i < found.len() {
+        let parent = found[i];
+        for (pid, ppid, _) in table {
+            if *ppid == parent && *pid != root && !found.contains(pid) {
+                found.push(*pid);
+            }
+        }
+        i += 1;
+    }
+    found
+}
+
+/// Asks `left` how many processes remain until none do or `budget` has been waited in `step`s;
+/// returns the last count.
+pub fn wait_gone(mut left: impl FnMut() -> usize, budget: Duration, step: Duration, mut sleep: impl FnMut(Duration)) -> usize {
+    let mut waited = Duration::ZERO;
+    loop {
+        let n = left();
+        if n == 0 || waited >= budget {
+            return n;
+        }
+        sleep(step);
+        waited += step;
+    }
+}
+
+/// T-552 (3): at quit, after the windows closed, waits up to WEBVIEW_EXIT_WAIT for this app's WebView2
+/// processes to end, so the next start finds the profile folder free. Returns how many were still
+/// running (0 off Windows, or when the process table cannot be read).
+pub fn wait_webviews_closed() -> usize {
+    let me = std::process::id();
+    wait_gone(|| webview_tree(&process_table(), me).len(), WEBVIEW_EXIT_WAIT, Duration::from_millis(100), std::thread::sleep)
+}
+
+#[cfg(windows)]
+fn process_table() -> Vec<(u32, u32, String)> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+    let mut table = Vec::new();
+    // SAFETY: the snapshot handle is checked before use and closed once; the entry is zeroed with
+    // its size set, as Process32FirstW/NextW require, and only read after a success.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return table;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut ok = Process32FirstW(snap, &mut entry) != 0;
+        while ok {
+            let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(entry.szExeFile.len());
+            table.push((entry.th32ProcessID, entry.th32ParentProcessID, String::from_utf16_lossy(&entry.szExeFile[..len])));
+            ok = Process32NextW(snap, &mut entry) != 0;
+        }
+        CloseHandle(snap);
+    }
+    table
+}
+
+#[cfg(not(windows))]
+fn process_table() -> Vec<(u32, u32, String)> {
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn t191b_agent_teams_is_offered_only_off_windows_and_wsl_with_the_command_line_found() {
+        let cli = || Some(PathBuf::from("/usr/local/bin/kolux"));
+        let linux = teams_host_from(false, None, "6.8.0-generic", cli());
+        assert_eq!(linux, TeamsHost { windows: false, wsl: false, cli: Some("/usr/local/bin/kolux".into()) });
+        assert!(teams_host_from(false, Some("Ubuntu"), "", cli()).wsl);
+        let wsl = teams_host_from(false, None, "5.15.153.1-microsoft-standard-WSL2", cli());
+        assert!(wsl.wsl && wsl.cli.is_none());
+        let win = teams_host_from(true, None, "", cli());
+        assert!(win.windows && !win.wsl && win.cli.is_none());
+        assert_eq!(teams_host_from(false, Some(""), "6.8.0", None).cli, None);
+    }
 
     #[test]
     fn a_missing_program_reports_missing() {
@@ -208,5 +507,141 @@ mod tests {
         assert_eq!(host_of("up\thttps://gitlab.example.org/team/app.git (fetch)"), Some("gitlab"));
         assert_eq!(host_of("origin\thttps://example.org/app.git (fetch)"), None);
         assert_eq!(host_of(""), None);
+    }
+
+    fn touch(p: &std::path::Path) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "").unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sess039_editors_are_found_on_the_path_and_jetbrains_launchers_beside_their_install() {
+        let base = std::env::temp_dir().join(format!("krs-editors-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (bin, pf, local) = (base.join("bin"), base.join("pf"), base.join("local"));
+        touch(&bin.join("code.cmd"));
+        touch(&pf.join("Neovim/bin/nvim.exe"));
+        touch(&pf.join("JetBrains/IntelliJ IDEA 2024.1/bin/idea64.exe"));
+        touch(&pf.join("JetBrains/IntelliJ IDEA 2025.2/bin/idea64.exe"));
+        touch(&local.join("PyCharm Community/bin/pycharm64.exe"));
+        // a launcher not in its install's bin folder does not count
+        touch(&pf.join("JetBrains/WebStorm 2025.1/webstorm64.exe"));
+        let found = editors_in(std::slice::from_ref(&bin), &[pf.clone(), local.clone()]);
+        let ids: Vec<&str> = found.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["vscode", "nvim", "idea", "pycharm"]);
+        assert!(found[0].path.ends_with("code.cmd") && !found[0].console);
+        assert!(found[1].console, "NeoVim runs in a console window");
+        assert!(found[2].path.contains("2025.2"), "the newest install wins: {}", found[2].path);
+        assert!(found[3].path.contains("PyCharm Community"));
+        // nothing installed: nothing offered
+        assert!(editors_in(&[], &[base.join("empty")]).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    const BUSY: &str = "failed to create webview: WebView2 error: WindowsError(Error { code: HRESULT(0x800700AA), message: \"The requested resource is in use.\" })";
+
+    /// An injected window creation that is busy `busy` times, then works; records every try and wait.
+    fn busy_then_ok(busy: usize) -> (Result<(), String>, usize, Vec<Duration>) {
+        let mut tries = 0;
+        let mut waits = Vec::new();
+        let got = open_retrying(
+            || {
+                tries += 1;
+                if tries <= busy {
+                    Err(BUSY)
+                } else {
+                    Ok(())
+                }
+            },
+            |d| waits.push(d),
+        );
+        (got, tries, waits)
+    }
+
+    #[test]
+    fn t552_a_busy_profile_folder_is_waited_out_and_the_window_opens() {
+        let (got, tries, waits) = busy_then_ok(2);
+        assert_eq!(got, Ok(()));
+        assert_eq!(tries, 3, "two busy tries, then the one that worked");
+        assert_eq!(waits, vec![Duration::from_millis(250), Duration::from_millis(500)]);
+        // free at once: no wait at all
+        assert_eq!(busy_then_ok(0), (Ok(()), 1, vec![]));
+    }
+
+    #[test]
+    fn t552_a_folder_still_busy_after_about_ten_seconds_gives_the_still_closing_message() {
+        let (got, tries, waits) = busy_then_ok(usize::MAX);
+        assert_eq!(got, Err("Kolux is still closing. Try again in a few seconds.".to_string()));
+        assert_eq!(tries, BUSY_WAITS_MS.len() + 1, "one try, then one after each wait");
+        let total: Duration = waits.iter().sum();
+        assert!(total >= Duration::from_millis(9_000) && total <= Duration::from_millis(11_000), "about 10 s in all, got {total:?}");
+        assert_eq!(&waits[..2], &[Duration::from_millis(250), Duration::from_millis(500)], "backoff starts 250 ms, 500 ms");
+        assert!(waits.windows(2).all(|w| w[0] <= w[1]), "the waits never shrink: {waits:?}");
+        // busy once per wait, then free on the very last try: still opens
+        let (edge, _, _) = busy_then_ok(BUSY_WAITS_MS.len());
+        assert_eq!(edge, Ok(()));
+    }
+
+    #[test]
+    fn t552_an_error_that_is_not_busy_is_not_retried() {
+        const OTHER: &str = "failed to create webview: WebView2 error: WindowsError(Error { code: HRESULT(0x80070002) })";
+        let mut tries = 0;
+        let mut waits = Vec::new();
+        let got = open_retrying(
+            || {
+                tries += 1;
+                Err(OTHER)
+            },
+            |d| waits.push(d),
+        );
+        assert_eq!(got, Err(OTHER.to_string()));
+        assert_eq!((tries, waits.len()), (1, 0));
+    }
+
+    #[test]
+    fn t552_busy_is_read_from_the_error_text_and_the_message_is_plain() {
+        assert!(webview_busy(BUSY));
+        assert!(webview_busy("HRESULT(0x800700aa)"), "lower case hex");
+        assert!(webview_busy("WebView2 error -2147024726"), "the signed decimal form");
+        assert!(!webview_busy("HRESULT(0x80070005) Access is denied."));
+        assert_eq!(startup_message(STILL_CLOSING), STILL_CLOSING);
+        assert_eq!(startup_message(BUSY), STILL_CLOSING);
+        assert_eq!(startup_message("no app data folder"), "Kolux could not start: no app data folder");
+    }
+
+    #[test]
+    fn t552_a_quit_waits_only_for_its_own_webview2_tree_and_only_so_long() {
+        let row = |pid: u32, ppid: u32, name: &str| (pid, ppid, name.to_string());
+        let me = 100;
+        let table = vec![
+            row(me, 1, "kolux-rs.exe"),
+            row(200, me, "msedgewebview2.exe"), // the browser process
+            row(201, 200, "msedgewebview2.exe"), // its renderer and helpers
+            row(202, 200, "msedgewebview2.exe"),
+            row(203, 201, "msedgewebview2.exe"),
+            row(300, me, "powershell.exe"),      // a pane's shell: not a webview, not waited for
+            row(301, 300, "msedgewebview2.exe"), // a webview another program in a pane started
+            row(400, 1, "msedgewebview2.exe"),   // another app's WebView2
+            row(500, 500, "msedgewebview2.exe"), // a self-parented entry never loops
+        ];
+        let mut tree = webview_tree(&table, me);
+        tree.sort();
+        assert_eq!(tree, vec![200, 201, 202, 203]);
+        assert!(webview_tree(&table, 999).is_empty());
+        // gone after two looks: two waits of the step
+        let mut left = vec![4, 1, 0].into_iter();
+        let mut slept = Vec::new();
+        let step = Duration::from_millis(100);
+        assert_eq!(wait_gone(|| left.next().unwrap_or(0), WEBVIEW_EXIT_WAIT, step, |d| slept.push(d)), 0);
+        assert_eq!(slept.len(), 2);
+        // never gone: gives up after the 3 s budget with the count left
+        let mut slept = Vec::new();
+        assert_eq!(wait_gone(|| 6, WEBVIEW_EXIT_WAIT, step, |d| slept.push(d)), 6);
+        assert_eq!(slept.iter().sum::<Duration>(), WEBVIEW_EXIT_WAIT);
+        // this test process started no WebView2, so the real wait returns at once
+        let t0 = Instant::now();
+        assert_eq!(wait_webviews_closed(), 0);
+        assert!(t0.elapsed() < Duration::from_secs(2));
     }
 }

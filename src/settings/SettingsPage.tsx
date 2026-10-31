@@ -20,6 +20,7 @@ import type { Project } from "../projects/model";
 import RepoPage from "./RepoPage";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
 import { markGuide } from "../onboarding/guide";
+import { clearReadFailure, connectFailed, firstAiConnected, readFailed } from "../onboarding/firstRun";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { hideRule, MAX_REPOS_DRAWN, MAX_SEARCH, SearchFolds, searchRepos, searchSettings } from "./search";
@@ -99,8 +100,11 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
   const [asking, setAsking] = useState(false);
   const read = useCallback(() => {
     invoke<KeyStatus>("claude_key_status")
-      .then(setStatus)
-      .catch((e) => setError(String(e)));
+      .then((v) => {
+        setStatus(v);
+        setError(clearReadFailure);
+      })
+      .catch(() => setError(readFailed));
     invoke<OwnSignIn | null>("claude_own_sign_in")
       .then(setOwn)
       .catch(() => setOwn(null));
@@ -133,7 +137,7 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
     const command = a === "cancel" ? "claude_key_cancel" : a === "disconnect" ? "claude_key_disconnect" : "claude_key_connect";
     setBusy(a !== "cancel");
     const call = invoke(command);
-    call.catch((e) => setError(String(e)));
+    call.catch((e) => setError(command === "claude_key_connect" ? connectFailed("Claude", e) : String(e)));
     // ACCT-002: the buttons come back after 30 seconds even if no answer arrives.
     void settleWithin(call).then(() => {
       setBusy(false);
@@ -177,7 +181,7 @@ function PageBody({ page, repo, onSaved }: { page: Page; repo?: Project; onSaved
         <>
           <p className="settings-sub">Link Kolux to the AI services you already pay for. Kolux charges nothing and ships no models or keys of its own: each agent runs on your plan or key and talks straight to its provider, and Kolux neither relays nor records that traffic. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
           <div data-section="connections">
-            <ConnectGrid cards={{ claude: <ClaudeCard />, codex: <CodexCard />, grok: <GrokCard /> }} />
+            <ConnectGrid cards={{ claude: <ClaudeCard onConnected={firstAiConnected} />, codex: <CodexCard onConnected={firstAiConnected} />, grok: <GrokCard onConnected={firstAiConnected} /> }} />
           </div>
           <div className="conn-advanced" data-section="accounts-advanced">
             <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>

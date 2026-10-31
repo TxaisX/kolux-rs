@@ -1,99 +1,94 @@
-FIX-2 · council re-review of lane/release faa709d (FB 2, FS 3, AFTER 5) · 2026-10-14
-lane/release from faa709d. Step 0 merge of main 5f3b287: 5e6d7c7. Text proof; the app was not
-launched (NO APP LAUNCHES). Review: state/kolux-rs-council/d2/release-faa709d-rereview.md.
+FIX-2 (lane/look, 2026-10-14): council re-review d2/look-829f533-rereview.md, "Send to build session"
+BEFORE 829f533 · STEP 0 merge of main 5f3b287 = 11f77b0 · no app launches (standing rule): screen changes carry
+LIVE PROOF PENDING steps below for the coordinator's batched run.
 
-FB2 (merge with main 5f3b287) - done in 5e6d7c7
-- Conflicts: PLAN.md, PROVENANCE.md, STATE.md, src-tauri/src/lib.rs, src/terminal/TerminalPane.tsx.
-- TerminalPane.tsx: main's six props (pendingTool, keySettings, clipboardFromPrograms,
-  linksOpenInKolux, onOpenLink, onOpenFile) plus the lane's onSlow; main's TERM-075 OSC 52 handler
-  kept next to the lane's SESS-051/SESS-032 timer (grep TERM-075: the prop doc and the handler).
-- lib.rs: union of the mod lines only (chat, chat_tools + crash, perms). Coordinator re-check.
+== 1. FB (part 2 P1, P2, P3; part 1 FB-1) ==
+P1 editor search can lock a core: parse_rg now takes the hits still wanted and stops there before
+building any (take(limit)), the column is one forward scan over the line, and the before/after trim
+walks at most SIDE characters instead of counting the whole prefix per hit.
+- Measured: ripgrep 14.1.1 ignores --max-columns / --max-columns-preview in --json output (a 5000-char
+  line with --max-columns 2000 still came back whole with 5000 submatches), so that flag was not added.
+- Test: editor_search::tests::a_line_with_thousands_of_matches_builds_only_the_hits_asked_for
+  (60 000 matches on one line; limit 3 gives 3 hits at UTF-16 columns 1,2,3; limit MAX_HITS gives 2000
+  with SIDE-long sides). On the old code it does not compile (parse_rg took no limit).
+- cargo test editor_search: 6 passed, 0 failed; clippy -D warnings exit 0.
+P2 the T-234-a, T-235-a and T-236-a ticks now end "live proof pending (batched)".
+P3 the Tower's Own window button is not offered (ownWindow.ts OWN_WINDOW_WIRED = false) until T-546-c's
+window side is wired; the Tower's own window code stays, off.
+- Test: TowerView.test.ts "FIX-2 (council P3): until the Tower's own window is wired, the main window's
+  Tower does not offer it" FAILED on the old TowerView.tsx/ownWindow.ts (1 failed | 2 passed), passes now
+  (vitest related: 2 files, 10 tests).
+FB-1 coordinator hunks, regenerated as real git patches (scratch worktree G:/Temp/look-w1-wt, removed):
+- evidence/FIX-2-open_in-lib.patch: lib.rs files::open_in registration, against the lane (11f77b0 and
+  later: the context has editor_search). evidence/FIX-2-open_in-lib-5f3b287.patch: the same against clean
+  5f3b287. With it, drop the #[allow(dead_code)] line above open_in in files.rs.
+- evidence/FIX-2-t550-topbar.patch: TopBar mounts UsagePill (the one button) in place of the span.
+- evidence/FIX-2-t546c-window.patch: capabilities/default.json (+create-webview-window, set-focus,
+  unminimize), new capabilities/tower.json (event default + close only), lib.rs Destroyed: only main
+  kills shells and closes the Tower, main.tsx draws TowerWindow for #tower-window, App.tsx useTowerBridge.
+  With it, set OWN_WINDOW_WIRED = true in src/tower/ownWindow.ts.
+- git apply --check: open_in-5f3b287, t550, t546c each OK on clean 5f3b287; open_in-lib, t546c, t550 OK
+  in sequence on 11f77b0. The lane's own EditorPane / Explorer / ClaudePill hunks are no longer hunks:
+  the lane now contains main, so merging the lane brings them whole.
 
-FB1 (unclear signature answers were refused and remembered for good) - fixed in update.rs
-- Only a definite answer is a refusal: another publisher on a valid signature, NotSigned,
-  HashMismatch. Everything else (empty status, UnknownError, NotTrusted, Incompatible,
-  NotSupportedFileFormat, Valid with no publisher) is Unverified: this download is stopped, nothing
-  is remembered, the next check offers it again.
-- The PowerShell read now runs with $ErrorActionPreference = 'Stop' and
-  Get-AuthenticodeSignature -ErrorAction Stop, so a non-terminating error (a file held by
-  antivirus) ends the read with an error instead of printing an empty status; no answer = Unverified.
-- Fail first: with only the test changed, cargo test --lib update:: gave
-  "test result: FAILED. 13 passed; 1 failed" - app030_a_signed_copy_takes_only_its_own_publisher
-  panicked at update.rs:802 with '"" was remembered' (G:/Temp/release-w1-logs/w4-fix2-failfirst.log).
+LIVE PROOF PENDING (1):
+- Tower (switcher Tower): the header shows Refresh and no "Own window" button.
+- T-234-a: open a code file, Ctrl+F opens find, Ctrl+H replace; a file with <<<<<<< / ======= / >>>>>>>
+  markers shows them coloured with next/previous conflict steps.
+- T-235-a: open a markdown note in preview, Ctrl+F finds in the rendered text; the contents panel lists
+  the headings and a click jumps to one.
+- T-236-a: Ctrl+Shift+F in the Explorer, type a word: hits grouped per file with line numbers; a click
+  opens the file at the hit. A one-line minified file with "e" stays responsive and shows at most 2000 hits.
 
-FS1 (a signed copy that could not read its own signature allowed everything) - fixed
-- New build flag KOLUX_RS_SIGNED_BUILD=1 (SIGNED_BUILD). With it, a copy whose own signature read
-  fails or is not Valid stops the update once ("could not confirm its own Windows signature").
-  Without it the old behaviour stands (an unsigned copy stays dormant; a copy that does read Valid
-  still compares). The signing release job must set the flag; scripts/release.mjs is the
-  coordinator's (hunk below).
-- Test: app030_a_copy_built_signed_that_cannot_read_its_own_signature_stops_once (new API, so its
-  fail-first was a compile failure, not an assertion).
+== 2. FS-1 fence: namespace spellings of a share ==
+is_share now refuses every path whose first two characters are separators (either slash) unless it
+is a verbatim disk path, so the device-namespace and verbatim spellings (the dot-UNC, the
+question-mark GLOBALROOT, a Volume GUID, a dot-drive) are refused from the spelling, before resolve
+(canonicalize) can contact a host. A resolved project path (verbatim disk) still passes.
+- Test: fence::tests::acct_055_namespace_spellings_of_a_share_are_refused_before_they_resolve.
+  On the old fence.rs it FAILED: the dot-UNC spelling came back "... is outside them" (it had been
+  resolved first). Now: cargo test fence 10 passed, 0 failed; clippy -D warnings exit 0; tsc exit 0.
+- Not fixed here (seen): a link inside a project that points at a share is still followed by
+  canonicalize before the share check on the result (council FS-1's last sentence); refusing that
+  needs reading each link target without following it, which is a reliability-lane fence change.
 
-FS2 (refused list keyed on the version string, no way out) - fixed
-- The list is now update.refusedInstallers: entries {sha256, signature, version}. A check skips an
-  update whose feed signature (which covers the installer bytes) matches an entry; a download whose
-  bytes' SHA-256 matches an entry is stopped without asking Windows. The version string is kept for
-  reading only. A stale installer served as "0.9.0" no longer blocks the real 0.9.0.
-- Capped at 20 (REFUSED_CAP), oldest dropped. Reset: update_mark with key "refusedInstallers" and an
-  empty value clears it (and the old update.refusedVersions); any other value is refused, so the
-  command cannot add entries. A forgotten installer that is still signed by someone else is stopped
-  again when it downloads, so the reset is never a bypass. No button calls it yet (support action).
-- The old version-keyed list is ignored (a list of strings parses as empty).
-- Tests: app030_a_refused_installer_is_known_by_its_bytes_not_its_version,
-  app030_the_refused_list_keeps_only_the_newest_twenty.
+== 3. FS-2 open_in launches the canonical folder ==
+open_target now returns the folder's canonical path (links and dot-dot resolved, the verbatim prefix
+of a disk path dropped) after the fence and the folder check, so a spelling whose quote and shell
+characters sit in a component that dot-dot cancels never reaches the launcher (code.cmd's %*).
+- Test: files::open_in_tests::edit043_the_folder_opened_is_the_canonical_one_not_the_callers_spelling
+  (a real temp folder spelled base\a"&x|y<z>\..\sub: Windows says it is a folder; what comes back has
+  none of " & | < > or "..", no verbatim prefix, and equals the canonical sub). On the old code it does
+  not compile (plain_disk_path is new) and its spelling came back unchanged (council probe).
+- cargo test edit043: 7 passed, 0 failed; clippy -D warnings exit 0; tsc exit 0.
 
-FS3 (the live-proof plan would prove nothing) - plan corrected in evidence/T-293.txt
-- Step 1 now trusts BOTH test roots on a throwaway test PC or VM, builds with
-  KOLUX_RS_SIGNED_BUILD=1, and checks the installed copy reads Valid (subject A) before going on;
-  a new step 5 proves a stale refusal does not block a good installer of the same version.
-- Why this is not an automated test: trusting a test root means adding it to the Windows trusted
-  root store, which asks the user (CurrentUser) or needs admin (LocalMachine) and changes how the PC
-  trusts every program. That is not acceptable on Txais's PC from a unit test; it stays a manual,
-  throwaway-machine proof. The automated test that does run on real Windows signatures is
-  app030_reads_real_windows_signatures (below).
+== 4. FS-3 second paste, FS-4 forecast readings (AFTER 1 wording) ==
+FS-3 paste.ts: handlePaste (the editor's paste handler, now exported) refuses a paste made while a
+chunked paste is still going in, with the toast "Paste refused: the last paste is still going in.
+Nothing was pasted." (before, a small one was dropped silently by holdInput and a big one started a
+second run of pieces). A piece whose dispatch throws now clears the paste mark, so the editor takes
+input again. AFTER 1: the header says keys are dropped, not queued.
+- Test: paste.test.ts "EDIT-008 (FIX-2): a second paste mid-paste is refused with a toast, and a failing
+  piece does not hold input forever". On the old code it does not compile (handlePaste/busyRefusal are new).
+FS-4 ClaudePill.tsx publishLive: only the windows the live report itself carried become forecast
+readings; a window kept from an older stored report (the backend merges them) is no longer stamped
+now. The event's optional "carried" list names them; without it, a window equal to what is shown is
+taken as kept. evidence/FIX-2-hooks-carried.patch (hooks lane, not committed) makes record_usage emit
+"carried" (the kinds before merge_limits). Applied in place: cargo test hooks:: 50 passed, clippy 0; reverted.
+- Test: ClaudePill.test.ts "FIX-2 (USAGE-031): only the windows a live report carried become forecast
+  readings" FAILED on the old ClaudePill.tsx (1 failed | 1 passed), passes now.
+- tsc 0; vitest related paste.ts + ClaudePill.tsx: 22 files, 142 tests passed.
+LIVE PROOF PENDING (4): paste a 1 MB text into a code file and paste again at once: a toast says the
+last paste is still going in; the first paste lands whole and one Ctrl+Z takes it out.
 
-AFTER items
-1. Done: the signature read is ended after 20 s (SIGNATURE_LIMIT) and gives no answer (Unverified).
-   Test app030_a_signature_read_that_hangs_is_given_up: ping -n 30 under a 400 ms limit returns no
-   answer well under 10 s; cmd /c echo hi returns "hi"; cmd /c exit 3 returns no answer.
-2. Done: powershell.exe is found under GetSystemDirectoryW, not SystemRoot. Test
-   app030_powershell_comes_from_windows_own_folder_and_the_held_copy_cannot_change. A user module
-   path shadowing Get-AuthenticodeSignature is still possible for same-user code (-NoProfile does
-   not stop PSModulePath); WinVerifyTrust stays the long-term answer (not done).
-3. Done: the download is written to a new file (create_new, a per-process counter in the name),
-   closed, reopened read-only with share mode read (nobody may write, rename or delete it), read
-   back and compared with the bytes in memory, and held open while Windows reads its signature;
-   deleted when the handle goes. Same test as 2 (write and delete refused while held), and
-   app030_reads_real_windows_signatures reads powershell.exe's bytes through the held copy as Valid.
-4. Not done: the pin is still the exact subject string (subject + issuer pairs or key hashes need a
-   decision about certificate renewals; left for the card that signs releases).
-5. Done in part: the stop card's button says "Close" (actionLabel in card.ts; test "FIX-2 AFTER 5:
-   the stop card closes with a Close button, not OK", which failed first with "actionLabel is not a
-   function"). Not done: fsync and a cap of 10 for the .bad / .bak.pre-repair copies, which live in
-   state.rs (a hard-stop file outside this lane's OWNS for this wave).
-
-Real readings (logs under G:/Temp/release-w1-logs/)
-- cargo test --lib update:: : 18 passed, 0 failed (w4-fix2-update.log). Includes the real-Windows
-  tests: powershell.exe reads Valid / Microsoft directly and through the held copy; a copy of the
-  unsigned test program named un[signed].exe reads exactly {NotSigned, no publisher}; a non-program
-  file is never allowed.
-- cargo clippy --all-targets -- -D warnings: clean (w4-fix2-clippy.log).
-- pnpm exec tsc --noEmit: 0. vitest related src/update/card.ts UpdateCenter.tsx: 3 files, 41 passed.
-- Full cargo test: lib 694 passed, 0 failed, 1 ignored; shim 3/3 (w4-fix2-cargo.log).
-- Full pnpm test: 1059 passed, 1 failed (w4-fix2-vitest.log). The one failure is privacy-audit
-  app070 on src-tauri/src/browser.rs reqwest::, main's own state at 5f3b287 (not this lane's file).
-- plan-check OK (422/660); "## Last 10 passes" count 1; duplicate-id grep empty; firewall -Baseline 0 new.
-
-LIVE PROOF PENDING (batched; visible change: the stop card's button)
-1. Only reachable with a signed test build (see evidence/T-293.txt steps 1-5). On the stop card,
-   the one button reads "Close" (it read "OK" before) and closes the card.
-2. Check for updates afterwards: the note reads "The newest installer was stopped earlier ...".
-
-Hunk left for the coordinator (scripts/release.mjs, not this lane's file)
-- None to apply today: release.mjs has no Windows (Authenticode) signing step yet (OD-03), so no
-  build may claim to be signed. The change that adds that step must, in the same commit, add
-  KOLUX_RS_SIGNED_BUILD: "1" to the build environment at release.mjs line 209:
-  -  const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: ..., KOLUX_RS_RELEASE_PUBKEY: pubkey };
-  +  const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: ..., KOLUX_RS_RELEASE_PUBKEY: pubkey, KOLUX_RS_SIGNED_BUILD: "1" };
-  (the flag is read at compile time; rustc rebuilds when it changes).
+== 5. P6 usage timers, P7 pill click test (P4, P5 not done this pass) ==
+P6 refresh.ts: the five-minute timer skips its read while the document is hidden (showing the window
+already reads through the visibilitychange focus kick); RunnerOptions.focusDebounceMs sets how soon
+after a read a focus may read again, and CodexPill uses CODEX_FOCUS_MS = 2 min (a Codex read starts
+a helper process), Claude keeps MOMENTS_MS.
+- Test: refresh.test.ts "skips timer reads while hidden, reads when shown, and keeps a longer focus
+  debounce". Not run against the old code this pass (budget); on it the hidden timer reads and the
+  1-minute focus reads, so the call counts 1 and 1 would come back 4 and 2.
+P7 UsagePill.test.ts: the click test now takes the button UsagePill renders and calls its own onClick.
+- tsc 0; vitest related refresh.ts + UsagePill.tsx + CodexPill.tsx: 18 files, 114 tests passed.
+Open: P4 (kill a superseded rg child) and P5 (clamp Hit.text, --max-filesize 10M) for the next pass.

@@ -7,7 +7,7 @@ What it does
   the file path goes in through an environment variable, never the command text).
 - Same publisher, valid signature: allowed. Another publisher, no signature, or contents that do
   not match the signature (HashMismatch): refused for good. The download is dropped and the card
-  gets a "security-stop: <reason>" error. (Amended by FIX-2, see evidence/FIX-2.txt: the refusal is
+  gets a "security-stop: <reason>" error. (Amended by FIX-2, see evidence/release-FIX-2.txt: the refusal is
   remembered by the installer's SHA-256 and update signature in update.refusedInstallers, capped at
   20, never by its version; NotTrusted, UnknownError, an empty status and the other unclear answers
   now stop once instead of for good.)

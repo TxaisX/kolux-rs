@@ -1,0 +1,99 @@
+FIX-2 · council re-review of lane/release faa709d (FB 2, FS 3, AFTER 5) · 2026-10-14
+lane/release from faa709d. Step 0 merge of main 5f3b287: 5e6d7c7. Text proof; the app was not
+launched (NO APP LAUNCHES). Review: state/kolux-rs-council/d2/release-faa709d-rereview.md.
+
+FB2 (merge with main 5f3b287) - done in 5e6d7c7
+- Conflicts: PLAN.md, PROVENANCE.md, STATE.md, src-tauri/src/lib.rs, src/terminal/TerminalPane.tsx.
+- TerminalPane.tsx: main's six props (pendingTool, keySettings, clipboardFromPrograms,
+  linksOpenInKolux, onOpenLink, onOpenFile) plus the lane's onSlow; main's TERM-075 OSC 52 handler
+  kept next to the lane's SESS-051/SESS-032 timer (grep TERM-075: the prop doc and the handler).
+- lib.rs: union of the mod lines only (chat, chat_tools + crash, perms). Coordinator re-check.
+
+FB1 (unclear signature answers were refused and remembered for good) - fixed in update.rs
+- Only a definite answer is a refusal: another publisher on a valid signature, NotSigned,
+  HashMismatch. Everything else (empty status, UnknownError, NotTrusted, Incompatible,
+  NotSupportedFileFormat, Valid with no publisher) is Unverified: this download is stopped, nothing
+  is remembered, the next check offers it again.
+- The PowerShell read now runs with $ErrorActionPreference = 'Stop' and
+  Get-AuthenticodeSignature -ErrorAction Stop, so a non-terminating error (a file held by
+  antivirus) ends the read with an error instead of printing an empty status; no answer = Unverified.
+- Fail first: with only the test changed, cargo test --lib update:: gave
+  "test result: FAILED. 13 passed; 1 failed" - app030_a_signed_copy_takes_only_its_own_publisher
+  panicked at update.rs:802 with '"" was remembered' (G:/Temp/release-w1-logs/w4-fix2-failfirst.log).
+
+FS1 (a signed copy that could not read its own signature allowed everything) - fixed
+- New build flag KOLUX_RS_SIGNED_BUILD=1 (SIGNED_BUILD). With it, a copy whose own signature read
+  fails or is not Valid stops the update once ("could not confirm its own Windows signature").
+  Without it the old behaviour stands (an unsigned copy stays dormant; a copy that does read Valid
+  still compares). The signing release job must set the flag; scripts/release.mjs is the
+  coordinator's (hunk below).
+- Test: app030_a_copy_built_signed_that_cannot_read_its_own_signature_stops_once (new API, so its
+  fail-first was a compile failure, not an assertion).
+
+FS2 (refused list keyed on the version string, no way out) - fixed
+- The list is now update.refusedInstallers: entries {sha256, signature, version}. A check skips an
+  update whose feed signature (which covers the installer bytes) matches an entry; a download whose
+  bytes' SHA-256 matches an entry is stopped without asking Windows. The version string is kept for
+  reading only. A stale installer served as "0.9.0" no longer blocks the real 0.9.0.
+- Capped at 20 (REFUSED_CAP), oldest dropped. Reset: update_mark with key "refusedInstallers" and an
+  empty value clears it (and the old update.refusedVersions); any other value is refused, so the
+  command cannot add entries. A forgotten installer that is still signed by someone else is stopped
+  again when it downloads, so the reset is never a bypass. No button calls it yet (support action).
+- The old version-keyed list is ignored (a list of strings parses as empty).
+- Tests: app030_a_refused_installer_is_known_by_its_bytes_not_its_version,
+  app030_the_refused_list_keeps_only_the_newest_twenty.
+
+FS3 (the live-proof plan would prove nothing) - plan corrected in evidence/T-293.txt
+- Step 1 now trusts BOTH test roots on a throwaway test PC or VM, builds with
+  KOLUX_RS_SIGNED_BUILD=1, and checks the installed copy reads Valid (subject A) before going on;
+  a new step 5 proves a stale refusal does not block a good installer of the same version.
+- Why this is not an automated test: trusting a test root means adding it to the Windows trusted
+  root store, which asks the user (CurrentUser) or needs admin (LocalMachine) and changes how the PC
+  trusts every program. That is not acceptable on Txais's PC from a unit test; it stays a manual,
+  throwaway-machine proof. The automated test that does run on real Windows signatures is
+  app030_reads_real_windows_signatures (below).
+
+AFTER items
+1. Done: the signature read is ended after 20 s (SIGNATURE_LIMIT) and gives no answer (Unverified).
+   Test app030_a_signature_read_that_hangs_is_given_up: ping -n 30 under a 400 ms limit returns no
+   answer well under 10 s; cmd /c echo hi returns "hi"; cmd /c exit 3 returns no answer.
+2. Done: powershell.exe is found under GetSystemDirectoryW, not SystemRoot. Test
+   app030_powershell_comes_from_windows_own_folder_and_the_held_copy_cannot_change. A user module
+   path shadowing Get-AuthenticodeSignature is still possible for same-user code (-NoProfile does
+   not stop PSModulePath); WinVerifyTrust stays the long-term answer (not done).
+3. Done: the download is written to a new file (create_new, a per-process counter in the name),
+   closed, reopened read-only with share mode read (nobody may write, rename or delete it), read
+   back and compared with the bytes in memory, and held open while Windows reads its signature;
+   deleted when the handle goes. Same test as 2 (write and delete refused while held), and
+   app030_reads_real_windows_signatures reads powershell.exe's bytes through the held copy as Valid.
+4. Not done: the pin is still the exact subject string (subject + issuer pairs or key hashes need a
+   decision about certificate renewals; left for the card that signs releases).
+5. Done in part: the stop card's button says "Close" (actionLabel in card.ts; test "FIX-2 AFTER 5:
+   the stop card closes with a Close button, not OK", which failed first with "actionLabel is not a
+   function"). Not done: fsync and a cap of 10 for the .bad / .bak.pre-repair copies, which live in
+   state.rs (a hard-stop file outside this lane's OWNS for this wave).
+
+Real readings (logs under G:/Temp/release-w1-logs/)
+- cargo test --lib update:: : 18 passed, 0 failed (w4-fix2-update.log). Includes the real-Windows
+  tests: powershell.exe reads Valid / Microsoft directly and through the held copy; a copy of the
+  unsigned test program named un[signed].exe reads exactly {NotSigned, no publisher}; a non-program
+  file is never allowed.
+- cargo clippy --all-targets -- -D warnings: clean (w4-fix2-clippy.log).
+- pnpm exec tsc --noEmit: 0. vitest related src/update/card.ts UpdateCenter.tsx: 3 files, 41 passed.
+- Full cargo test: lib 694 passed, 0 failed, 1 ignored; shim 3/3 (w4-fix2-cargo.log).
+- Full pnpm test: 1059 passed, 1 failed (w4-fix2-vitest.log). The one failure is privacy-audit
+  app070 on src-tauri/src/browser.rs reqwest::, main's own state at 5f3b287 (not this lane's file).
+- plan-check OK (422/660); "## Last 10 passes" count 1; duplicate-id grep empty; firewall -Baseline 0 new.
+
+LIVE PROOF PENDING (batched; visible change: the stop card's button)
+1. Only reachable with a signed test build (see evidence/T-293.txt steps 1-5). On the stop card,
+   the one button reads "Close" (it read "OK" before) and closes the card.
+2. Check for updates afterwards: the note reads "The newest installer was stopped earlier ...".
+
+Hunk left for the coordinator (scripts/release.mjs, not this lane's file)
+- None to apply today: release.mjs has no Windows (Authenticode) signing step yet (OD-03), so no
+  build may claim to be signed. The change that adds that step must, in the same commit, add
+  KOLUX_RS_SIGNED_BUILD: "1" to the build environment at release.mjs line 209:
+  -  const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: ..., KOLUX_RS_RELEASE_PUBKEY: pubkey };
+  +  const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: ..., KOLUX_RS_RELEASE_PUBKEY: pubkey, KOLUX_RS_SIGNED_BUILD: "1" };
+  (the flag is read at compile time; rustc rebuilds when it changes).

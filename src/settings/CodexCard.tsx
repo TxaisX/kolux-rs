@@ -7,6 +7,7 @@
 // account Kolux made, and for Codex's own login only explains how to sign out in Codex.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { clearReadFailure, connectFailed, readFailed } from "../onboarding/firstRun";
 import { AttentionNote, fixDoes, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
@@ -71,7 +72,19 @@ export function codexState(v: CodexView): CodexState {
 const codexChip: Record<CodexState, string> = { connecting: "Connecting", connected: "Connected", attention: "Needs attention", disconnected: "Not connected" };
 
 export function CodexCardView({ view, error, pending = false, onAction }: { view: CodexView | null; error?: string | null; pending?: boolean; onAction: (a: CodexAction) => void }) {
-  if (!view) return null;
+  // ACCT-035 (FIX-3): a first read that failed still shows the card and says why, never a blank gap.
+  if (!view)
+    return error ? (
+      <section className="conn-card" aria-label="Codex" data-state="attention">
+        <header className="conn-head">
+          <VendorMark agent="codex" size={18} />
+          <span className="conn-name">Codex</span>
+        </header>
+        <p className="conn-detail warn" role="alert">
+          {error}
+        </p>
+      </section>
+    ) : null;
   const state = codexState(view);
   const busy = state === "connecting";
   return (
@@ -145,8 +158,11 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
   const [pending, setPending] = useState(false);
   const read = useCallback(() => {
     invoke<CodexView>("codex_accounts")
-      .then(setView)
-      .catch((e) => setError(String(e)));
+      .then((v) => {
+        setView(v);
+        setError(clearReadFailure);
+      })
+      .catch(() => setError(readFailed));
   }, []);
   useEffect(() => {
     read();
@@ -171,7 +187,7 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
             ? openInstallPage("codex")
             : invoke("codex_account_sign_in", { device: a.kind === "code", again: null });
     if (a.kind !== "cancel") setPending(true);
-    call.catch((e) => setError(String(e)));
+    call.catch((e) => setError(a.kind === "connect" || a.kind === "code" ? connectFailed("Codex", e) : String(e)));
     // ACCT-002: a choice comes back after 30 seconds even if no answer arrives.
     void settleWithin(call).then(() => {
       setPending(false);

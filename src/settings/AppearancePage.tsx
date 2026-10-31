@@ -5,8 +5,9 @@ import { useContext, useEffect, useRef, useState, type CSSProperties, type React
 import { MAX_LEVEL, MIN_LEVEL, onZoom, percentOf, stepZoom, zoomLevel, type ZoomStep } from "./zoom";
 import { SearchFolds } from "./search";
 import { invoke } from "@tauri-apps/api/core";
-import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, THEMED_SCREENS, type Appearance, type FontWeight, type Mode } from "../theme";
-import { importScheme } from "../terminal/schemes";
+import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, terminalFor, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, THEMED_SCREENS, type Appearance, type FontWeight, type Mode } from "../theme";
+import { importScheme, type CustomScheme } from "../terminal/schemes";
+import { parseSchemeFile, planImport, planSummary, sameColours } from "./importSchemes";
 import { GPU_FIELD, gpuOn } from "../terminal/renderer";
 import { schemeOptions, SchemeList } from "./SchemePicker";
 import { patchSettings, saveOnClose, useDraftOf, useSettings } from "./useSettings";
@@ -144,7 +145,7 @@ export function FontField({ label, value, placeholder, onPick }: { label: string
         }}
       />
       {open && shown.length > 0 && (
-        <div className="font-list" role="listbox" aria-label={`${label} suggestions`}>
+        <div className="font-list" role="listbox" data-popup aria-label={`${label} suggestions`}>
           {shown.map((f) => (
             <button key={f} type="button" role="option" aria-selected={f === value} tabIndex={-1} style={{ fontFamily: fontStack(f, "var(--ui-font)") }} onMouseDown={(e) => e.preventDefault()} onClick={() => commit(f)}>
               {f}
@@ -332,6 +333,91 @@ export function PaneLook({ look, onChange }: { look: Appearance; onChange: (a: A
 
 /** SET-023: a scheme for dark mode and one for light mode, a search box over both, and schemes
  *  pasted in Windows Terminal's JSON format. Removing a scheme in use falls back to the default. */
+type Incoming = { file: string; scheme?: CustomScheme; problem?: string; same?: boolean };
+
+/** SET-024: schemes brought in from Warp theme files or a Ghostty configuration. Each file is
+ *  previewed first; only the ticked ones join the custom list, within the cap. */
+function SchemeImport({ look, onChange }: { look: Appearance; onChange: (a: Appearance) => void }) {
+  const [incoming, setIncoming] = useState<Incoming[]>([]);
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [result, setResult] = useState("");
+  const read = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const now = terminalFor(look, true);
+    const rows = await Promise.all(
+      [...files].map(async (f): Promise<Incoming> => {
+        try {
+          const scheme = parseSchemeFile(f.name, await f.text());
+          return { file: f.name, scheme, same: sameColours(scheme, now) };
+        } catch (e) {
+          return { file: f.name, problem: e instanceof Error ? e.message : String(e) };
+        }
+      }),
+    );
+    setIncoming(rows);
+    setTicked(new Set());
+    setResult("");
+  };
+  const usable = incoming.filter((r) => r.scheme && !r.same);
+  const toggle = (name: string, on: boolean) => setTicked((t) => (on ? new Set(t).add(name) : new Set([...t].filter((n) => n !== name))));
+  const apply = () => {
+    const plan = planImport(look.custom, usable.filter((r) => ticked.has(r.scheme!.name)).map((r) => r.scheme!));
+    if (plan.added.length || plan.replaced.length) onChange({ ...look, custom: plan.custom });
+    setResult(planSummary(plan));
+    setIncoming([]);
+    setTicked(new Set());
+  };
+  return (
+    <div className="scheme-import">
+      <label className="scheme-add">
+        <span>Bring in from Warp or Ghostty</span>
+        <input type="file" aria-label="Warp theme or Ghostty configuration files" multiple accept=".yaml,.yml,.conf,.config,text/plain,*" onChange={(e) => void read(e.target.files).finally(() => (e.target.value = ""))} />
+      </label>
+      <p className="conn-detail">Pick Warp theme files (.yaml) or your Ghostty configuration file. Nothing changes until you tick schemes and apply.</p>
+      {incoming.length > 0 && (
+        <div role="group" aria-label="Schemes to bring in">
+          {usable.length > 1 && (
+            <label className="conn-switch">
+              <input type="checkbox" aria-label="Select all" checked={ticked.size === usable.length} onChange={(e) => setTicked(e.target.checked ? new Set(usable.map((r) => r.scheme!.name)) : new Set())} />
+              <span>Select all</span>
+            </label>
+          )}
+          {incoming.map((r) =>
+            r.scheme && !r.same ? (
+              <label key={r.file} className="conn-switch scheme-incoming">
+                <input type="checkbox" aria-label={`Bring in ${r.scheme.name}`} checked={ticked.has(r.scheme.name)} onChange={(e) => toggle(r.scheme!.name, e.target.checked)} />
+                <span className="scheme-swatch" style={{ background: r.scheme.background, color: r.scheme.foreground }}>
+                  Aa
+                  {(["red", "green", "yellow", "blue"] as const).map((k) => (
+                    <i key={k} style={{ background: r.scheme![k] }} />
+                  ))}
+                </span>
+                <span>
+                  {r.scheme.name}
+                  <small>{look.custom.some((c) => c.name.toLowerCase() === r.scheme!.name.toLowerCase()) ? `Replaces your scheme ${r.scheme.name}.` : "Joins your custom schemes."}</small>
+                </span>
+              </label>
+            ) : (
+              <p key={r.file} className={r.same ? "conn-detail" : "conn-detail warn"}>
+                {r.file}: {r.same ? "already matches your current terminal colours, so there is nothing to apply." : r.problem}
+              </p>
+            ),
+          )}
+          <div className="btn-row">
+            <button type="button" className="btn" disabled={ticked.size === 0} onClick={apply}>
+              Bring in {ticked.size || ""}
+            </button>
+            <button type="button" className="btn" onClick={() => setIncoming([])}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {result && <p className="conn-detail">{result}</p>}
+    </div>
+  );
+}
+
 function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: Appearance) => void }) {
   const [query, setQuery] = useState("");
   const [paste, setPaste] = useState("");
@@ -375,6 +461,7 @@ function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: A
         Add scheme
       </button>
       {problem && <p className="conn-detail warn">{problem}</p>}
+      <SchemeImport look={look} onChange={onChange} />
     </>
   );
 }

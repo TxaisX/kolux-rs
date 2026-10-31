@@ -26,7 +26,7 @@ const LOCK_STALE: Duration = Duration::from_secs(30);
 const LOCK_WAIT: Duration = Duration::from_secs(35);
 
 /// The agents whose hooks Kolux manages, by catalogue id.
-pub const MANAGED: [&str; 2] = ["claude", "codex"];
+pub const MANAGED: [&str; 5] = ["claude", "codex", "gemini", "antigravity", "amp"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Plan {
@@ -170,8 +170,10 @@ fn remove_claude_once(file: &Path, prev: &Path) -> Result<bool, String> {
         changed = true;
     }
     if changed {
+        let record = prev.parent().map(|d| d.join(BACKUP_RECORD)).unwrap_or_default();
         match copy.filter(|(_, v)| *v == s) {
             Some((bytes, _)) => write_atomic(file, &bytes, Some(&text))?,
+            None if drop_created(file, &record, &s, &text)? => {}
             None => write_json(file, &s, Some(&text))?,
         }
         let _ = fs::remove_file(prev);
@@ -213,7 +215,7 @@ pub fn backup_of(file: &Path) -> PathBuf {
 }
 
 /// Keeps a copy of `file` from before Kolux's first install; a copy already there is never
-/// replaced, and a missing file has nothing to keep. A copy that cannot be made, or that does not
+/// replaced, and a missing file has nothing to keep (FIX-2: its record says it was missing). A copy that cannot be made, or that does not
 /// hash the same as the file, stops the install. T-152 (2): a new copy returns the sha256 of the
 /// file and of the copy, written to `record` before the copy takes its name (a rebuilt record
 /// returns `None`; it is logged here).
@@ -249,12 +251,19 @@ pub fn back_up(file: &Path, record: &Path) -> Result<Option<(String, String)>, S
         };
     }
     if !file.exists() {
+        // FIX-2 (S8): Kolux is about to create the file, so the record says it was missing; the
+        // next start then knows Kolux's entries in it need no copy, and off deletes it.
+        write_lines(record, &format!("{MISSING}  {}\n", file.display())).map_err(refuse)?;
         return Ok(None);
     }
     let bytes = fs::read(file).map_err(|e| refuse(e.to_string()))?;
     // T-152-c (4): a file that already holds Kolux's entries is not the user's own file; a copy of
     // it would put those entries back on every later off, so none is made and the install stops.
+    // FIX-2 (S8): unless Kolux created it, which the record says; then there is nothing to keep.
     if holds_mine(&bytes) {
+        if was_missing(record, file) {
+            return Ok(None);
+        }
         return Err(format!(
             "{} already holds Kolux's hook entries but has no {BACKUP_SUFFIX} copy, so no copy is made and hooks are not installed; switch the hooks off first to take Kolux's entries out",
             file.display()
@@ -313,9 +322,40 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
+/// FIX-2 (S8): the record line, in place of a hash, for a file that did not exist before Kolux's
+/// first install: `missing  <file>`.
+const MISSING: &str = "missing";
+
+/// FIX-2 (S8): `record` says `file` did not exist before Kolux first wrote it.
+pub fn was_missing(record: &Path, file: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(record) else { return false };
+    let want = resolved(file);
+    text.lines().any(|l| l.split_once("  ").is_some_and(|(h, p)| h == MISSING && resolved(Path::new(p)) == want))
+}
+
+/// FIX-2 (S5, S8): `v`, what is left of `file` once Kolux's entries are out, is `{}`, the file has
+/// no kept copy and its record says Kolux created it: the file is deleted (only while it still
+/// holds `text`, else `CHANGED`), the record with it. True when deleted.
+pub fn drop_created(file: &Path, record: &Path, v: &Value, text: &str) -> Result<bool, String> {
+    if v.as_object().is_none_or(|o| !o.is_empty()) || backup_of(file).exists() || !was_missing(record, file) {
+        return Ok(false);
+    }
+    // The same one-syscall window as `write_atomic`'s re-read and rename.
+    if fs::read(file).map_err(|e| format!("{}: {e}", file.display()))? != text.as_bytes() {
+        return Err(format!("{} {CHANGED}", file.display()));
+    }
+    fs::remove_file(file).map_err(|e| format!("{}: {e}; nothing removed", file.display()))?;
+    let _ = fs::remove_file(record);
+    Ok(true)
+}
+
 /// Both hashes, written through a synced temp file and renamed over the record.
 fn write_record(record: &Path, file: &Path, original: &str, copy: &Path, kept: &str) -> Result<(), String> {
-    let text = format!("{original}  {}\n{kept}  {}\n", file.display(), copy.display());
+    write_lines(record, &format!("{original}  {}\n{kept}  {}\n", file.display(), copy.display()))
+}
+
+/// `text` written through a synced temp file and renamed over the record.
+fn write_lines(record: &Path, text: &str) -> Result<(), String> {
     let tmp = record.with_extension("sha256.kolux-rs-tmp");
     let fail = |e: std::io::Error| format!("the copy's record {}: {e}", record.display());
     if let Some(dir) = record.parent() {
@@ -528,6 +568,8 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
             }
             Ok("removed")
         }
+        // T-120-b: Gemini CLI, Antigravity and Amp.
+        (id @ ("gemini" | "antigravity" | "amp"), Plan::Install | Plan::Remove) => vendors::apply(home, profile, id, plan),
         _ => Ok("left as it was"),
     }
 }
@@ -549,7 +591,7 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
             return Vec::new();
         }
     };
-    for refresh in [write_claude_script, write_status_script, write_codex_script] {
+    for refresh in [write_claude_script, write_status_script, write_codex_script, vendors::write_gemini_script, vendors::write_antigravity_script] {
         if let Err(e) = refresh(&home) {
             eprintln!("kolux-rs: agent hook script: {e}");
         }
@@ -613,6 +655,7 @@ pub fn agent_hooks_file() -> String {
 
 pub mod saved;
 pub mod switch;
+pub mod vendors;
 
 #[cfg(test)]
 mod tests;

@@ -331,9 +331,14 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
     }
     let Some((pane_key, terminal)) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)) else { return (400, None) };
     let Ok(event) = serde_json::from_slice::<Value>(&req.body) else { return (400, None) };
-    let agent = match req.path.as_str() {
-        "/claude" => crate::status::Agent::Claude,
-        "/codex" => crate::status::Agent::Codex,
+    let (agent, event) = match req.path.as_str() {
+        "/claude" => (crate::status::Agent::Claude, event),
+        "/codex" => (crate::status::Agent::Codex, event),
+        // T-120-b: Gemini CLI, Antigravity and Amp, each turned into the shape the rules read.
+        p if agent_hooks::vendors::is_route(p) => match agent_hooks::vendors::normalize(p, &event) {
+            Some(e) => (crate::status::Agent::Vendor, e),
+            None => return (200, None),
+        },
         _ => return (404, None),
     };
     (200, crate::status::report(pane_key, terminal, agent, &event))
@@ -344,6 +349,10 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
 /// event, Codex, a body that cannot be read) gets `{}`, no opinion, so Claude's own permission
 /// flow carries on and Kolux never blocks by itself.
 pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
+    // T-120-b: Antigravity's PreToolUse hook must answer; "allow" hands the call to its own policy.
+    if path == "/antigravity/PreToolUse" {
+        return json!({ "decision": "allow" }).to_string();
+    }
     let ask = || {
         if path != "/claude" {
             return None;
@@ -487,6 +496,9 @@ fn iso_ms(s: &str) -> Option<i64> {
 /// (`claudeUsageLimitResetsAt`) and for the next limit stop.
 fn record_usage(app: &AppHandle, u: &Usage) {
     let mut u = u.clone();
+    // FIX-2 (council FS-4): the windows this report itself carried, named before the merge with the
+    // stored ones, so the pill takes only these as forecast readings stamped now.
+    let carried: Vec<String> = u.limits.iter().map(|l| l.kind.clone()).collect();
     if !u.limits.is_empty() {
         if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
             if let Ok(store) = store.lock() {
@@ -504,7 +516,9 @@ fn record_usage(app: &AppHandle, u: &Usage) {
             let _ = app.emit(crate::claude_key::EVENT, ());
         }
     }
-    let _ = app.emit(USAGE_EVENT, &u);
+    let mut payload = json!(u);
+    payload["carried"] = json!(carried);
+    let _ = app.emit(USAGE_EVENT, payload);
 }
 
 /// The config folder the active Claude account runs under; none for the default sign-in.
@@ -625,13 +639,32 @@ pub fn status_command(script: &str, prev: &str) -> String {
 /// start. Delayed expansion is off, the agent's home path loses quotes and a trailing backslash,
 /// and no parenthesised block holds a path, so `!`, `&` and `)` in paths change nothing.
 /// `prints` (SAFE-009): Kolux's answer goes to stdout for the agent to read instead of to NUL.
+///
+/// FIX-2 (S7, COMPAT 3.1): the held line is `route|identity|config|` (KR) and a small JSON object
+/// of only the fields the status rules read, made by Windows PowerShell (every Windows has it):
+/// the event, tool and session names, a few short flags and ids, `cwd`, whether the background
+/// lists were empty, and the time it was held. The tool's input and output, the prompt and the
+/// reply never reach the file. It runs only when Kolux cannot take the event; anything it cannot
+/// read is dropped, not held.
+pub(crate) const SPOOL_LINE: &str = concat!(
+    r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
+    r#"$ErrorActionPreference='Stop'; try { $e=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8) | ConvertFrom-Json; $o=[ordered]@{}; "#,
+    r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','fullyIdle') "#,
+    r#"{ $v=$e.$k; if ($v -is [string]) { $o[$k]=$v.Substring(0,[Math]::Min($v.Length,300)) } elseif ($v -is [bool]) { $o[$k]=$v } }; "#,
+    r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
+    r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } }; "#,
+    r#"$o['spooled_at']=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); "#,
+    r#"[IO.File]::AppendAllText($env:KS, $env:KR + (ConvertTo-Json -InputObject $o -Compress -Depth 3) + [char]13 + [char]10, (New-Object Text.UTF8Encoding $false)) } catch { }""#,
+    r#" <NUL >NUL 2>&1"#
+);
+
 fn script(agent: &str, route: &str, prints: bool) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
     let (out, after) = if prints { ("", "2>NUL") } else { ("-o NUL ", ">NUL 2>&1") };
     let post = format!("%SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %KC%\" --data-binary \"@%KF%\" {out}\"http://127.0.0.1:%KP%/{route}\" {after}");
     // A status-line reading is only worth its moment: it is never held for later.
     let spool = route != "claude-status";
-    let record = format!("<nul set /p \"={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\" >\"%KF%.line\"");
+    let record = format!("set \"KR={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\"");
     let keep = format!("for %%d in (\"%KE%\") do set \"KS=%%~dpd{}\"", agent_hooks::saved::SPOOL_FILE);
     let mut lines = vec![
         "@echo off",
@@ -646,8 +679,13 @@ fn script(agent: &str, route: &str, prints: bool) -> String {
         "rem The endpoint file names the Kolux running now, so a pane outlives a Kolux restart.",
         "if defined KE if exist \"%KE%\" for /f \"usebackq tokens=1,2\" %%a in (\"%KE%\") do (set \"KP=%%a\" & set \"KT=%%b\")",
         "set \"KC=%CLAUDE_CONFIG_DIR%\"",
-        "if defined KC set \"KC=%KC:\"=%\"",
-        "if defined KC if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        // FIX-2: an unset variable's `%KC:...%` is not empty text but a broken line that stops
+        // the whole script, so the edits run only on lines reached when KC is set.
+        "if not defined KC goto config",
+        "set \"KC=%KC:\"=%\"",
+        "if not defined KC goto config",
+        "if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        ":config",
         "set \"KN=%TIME::=%\"",
         "set \"KN=%KN:.=%\"",
         "set \"KN=%KN:,=%\"",
@@ -669,12 +707,11 @@ fn script(agent: &str, route: &str, prints: bool) -> String {
             "for %%z in (\"%KF%\") do if %%~zz==0 goto done",
             keep.as_str(),
             record.as_str(),
-            "type \"%KF%\" >>\"%KF%.line\"",
-            "echo(>>\"%KF%.line\"",
-            "type \"%KF%.line\" >>\"%KS%\"",
+            "rem Only what the status needs is held: never the tool's input or output, the prompt or the reply.",
+            SPOOL_LINE,
         ]);
     }
-    lines.extend([":done", "del \"%KF%\" \"%KF%.line\" >NUL 2>&1", "exit /b 0", ""]);
+    lines.extend([":done", "del \"%KF%\" >NUL 2>&1", "exit /b 0", ""]);
     lines.join("\r\n")
 }
 
@@ -728,7 +765,7 @@ fn is_mine(group: &Value) -> bool {
 /// Puts exactly one Kolux RS group under each of the twelve events, leaving every other entry
 /// (another tool's hooks, the user's own) as it is. True when `settings` changed.
 pub fn install_claude_hooks(settings: &mut Value, command: &str) -> bool {
-    install_groups(settings, &CLAUDE_EVENTS, &TOOL_EVENTS, command)
+    install_groups(settings, &CLAUDE_EVENTS, &TOOL_EVENTS, command, 10)
 }
 
 /// STAT-040: Kolux's command takes the `statusLine` slot, keeping padding and whatever else is
@@ -754,12 +791,13 @@ pub fn install_claude_status(settings: &mut Value, command: &str) -> (bool, Opti
 
 /// The same for Codex's `hooks.json` (STAT-008): one Kolux group per event, after the user's own.
 pub fn install_codex_hooks(file: &mut Value, command: &str) -> bool {
-    install_groups(file, &CODEX_EVENTS, &[], command)
+    install_groups(file, &CODEX_EVENTS, &[], command, 10)
 }
 
 /// One Kolux group under each of `events`; a stale one is replaced where it stands, a new one
 /// goes last. `matched` events get the match-everything matcher (COMPAT 3.4).
-fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: &str) -> bool {
+/// `timeout` is in the agent's own unit (seconds for Claude Code and Codex, ms for Gemini CLI).
+fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: &str, timeout: u64) -> bool {
     let before = root.clone();
     if !root.is_object() {
         *root = json!({});
@@ -774,7 +812,7 @@ fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: 
             *groups = json!([]);
         }
         let groups = groups.as_array_mut().unwrap();
-        let hook = json!([{ "type": "command", "command": command, "timeout": 10 }]);
+        let hook = json!([{ "type": "command", "command": command, "timeout": timeout }]);
         let mine = if matched.contains(event) { json!({ "matcher": "*", "hooks": hook }) } else { json!({ "hooks": hook }) };
         match groups.iter().position(is_mine) {
             Some(i) => {

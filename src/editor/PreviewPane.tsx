@@ -3,11 +3,11 @@
 // The HTML is sanitised (DOMPurify) and links do not navigate, so nothing in a note can take over
 // the app's window. Front matter shows as its own block above the note (EDIT-019); More actions
 // hides or shows it for each note, shown at first and remembered across restarts.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { Close, Dots, FileCode } from "../chrome/icons";
+import { Close, Dots, FileCode, List } from "../chrome/icons";
 import { baseName, keyOf, subscribe, textOf } from "./buffers";
 import { splitFront } from "./markdown";
 
@@ -29,6 +29,11 @@ const rememberFront = (path: string, hide: boolean) => {
   }
 };
 import { domPick, selections } from "./notes";
+import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
+import { outline } from "./toc";
+import { useKeymap } from "../keys/KeymapContext";
+import { matchEvent } from "../keys/keymap";
+import "./editor-extras.css";
 
 type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
 
@@ -41,6 +46,14 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
   const [menu, setMenu] = useState(false);
   const [frontOff, setFrontOff] = useState(() => hiddenFronts().includes(keyOf(path)));
   useEffect(() => setFrontOff(hiddenFronts().includes(keyOf(path))), [path]);
+  // EDIT-017 / EDIT-016: the find bar and the contents panel.
+  const [find, setFind] = useState<FindOpen | null>(null);
+  const [toc, setToc] = useState(false);
+  const page = useRef<HTMLDivElement>(null);
+  const section = useRef<HTMLElement>(null);
+  const root = useCallback(() => page.current, []);
+  const keymap = useKeymap();
+  const hasHeadings = useMemo(() => outline(text ?? "").length > 0, [text]);
 
   useEffect(() => {
     let alive = true;
@@ -68,6 +81,21 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
     return () => void selections.delete(id);
   }, [id, path, text]);
 
+  // A preview opened from the explorer or Quick Open takes the keyboard, so Mod+F answers at once.
+  useEffect(() => {
+    if (focused && !hidden && !section.current?.contains(document.activeElement)) section.current?.focus();
+  }, [focused, hidden]);
+
+  // The user's own find chords (editor.find and editor.replace both open find: a preview has
+  // nothing to replace).
+  const onKeys = (e: React.KeyboardEvent) => {
+    const hit = matchEvent(keymap, e.nativeEvent, ["editor"]);
+    if (hit?.id !== "editor.find" && hit?.id !== "editor.replace") return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.repeat) setFind((f) => ({ replace: false, seed: selectedIn(page.current), n: (f?.n ?? 0) + 1 }));
+  };
+
   const name = baseName(path);
   const { front, body } = splitFront(text ?? "");
   const toggleFront = () => {
@@ -76,7 +104,7 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
     setMenu(false);
   };
   return (
-    <section className={`pane editor preview${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Preview of ${name}`} onMouseDown={onFocus} data-kind="preview" data-key={id} tabIndex={-1}>
+    <section ref={section} className={`pane editor preview${focused ? " focused" : ""}${toc && hasHeadings ? " toc-open" : ""}`} hidden={hidden} aria-label={`Preview of ${name}`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="preview" data-key={id} tabIndex={-1}>
       <header className="pane-head">
         <span className="agent-mark" title="Markdown preview">
           <FileCode size={13} />
@@ -86,6 +114,11 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
         <span className="path" title={path}>
           {path}
         </span>
+        {hasHeadings && (
+          <button className="ib" aria-pressed={toc} title="Contents" aria-label="Contents" onClick={() => setToc((v) => !v)}>
+            <List size={13} />
+          </button>
+        )}
         <span className="right">
           <span className="diff-actions">
             <button className="ib" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)} title="More actions" aria-label="More actions">
@@ -116,7 +149,10 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
           </button>
         </div>
       )}
+      {find && <FindBar pane={id} root={root} open={find} onClose={() => (setFind(null), section.current?.focus())} />}
+      {toc && hasHeadings && <Contents md={text ?? ""} path={path} root={root} onClose={() => setToc(false)} />}
       <div
+        ref={page}
         className="pane-body md-preview"
         aria-readonly="true"
         onClick={(e) => {

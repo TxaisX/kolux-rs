@@ -18,9 +18,17 @@ const walk = (dir, out = []) => {
 const CLIENTS = [/\bfetch\(\s*["'`]https?:/, /XMLHttpRequest/, /sendBeacon/, /new WebSocket\(/, /\breqwest::/, /tauri_plugin_updater/, /\bureq::/, /\bhyper::/, /TcpStream::connect/];
 const ALLOWED = {
   "src-tauri/src/artifacts.rs": [/\breqwest::/], // the script CDNs, when saving an artifact for offline use
-  "src-tauri/src/update.rs": [/tauri_plugin_updater/, /\breqwest::/], // GitHub Releases (APP-031 checks the installer the manifest names is there)
+  "src-tauri/src/browser.rs": [/\breqwest::/], // the open page's own site icon (APP-070: sites the user opens in the browser pane)
+  "src-tauri/src/update.rs": [/tauri_plugin_updater/, /reqwest::/], // GitHub Releases (APP-031 checks the installer the manifest names is there)
   "src-tauri/src/lib.rs": [/tauri_plugin_updater/],
   "src-tauri/src/cli.rs": [/TcpStream::connect/], // kolux-dev talking to the app on 127.0.0.1
+};
+// The one loopback call each file may make, as exact text: it is cut out before the scan, so any
+// other fetch in the same file is still caught (an ALLOWED entry would pass the whole file).
+// A whole-file reqwest pass covers one client only: a second builder in the same file fails the audit.
+const ONE_CLIENT = { "src-tauri/src/browser.rs": "reqwest::Client::builder(", "src-tauri/src/artifacts.rs": "reqwest::Client::builder(", "src-tauri/src/update.rs": "reqwest::Client::builder(" };
+const EXACT = {
+  "src-tauri/src/agent_hooks/vendors.rs": /\bfetch\(`http:\/\/127\.0\.0\.1:\$\{port\}\/amp`/g, // the Amp status plugin posting to Kolux on 127.0.0.1
 };
 
 test("app070: no network client in the shipped source beyond the connections the statement names", () => {
@@ -31,7 +39,12 @@ test("app070: no network client in the shipped source beyond the connections the
   for (const f of files) {
     const rel = path.relative(root, f).replace(/\\/g, "/");
     // Rust tests sit at the end of each file behind #[cfg(test)]; a client used only there is not shipped.
-    const text = fs.readFileSync(f, "utf8").split("#[cfg(test)]")[0];
+    let text = fs.readFileSync(f, "utf8").split("#[cfg(test)]")[0];
+    if (EXACT[rel]) {
+      expect(text.match(EXACT[rel]) ?? [], rel).toHaveLength(1);
+      text = text.replace(EXACT[rel], "");
+    }
+    if (ONE_CLIENT[rel]) expect(text.split(ONE_CLIENT[rel]).length - 1, rel).toBe(1);
     for (const re of CLIENTS) {
       if (re.test(text) && !(ALLOWED[rel] ?? []).some((a) => a.source === re.source)) found.push(`${rel}: ${re.source}`);
     }

@@ -1,6 +1,6 @@
 // Settings > General: the Classic or New look and the screen that opens first (SET-037).
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AppInfo } from "../app-info";
 import { screens } from "../chrome/TopBar";
 import { numberOrDefault, useDraft, useSettings } from "./useSettings";
@@ -9,31 +9,10 @@ import { REVIEW_FIELD, reviewOn } from "../editor/notes";
 import { CONFIRM_DELETE_KEY, confirmDelete } from "../automations/model";
 import { CONFIRM_CLOSE_FIELD } from "../terminal/closing";
 import { feedbackUrl, OUTBOUND } from "./privacy";
-import { AUTOSAVE_KEY, AUTOSAVE_PAUSE_KEY, autosaveOf, PAUSE_DEFAULT, PAUSE_MAX, PAUSE_MIN } from "../editor/autosave";
-
-/** EDIT-002: autosave, off until switched on, and the pause after typing before it writes. */
-export function EditorSettings({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => unknown }) {
-  const pause = autosaveOf({ ...settings, [AUTOSAVE_KEY]: true }) ?? PAUSE_DEFAULT;
-  const on = autosaveOf(settings) !== null;
-  // SET-036: emptied, the pause goes back to its default.
-  const field = useDraft(String(pause / 1000), (t) => onSave({ [AUTOSAVE_PAUSE_KEY]: numberOrDefault(t.trim() && String(Number(t) * 1000), PAUSE_DEFAULT, [PAUSE_MIN, PAUSE_MAX]) }));
-  return (
-    <section className="conn-card" data-section="editor">
-      <h2 className="conn-name">Editor</h2>
-      <label className="conn-switch">
-        <input type="checkbox" role="switch" checked={on} onChange={(e) => onSave({ [AUTOSAVE_KEY]: e.target.checked })} />
-        <span>
-          Autosave
-          <small>Writes an edited file a short pause after you stop typing. A file another program changed is never written over.</small>
-        </span>
-      </label>
-      <label className="look-select">
-        <span>Pause before saving (seconds)</span>
-        <input aria-label="Autosave pause in seconds" className="field" type="number" min={PAUSE_MIN / 1000} max={PAUSE_MAX / 1000} step={0.25} {...field} disabled={!on} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
-      </label>
-    </section>
-  );
-}
+import { DELAY, prefPatch, readEditorPrefs, type DiffView } from "./editorPrefs";
+import { addApp, addCustom, draftReady, moveApp, OPEN_IN_FIELD, presetsLeft, readOpenIn, removeApp, type OpenInApp } from "./openIn";
+import { applyDraft, PROXY_FIELD, readProxyRest, type ProxyDraft } from "./proxy";
+import { autosaveOf } from "../editor/autosave";
 
 /** A row of buttons that behaves as one radio group. */
 export function Segmented<T extends string>({ label, options, value, onPick, off = [] }: { label: string; options: Array<{ id: T; label: string }>; value: T; onPick: (v: T) => void; off?: T[] }) {
@@ -161,14 +140,187 @@ function Confirmations({ settings, onSave }: { settings: Record<string, unknown>
   );
 }
 
+/** SET-038 + EDIT-002: editor and diff preferences; the built-in editor and the diff views follow
+ *  them. The one Editor card: autosave reads and writes the same settings the editor tabs use
+ *  (autosaveOf), so the switch here is the switch the app obeys. */
+export function EditorCard({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => unknown }) {
+  const p = readEditorPrefs(settings);
+  const on = autosaveOf(settings) !== null;
+  // SET-036: the pause saves on a pause in typing, never mid-number; emptied, it goes back to its default.
+  const pause = useDraft(String(p.autoSaveDelay / 1000), (t) => onSave(prefPatch("autoSaveDelay", numberOrDefault(t.trim() && String(Number(t) * 1000), DELAY.base, [DELAY.min, DELAY.max]))));
+  const box = (key: "minimap" | "wordWrap" | "spellcheck" | "diffWordWrap" | "diffWhitespace" | "diffTree", label: string) => (
+    <label className="conn-switch">
+      <input type="checkbox" role="switch" aria-label={label} checked={p[key]} onChange={(e) => onSave(prefPatch(key, e.target.checked))} />
+      <span>{label}</span>
+    </label>
+  );
+  return (
+    <section className="conn-card" data-section="editor">
+      <h2 className="conn-name">Editor and diffs</h2>
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" aria-label="Autosave" checked={on} onChange={(e) => onSave(prefPatch("autoSave", e.target.checked))} />
+        <span>
+          Autosave
+          <small>Writes an edited file a short pause after you stop typing. A file another program changed is never written over.</small>
+        </span>
+      </label>
+      {on && (
+        <label className="look-select">
+          <span>Pause before saving (seconds)</span>
+          <input aria-label="Autosave pause in seconds" className="field" type="number" min={DELAY.min / 1000} max={DELAY.max / 1000} step={0.25} {...pause} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+        </label>
+      )}
+      {box("minimap", "Minimap beside the editor")}
+      {box("wordWrap", "Word wrap in the editor")}
+      {box("spellcheck", "Spellcheck in rich markdown")}
+      <div className="look-select">
+        <span>Diffs open</span>
+        <Segmented<DiffView> label="Diffs open" options={[{ id: "inline", label: "Inline" }, { id: "split", label: "Side by side" }]} value={p.diffView} onPick={(v) => onSave(prefPatch("diffView", v))} />
+      </div>
+      {box("diffWordWrap", "Word wrap in diffs")}
+      {box("diffWhitespace", "Show changes made only of whitespace")}
+      {box("diffTree", "File tree beside the combined diff")}
+    </section>
+  );
+}
+
+/** SET-039: the apps every Open in menu lists, from presets or by name and command. */
+function OpenInCard({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => void }) {
+  const list = readOpenIn(settings);
+  const [draft, setDraft] = useState({ name: "", command: "" });
+  const put = (next: OpenInApp[]) => onSave({ [OPEN_IN_FIELD]: next });
+  const left = presetsLeft(list);
+  return (
+    <section className="conn-card" data-section="open-in">
+      <h2 className="conn-name">Open in</h2>
+      <p className="conn-detail">These apps appear, in this order, in every Open in menu: worktrees, files and the keybindings file.</p>
+      <ul className="conn-list open-in-list" aria-label="Open in apps">
+        {list.map((a, i) => (
+          <li key={a.id}>
+            <span className="name">{a.name}</span> <code>{a.command}</code>
+            <button type="button" className="btn" aria-label={`Move ${a.name} up`} disabled={i === 0} onClick={() => put(moveApp(list, a.id, -1))}>
+              Up
+            </button>
+            <button type="button" className="btn" aria-label={`Move ${a.name} down`} disabled={i === list.length - 1} onClick={() => put(moveApp(list, a.id, 1))}>
+              Down
+            </button>
+            <button type="button" className="btn" aria-label={`Remove ${a.name}`} onClick={() => put(removeApp(list, a.id))}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      {left.length > 0 && (
+        <label className="look-select">
+          <span>Add an app</span>
+          <select className="field" aria-label="Add an Open in app" value="" onChange={(e) => put(addApp(list, left.find((p) => p.id === e.target.value)!))}>
+            <option value="">Choose an app</option>
+            {left.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="btn-row">
+        <input className="field" aria-label="App name" placeholder="Name" maxLength={60} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+        <input className="field" aria-label="App command" placeholder="Command, e.g. gvim --remote" maxLength={300} value={draft.command} onChange={(e) => setDraft({ ...draft, command: e.target.value })} />
+        <button
+          type="button"
+          className="btn"
+          disabled={!draftReady(draft)}
+          onClick={() => {
+            put(addCustom(list, draft));
+            setDraft({ name: "", command: "" });
+          }}
+        >
+          Add custom app
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** SET-040: the proxy for Kolux's own traffic. The address is sealed (SAFE-026) and never shown back. */
+function ProxyCard({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => void }) {
+  const rest = readProxyRest(settings);
+  const [set, setSet] = useState<boolean | null>(null);
+  const [draft, setDraft] = useState<ProxyDraft>({ address: "", bypass: rest.bypass.join(", ") });
+  const [http1, setHttp1] = useState(rest.http1);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    invoke<boolean>("secret_status", { key: PROXY_FIELD }).then(setSet, () => setSet(false));
+  }, []);
+  const apply = async (clear = false) => {
+    setErrors([]);
+    setNote("");
+    const r = applyDraft(clear ? { address: "", bypass: draft.bypass } : draft, http1);
+    if ("errors" in r) return setErrors(r.errors);
+    // An empty address field keeps a sealed proxy unless Clear was pressed.
+    const keep = !clear && !r.address && !!set;
+    try {
+      if (r.address) await invoke("secret_set", { key: PROXY_FIELD, value: r.address });
+      else if (clear) await invoke("secret_clear", { key: PROXY_FIELD });
+      onSave(r.patch);
+      setSet(Boolean(r.address) || keep);
+      setDraft({ ...draft, address: "" });
+      setNote(r.address || keep ? "Proxy saved. Kolux's own traffic goes through it." : "No proxy: traffic goes direct.");
+    } catch (e) {
+      setErrors([String(e)]);
+    }
+  };
+  if (set === null) return null;
+  return (
+    <section className="conn-card" data-section="proxy">
+      <details open={set}>
+        <summary className="conn-name">Network proxy</summary>
+        <p className="conn-detail">{set ? "A proxy is set; its address is kept sealed and not shown. Type a new one to replace it, or clear it." : "Kolux's own traffic (update checks and downloads) goes direct."}</p>
+        <label className="look-select">
+          <span>Proxy address</span>
+          <input className="field" aria-label="Proxy address" autoComplete="off" spellCheck={false} placeholder="host:port or http://host:port" maxLength={300} value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
+        </label>
+        <label className="look-select">
+          <span>Do not use the proxy for</span>
+          <textarea className="field" aria-label="Proxy bypass list" rows={2} placeholder="localhost, *.corp.example, 10.0.0.0/8" value={draft.bypass} onChange={(e) => setDraft({ ...draft, bypass: e.target.value })} />
+        </label>
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" aria-label="HTTP/1 only" checked={http1} onChange={(e) => setHttp1(e.target.checked)} />
+          <span>
+            HTTP/1 only
+            <small>Helps on networks that break newer protocols. Off by default.</small>
+          </span>
+        </label>
+        <div className="btn-row">
+          <button type="button" className="btn" onClick={() => void apply()}>
+            Apply
+          </button>
+          <button type="button" className="btn" disabled={!set} onClick={() => void apply(true)}>
+            Clear proxy
+          </button>
+        </div>
+        {errors.map((e) => (
+          <p key={e} className="conn-detail warn">
+            {e}
+          </p>
+        ))}
+        {note && <p className="conn-detail">{note}</p>}
+      </details>
+    </section>
+  );
+}
+
 export default function GeneralPage() {
   const { settings, error, save } = useSettings();
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
       {settings && <GeneralView settings={settings} onSave={save} />}
-      {settings && <EditorSettings settings={settings} onSave={save} />}
       {settings && <Confirmations settings={settings} onSave={save} />}
+      {settings && <EditorCard settings={settings} onSave={save} />}
+      {settings && <OpenInCard settings={settings} onSave={save} />}
+      {settings && <ProxyCard settings={settings} onSave={save} />}
       <DiagnosticsCard />
       <PrivacyCard />
     </>

@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
+import { STATUSES_FAILED } from "../onboarding/firstRun";
 import { CodexCardView, codexHeadline, type CodexView } from "./CodexCard";
 
 const off: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [], settingsWarning: null };
@@ -48,4 +49,13 @@ test("T-138-c ACCT-001: the card lists no accounts; they live under Manage accou
 
 test("T-138-b: the headline names the active account by its name too", () => {
   expect(codexHeadline({ ...off, accounts: [{ ...kim, label: "Work" }], active: "c1" })).toBe("Connected · Work · kim@example.com");
+});
+
+test("ACCT-035 (FIX-3): when the first read fails the card still shows, named, with the read-failure line; with no error it waits blank", () => {
+  const h = renderToString(createElement(CodexCardView, { view: null, error: STATUSES_FAILED, onAction: () => {} }));
+  expect(h).toContain('aria-label="Codex"');
+  expect(h).toContain('role="alert"');
+  expect(h).toContain(STATUSES_FAILED);
+  expect(h).not.toContain("Connect with your ChatGPT plan");
+  expect(renderToString(createElement(CodexCardView, { view: null, error: null, onAction: () => {} }))).toBe("");
 });

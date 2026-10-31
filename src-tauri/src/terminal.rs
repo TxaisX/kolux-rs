@@ -637,7 +637,7 @@ impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>) -> Result<u32, String> {
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>, shell: Option<(String, Vec<String>)>) -> Result<u32, String> {
         // TERM-115: a pane's Ctrl+C must reach its program. Windows hands "ignore Ctrl+C" down to
         // every child a process starts, and this app is itself started with CREATE_NEW_PROCESS_GROUP
         // (by `kolux-dev`, and by the dev runner), so its shells never saw the interrupt: the pty got
@@ -674,10 +674,11 @@ impl Terminals {
         // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
         let mut prs = crate::scm::PrScan::default();
         let link_dir = cwd.clone();
-        // ACCT-046: a program runs as asked; an automatic shell has a line of fallbacks.
+        // ACCT-046: a program runs as asked; a shell pane has a line of fallbacks behind the
+        // chosen default shell (SET-026), when there is one.
         let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => vec![program_command(p, &args, cwd.as_deref())],
-            None => shell_commands(cwd.as_deref()),
+            None => shell_commands(cwd.as_deref(), shell),
         };
         let key = crate::cli::secret();
         let (fresh, managers) = (crate::install::fresh_path(""), node_managers());
@@ -802,6 +803,11 @@ impl Terminals {
                     }
                 }
                 crate::activity::terminal_ended(id);
+                // TERM-122: after activity has closed its spells, the panes' sessions go with the
+                // terminal, so a closed pane, or an agent that was the pane's own program and
+                // exited or crashed, never keeps the computer awake (an agent typed into a shell
+                // pane ends with the shell, not with the agent).
+                crate::status::terminal_ended(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
                 crate::automations::follow(&exit_app, |s| {
                     let run = crate::automations::pane_ended(s, id, code, crate::automations::now_ms())?;
@@ -961,14 +967,6 @@ impl Terminals {
         }
     }
 
-    /// The program session started in `dir` itself since `since`, with when it last wrote, so a
-    /// worker start can wait for its agent (ORCH-016).
-    pub fn program_in(&self, dir: &std::path::Path, since: Instant) -> Option<(u32, Option<Instant>)> {
-        let inner = self.inner.lock().ok()?;
-        let same = |d: &str| std::path::Path::new(d).canonicalize().ok() == dir.canonicalize().ok();
-        inner.marks.iter().filter(|(id, m)| m.started >= since && inner.dirs.get(id).is_some_and(|d| same(d))).map(|(id, m)| (*id, m.last_output)).next()
-    }
-
     /// What session `id` runs: `None` when it is gone, `Some(None)` for a shell (the foreground
     /// cannot be told), `Some(Some(agent))` for a program Kolux started (USAGE-007).
     pub fn program(&self, id: u32) -> Option<Option<&'static str>> {
@@ -1051,15 +1049,28 @@ impl Terminals {
 
     /// CLI-017: every open session as (handle, the folder it started in, its program; none for a shell).
     pub fn sessions(&self) -> Vec<(String, String, Option<String>)> {
-        self.every().into_iter().filter_map(|(h, dir, program)| Some((h, dir?, program))).collect()
-    }
-
-    /// CLI-023: every open session, a shell started in the home folder (no folder) included.
-    pub fn every(&self) -> Vec<(String, Option<String>, Option<String>)> {
         let Ok(inner) = self.inner.lock() else { return Vec::new() };
         let mut ids: Vec<u32> = inner.sessions.keys().copied().collect();
         ids.sort_unstable();
-        ids.into_iter().map(|id| (handle_of(id), inner.dirs.get(&id).cloned(), inner.marks.get(&id).map(|m| m.program.clone()))).collect()
+        ids.into_iter().filter_map(|id| Some((handle_of(id), inner.dirs.get(&id).cloned()?, inner.marks.get(&id).map(|m| m.program.clone())))).collect()
+    }
+
+    /// CLI-023 (T-262-c): every open session with the folder it started in and the program it
+    /// runs. A plain shell given no folder started in the home folder (as the PTY falls back), and
+    /// its program is the shell that actually started (a fallback when the chosen one did not).
+    pub fn every(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        let home = crate::pty::home_dir().map(|h| h.to_string_lossy().into_owned());
+        let Ok(inner) = self.inner.lock() else { return Vec::new() };
+        let mut ids: Vec<u32> = inner.sessions.keys().copied().collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .map(|id| {
+                let mark = inner.marks.get(&id);
+                let dir = inner.dirs.get(&id).cloned().or_else(|| mark.is_none().then(|| home.clone()).flatten());
+                let program = mark.map(|m| m.program.clone()).or_else(|| inner.sessions.get(&id).map(|s| s.program().to_string()));
+                (handle_of(id), dir, program)
+            })
+            .collect()
     }
 
     /// CLI-023: the window's latest report of its panes and tabs.
@@ -1146,17 +1157,14 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
-    let (mut program, mut args) = (program, args);
     let pinned = resumed.is_some();
-    let (env, cap, account, hooks_on): (Vec<(String, String)>, bool, Option<String>, bool) = {
+    #[allow(clippy::type_complexity)]
+    let (env, cap, account, hooks_on, plain): (Vec<(String, String)>, bool, Option<String>, bool, Option<serde_json::Value>) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
-        // SET-026: a plain new terminal opens in the chosen default shell.
-        if program.is_none() {
-            if let Some((p, a)) = crate::pty::default_shell(&settings) {
-                (program, args) = (Some(p), Some(a));
-            }
-        }
+        // SET-026: a plain new terminal opens in the chosen default shell; the search for it on
+        // PATH runs after the lock is let go (council), with the settings read here.
+        let plain = program.is_none().then(|| settings.clone());
         let used = codex.then(|| account.clone().or_else(|| crate::codex_accounts::active_account(&store).map(|a| a.id))).flatten();
         let codex_home = resumed.or_else(|| crate::codex_accounts::active_home(&store));
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
@@ -1170,8 +1178,9 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
-        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings))
+        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings), plain)
     };
+    let shell = plain.and_then(|s| crate::pty::default_shell(&s));
     // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
     if env.iter().any(|(k, _)| k == crate::claude_accounts::CONFIG_ENV) {
         let found = crate::claude_accounts::sign_in_overrides(&env_own, cfg!(windows));
@@ -1212,7 +1221,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     }
     let agent = program.as_deref().and_then(crate::agents::credited_agent);
     let dir = cwd.clone();
-    let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key)?;
+    let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell)?;
     // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
     if let Some(dir) = dir {
         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
@@ -1558,7 +1567,7 @@ HOME=/home/me
         let dir = std::env::temp_dir().join(format!("kolux-orch058-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let t = Terminals::default();
-        let s = PtySession::spawn(shell_commands(Some(&dir.to_string_lossy())).remove(0), 80, 24, |_| {}, |_| {}).expect("spawn a shell in the folder");
+        let s = PtySession::spawn(shell_commands(Some(&dir.to_string_lossy()), None).remove(0), 80, 24, |_| {}, |_| {}).expect("spawn a shell in the folder");
         let pid = s.pid().expect("the platform reports the shell's pid");
         {
             let mut inner = t.inner.lock().unwrap();
@@ -1578,13 +1587,30 @@ HOME=/home/me
         assert!(t.inner.lock().unwrap().dirs.is_empty());
     }
 
+    /// T-262-c (CLI-023): a plain shell given no folder lists the home folder it started in and
+    /// the shell program that started; the CLI-017 session list keeps leaving it out.
+    #[test]
+    fn t262c_a_plain_shell_lists_its_start_folder_and_program() {
+        let t = Terminals::default();
+        let mut cmd = shell_commands(None, None);
+        let s = PtySession::spawn(cmd.remove(0), 80, 24, |_| {}, |_| {}).expect("spawn a shell");
+        let started = s.program().to_string();
+        t.inner.lock().unwrap().sessions.insert(7, s);
+        let every = t.every();
+        let home = crate::pty::home_dir().map(|h| h.to_string_lossy().into_owned());
+        assert!(home.is_some(), "this account has a home folder");
+        assert_eq!(every, vec![(handle_of(7), home, Some(started))]);
+        assert!(t.sessions().is_empty(), "a shell with no folder is not a worktree session");
+        t.inner.lock().unwrap().sessions.remove(&7).unwrap().kill();
+    }
+
     #[test]
     fn only_agent_panes_have_git_prompts_turned_off() {
         let mut agent = crate::pty::program_command("claude", &[], None);
         unattended(&mut agent, true);
         assert_eq!(agent.get_env("GIT_TERMINAL_PROMPT").and_then(|v| v.to_str()), Some("0"));
         assert_eq!(agent.get_env("GCM_INTERACTIVE").and_then(|v| v.to_str()), Some("never"));
-        let mut shell = crate::pty::shell_commands(None).remove(0);
+        let mut shell = crate::pty::shell_commands(None, None).remove(0);
         let before = shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string());
         unattended(&mut shell, false);
         assert_eq!(shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string()), before, "a shell still prompts");

@@ -1,0 +1,72 @@
+shell-FIX-2 (council D2 re-review of lane/shell 2963ba6: FS1, FS2, AFTER 3 and 4) · 2026-10-14
+Lane/shell from 2963ba6, merged with main 950ba36 as e6818c5 (no conflicts; tree == 950ba36).
+Logs: G:/Temp/shell-w1-logs/fix2-*.log. All Rust runs: GIT_* and KOLUX_* unset, HOME/USERPROFILE,
+CLAUDE_CONFIG_DIR, CODEX_HOME and TEMP/TMP under G:\Temp\shell-w1\ (scratch markers in place).
+
+(a) FS1 · the NT object prefix \??\ is read like \\?\ (links.rs, skills.rs and onboarding.rs are
+    outside this lane's OWNS: REAL patch evidence/shell-FIX-2-links.patch, git diff against 950ba36)
+  - Change: links.rs windows_form writes a leading \??\ as \\?\, so \??\UNC\host\share is a host,
+    \??\GLOBALROOT\... and \??\pipe\... are not ours, \??\C:\... stays local, a registered share
+    root written as \??\UNC\ is still allowed.
+  - Tests (new cases in existing tests, plus one new test):
+    links::tests::safe021_paths_on_other_machines_are_refused_as_text_and_local_wsl_and_registered_shares_pass
+      + host: \??\UNC\server\share\a, \??\unc\x.invalid\s, /??/UNC/server/share,
+        \??\GLOBALROOT\Device\Mup\server\share, \??\pipe\kolux, \??\C:\..\..\UNC\server\share
+      + local: \??\C:\very\long\path, \??\UNC\wsl$\Ubuntu\home
+      + roots: \??\UNC\nas\projects\repo\a allowed, \??\UNC\nas\projects\other refused
+    skills::tests::an_nt_object_path_to_a_share_is_refused_by_its_text (new: remote_path on four
+      \??\ share forms, usable() refuses a \??\UNC\x.invalid\s AI home override, \??\C:\ is local)
+    onboarding::tests::a_path_folder_on_another_computer_is_never_looked_up
+      + PATH entries \??\UNC\x.invalid\bin and \??\unc\x.invalid\s; the spy now counts lookups by the
+        test host's name (x.invalid) instead of by host_path, so a form host_path misses is caught.
+  - RED on 950ba36 code (scratch worktree G:/Temp/shell-w5-wt, fix2-a-red.log):
+    test result: FAILED. 3 passed; 3 failed (links safe021 at links.rs:367, skills an_nt at
+    skills.rs:924, onboarding a_path_folder at onboarding.rs:520 "left: 2" = two share lookups)
+  - GREEN after the fix (fix2-a-green.log): links:: skills:: onboarding:: 28 passed; 0 failed.
+  - Patch proof: on the scratch worktree at 950ba36, git checkout -- . then
+    git apply --check -v evidence/shell-FIX-2-links.patch: links.rs, onboarding.rs, skills.rs OK;
+    applied, rerun 28 passed; 0 failed (fix2-a-applied.log); clippy --all-targets -D warnings clean
+    (fix2-a-clippy.log). Worktree removed (git worktree list shows none). git apply --check also
+    clean on lane e6818c5.
+
+(b) FS2 · PLAN.md T-323 tick rewritten: the stale "wheel moves the scheme list 120 px" claim is
+    gone; it cites shell-FIX-1 (popups only, hunk A installMenuWheel in main.tsx, on main since
+    950ba36), says the scheme list is inline and scrolls natively, cites this file, and ends with
+    "live proof pending (batched)". plan-check: OK.
+
+(c) AFTER
+  3. menuWheel: the document no longer carries a blocking (passive:false) wheel listener. The
+     document gets passive capture listeners for pointerover and focusin; the first time the pointer
+     or the focus reaches a popup (MENU_SELECTOR), that popup gets the one non-passive wheel
+     listener; a popup that left the page is dropped at the next arming; the uninstall removes all.
+     main.tsx needs no change (installMenuWheel(document) keeps its call shape).
+     Test: src/settings/menuWheel.test.ts "FIX-2 the wheel rule listens only on popups that were
+     reached > the document never gets a wheel listener; a popup gets one, once, when the pointer
+     enters it". RED on the old code: "AssertionError: expected 1 to be +0" (doc wheel count 1;
+     fix2-c-wheel-red.log, 1 failed | 7 passed). GREEN: 8 passed (fix2-c-wheel-green.log).
+  4a. Pane note display names (pty.rs is core's: REAL patch evidence/shell-FIX-2-pty.patch, diff
+     against e6818c5 == 950ba36): the fallback note says "PowerShell 7 did not start; opened Windows
+     PowerShell" (menu names for pwsh, powershell, cmd, wsl, Git's bash; other programs keep their
+     file name). New test pty::tests::the_fallback_note_uses_the_menu_names_of_known_shells; the
+     existing acct046_a_chosen_default_shell_keeps_the_fallbacks_behind_it now expects the menu name.
+     RED (fix2-c-note-red.log): left "pwsh.exe did not start; opened powershell.exe". GREEN
+     (fix2-c-note-green.log): pty:: terminal:: 30 passed; 0 failed; clippy clean. Patch reverted
+     from the lane tree; git apply --check clean (alone and together with the links patch).
+  4b. Dead-PATH test flake check: onboarding::tests::dead_path_folders_share_one_deadline_and_are_not_asked_twice
+     run alone 5 times (fix2-c-deadpath-x5.log): 5/5 ok, 0.31-0.33 s each; it also passed inside the
+     full parallel run at STEP 0. No flake seen; left as is.
+
+Gates on the commit tree: tsc --noEmit clean; vitest 162 files, 1003 tests passed (fix2-vitest.log);
+plan-check --write-state OK; Last 10 passes header count 1; duplicate-id grep empty; firewall
+-Baseline 0 new. No Rust in the lane commit (Rust only in the two patches, tested above); the
+full cargo run is the STEP 0 one (691/3/1, the 3 = TEMP env, agent_hooks rerun 52/52).
+
+LIVE PROOF PENDING (batched, coordinator; after the commit and both patches are on main):
+  1. Open Settings > Appearance, type in a font field so its suggestions list (a popup) shows;
+     move the pointer onto it and wheel: the list scrolls, the settings page behind stays still
+     at the list's end.
+  2. Wheel over the terminal scheme list (inline): it scrolls, then the page scrolls past its end.
+  3. Wheel anywhere on a page with no popup: scrolling is smooth (no blocking listener); in
+     DevTools > Performance the wheel shows no "blocking" handler outside popups.
+  4. Set the default shell to a program that does not exist; open a new shell pane: the first dim
+     line reads "<name> did not start; opened PowerShell 7" (or "Windows PowerShell").

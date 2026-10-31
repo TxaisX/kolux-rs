@@ -15,7 +15,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ChevronDown, Close, FileCode, FolderPlus, Plus } from "../chrome/icons";
+import { ChevronDown, Close, Expand, FileCode, FolderPlus, Plus, Search } from "../chrome/icons";
+import { loadTargets, openIn, type Target } from "./openIn";
+import ContentSearch from "./ContentSearch";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { keyOf } from "./buffers";
@@ -111,6 +113,24 @@ type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: s
 
 export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onMoved }: Props) {
   const keymap = useKeymap();
+  // EDIT-037: the explorer shows either the file tree or the content search; Mod+Shift+F
+  // brings the search forward (with its text selected) while the explorer is shown.
+  const [searching, setSearching] = useState(false);
+  const [searchAsk, setSearchAsk] = useState(0);
+  // EDIT-043: the Open in menu (null while closed) and the last launch that failed.
+  const [openTargets, setOpenTargets] = useState<{ list: Target[]; x: number; y: number } | null>(null);
+  const [openErr, setOpenErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (hidden) return;
+    const key = (e: KeyboardEvent) => {
+      if (matchEvent(keymap, e, ["global"])?.id !== "sidebar.search.toggle") return;
+      e.preventDefault();
+      setSearching(true);
+      setSearchAsk((n) => n + 1);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [hidden, keymap]);
   const [kids, setKids] = useState<Record<string, Node[] | undefined>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -164,7 +184,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onMo
     if (hidden && box.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
   }, [hidden]);
   useEffect(() => {
-    if (focusAsk && !hidden) box.current?.focus();
+    if (focusAsk && !hidden && !searching) box.current?.focus();
   }, [focusAsk, hidden]);
 
   const rows = flatten(root, kids, open, draft);
@@ -487,10 +507,16 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onMo
   return (
     <aside className="explorer" hidden={hidden} aria-label="Explorer">
       <header className="explorer-head">
-        <span className="title">Explorer</span>
+        <span className="title">{searching ? "Search" : "Explorer"}</span>
         <span className="path" title={root}>
           {name}
         </span>
+        <button className={`ib${searching ? " on" : ""}`} onClick={() => (setSearching(!searching), setSearchAsk((n) => n + 1))} aria-pressed={searching} title="Search file contents (Ctrl+Shift+F)" aria-label="Search file contents">
+          <Search size={12} />
+        </button>
+        <button className="ib" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); if (openTargets) setOpenTargets(null); else void loadTargets().then((list) => setOpenTargets({ list, x: r.left, y: r.bottom + 4 })); }} aria-expanded={!!openTargets} aria-haspopup="menu" title="Open this folder in another app" aria-label="Open in">
+          <Expand size={12} />
+        </button>
         <button className="ib" onClick={() => startNew(false)} title="New file" aria-label="New file">
           <Plus size={12} />
         </button>
@@ -501,6 +527,23 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onMo
           <Close size={12} />
         </button>
       </header>
+      {openTargets && (
+        <div className="menu open-in-menu" role="menu" aria-label="Open in" style={{ left: openTargets.x, top: openTargets.y }} onKeyDown={(e) => e.key === "Escape" && setOpenTargets(null)}>
+          {openTargets.list.map((t) => (
+            <button key={t.label} role="menuitem" className="menu-item" onClick={() => (setOpenTargets(null), setOpenErr(null), void openIn(root, t).catch((err) => setOpenErr(`${t.label} did not open: ${err}`)))}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {openErr && (
+        <div className="notice load-failed" role="alert">
+          {openErr}
+          <button className="btn" onClick={() => setOpenErr(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {failed[root] && (
         <div className="notice load-failed" role="alert">
           The folder did not load: {failed[root]}
@@ -530,7 +573,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onMo
           </button>
         </div>
       )}
+      <ContentSearch root={root} hidden={!searching} focusAsk={searchAsk} onOpen={onOpen} />
       <div
+        hidden={searching}
         className={`explorer-rows${dropAt === root ? " drop" : ""}`}
         ref={box}
         tabIndex={0}

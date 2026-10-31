@@ -2,6 +2,7 @@ mod activity;
 mod agents;
 mod artifacts;
 mod automations;
+mod awake;
 mod capture;
 mod chat;
 mod chat_tools;
@@ -17,6 +18,7 @@ mod codex_accounts;
 mod codex_usage;
 mod creatures;
 mod diag;
+mod editor_search;
 mod fence;
 mod files;
 mod fsops;
@@ -219,7 +221,7 @@ fn dev_inject() -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     diag::catch_panics();
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
     // APP-001: one copy per profile, settled before any window exists. A second launch hands over to
     // the first and exits with a code of its own, so no second window ever opens. The folder is the
     // one the app's path resolver gives (the roaming app data folder named by the identifier).
@@ -233,11 +235,18 @@ pub fn run() {
         // ponytail: a profile the lock file cannot be made in still starts, unguarded.
         Err(_) => None,
     };
+    // T-552: the config's windows are opened by tools::guarded_setup instead, which waits out a
+    // quitting Kolux whose WebView2 processes still hold the profile folder, and turns any setup
+    // failure into a plain native message instead of a panic.
+    let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
+    for w in &mut context.config_mut().app.windows {
+        w.create = false;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(move |app| {
+        .setup(move |app| tools::guarded_setup(app, &windows, |app| {
             if let Some(lock) = lock {
                 app.manage(lock);
             }
@@ -295,6 +304,15 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            // TERM-122: the keep-awake watcher reads the saved choice every tick, and counts a
+            // working pane only while its terminal is still running.
+            {
+                let (h, t) = (app.handle().clone(), app.handle().clone());
+                awake::start(
+                    move || h.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default(),
+                    move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
+                );
+            }
             app.manage(links::Grants::default());
             // APP-041: the app's own start-and-stop record, next to what the terminals report.
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
@@ -398,7 +416,7 @@ pub fn run() {
                 }
             });
             Ok(())
-        })
+        }))
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
         // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
         .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
@@ -521,6 +539,8 @@ pub fn run() {
             projects::git_start,
             setup::workspace_setup,
             setup::workspace_issue_command,
+            setup::script_trust_needed,
+            setup::script_trust_grant,
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
@@ -528,9 +548,13 @@ pub fn run() {
             agents::agent_start_line,
             agents::open_install_page,
             agents::inventory::session_tabs,
+            orchestration::task_reset,
             pty::shell_list,
             tools::tools_check,
             tools::tools_dismiss,
+            tools::editors_list,
+            tools::teams_host,
+            awake::keep_awake_state,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,
@@ -551,6 +575,12 @@ pub fn run() {
             scm::scm_repo_labels,
             github::github_repo_parent,
             github::github_people,
+            github::github_project,
+            github::github_projects,
+            github::github_project_set,
+            github::github_issue_state,
+            github::github_issue_comment,
+            github::github_issue_create,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
@@ -641,7 +671,9 @@ pub fn run() {
             files::file_stamps,
             files::file_pick,
             files::md_list,
+            editor_search::editor_search,
             skills::skills_scan,
+            files::open_in,
             files::file_list,
             files::md_new,
             files::diff_sides,
@@ -654,7 +686,7 @@ pub fn run() {
             artifacts::artifact_add,
             artifacts::artifact_remove,
             artifacts::open_external,
-            links::open_path, links::file_grant,
+            links::open_path, links::file_grant, links::editor_open,
             fsops::fs_create,
             fsops::fs_rename,
             fsops::fs_trash,
@@ -674,7 +706,7 @@ pub fn run() {
             usage_alerts::usage_alert_send
         ])
         .build(context)
-        .unwrap_or_else(|e| diag::fatal(&e.to_string()))
+        .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
                 use std::sync::atomic::Ordering::SeqCst;
@@ -722,15 +754,26 @@ pub fn run() {
                     if let Ok(store) = handle.state::<Mutex<Store>>().lock() {
                         store.close();
                     }
+                });
+                if !done {
+                    eprintln!("quit: the final save did not finish within {:?}; quitting without it", state::QUIT_DEADLINE);
+                }
+                // T-552: the window's WebView2 processes let go of the profile folder before the app
+                // ends (up to 3 s), so a relaunch right after finds it free.
+                let webviews_left = tools::wait_webviews_closed();
+                // The exit lines and file removals also run on their own thread (APP-050: a stalled
+                // drive cannot hold the quit past the deadline).
+                let handle = app.clone();
+                let _ = state::within(state::QUIT_DEADLINE, move || {
                     if let Ok(dir) = handle.path().app_data_dir() {
+                        if webviews_left > 0 {
+                            diag::write(&dir, &format!("app exit: {webviews_left} WebView2 process(es) still running after 3 s (T-552)"));
+                        }
                         diag::write(&dir, "app exit");
                         let _ = std::fs::remove_file(dir.join(cli::FILE));
                         let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));
                     }
                 });
-                if !done {
-                    eprintln!("quit: the final save did not finish within {:?}; quitting without it", state::QUIT_DEADLINE);
-                }
                 // APP-025: an update that finished downloading installs as the app quits.
                 update::install_on_quit(app);
             }

@@ -90,7 +90,9 @@ Two tabs show a workspace's uncommitted changes:
 
 In All Changes, **Compare** picks what the changes are measured against: **Working tree** (what you have not committed yet) or **Branch vs** its base, for example "Branch vs main" (everything this branch changed since it left that branch, committed or not). Side by side, Wrap, Whitespace and the file tree button change the view, and **Make default** makes new All Changes tabs start with that layout. Each file has a button that opens it as a diff tab, in the split Source Control's "Open diffs in" names.
 
-While Compare is set to the branch, a commit box shows under the header. It commits only what is staged (the button says, for example, "Commit 3 staged"); stage files in Source Control. If a Git hook refuses the commit, it says "Commit blocked by a hook" with the hook's output.
+While Compare is set to the branch, a commit box shows under the header. It commits only what is staged (the button says, for example, "Commit 3 staged"); stage files in Source Control. If a Git hook refuses the commit, it says "Commit blocked by a hook" with the hook's output. The tab reads the staged files once when it opens, so the Commit button knows its count at once instead of after the next update.
+
+When Compare is set to the branch and the branch shares no history with its base (an unrelated branch, or a shallow copy cut before the two split), a hint line at the top says "vs <base> tip: no common ancestor found", and the changes are measured against the base's latest commit. If the branch has no commits yet, or the base no longer exists, the tab says so instead of showing a comparison. Keeping the branch view up to date no longer runs a second Git status each time, so a busy workspace costs less.
 
 Diff lines also take review notes ("What should change here?"). A note needs some text; to remove one, use the bin on its card. Staging, committing and discarding are in [Projects and worktrees](projects-and-worktrees.md).
 
@@ -122,8 +124,37 @@ In a narrow browser pane (under about 360 pixels wide) the Address box folds up 
 
 While a page is loading, the tab shows your app's colour (dark in a dark theme, light in a light theme) instead of a white flash. If you change the theme, the next page you load follows the new colour.
 
+### Find, zoom and the site icon
+
+| To do this | Do this |
+|---|---|
+| Find text on the page | Ctrl+F. A find bar opens under the toolbar. Enter goes to the next match, Shift+Enter to the previous one (the two arrow buttons do the same), Escape closes it |
+| Zoom in, out | Ctrl+= and Ctrl+-, or Ctrl with the mouse wheel (one step per wheel burst) |
+| Back to 100% | Ctrl+0 |
+
+Each browser tab keeps its own zoom. A small badge in the toolbar shows the level for a moment after each change. The steps run from 25% up to 500% (25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500). The level stays when the page reloads or moves to another site. In a browser tab these keys zoom the page, not the app. Find uses the page's own find, so a page could in principle see what you search for.
+
+The globe in a browser tab's toolbar becomes the site's own icon once Kolux has fetched it. The icon stays while you move within one site and goes when you move to another. It shows in the toolbar only; the tab strip keeps its usual mark.
+
+### Links that open new tabs
+
+A link a page opens in a new window (a `_blank` link or a script) becomes another Kolux browser tab. You can also open a link as a tab yourself:
+
+| To do this | Do this |
+|---|---|
+| Open a link in a new tab behind this one | Middle-click it, or Ctrl-click it |
+| Open it in front | Shift with either of the above |
+
+A tab opened by a page comes to the front only if the page's own tab is on screen. Only web addresses (http or https) open this way. A download link, or a link the page itself handled, is left to the page.
+
+**A limit on pages opening tabs.** To stop a page from filling your window with tabs, all browser pages share one allowance: 5 new tabs in any 10 seconds, whether they come from new-window requests or from link opens. Extra ones are quietly dropped, with no message, and the allowance fills up again as the 10 seconds pass. Because it is shared, a page that is spamming can use it up and your own real clicks in other tabs may be dropped for those seconds. An address Kolux refuses (see above) takes nothing from the allowance. A per-tab allowance and a "popups blocked" note are planned.
+
+### Site icons and the local network
+
+Kolux itself fetches a page's icon, so it keeps this narrow. An icon is accepted only if it is an image of modest size (up to 256 KB), and a fetch takes at most 5 redirects and 8 seconds. A redirect is refused if it goes from https down to http, or to somewhere the tab itself may not go. A page on the public web cannot point its icon at your own machine or home network: addresses such as `localhost`, `127.0.0.1`, `192.168...`, `10...`, names ending `.local` or `.lan`, or a plain name with no dot are refused for icons unless the page is on that same host. A page you open on `localhost` can still show its own icon. Your tab can still go to `localhost`; the rule only guards what Kolux fetches for a page.
+
 ## Not available
 
-Find on a page, "grab page element" and hard reload have keys listed on the Shortcuts page, but they do nothing yet in this version. Use Ctrl+R to reload.
+"Grab page element" and hard reload have keys listed on the Shortcuts page, but they do nothing yet in this version. Use Ctrl+R to reload.
 
-<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiskBanner.tsx, src/editor/diskChange.ts, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/scm/split.ts, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx, src/browser/colour.ts, src/browser/browser.css, src-tauri/src/browser.rs at e19b35b -->
+<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiskBanner.tsx, src/editor/diskChange.ts, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/scm/split.ts, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx, src/browser/colour.ts, src/browser/browser.css, src/browser/zoom.ts, src/browser/site.ts, src-tauri/src/browser.rs, src-tauri/src/scm.rs at 5f3b287 -->

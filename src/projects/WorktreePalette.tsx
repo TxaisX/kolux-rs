@@ -24,13 +24,20 @@ export type Chip = { field: "repo" | "section"; value: string };
 export type RowAt = { mark: Badge; since: number } | null;
 
 /** VIEW-040: a workspace row's mark from its strongest state: a request for the user beats unread
- * output, which beats a finished turn; work in progress keeps its spinner, as on the tab.
- * ponytail: the radio mark for monitoring background work waits for that state (STAT-024, T-123). */
-export function dirMark(state: AgentState | null, unread: boolean): Badge {
+ * output, which beats a finished turn; work in progress keeps its spinner, as on the tab, and
+ * work that only watches background tasks after its turn (STAT-024) shows the radio mark. */
+export function dirMark(state: AgentState | null, unread: boolean, monitoring = false): Badge {
   if (state === "permission" || state === "waiting" || state === "blocked") return "permission";
-  if (state === "working") return "working";
+  if (state === "working") return monitoring ? "background" : "working";
   if (unread) return "unread";
   return state === "done" ? "done" : null;
+}
+
+/** VIEW-040 / STAT-024: a folder counts as monitoring only when every pane in it that the hook
+ * calls working is just watching background work; one pane really working keeps the spinner. */
+export function dirMonitoring(panes: { state?: AgentState; monitoring?: boolean }[]): boolean {
+  const working = panes.filter((p) => p.state === "working");
+  return working.length > 0 && working.every((p) => p.monitoring === true);
 }
 
 /** VIEW-040: minutes until a whole hour has passed, hours until two days, then days. */
@@ -50,7 +57,7 @@ export function RowMark({ mark, since, now }: { mark: Badge; since: number; now:
       {mark === "unread" ? (
         <span className={`badge unread dot`} role="img" aria-label="unread" data-tip="Finished or rang the bell while you were away." />
       ) : (
-        <span className={`badge ${mark}`} role="img" aria-label={mark === "permission" ? "needs permission" : mark} data-tip={VOCAB[mark].explain}>
+        <span className={`badge ${mark}`} role="img" aria-label={mark === "permission" ? "needs permission" : mark === "background" ? "monitoring" : mark} data-tip={VOCAB[mark].explain}>
           <StatusGlyph glyph={VOCAB[mark].glyph} size={11} />
         </span>
       )}

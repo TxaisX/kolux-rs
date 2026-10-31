@@ -46,6 +46,7 @@ import HelpMenu from "../onboarding/HelpMenu";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
 import { issueCommand } from "../setup/IssueCommand";
+import { trustedSetup } from "../setup/TrustPrompt";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -686,7 +687,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       // A create overtaken after Git had already finished it stays, but never takes the front.
       const front = !keepOpen && !lost && shown.current === from;
       // PROJ-033: the project's setup script runs in a Setup terminal; a script that cannot run says why.
-      const setup = setupSkip || !onSetup ? null : await invoke<SetupLine | null>("workspace_setup", { path: wt.path }).catch((err) => (say("warn", String(err)), null));
+      const setup = setupSkip || !onSetup ? null : await trustedSetup(wt.path).catch((err) => (say("warn", String(err)), null));
       if (agent && setup && onSetup && waitsForSetup(setupWhere, setupWait, true, true)) {
         onSetup(wt.path, wt.branch, setup, setupWhere, front, () => onStartIn(agent, wt.path, wt.branch, prompt, front));
       } else {

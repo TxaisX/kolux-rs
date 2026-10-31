@@ -1,0 +1,3 @@
+/* T-550: the usage pill is a button; its look stays the .usage rule in styles.css, plus a hover and a keyboard ring. */
+button.usage:hover { color: var(--fg); border-color: var(--fg-muted); }
+button.usage:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }

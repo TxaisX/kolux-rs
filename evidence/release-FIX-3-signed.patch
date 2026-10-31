@@ -1,0 +1,12 @@
+# FIX-3 (lane/release): the KOLUX_RS_SIGNED_BUILD hunk kept OUT of the merged tree, for the coordinator.
+# Apply ONLY in the same commit that adds a Windows (Authenticode) signing step to release.mjs (OD-03);
+# until then no build may claim to be signed. update.rs reads the flag at compile time (SIGNED_BUILD).
+--- a/scripts/release.mjs
++++ b/scripts/release.mjs
+@@ -207,5 +207,5 @@
+   const resources = { [path.join(dir, "src-tauri", "cli", "kolux.cmd").replaceAll("\\", "/")]: "bin/kolux.cmd", [path.join(target, "kolux.exe").replaceAll("\\", "/")]: "bin/kolux.exe" };
+   fs.writeFileSync(conf, JSON.stringify({ bundle: { createUpdaterArtifacts: true, resources }, plugins: { updater: { pubkey } } }));
+-  const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: fs.readFileSync(key, "utf8"), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.KOLUX_RELEASE_KEY_PASSWORD ?? "", KOLUX_RS_RELEASE_PUBKEY: pubkey };
++  const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: fs.readFileSync(key, "utf8"), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.KOLUX_RELEASE_KEY_PASSWORD ?? "", KOLUX_RS_RELEASE_PUBKEY: pubkey, KOLUX_RS_SIGNED_BUILD: "1" };
+   say("installing packages");
+   tool("pnpm", ["install", "--frozen-lockfile"], { cwd: dir, env: benv });

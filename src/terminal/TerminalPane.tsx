@@ -20,7 +20,6 @@ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { batchAcks, memoryProfile } from "./flow";
-import { resumes } from "./layout";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
@@ -96,8 +95,9 @@ type Props = {
   crew?: Crew;
   /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */
   stop?: StopInfo;
-  /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report. */
-  context?: number;
+  /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report;
+   * null or left out while no reading has come in yet (USAGE-001: a greyed 0%). */
+  context?: number | null;
   /** USAGE-004: the agent's plan figures beside the gauge on the Agents screen. */
   plan?: string;
   /** TERM-118: the program rang the terminal bell. */
@@ -115,6 +115,8 @@ type Props = {
   restored?: boolean;
   /** TERM-075: the setting "Programs can copy to the clipboard" (OSC 52); on unless turned off. */
   clipboardFromPrograms?: boolean;
+  /** TERM-107 (T-066-c): false when the restored agent's start line carries no resume form. */
+  resumed?: boolean;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** SESS-005: no process has appeared five seconds after the start. */
@@ -189,7 +191,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, onSlow, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, onSlow, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -701,7 +703,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         // onData: the terminal's own answers to the shell's start-up questions go through onData.
         let keepInView = false;
         if (restored) {
-          setRestoredMark(agent !== "shell" && !resumes(agent, args) ? "restored without resume" : "restored");
+          setRestoredMark(resumed === false ? "restored without resume" : "restored");
           const unmark = () => {
             setRestoredMark(null);
             key.dispose();
@@ -1160,10 +1162,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
               Review plan
             </button>
           )}
-          <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
-            <Ring percent={context ?? 0} />
-            {Math.round(context ?? 0)}%
-          </span>
+          <ContextGauge context={context} agent={agent} />
           <button
             className="ib"
             title="Pane menu"
@@ -1292,6 +1291,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       {plusAt && (
         <PlusMenu
           agents={agents}
+          dir={cwd ?? undefined}
           defaultId={defaultId}
           onSetDefault={onSetDefault}
           busy={launching}
@@ -1461,5 +1461,19 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         </div>
       )}
     </section>
+  );
+}
+
+/** USAGE-001: the header's context ring and percentage. Always there; a greyed 0% until the
+ * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. */
+export function ContextGauge({ context, agent }: { context?: number | null; agent: string }) {
+  const none = context === null || context === undefined;
+  const percent = none ? 0 : Math.round(context);
+  const title = none ? (agent === "shell" ? "Context used (agents only)" : "Context used: nothing received yet. The figure appears with the agent's first status report.") : `Context used: ${percent}% of the agent's context window`;
+  return (
+    <span className={none ? "gauge none" : `gauge ${toneOf(percent)}`.trim()} title={title}>
+      <Ring percent={percent} />
+      {percent}%
+    </span>
   );
 }

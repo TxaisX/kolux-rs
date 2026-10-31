@@ -1,0 +1,59 @@
+T-032-b · SAFE-004 a Request changes still waiting to send can be cancelled (lane/marks from 243736d, 2026-10-14)
+
+What the user gets: after Request changes in the plan review sheet, the sheet stays up for the
+short wait while Kolux answers Claude's plan prompt and waits for it to leave (at most about
+3.3 s). It reads "Sending your feedback once Claude has left its plan prompt. Cancel stops it
+before anything more is typed.", the button reads "Sending…" and both answers are held, and a
+"Cancel sending" button sits where the user just clicked. Cancel at any step before Enter: nothing
+more is typed and Enter is never pressed. Cancelled before the prompt was answered, the sheet
+stays open on the draft; cancelled after, the sheet closes and a toast says what went out (the
+prompt was dismissed, or the feedback is typed but not sent). The saved draft is now wiped only
+when the feedback is actually sent, so a cancelled or failed send keeps it.
+
+Behaviour change for Txais to confirm (DECISIONS.md is read only on this lane):
+- SAFE-004 reads as if Request changes closes the sheet at once. The sheet now stays open in the
+  sending state until the send ends, so Cancel is reachable; then it closes.
+- Kept as before: the feedback is never force-sent after 3 s while the pane still asks (an Enter
+  into the open menu would pick its default, Yes; council re-review of chat a969502).
+
+Code (lane-owned):
+- src/terminal/planReview.ts: startFeedback(text, steps) runs the send as a job (answer no, wait
+  up to 30 x 100 ms while the pane asks, paste the message, wait 300 ms, re-check, Enter) and
+  returns { cancel, done }; done resolves to sent / cancelled / no-answer / still-asking / gone
+  with whether the prompt was answered and whether the text was typed. Every step re-checks the
+  cancel flag first.
+- src/terminal/PlanSheet.tsx: props sending and onCancel; the status note, Cancel sending button,
+  Sending… label, both answers disabled while sending.
+- Tests: 7 new in src/terminal/planReview.test.ts (send order, waits while asking, cancel before
+  anything, cancel while waiting, cancel between paste and Enter, failed answer / keeps asking /
+  closed pane, pane re-asks after the paste so Enter is held); new src/terminal/PlanSheet.test.ts
+  (2: the sending state, no Cancel when nothing is pending).
+
+Coordinator hunk (App.tsx is a coordinator file):
+- evidence/marks-T-032-b-App.patch: requestChanges runs startFeedback and keeps the job on the
+  existing reviewing state (no new top-level state); the draft is dropped only on "sent"; toasts
+  for no-answer, still-asking and a cancel after the answer; the sheet gets sending, onCancel, and
+  closed stays false while a send is pending. `git apply --check` OK at 243736d; stacked with the
+  T-029-b and T-052 patches on a scratch worktree with the lane files, tsc --noEmit exit 0.
+
+Readings (2026-10-14):
+- Red first: vitest run planReview.test.ts PlanSheet.test.ts -> 9 failed (startFeedback is not a
+  function; no Cancel sending button).
+- Green: same, --reporter=verbose -> "Tests 16 passed (16)", the 9 new names prefixed ✓.
+- vitest related (planReview.ts, PlanSheet.tsx and both tests) -> "Test Files 2 passed (2)",
+  "Tests 16 passed (16)".
+- tsc --noEmit lane exit 0; scratch worktree with all five App/styles patches exit 0.
+
+LIVE PROOF PENDING (batched; builders do not launch the app):
+1. Apply the App patch on main; dev app with a scratch profile.
+2. A Claude stand-in pane posts an ExitPlanMode ask; open Review plan, add a section comment.
+3. Request changes: the sheet shows the sending note, "Sending…" and "Cancel sending".
+4. Keep the stand-in asking and click Cancel sending at once: the Esc has already gone out, so the
+   prompt is dismissed, the sheet closes with the toast "Claude's plan prompt was dismissed" and the
+   draft is kept (stand-in review FIX-BEFORE 1: a cancel before anything is sent cannot be reached).
+5. Request changes again and let the stand-in leave the ask: one pasted message, then one Enter;
+   the sheet closes and reopening the pane's review shows an empty draft.
+6. Request changes with the stand-in still asking past 3 s: a toast says the feedback was not
+   typed; nothing is written to the pane.
+The real-Claude check (Approve starts the work, Request changes brings back a revised plan) is
+split to T-032-c: it needs a real agent session, which builders may not start.

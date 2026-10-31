@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { beyondWindow, eventLine, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
+import { beyondWindow, duplicateQuery, eventLine, issueNumber, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
 
 const projects = [
   { id: "a", name: "Alpha", path: "G:/r/alpha" },
@@ -55,4 +55,11 @@ test("GIT-050: the preview's timeline says each event in words", () => {
   expect(e("commented", "mo", "Same here.")).toBe("@mo commented: Same here.");
   expect(e("renamed", "mo", "Crsh → Crash")).toBe("@mo renamed this: Crsh → Crash");
   expect(e("head_ref_deleted", "")).toBe("head ref deleted");
+});
+
+test("GIT-047: a duplicate number is a plain or #-prefixed positive number, and suggestions search the title's words", () => {
+  expect(["12", "#12", " #3 "].map(issueNumber)).toEqual([12, 12, 3]);
+  expect(["", "0", "#", "1.5", "-2", "12a", "acme#3"].map(issueNumber)).toEqual([null, null, null, null, null, null, null]);
+  expect(duplicateQuery("acme/app", 'Crash when "saving" (is:open) a [big] file')).toBe("repo:acme/app is:issue Crash when saving big file");
+  expect(duplicateQuery("acme/app", "a b")).toBeNull();
 });

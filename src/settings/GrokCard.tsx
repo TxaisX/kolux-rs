@@ -6,6 +6,7 @@
 // sign-in is left alone and the card says how to sign out of Grok itself.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { clearReadFailure, connectFailed, readFailed } from "../onboarding/firstRun";
 import { listen } from "@tauri-apps/api/event";
 import { AttentionNote, fixDoes, fixFor, type Attention } from "./Attention";
 import { liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
@@ -54,7 +55,18 @@ export function grokHeadline(v: GrokView): string {
 const chip: Record<GrokState, string> = { connecting: "Connecting", connected: "Connected", attention: "Needs attention", disconnected: "Not connected" };
 
 export function GrokCardView({ view, pending, error, onAction }: { view: GrokView | null; pending: GrokAction | null; error?: string | null; onAction: (a: GrokAction) => void }) {
-  if (!view) return null;
+  // ACCT-035 (FIX-3): a first read that failed still shows the card and says why, never a blank gap.
+  if (!view)
+    return error ? (
+      <section className="conn-card" aria-label="Grok" data-state="attention">
+        <header className="conn-head">
+          <span className="conn-name">Grok</span>
+        </header>
+        <p className="conn-detail warn" role="alert">
+          {error}
+        </p>
+      </section>
+    ) : null;
   const state = grokState(view);
   const fix = fixFor(view.attention, "grok");
   return (
@@ -174,8 +186,11 @@ export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on
   const [ask, setAsk] = useState<Question | null>(null);
   const read = useCallback(() => {
     invoke<GrokView>("grok_status")
-      .then(setView)
-      .catch((e) => setError(String(e)));
+      .then((v) => {
+        setView(v);
+        setError(clearReadFailure);
+      })
+      .catch(() => setError(readFailed));
   }, []);
   useEffect(() => {
     read();
@@ -189,7 +204,7 @@ export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on
   const run = (a: GrokAction, call: Promise<unknown>) => {
     setError(null);
     if (a !== "cancel") setPending(a);
-    call.catch((e) => setError(String(e)));
+    call.catch((e) => setError(a === "disconnect" || a === "cancel" ? String(e) : connectFailed("Grok", e)));
     void settleWithin(call).then(() => {
       setPending(null);
       read();

@@ -1357,7 +1357,8 @@ fn checks_of(gh: &Path, host: &str, ids: &[String]) -> std::collections::HashMap
 
 /// GIT-043: one page of every search in `queries` on `host`, newest first, each item once.
 pub fn tasks_search(gh: &Path, host: &str, queries: &[String], page: u32) -> Result<TaskPage, String> {
-    host_ok(host)?;
+    // FIX-1 (tasks council FB 1): the same host gate as github.rs, for a host taken from a remote.
+    crate::github::host_allowed(gh, host)?;
     if page == 0 || page * TASKS_PER_PAGE > SEARCH_WINDOW {
         return Err(format!("GitHub search reaches only the first {SEARCH_WINDOW} results; this page cannot be reached"));
     }
@@ -1446,6 +1447,7 @@ fn label_list(v: &serde_json::Value) -> Vec<TaskLabel> {
 }
 
 fn gh_value(gh: &Path, host: &str, args: &[&str], input: Option<&str>) -> Result<serde_json::Value, String> {
+    crate::github::host_allowed(gh, host)?;
     let text = gh_run(gh, &std::env::temp_dir(), args, input).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }

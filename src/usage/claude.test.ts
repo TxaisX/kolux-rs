@@ -62,3 +62,12 @@ test("T-263 USAGE-024: reset countdowns drop zero parts and tick by themselves, 
   expect(nextTick([now + 2 * day + 20 * min, now + 3 * hour + 45_000, null], now)).toBeLessThan(46_000);
   expect(nextTick([now - 1, null], now)).toBeNull();
 });
+
+test("T-070 USAGE-023: a failed read keeps the figures and adds one steady error mark; a good read has none", () => {
+  const html = renderToString(createElement(ClaudePillView, { limits, trouble: true }));
+  expect(html).toContain("Claude 37% left");
+  expect(html).toContain('data-usage-trouble="1"');
+  expect(html).toContain('aria-label="last read failed"');
+  expect(html).not.toContain("spinner");
+  expect(renderToString(createElement(ClaudePillView, { limits }))).not.toContain("data-usage-trouble");
+});
