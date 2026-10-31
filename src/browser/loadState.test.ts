@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEAD_AFTER, type Event, fresh, type Health, MAX_RECOVERIES, overlayModel, overlayOf, step, trustLabel } from "./loadState";
+import { DEAD_AFTER, type Event, fresh, type Health, LOADING_GRACE, MAX_RECOVERIES, overlayModel, overlayOf, step, trustLabel } from "./loadState";
 
 // T-074 (BROW-008, BROW-009): the load-state machine, fed the events the back end can give
 // (started, finished, and the answer of a location.href probe) and the user's own actions.
@@ -23,6 +23,39 @@ describe("BROW-008: a page that fails to load", () => {
     expect(h.phase).toBe("failed");
     expect(overlayOf(h)).toEqual({ kind: "failed", url: "http://localhost:9/" });
     expect(actions).toEqual(["overlay"]);
+  });
+
+  // A certificate the engine refuses never sends started or finished. The typed navigation enters
+  // loading itself and the probe's grace turns the stuck about:blank into a failed load.
+  it("fails a typed navigation that never commits, after the loading grace", () => {
+    const probes = Array.from({ length: LOADING_GRACE }, () => ({ t: "probe", answer: "error-page" }) as Event);
+    const { h, actions } = run([{ t: "navigate", url: "https://expired.badssl.com/" }, ...probes]);
+    expect(h.phase).toBe("failed");
+    expect(overlayOf(h)).toEqual({ kind: "failed", url: "https://expired.badssl.com/" });
+    expect(actions).toEqual(["overlay"]);
+    const short = run([{ t: "navigate", url: "https://expired.badssl.com/" }, ...probes.slice(1)]);
+    expect(short.h.phase).toBe("loading");
+    expect(overlayOf(short.h)).toBeNull();
+  });
+
+  it("a page that commits during loading does not wait for the grace", () => {
+    const { h } = run([{ t: "navigate", url: "https://example.com/" }, { t: "probe", answer: "page" }]);
+    expect(h.phase).toBe("ok");
+    expect(overlayOf(h)).toBeNull();
+  });
+
+  it("keeps the typed address when the engine's started event has none", () => {
+    const probes = Array.from({ length: LOADING_GRACE }, () => ({ t: "probe", answer: "error-page" }) as Event);
+    const { h } = run([{ t: "navigate", url: "https://expired.badssl.com/" }, { t: "started", url: "" }, ...probes]);
+    expect(h.phase).toBe("failed");
+    expect(overlayOf(h)).toEqual({ kind: "failed", url: "https://expired.badssl.com/" });
+  });
+
+  it("keeps the typed address when the engine reports about:blank", () => {
+    const probes = Array.from({ length: LOADING_GRACE }, () => ({ t: "probe", answer: "error-page" }) as Event);
+    const { h } = run([{ t: "navigate", url: "https://expired.badssl.com/" }, { t: "started", url: "about:blank" }, ...probes]);
+    expect(h.phase).toBe("failed");
+    expect(overlayOf(h)).toEqual({ kind: "failed", url: "https://expired.badssl.com/" });
   });
 
   it("a page that loaded shows no overlay and the probe keeps it that way", () => {
