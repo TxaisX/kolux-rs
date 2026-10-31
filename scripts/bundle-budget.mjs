@@ -1,16 +1,20 @@
 // T-591 (brief Phase 1): the JavaScript the main window loads at start may not grow past a recorded
 // ceiling. It is the entry script dist/index.html names, the chunks it preloads, and App, which
 // main.tsx starts loading at once (FIX-4), each with every chunk it imports statically; chunks loaded
-// on demand (diagrams, PDF, editor languages) and the CSS do not count.
+// on demand (the editor and its CodeMirror, Lexical and highlight.js, the pages and settings, the
+// browser and PDF panes, diagrams) and the CSS do not count.
 // Run after `vite build`:   node scripts/bundle-budget.mjs        exit 0 = within, 1 = over or no build
-// ponytail: the ceiling is today's first load (3,152,680 bytes on 2026-10-30) plus about 5% for this
-// cycle's fixes. Upgrade path: the 1.5 MB target, reached by moving what App draws only on demand
-// behind import() and lowering CEILING as it shrinks.
+// ponytail: the ceiling is today's first load (1,859,764 bytes on 2026-10-31, down from 3,182,193 at
+// d8f805a6 once the editor, the pages and the browser pane moved behind import()) plus about 1% for
+// small fixes. Upgrade path: the 1.5 MB target. What still holds it up: @codemirror/commands, which
+// editor/buffers.ts imports for its undo annotation and which brings the drawing (@codemirror/view and
+// language) with it (315 kB); xterm, which the first frame's terminal needs; and the two sidebars,
+// which are drawn with the first frame.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const CEILING = 3_300_000;
+export const CEILING = 1_880_000;
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 
 /** The first-load chunks of a built `dist` folder, their total size in bytes, and whether it is within `ceiling`. */

@@ -6,8 +6,8 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import TerminalPane from "../terminal/TerminalPane";
-import EditorPane, { editors } from "../editor/EditorPane";
-import BrowserPane from "../browser/BrowserPane";
+import { editors } from "../keys/handles";
+import { BrowserPane, EditorPane } from "../lazy/panes";
 import type { AgentInfo } from "../launch/PlusMenu";
 import type { Agent } from "../chrome/VendorMark";
 import { useKeymap } from "../keys/KeymapContext";
@@ -30,8 +30,11 @@ import "./floating.css";
  * The window asks this first for every key: true means the layer handled it (a panel command, or a
  * tab command while focus is inside the open panel) and the window must do nothing more. It works on
  * every screen, so Mod+S in a floating editor saves outside a workspace screen too.
+ * Cycle 3 (first load): the latch object itself lives in ./keys, so the window's shortcut router asks
+ * it without loading the editors and the browser page this layer can open; it is set while mounted.
  */
-export const floatingKeys = { handle: (_e: KeyboardEvent): boolean => false };
+import { floatingKeys } from "./keys";
+export { floatingKeys };
 
 type Props = {
   agents?: AgentInfo[];

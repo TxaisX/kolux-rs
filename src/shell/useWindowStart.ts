@@ -3,7 +3,7 @@
 // for in the built-in browser (GIT-036). Called where they sat, so the window's hook order is unchanged.
 import type { WindowState } from "./windowStore";
 import type { AppInfo } from "../app-info";
-import { OPEN_IN_BROWSER, openDetail, type OpenInBrowser } from "../browser/BrowserPane";
+import { OPEN_IN_BROWSER, openDetail, type OpenInBrowser } from "../browser/openIn";
 import type { ShellInfo } from "../chrome/LayoutStrip";
 import { applyWindowBlur } from "../chrome/appLook";
 import type { AgentInfo } from "../launch/PlusMenu";

@@ -6,7 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { openInBrowser } from "../browser/BrowserPane";
+import { openInBrowser } from "../browser/openIn";
 import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, type PortRow, type PortsView } from "./ports";
 
 type Props = { active: string | null; workspaces: string[] };

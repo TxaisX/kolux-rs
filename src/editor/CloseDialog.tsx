@@ -5,9 +5,12 @@
 import { useEffect, useRef, useState } from "react";
 import { baseName, diskOf, isDirty, textOf } from "./buffers";
 import { askText, closable, saveAll, unsavedTabs, type GuardPane, type Unsaved } from "./closeGuard";
-import { saveQuiet } from "./EditorPane";
 import NamePrompt from "./NamePrompt";
 import { needsName } from "./untitled";
+
+/** EDIT-031: the editor's own save, loaded the first time the user picks Save. The prompt itself is
+ *  drawn for any tab, so the window does not carry CodeMirror before a file is opened (cycle 3, first load). */
+const saveQuiet = async (path: string, onToast?: (text: string) => void) => (await import("./EditorPane")).saveQuiet(path, onToast);
 
 type Options = {
   panes: GuardPane[];

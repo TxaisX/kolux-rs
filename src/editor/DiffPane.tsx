@@ -43,7 +43,10 @@ import { fileOnDisk, isHtml, previewHtml } from "./htmlPreview";
 /** SET-038 (T-323-b): how a new diff tab starts, from the Settings > General choices. */
 export const diffStart = (p: EditorPrefs) => ({ split: p.diffView === "split", wrap: p.diffWordWrap, spaces: p.diffWhitespace });
 
-export const diffNav = new Map<number, (dir: 1 | -1) => void>();
+// Cycle 3 (first load): the change stepper the window's F7 calls lives in keys/handles.ts now, so the
+// shortcut router holds it without loading this pane; filled here while a diff tab is open.
+import { diffNav } from "../keys/handles";
+export { diffNav };
 
 type Sides = { original: string; modified: string };
 

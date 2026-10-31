@@ -20,7 +20,9 @@ import { createSlash, type SlashView } from "./slashMenu";
 import { createWiki, type WikiView } from "./wikiPopup";
 import { $importFlowing, DETAILS_NODES, looseCodeRows, makeDetails, withoutSections } from "./richDetails";
 
-export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
+// Cycle 3 (first load): the rule itself is in ./mdFiles, so the window's shortcut router can ask
+// whether a tab is a note without loading this module and everything Lexical registers here.
+export { isMarkdown } from "./mdFiles";
 
 /** Files bigger than this open in source view with a banner (EDIT-012). */
 export const RICH_LIMIT = 600 * 1024;

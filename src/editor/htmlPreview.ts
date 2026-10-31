@@ -2,7 +2,7 @@
 // loopback address (browser_preview); the browser pane's own openInBrowser makes the tab. Offered on edit tabs, and
 // on diffs only while the file still exists on disk.
 import { invoke } from "@tauri-apps/api/core";
-import { openInBrowser } from "../browser/BrowserPane";
+import { openInBrowser } from "../browser/openIn";
 
 export const isHtml = (path: string) => /\.html?$/i.test(path);
 

@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Globe } from "../chrome/icons";
-import { openInBrowser } from "./BrowserPane";
+import { openInBrowser } from "./openIn";
 import { livePages } from "./pages";
 import { previewHint, previewTitle, printedFor, sameOriginPage, type Candidate } from "./preview";
 

@@ -46,12 +46,11 @@ import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./pop
 type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; cwd?: string | null; targets?: () => SendTarget[]; onSend?: (key: number, text: string) => Promise<void> | void; /** Came back from the saved layout: its first page opens in its own saved profile (row 977). */ restored?: boolean };
 
 /** The pane body's place in the window, in CSS pixels, as the back end places the page. */
-/** GIT-036: asks the window for a new browser tab at `url` in the focused split. */
-export const OPEN_IN_BROWSER = "kolux-open-in-browser";
-export const openInBrowser = (url: string, title?: string) => window.dispatchEvent(new CustomEvent<OpenInBrowser>(OPEN_IN_BROWSER, { detail: title === undefined ? url : { url, title } }));
-/** The event's detail: the address alone, or with a fixed tab name (T-242: "Preview host:port"). */
-export type OpenInBrowser = string | { url: string; title: string };
-export const openDetail = (d: OpenInBrowser): { url: string; title?: string } => (typeof d === "string" ? { url: d } : d);
+/** GIT-036: asks the window for a new browser tab at `url` in the focused split. The event and its
+ *  one-line helpers live in ./openIn (cycle 3, first load: the checks list and the shortcut router ask
+ *  for a page without loading this pane); they are re-exported here so every caller keeps its import. */
+import { openInBrowser } from "./openIn";
+export { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./openIn";
 
 /** T-241 (BROW-039): what a tab's address previews, when it is a worktree document of ours. */
 type Preview = { folder: string; file: string; path: string; granted: boolean };
