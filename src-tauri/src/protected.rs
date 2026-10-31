@@ -130,10 +130,7 @@ fn recursive_delete(c: &Read, base: &Base) -> bool {
     // relative cd may land anywhere, so it makes the folder unknown.
     let cdpath = c.text.to_ascii_uppercase().contains("CDPATH") || std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
     let paired = windows.then(|| pair(&c.chains[1], &c.chains[2])).flatten();
-    // T-604b (c): find's `-delete` may sit in a part the reading split off (an escaped `\(` group),
-    // so a find anywhere in a command that holds `-delete` is read as a delete.
-    let find_deletes = c.text.contains("-delete");
-    let how = How { cdpath, find_deletes };
+    let how = How { cdpath };
     c.chains.iter().enumerate().any(|(i, chain)| {
         if i == 2 && paired.is_some() {
             return false;
@@ -147,8 +144,6 @@ fn recursive_delete(c: &Read, base: &Base) -> bool {
 struct How {
     /// CDPATH may apply, so a relative cd is unknown (round 7).
     cdpath: bool,
-    /// The command holds `-delete`, so a find in it deletes (T-604b).
-    find_deletes: bool,
 }
 
 /// Whether a path lost its meaning in the `Bash` reading, so on a Windows base only its `Shell`
@@ -190,9 +185,20 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, how: H
         // program it runs only (round 7 review of PR #15); T-604b (b): nested wrappers' folders are
         // joined in order, as each wrapper starts the next in its own folder.
         let here = wrapper_folders(&full.words[..full.at]).into_iter().fold(dir.clone(), |d, f| f.and_then(|f| cd_to(&f, d.as_deref(), base, cdpath)));
+        // T-604b (c): find's -delete (its own word, among its own arguments) removes what matches
+        // under each start point, never the start point's folder above it, so a start point inside
+        // the workspace runs, the workspace root included; its .git and anything outside ask.
+        // ponytail: a -delete after an escaped `\(` group lands in a part the reading split off and is not seen.
+        if p == "find" && args.contains(&"-delete") {
+            let ws = base.workspace.as_deref().or(base.cwd.as_deref()).map(norm);
+            let root = |t: &str| ws.is_some() && locate(t, here.as_deref(), base) == ws;
+            if find_targets(&args).iter().any(|t| unclear_target(t) || (risky(t, here.as_deref(), base) && !root(t))) {
+                return true;
+            }
+            continue;
+        }
         // T-604b (c): the other recursive deletes, each judged by its targets as rm -rf is.
         let other = match p.as_str() {
-            "find" if how.find_deletes => Some(find_targets(&args)),
             "rimraf" => Some(args.iter().filter(|a| !a.starts_with('-')).map(|a| a.to_string()).collect()),
             "robocopy" => robocopy_target(&args),
             "[io.directory]::delete" | "[system.io.directory]::delete" => directory_delete(chain.peek().map(|s| s.words.as_slice())),
@@ -4301,9 +4307,9 @@ mod tests {
             "find / -delete",
             "find ~ -type f -delete",
             "find -L /etc -name '*.conf' -delete",
-            "find . -delete",
             "find $DIR -delete",
-            "cd .. && find app -delete",
+            "find .git -delete",
+            "find . .. -name x -delete",
             "rimraf ../other",
             "npx rimraf /",
             "pnpm exec rimraf ~/code",
@@ -4326,6 +4332,12 @@ mod tests {
             }
         }
         for c in [
+            "find . -name '*.pyc' -delete",
+            "find . -name .DS_Store -delete",
+            "find . -name '*soft-delete*'",
+            "find . -name x; git push origin --delete feat",
+            "find . -name '*soft-delete*' && git push origin --delete feat && rm -rf build",
+            "cd .. && find app -delete",
             "find build -name '*.o' -delete",
             "find .. -name x -print",
             "find /tmp/cache -delete",
@@ -4344,6 +4356,24 @@ mod tests {
         }
         if w("robocopy src C:\\Users\\me\\app\\dist /MIR").is_some() {
             missed.push("should run on Windows: robocopy src C:\\Users\\me\\app\\dist /MIR".into());
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (lane2 review): find deletes only with its own `-delete` word, and judges its start
+    /// points by containment: inside the workspace (its root included) runs, outside asks.
+    #[test]
+    fn t604b_find_is_judged_by_its_own_delete_word_and_where_it_starts() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["find .. -delete", "find / -name x -delete", "find ~ -delete"] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["find . -name '*.pyc' -delete", "find . -name .DS_Store -delete", "find . -name '*soft-delete*'", "find . -name x && git push origin --delete feat", "find .. -name '*soft-delete*'", "find .. -print; git push origin --delete feat"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
         }
         assert!(missed.is_empty(), "{missed:#?}");
     }

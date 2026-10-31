@@ -1515,8 +1515,9 @@ pub struct RemoveCheck {
 /// ponytail: every such commit comes back, one short line each, so a branch with thousands never
 /// pushed sends thousands of lines; count with `rev-list --count` and list the first few if one shows up.
 fn only_here(_git: &Git, repo: &Path, branch: Option<&str>, head: &str) -> Result<Vec<String>, String> {
+    // T-613b: a detached worktree whose HEAD Git could not tell has commits Kolux cannot see.
     if branch.is_none() && head.is_empty() {
-        return Ok(Vec::new()); // no commit at all
+        return Err(UNREAD_HEAD.into());
     }
     let rev = branch.map_or_else(|| head.to_string(), |b| format!("refs/heads/{b}"));
     if !Git::ref_ok(&rev) {
@@ -1524,7 +1525,7 @@ fn only_here(_git: &Git, repo: &Path, branch: Option<&str>, head: &str) -> Resul
     }
     if branch.is_some() {
         // for-each-ref lists nothing for a ref that is not there (an unborn branch) and fails on a broken one.
-        let listed = crate::git::run(&["for-each-ref", "--format=%(refname)", &rev], Some(repo))?;
+        let listed = crate::git::run(&["for-each-ref", "--format=%(refname)", &rev], Some(repo)).map_err(|_| UNREAD_BRANCH.to_string())?;
         if !listed.lines().any(|l| l == rev) {
             return Ok(Vec::new());
         }
@@ -1534,8 +1535,12 @@ fn only_here(_git: &Git, repo: &Path, branch: Option<&str>, head: &str) -> Resul
     let mut args = vec!["log", "--format=%h %s", rev.as_str(), "--not"];
     args.extend(itself.as_deref());
     args.extend(["--branches", "--remotes", "--"]);
-    crate::git::run(&args, Some(repo)).map(|out| out.lines().map(str::to_string).collect())
+    crate::git::run(&args, Some(repo)).map(|out| out.lines().map(str::to_string).collect()).map_err(|_| if branch.is_some() { UNREAD_BRANCH } else { UNREAD_HEAD }.to_string())
 }
+
+/// T-613b: why a delete is refused when the commits it could lose cannot be read.
+const UNREAD_BRANCH: &str = "Kolux could not read this branch, so it was left in place.";
+const UNREAD_HEAD: &str = "Kolux could not read this workspace's commit, so it was left in place.";
 
 pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result<RemoveCheck, String> {
     let all = git.worktrees(Path::new(&project.path))?;
@@ -2404,8 +2409,11 @@ pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::ter
 fn keep_detached(git: &Git, project: &Project, path: &str) -> Result<Option<Kept>, String> {
     let repo = Path::new(&project.path);
     let Some(target) = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(path))) else { return Ok(None) };
-    if target.branch.is_some() || target.head.is_empty() {
+    if target.branch.is_some() {
         return Ok(None);
+    }
+    if target.head.is_empty() {
+        return Err(UNREAD_HEAD.into());
     }
     // In the branch turn, so two detached workspaces at one HEAD deleted side by side make one branch.
     let turn = branch_turn(repo);
@@ -5012,9 +5020,19 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         git_in(&repo, &["branch", "broken"]);
         fs::write(repo.join(".git/refs/heads/broken"), "0000000000000000000000000000000000000bad\n").unwrap();
         let read = only_here(&git, &repo, Some("broken"), "");
-        assert!(read.is_err(), "a failed read is not an empty list: {read:?}");
+        assert_eq!(read, Err("Kolux could not read this branch, so it was left in place.".to_string()), "a failed read is not an empty list");
         // a branch that is not there at all (unborn) still has nothing to lose
         assert_eq!(only_here(&git, &repo, Some("never-made"), ""), Ok(Vec::new()));
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    /// T-613b (review of lane2): a detached worktree whose HEAD Git could not tell (an empty head)
+    /// is not taken for one with no commits: the check refuses with a plain message.
+    #[test]
+    fn t613b_a_detached_worktree_whose_head_cannot_be_read_is_refused() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("repo613h");
+        assert_eq!(only_here(&git, &repo, None, ""), Err("Kolux could not read this workspace's commit, so it was left in place.".to_string()));
         let _ = fs::remove_dir_all(repo);
     }
 
