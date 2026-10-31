@@ -6,8 +6,9 @@ import CardLine from "./CardLine";
 
 const facts = (o: Partial<CardFacts> = {}): CardFacts => ({ agents: 0, state: "idle", pr: null, changed: 0, note: null, ...o });
 
-test("PROJ-062: nothing saved is the Default preset: status and the agent summary", () => {
-  expect(readCardDetails({})).toEqual({ shown: ["status", "agents"], density: "default" });
+test("PROJ-062 / T-609: nothing saved is the Default preset: status, the agent summary and the changed-file count", () => {
+  expect(readCardDetails({})).toEqual({ shown: ["status", "agents", "changes"], density: "default" });
+  expect(cardShows({}, "changes"), "T-609: the count is on by default").toBe(true);
   expect(readCardDetails({ [CARD_DENSITY_FIELD]: "nonsense" }).density).toBe("default");
   expect(readCardDetails({ [CARD_DENSITY_FIELD]: "compact" })).toEqual({ shown: ["status"], density: "compact" });
   expect(readCardDetails({ [CARD_DENSITY_FIELD]: "detailed" }).shown).toEqual(["status", "agents", "pr", "changes", "note"]);
@@ -77,8 +78,9 @@ const settle = (start: Record<string, unknown>, steps: Array<[string, boolean]>)
 };
 
 test("PROJ-062: the sidebar chooser saves a custom list for a custom set and a preset marker for a preset-equal set", () => {
-  expect(detailsAfter({}, "pr", true), "Default plus a pull request is custom").toEqual(["status", "agents", "pr"]);
-  expect(detailsAfter({}, "agents", false), "Default minus the summary is Compact").toEqual([presetMark("compact")]);
+  expect(detailsAfter({}, "pr", true), "Default plus a pull request is custom").toEqual(["status", "agents", "pr", "changes"]);
+  expect(detailsAfter({}, "agents", false), "Default minus the summary is custom").toEqual(["status", "changes"]);
+  expect(detailsAfter({ [CARD_DETAILS_FIELD]: ["status", "changes"] }, "changes", false), "and minus the count too is Compact").toEqual([presetMark("compact")]);
   expect(detailsAfter({}, "status", false), "status stays on").toEqual([presetMark("default")]);
   expect(detailsAfter({}, "mystery", true)).toEqual([presetMark("default")]);
 });
@@ -87,10 +89,10 @@ test("PROJ-062: unticking back to a preset follows the preset again (the frozen-
   const detailed = { [CARD_DENSITY_FIELD]: "detailed" };
   const trimmed = settle(detailed, [["pr", false], ["changes", false]]);
   expect(readCardDetails(trimmed)).toEqual({ shown: ["status", "agents", "note"], density: "custom" });
-  const back = settle(trimmed, [["note", false]]);
+  const back = settle(trimmed, [["note", false], ["changes", true]]);
   expect(back[CARD_DETAILS_FIELD], "not a literal list").toEqual([presetMark("default")]);
-  expect(readCardDetails(back)).toEqual({ shown: ["status", "agents"], density: "default" });
-  const full = settle(back, [["pr", true], ["changes", true], ["note", true]]);
+  expect(readCardDetails(back)).toEqual({ shown: ["status", "agents", "changes"], density: "default" });
+  const full = settle(back, [["pr", true], ["note", true]]);
   expect(full[CARD_DETAILS_FIELD]).toEqual([presetMark("detailed")]);
   expect(readCardDetails(full).density).toBe("detailed");
 });
@@ -125,9 +127,9 @@ test("AUTO-024: with the property ticked a worktree made by a run carries the ta
 });
 
 test("AUTO-024: ticking Automation in the chooser saves a custom list; unticking it follows the preset again", () => {
-  expect(detailsAfter({}, "automation", true)).toEqual(["status", "agents", "automation"]);
+  expect(detailsAfter({}, "automation", true)).toEqual(["status", "agents", "changes", "automation"]);
   const ticked = settle({}, [["automation", true]]);
-  expect(readCardDetails(ticked)).toEqual({ shown: ["status", "agents", "automation"], density: "custom" });
+  expect(readCardDetails(ticked)).toEqual({ shown: ["status", "agents", "changes", "automation"], density: "custom" });
   const off = settle(ticked, [["automation", false]]);
   expect(off[CARD_DETAILS_FIELD]).toEqual([presetMark("default")]);
 });
@@ -158,7 +160,7 @@ test("PROJ-062 (T-266-b): ports and task are separate details; ticked, they move
   expect(cardLine(["status", "ports", "task"], f)).toBe("Port 8080 · Task #7");
   expect(CARD_DETAILS.map((d) => d.id)).toEqual(expect.arrayContaining(["ports", "task"]));
   for (const p of Object.values(PRESETS)) expect(p).not.toContain("ports");
-  expect(detailsAfter({}, "ports", true)).toEqual(["status", "agents", "ports"]);
+  expect(detailsAfter({}, "ports", true)).toEqual(["status", "agents", "changes", "ports"]);
 });
 
 test("PROJ-062 (T-266-b): empty cases say nothing", () => {

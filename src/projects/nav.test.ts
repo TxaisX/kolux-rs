@@ -105,6 +105,10 @@ test("palette rows carry the agent's mark, permission over unread over a fresh f
   expect(dirMark("done", false)).toBe("done");
   expect(dirMark("idle", false)).toBeNull();
   expect(dirMark(null, true)).toBe("unread");
+  // DT-C52: a blocked or interrupted workspace shows Stopped, as its tab does; a question wins, unread output beats a stop.
+  expect(dirMark("blocked", false)).toBe("stopped");
+  expect(dirMark("interrupted", false)).toBe("stopped");
+  expect(dirMark("blocked", true)).toBe("unread");
   const at = (d: string) => (d.endsWith("login") ? { mark: "permission" as const, since: 5 } : null);
   const items = worktreeItems([proj], { p1: ws }, false, () => null, () => {}, at);
   expect(items.filter((i) => i.section === "Worktrees").map((i) => i.mark ?? null)).toEqual([null, "permission"]);

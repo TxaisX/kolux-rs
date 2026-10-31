@@ -4,17 +4,19 @@
 
 import { paneState, type AgentState } from "../projects/rows";
 
-export type Group = "needs" | "waiting" | "done";
+export type Group = "needs" | "waiting" | "done" | "stopped";
 export type Source = { key: number; agent: string; title: string; branch: string | null; cwd: string | null; state: AgentState; interrupted: boolean; running: boolean; changed: number; finishedAt: number | null };
 /** `exited` (T-035-b): the question or permission is still open but the agent's terminal is gone. */
-export type Item = Omit<Source, "finishedAt" | "running" | "interrupted" | "changed"> & { group: Group; label: string; when: number; exited: boolean };
+/** `state` "stopped" (DT-C52): an agent whose program has exited, as the Board and the Tower show it. */
+export type Item = Omit<Source, "finishedAt" | "running" | "interrupted" | "changed" | "state"> & { state: AgentState | "stopped"; group: Group; label: string; when: number; exited: boolean };
 
 export const GROUPS: Array<{ id: Group; title: string }> = [
   { id: "needs", title: "Needs you" },
   { id: "waiting", title: "Waiting on agent" },
   { id: "done", title: "Done today" },
+  { id: "stopped", title: "Stopped" },
 ];
-/** Done today keeps the 20 newest finishes of the last 30 minutes. */
+/** Done today keeps the 20 newest finishes of the last 30 minutes; Stopped the same for programs that exited. */
 export const DONE_LIMIT = 20;
 export const DONE_WINDOW_MS = 30 * 60_000;
 
@@ -30,15 +32,17 @@ export function sourceOf(p: { key: number; agent: string; branch: string | null;
 }
 
 export function inboxItems(sources: Source[], now: number): Item[] {
-  const item = (s: Source, group: Group, label: string, when: number): Item => ({ key: s.key, agent: s.agent, title: s.title, branch: s.branch, cwd: s.cwd, state: s.state, group, label, when, exited: group === "needs" && !s.running });
+  const item = (s: Source, group: Group, label: string, when: number): Item => ({ key: s.key, agent: s.agent, title: s.title, branch: s.branch, cwd: s.cwd, state: group === "stopped" ? "stopped" : s.state, group, label, when, exited: group === "needs" && !s.running });
   const newest = (a: Item, b: Item) => b.when - a.when;
   const needs = sources.filter((s) => NEEDS[s.state]).map((s) => item(s, "needs", NEEDS[s.state]!, s.changed));
   const waiting = sources.filter((s) => s.running && (s.state === "working" || s.state === "queued")).map((s) => item(s, "waiting", s.state === "queued" ? "Queued" : "Running", s.changed));
+  const recent = (s: Source) => s.finishedAt !== null && now - s.finishedAt <= DONE_WINDOW_MS;
+  // DT-C52 (Txais, 2026-10-31): an agent whose program has exited is Stopped, as on the Board and the Tower
+  // (chipOf), not Done today: the window does not keep its exit code, so it cannot say the work finished.
+  const stopped = sources.filter((s) => s.state === "done" && !s.running && recent(s)).map((s) => item(s, "stopped", "Stopped", s.finishedAt!));
   // Interrupted sessions and anything older than 30 minutes stay out of done today.
-  const done = sources
-    .filter((s) => s.state === "done" && !s.interrupted && s.finishedAt !== null && now - s.finishedAt <= DONE_WINDOW_MS)
-    .map((s) => item(s, "done", "Done", s.finishedAt!));
-  return [...needs.sort(newest), ...waiting.sort(newest), ...done.sort(newest).slice(0, DONE_LIMIT)];
+  const done = sources.filter((s) => s.state === "done" && s.running && !s.interrupted && recent(s)).map((s) => item(s, "done", "Done", s.finishedAt!));
+  return [...needs.sort(newest), ...waiting.sort(newest), ...done.sort(newest).slice(0, DONE_LIMIT), ...stopped.sort(newest).slice(0, DONE_LIMIT)];
 }
 
 /** Up and Down walk the rows in order; with nothing selected Down picks the first and Up the last; both ends stop. */

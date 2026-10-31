@@ -41,6 +41,7 @@ import { CardDetailsChooser } from "../look/CardDetailsChooser";
 import { HEADER_COLOURS_SETTING, colourSaveAfterDelete, headerColourOf, headersGoneWithGroup } from "../look/headerColour";
 import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
 import { useCardPorts } from "../look/cardPorts";
+import { useCardChanges } from "../look/cardChanges";
 import { takeSuggestion } from "./suggest";
 import { IconPicker } from "./IconPicker";
 import { ProjectIcon } from "./IconView";
@@ -454,6 +455,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   // shown (backing off after failures, waiting out a rate limit), and again on focus when stale.
   const pollPaths = Object.values(worktrees).flat().map((w) => w.path);
   const goneFolders = useMissingFolders(pollPaths); // PROJ-086
+  // T-609: the changed-file count on the cards, read from git while the cards show it (look/cardChanges.ts).
+  const cardChanges = useCardChanges(pollPaths, cardDetails.shown.includes("changes"));
   const norm = (d: string) => d.replace(/[\\/]+$/, "").toLowerCase();
   const pollActive = activeDir === null ? null : (pollPaths.find((p) => norm(p) === norm(activeDir)) ?? null);
   const pollLinks = linkedPrs(settings[SCM_LINKED_PR_KEY]);
@@ -1648,14 +1651,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const asking = confirm?.path === w.path;
     const info = infoOf(w);
     // PROJ-062: what the card shows under its name, and what a hover adds for the rest.
-    const facts: CardFacts = { agents: liveIn(w).length, state: info.state, pr: info.pr, changed: info.changed, note: w.comment ?? null, ports: cardPorts.portsFor(w.path), task: w.number ?? null };
+    const facts: CardFacts = { agents: liveIn(w).length, state: info.state, pr: info.pr, changed: cardChanges.countFor(w.path), note: w.comment ?? null, ports: cardPorts.portsFor(w.path), task: w.number ?? null };
     const hoverTitle = cardTitle(worktreeLabel(w), w.branch, cardDetails.shown, facts, `Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`);
     const un = isUnread(w);
     const shut = shutKids.has(w.path);
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}${picked.some((x) => same(x, w.path)) ? " picked" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={(e) => (isToggleClick(e, /mac/i.test(navigator.platform)) ? setPicked(toggleRow(picked, w.path, activeDir, same)) : (setPicked([]), show(w)))} onPointerEnter={() => cardPorts.load(w.path, pollPaths)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}${picked.some((x) => same(x, w.path)) ? " picked" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={(e) => (isToggleClick(e, /mac/i.test(navigator.platform)) ? setPicked(toggleRow(picked, w.path, activeDir, same)) : (setPicked([]), show(w)))} onPointerEnter={() => (cardPorts.load(w.path, pollPaths), cardChanges.load(w.path))} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}

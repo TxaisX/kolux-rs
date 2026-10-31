@@ -28,7 +28,7 @@ export const VOCAB: Record<StatusKey, Vocab> = {
   stale: { word: "No recent update", glyph: "stale", tone: "", explain: "No status has arrived from this agent for a while." },
   starting: { word: "Starting", glyph: "spinner", tone: "working", explain: "The program is starting up." },
   unreachable: { word: "Cannot reach", glyph: "failed", tone: "attention", explain: "Kolux cannot talk to this agent." },
-  stopped: { word: "Stopped", glyph: "idle", tone: "", explain: "The program has stopped." },
+  stopped: { word: "Stopped", glyph: "idle", tone: "", explain: "Stopped: waiting on a limit or sign-in, or the program has ended." },
 };
 
 /** A stopped label says what caused the stop. */

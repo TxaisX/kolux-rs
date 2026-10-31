@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 718 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 719 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -34,24 +34,14 @@ agent mark, name, branch (a detached checkout shows its short commit; a plain fo
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
-- [product-ux] 2026-10-30 · Question (T-608): should a pane that is blocked (a limit or a sign-in) still count as
-  needing you, or only permissions and questions? Today the Inbox and the bell still count it, as before; the
-  Board and the Tower show it as Stopped.
-- [product-ux] 2026-10-30 · Question (T-608): when an agent's program has exited, the Board and Tower say "Stopped"
-  but the Inbox lists it under "Done today", because the window does not keep the program's exit code. Should the
-  Inbox say "Stopped" too? Until you answer, it stays as it is.
-- [product-ux] 2026-10-30 · Question (T-608): the Ctrl+J jump between panes that need you, and the little badges on
-  tabs, still use each pane's own "needs attention" flag, which also lights up when a pane is blocked or was
-  interrupted. Everywhere else, "Needs you" now means only a permission request or a question. Should Ctrl+J and the
-  tab badges follow that same rule? Until you answer, they stay as they are.
 - [product-ux] 2026-10-30 · Open: live Windows checks for T-608 to T-612 (steps in each evidence/T-6xx.txt):
   the consent line on a fresh profile and the one-time card on an old one; a hand-started Claude asking permission
   shows Needs you on the Board, Tower, Inbox, needs strip, bell and sidebar; Review changes from a Done card and an
   Inbox row; Show Floor, Space, Workspace Statuses, Artifacts and Skills from the palette; Rename worktree from the
   palette with the sidebar closed; Open a session with no workspace asks for a folder; Escape closes the Tip.
-- [integrator] 2026-10-30 · Open: reclaim the old Kolux (about 408 GB), as in docs/reclaim-old-kolux.md. (1) Archive
-  TxaisX/kolux and TxaisX/kolux-releases on GitHub (Settings > Danger Zone > Archive this repository). (2) Sign test
-  account A in at its new folder G:\Temp\live-signin\account-a. (3) Uninstall the old app, then run
+- [integrator] 2026-10-30 · Open: reclaim the old Kolux (about 408 GB), as in docs/reclaim-old-kolux.md (the old GitHub
+  repos are already removed, Txais 2026-10-31). (1) Sign test account A in at its new folder
+  G:\Temp\live-signin\account-a. (2) Uninstall the old app, then run
   scripts/reclaim-old-kolux.ps1 (look first, move anything that is not an old-repo copy out of the backups folder, then
   -Delete and type DELETE). Leave ~/.kolux/agent-hooks alone for now.
 - [reliability] 2026-10-30 · Open: live Windows checks on the installed build. T-565 (round 1 review fixed): Escape
@@ -76,21 +66,13 @@ recorded default until told otherwise; nothing here blocks a pass.
   ending on the next save. Nothing changes until you pick (T-603).
 - [updates] 2026-10-30 · The feed is now the public TxaisX/kolux-rs itself (DT-R40); the signing key is at
   ~/.kolux-rs/release-signing/kolux-rs.key (no password) and releases ship from the owner's PC
-  (`node scripts/release.mjs`). Only for release.yml on GitHub's runners: lift the GitHub Actions billing block
-  (Settings > Billing and plans) and add the secrets KOLUX_RELEASE_KEY (the key file's text) and
-  KOLUX_RELEASE_PUBKEY (its .pub); KOLUX_RELEASES_TOKEN is no longer needed (T-622).
-- [release-ci] 2026-10-30 · Question (optional, X-proc.13): should CI fail on every new high-severity library advisory
-  (`pnpm audit --audit-level high` added to the ci.yml checks)? It is a one-line change, but it can turn builds red without
-  any code change. Not added; nothing changes until you say yes.
-- [release-ci] 2026-10-30 · Optional repository setting: protect the release job with a GitHub environment that needs a
-  reviewer's approval before it signs and publishes (GitHub repository Settings > Environments). Only you can set it.
-- [release-ci] 2026-10-30 · Open: live proofs. APP-025 box 2 (a downloaded update installs and Kolux comes back), APP-059
-  box 1 and APP-060 box 1 (a real release run) need the CI billing block lifted (X-proc.2) and the signing secrets; APP-043
-  (Restart Kolux and both safe-graphics restarts come back) needs one check on the installed Windows build (T-592).
-- [release-ci] 2026-10-30 · Follow-ups from the PR #9 review, not built: (1) sign in a separate job from a
-  downloaded artifact; today the sign step runs in the build job, next to node_modules the build step's install scripts
-  wrote. (2) scripts/license-check.mjs: anchor the MIT and BSD-2 patterns on the full licence text. (3)
-  richCodeColourTime.test.ts: its 500 ms limit needs more headroom on CI runners.
+  (`node scripts/release.mjs`). GitHub CI is not used (DT-C54), so no billing change, releases repo or
+  release secrets are needed (T-622).
+- [release-ci] 2026-10-30 · Open: live proofs. APP-025 box 2 (a downloaded update installs on a plain quit) and APP-043 (T-592)
+  are on docs/live-proofs-windows.md. APP-059 box 1 and APP-060 box 1 (a release run on GitHub's runners) are not
+  applicable (DT-C54).
+- [release-ci] 2026-10-30 · Follow-ups from the PR #9 review, not built: scripts/license-check.mjs: anchor the MIT
+  and BSD-2 patterns on the full licence text. (The CI-only items were dropped with DT-C54.)
 - [status-hooks] 2026-10-30 · Question (T-585): a helper agent whose stop is lost without an Esc, or a background helper
   that stays silent from an Esc until the next prompt, can still keep a pane "working". Clearing those needs a signal Kolux
   does not have yet (for example Claude's Stop event listing which helpers are still alive, which is not confirmed). Should
@@ -174,7 +156,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-30 · [status-hooks] T-583 · The order of a pane's status events is kept by one app-wide lock held only around the status step, the emit and the after-queue; a protected-command reply is worked out per connection, outside that lock, so one slow hook never holds up another pane.
 - 2026-10-30 · [release-ci] T-588 · CI release signing acts only on the build this run's `--build-only` recorded, never on the newest output folder; a run on an already-released main ends with "nothing was built, nothing to sign".
 - 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
-- 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters is left untouched, and the installer log says to use Settings > CLI > Register (NSIS string limit). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
+- 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters (Txais's is 1,815; the first live check failed, 2026-10-31) is left to the app: the installer writes kolux-path-pending.txt and Kolux adds the bin folder once at its next start (%VARIABLES% kept, REG_EXPAND_SZ); uninstall runs the app's own --uninstall-path, after the app-running check, to remove exactly our entry at any length (cycle 2, DT-C55). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
 - 2026-10-30 · [editor] T-601 · A click on a collapsible section's heading (<summary>) keeps its normal action, so the section still opens. Mermaid's protected settings also cover fontFamily, altFontFamily and htmlLabels, so a diagram cannot change them. A note's inline style attributes are dropped.
 - 2026-10-30 · [editor] T-602 · A note whose table has a row holding more cells than its header opens in source view, with the banner saying why.
 - 2026-10-30 · [editor] T-603 · A reload switches a tab's line ending only when the new text uses one line ending throughout; text that mixes them keeps the tab's own. A second tab of an open file takes the first tab's line ending.
@@ -192,11 +174,6 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [release] T-185-a · The installed CLI is a kolux.exe plus kolux.cmd shim in the install's bin folder, built only by the release script; only a refused connection means the app is down, lost answers print an exact --retry-request command, and reset takes exactly one scope (DT-R27).
 ## Follow-ups (not built yet)
 
-- 2026-10-30 · [product-ux] T-609 · Not built: the sidebar's changed-files count on by default. First give the
-  count a real source: src/projects/ProjectsPanel.tsx (around line 1628) feeds RowInfo.changed, which is a timestamp
-  (App.tsx sets changed: Date.now()), as the number of changed files. Then set src/look/cards.ts PRESETS.default
-  to ["status", "agents", "changes"], update its note, and update src/look/cards.test.ts and
-  src/look/clickThrough.test.ts.
 - 2026-10-30 · [product-ux] T-608 / T-612 · Docs not updated (not this lane's files): docs/guide/settings.md
   (lines 181, 187, 193), docs/guide/getting-started.md (12-14, 39) and docs/guide/board-agents-inbox.md (118)
   should describe the consent line, "Open a session" asking for a folder when there is no workspace, and a blocked
@@ -226,14 +203,6 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-30 · [safety] T-606 · Review of PR #15: a writer installed as a non-npm .cmd/.bat script refuses a multi-line
   prompt with a plain message (cmd.exe cannot take a line break); a typed or file hand-over would lift that.
 
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (a) Force Reload's unsaved-work question uses window.confirm;
-  switch it to the app's own close question, or to the dialog plugin's ask() with dialog:allow-ask.
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (b) programWord (src/launch/PlusMenu.tsx:39) labels agents
-  without a vendor mark "PowerShell".
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (c) a pane whose program failed to start no longer rings the
-  bell (needsAttention leaves out "failed"), unlike main before PR #16.
-- 2026-10-30 · [product-ux] Review of PR #16, not built: (d) a late Stop/done hook that arrives after the prompt mark
-  can bring a stale status word back.
 
 - 2026-10-30 · [safety] T-604 · Review of PR #15, not fixed here: the protected-delete rule does not cover
   `[IO.Directory]::Delete`, `find -delete`, `rimraf` or `robocopy /MIR`.
@@ -244,6 +213,12 @@ recorded default until told otherwise; nothing here blocks a pass.
   live on Windows, and ask on any PowerShell wildcard in a delete folder if it can match `..`.
 - 2026-10-30 · [safety] T-604 · Review of PR #15 (round 8): a user whose own environment sets CDPATH is asked about
   every relative `cd ... && rm -rf ...` (an extra question, not a hole).
+
+- 2026-10-31 · [product-ux-2] T-609 · The sidebar's changed-files count reads scm_status (git status with untracked files)
+  as foreground work, now on by default for every workspace (src/look/cardChanges.ts:344, ponytail); give it a
+  count-only background command or a longer cache.
+- 2026-10-31 · [product-ux-2] T-608b · Docs: docs/guide/board-agents-inbox.md still describes three Inbox groups; add
+  Stopped.
 
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt

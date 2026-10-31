@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { DONE_LIMIT, exitNote, inboxItems, moveSelection, openLabel, settle, type Source } from "./inbox";
+import { DONE_LIMIT, GROUPS, exitNote, inboxItems, moveSelection, openLabel, settle, type Source } from "./inbox";
 
 const MIN = 60_000;
 const now = 10_000 * MIN;
@@ -60,7 +60,7 @@ test("T-035-b: a question or permission whose terminal has exited stays in Needs
     [2, "needs", false, "Answer in Code", true],
     [3, "needs", true, "Answer in Code", false],
     [5, "waiting", false, "Open in Code", true],
-    [4, "done", false, "Open in Code", true],
+    [4, "stopped", false, "Open in Code", true],
   ]);
   expect(exitNote(items[0])).toMatch(/terminal has exited/);
 });
@@ -72,4 +72,15 @@ test("FIX-1: a blocked item whose terminal exited (a stop, not a prompt) gets it
   expect(exitNote(blocked)).not.toMatch(/prompt/);
   const [asked] = inboxItems([src(2, "waiting", { running: false })], now);
   expect(exitNote(asked)).toMatch(/prompt cannot be answered/);
+});
+
+test("DT-C52: an agent whose program has exited is listed as Stopped, after Done today, never as Done; the 30-minute window and the limit hold for it too", () => {
+  const items = inboxItems([src(1, "done", { running: false, finishedAt: now - 2 * MIN }), src(2, "done", { finishedAt: now - MIN }), src(3, "done", { running: false, finishedAt: now - 40 * MIN }), src(4, "done", { running: false, interrupted: true, finishedAt: now - 3 * MIN })], now);
+  expect(items.map((i) => [i.key, i.group, i.label, i.state])).toEqual([
+    [2, "done", "Done", "done"],
+    [1, "stopped", "Stopped", "stopped"],
+    [4, "stopped", "Stopped", "stopped"],
+  ]);
+  expect(GROUPS.map((g) => g.title)).toEqual(["Needs you", "Waiting on agent", "Done today", "Stopped"]);
+  expect(inboxItems(Array.from({ length: 25 }, (_, i) => src(i + 1, "done", { running: false, finishedAt: now - i * 1000 })), now)).toHaveLength(DONE_LIMIT);
 });
