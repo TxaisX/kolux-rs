@@ -122,7 +122,7 @@ handling unchanged; both existing PROJ-051 tests plus a new one pass.
 The remaining P0 cards need one run from **Windows Terminal or PowerShell**, not a Kolux terminal:
 
 ```powershell
-cd G:\Dev\kolux-rs
+cd <your clone of kolux-rs>
 node scripts/prove/live-installed.mjs start
 node scripts/prove/live-checks.mjs b7     # BROW-008 box 2
 node scripts/prove/live-installed.mjs stop
@@ -137,7 +137,7 @@ Three of the eleven provable cards already have scripts (`APP-052`, `SET-004`, `
 `node scripts/release.mjs` was started against `main` at `a1c590d0` with the checkout set explicitly:
 
 ```powershell
-$env:KOLUX_RELEASE_CHECKOUT="G:\Dev\kolux-rs-release-checkout"
+$env:KOLUX_RELEASE_CHECKOUT="<release checkout>"
 node scripts/release.mjs
 ```
 
