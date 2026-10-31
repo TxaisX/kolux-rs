@@ -188,12 +188,27 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, how: H
         // T-604b (c): find's -delete (its own word, among its own arguments) removes what matches
         // under each start point, never the start point's folder above it, so a start point inside
         // the workspace runs, the workspace root included; its .git and anything outside ask.
-        // ponytail: a -delete after an escaped `\(` group lands in a part the reading split off and is not seen.
-        if p == "find" && args.contains(&"-delete") {
-            let ws = base.workspace.as_deref().or(base.cwd.as_deref()).map(norm);
-            let root = |t: &str| ws.is_some() && locate(t, here.as_deref(), base) == ws;
-            if find_targets(&args).iter().any(|t| unclear_target(t) || (risky(t, here.as_deref(), base) && !root(t))) {
-                return true;
+        // T-604b follow-up (cycle 3): the reading splits at `(` and `)`, so the expression after an
+        // escaped group (`find .. \( -name x -delete \)`) lands in the next parts. A command never
+        // starts with `-`, `!` or `,`, so those parts are put back before find is judged; an empty
+        // part is skipped and a real command ends the group.
+        if p == "find" {
+            let mut words: Vec<&str> = args.clone();
+            while let Some(next) = chain.peek() {
+                let nw = next.program_words();
+                if !(nw.is_empty() || nw.first().is_some_and(|w| w.starts_with(['-', '!', ',']) || w == "\\")) {
+                    break;
+                }
+                if let Some(next) = chain.next() {
+                    words.extend(next.words.iter().map(String::as_str));
+                }
+            }
+            if words.contains(&"-delete") {
+                let ws = base.workspace.as_deref().or(base.cwd.as_deref()).map(norm);
+                let root = |t: &str| ws.is_some() && locate(t, here.as_deref(), base) == ws;
+                if find_targets(&words).iter().any(|t| unclear_target(t) || (risky(t, here.as_deref(), base) && !root(t))) {
+                    return true;
+                }
             }
             continue;
         }
@@ -298,7 +313,7 @@ fn find_targets(args: &[&str]) -> Vec<String> {
             _ => break,
         }
     }
-    let starts: Vec<String> = args[i.min(args.len())..].iter().take_while(|a| !(a.starts_with(['-', '(', ')', '!', ',']) || a.is_empty())).map(|a| a.to_string()).collect();
+    let starts: Vec<String> = args[i.min(args.len())..].iter().take_while(|a| !(a.starts_with(['-', '(', ')', '!', ',']) || **a == "\\" || a.is_empty())).map(|a| a.to_string()).collect();
     if starts.is_empty() { vec![".".to_string()] } else { starts }
 }
 
@@ -408,29 +423,39 @@ fn risky(target: &str, dir: Option<&str>, base: &Base) -> bool {
     // HOME and its ancestors are never temp deletes, even when HOME lies under a temp root.
     let reaches_home = base.home.as_deref().is_some_and(|h| under(&norm(h), &path));
     if !reaches_home {
-        if let Some(root) = base.temp.iter().find(|r| under(&path, &norm(r))) {
+        let temp: Vec<String> = base.temp.iter().map(|r| norm(r)).collect();
+        if let Some(root) = temp.iter().find(|r| under(&path, r)) {
             // T-604b (a): a link on the way may lead out of the temp folder.
-            return links_out(&path, &norm(root), base);
+            return link_answers(&path, root, &temp, None, base);
         }
     }
     let Some(ws) = base.workspace.as_deref().or(base.cwd.as_deref()) else { return true };
     let ws = norm(ws);
-    path == ws || under(&path, &format!("{ws}/.git")) || !under(&path, &ws)
+    let git = format!("{ws}/.git");
+    if path == ws || under(&path, &git) || !under(&path, &ws) { return true; }
+    // T-604b follow-up (cycle 3): a delete at or through a link is judged where the link leads.
+    link_answers(&path, &ws, std::slice::from_ref(&ws), Some(&git), base)
 }
 
-/// T-604b (a): whether a delete of `path`, under the temp root `root`, goes through a link (or
-/// junction) below the root that leads out of every temp root, or to HOME or above it. A link is
-/// resolved on disk; one that cannot be resolved (it leads nowhere, or the rest of the path is not
-/// there) counts as leading out. A path with no link on the way stays where its text says.
-/// ponytail: only the temp exemption follows links; a link inside the workspace is judged as text.
-fn links_out(path: &str, root: &str, base: &Base) -> bool {
-    let rest = path[root.len()..].trim_start_matches('/');
+/// T-604b (a) and its cycle-3 follow-up: whether a delete of `path` under `root` goes through a link (a
+/// symlink, or a junction on Windows). A start point that is itself a link asks: once normalized, `rm link`
+/// (which removes the link) and `rm link/` (which follows it) cannot be told apart, and `find link/` follows.
+/// A link on the way is resolved: one that stays under a root in `roots` (every temp root, or the workspace),
+/// and out of `git` when one is given, runs; one that leads elsewhere, or cannot be resolved (it leads
+/// nowhere, or the rest of the path is not there), asks. A path with no link on the way stays where its text
+/// says.
+fn link_answers(path: &str, root: &str, roots: &[String], git: Option<&str>, base: &Base) -> bool {
+    let rest = path.get(root.len()..).unwrap_or("").trim_start_matches('/');
+    let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
     let mut at = std::path::PathBuf::from(root);
     let mut linked = false;
-    for part in rest.split('/').filter(|p| !p.is_empty()) {
+    for (i, part) in parts.iter().enumerate() {
         at.push(part);
         match std::fs::symlink_metadata(&at) {
             Ok(m) if m.file_type().is_symlink() => {
+                if i + 1 == parts.len() {
+                    return true;
+                }
                 linked = true;
                 break;
             }
@@ -442,8 +467,15 @@ fn links_out(path: &str, root: &str, base: &Base) -> bool {
         return false;
     }
     let Ok(real) = std::fs::canonicalize(path) else { return true };
-    let reaches_home = base.home.as_deref().and_then(|h| std::fs::canonicalize(h).ok()).is_some_and(|h| h.starts_with(&real));
-    reaches_home || !base.temp.iter().filter_map(|r| std::fs::canonicalize(r).ok()).any(|r| real.starts_with(r))
+    if !roots.iter().filter_map(|r| std::fs::canonicalize(r).ok()).any(|r| real.starts_with(r)) {
+        return true;
+    }
+    if let Some(g) = git.and_then(|g| std::fs::canonicalize(g).ok()) {
+        if real.starts_with(g) {
+            return true;
+        }
+    }
+    base.home.as_deref().and_then(|h| std::fs::canonicalize(h).ok()).is_some_and(|h| h.starts_with(&real))
 }
 
 /// Where `arg` points as text, or None when it cannot be known: a variable, another user's home,
@@ -4390,6 +4422,96 @@ mod tests {
             }
         }
         for c in ["rm -rf build/*", "del /s /q dist\\*.o", "Remove-Item -Recurse -Force build", "Remove-Item -Recurse -Force .\\build\\out"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// A folder link for the link tests: a symlink on Unix, a junction on Windows (no admin needed).
+    fn link_dir(target: &std::path::Path, link: &std::path::Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            let out = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+            assert!(out.status.success(), "mklink /J failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    /// T-604b follow-up (cycle 3, data loss): a delete whose start point is a link asks, and a delete that
+    /// goes through a link is judged where the link leads. A link that stays inside the workspace runs; one
+    /// that leads out of it, or nowhere, asks. A junction is a link on Windows too.
+    #[test]
+    fn t604c_a_delete_at_or_through_a_link_is_judged_by_where_the_link_leads() {
+        let root = std::env::temp_dir().join(format!("krs-t604c-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("krs-t604c-out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(root.join("real/sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        link_dir(&outside, &root.join("out"));
+        link_dir(&root.join("real"), &root.join("inner"));
+        link_dir(&root.join("nowhere"), &root.join("dangling"));
+        let r = root.display().to_string();
+        let sep = std::path::MAIN_SEPARATOR;
+        // Every path is joined the platform's way: on Windows a mixed `\\` and `/` word is read two ways.
+        let p = |name: &str| format!("{r}{sep}{}", name.replace('/', &sep.to_string()));
+        let b = Base { workspace: Some(r.clone()), cwd: Some(r.clone()), home: Some("/home/me".into()), temp: vec![] };
+        let mut missed: Vec<String> = Vec::new();
+        for c in [
+            format!("rm -rf {}", p("out")),
+            format!("rm -rf {}{sep}", p("out")),
+            format!("rm -rf {}", p("out/sub")),
+            format!("rm -rf {}{sep}*", p("out")),
+            format!("find {} -delete", p("out")),
+            format!("find {} -name x -delete", p("out")),
+            format!("Remove-Item -Recurse -Force {}", p("out")),
+            format!("cd {} && rm -rf sub", p("out")),
+            format!("rm -rf {}", p("dangling")),
+            format!("rm -rf {}{sep}x", p("dangling")),
+        ] {
+            if check(&c, &b, &json!({})).map(|x| x.id) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", check(&c, &b, &json!({})).map(|x| x.id)));
+            }
+        }
+        for c in [
+            format!("rm -rf {}", p("real")),
+            format!("rm -rf {}", p("real/sub")),
+            format!("rm -rf {}", p("inner/sub")),
+            format!("rm -rf {}", p("made-up")),
+            format!("find {} -name x -delete", p("real")),
+            format!("find {} -delete", p("inner/sub")),
+        ] {
+            if check(&c, &b, &json!({})).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", check(&c, &b, &json!({})).map(|x| x.id)));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b follow-up (cycle 3, data loss): a `-delete` after an escaped group (`\\( ... \\)`) is still
+    /// find's own word. The reading splits at the parenthesis, so the expression parts after it are put back
+    /// before find is judged: a start point outside asks, one inside the workspace runs.
+    #[test]
+    fn t604c_a_delete_after_an_escaped_group_is_judged_as_find_delete() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in [
+            "find .. \\( -name x -delete \\)",
+            "find .. \\( \\( -name x -delete \\) \\)",
+            "find .. -name x \\( -delete \\)",
+            "find ~ \\( -name x -delete \\)",
+            "find ../other \\( -name x -delete \\)",
+            "cd .. && find other \\( -name x -delete \\)",
+        ] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["find . \\( -name x -delete \\)", "find . -name x \\( -delete \\)", "find build \\( -name '*.o' -delete \\)", "find . -name x \\( -print \\)"] {
             if hit(c).is_some() {
                 missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
             }
