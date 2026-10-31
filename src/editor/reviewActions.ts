@@ -22,12 +22,8 @@ export function reviewActions(s: WindowState, p: ReturnType<typeof useSettingsPl
   const {
     activeDir, agents, focused, hookRef, notes, panes, planDrafts, ptys, setHook, setNotes, setPlanDrafts, setReviewing, setStamp, setToast, titles, turn
   } = s;
-  const {
-    notesFor, saveNotes
-  } = p;
-  const {
-    openIn
-  } = la;
+  const { notesFor, saveNotes } = p;
+  const { openIn } = la;
   // SKILL-008: a waiting role gets its prompt once the role it waits on has written this run's
   // marker and its session is found; once only, and a failed send is tried again next time.
   // Council FIX-2 (chat 8151d6f re-review, FS2): the window's own pastes (Send
@@ -155,3 +151,5 @@ export function reviewActions(s: WindowState, p: ReturnType<typeof useSettingsPl
     toPane, answer, dropDraft, planLive, approvePlan, requestChanges, pasteInto, sendNotes, inWorktree, sendReview, startReview,
   };
 }
+
+export type ReviewActions = ReturnType<typeof reviewActions>;

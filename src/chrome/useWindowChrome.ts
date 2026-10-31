@@ -44,3 +44,5 @@ export function useWindowChrome({ classic, info, keymap, needs, panes, setNotice
     needing, keymapNotice,
   };
 }
+
+export type WindowChrome = ReturnType<typeof useWindowChrome>;

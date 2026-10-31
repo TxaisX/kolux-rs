@@ -111,3 +111,5 @@ export function useSettingsPlumbing({ activeDir, classic, dragLeft, keymap, owne
     leftWidth, explorerOpen, scmOpen, saveRight, showRight, toggleExplorer, setDefault,
   };
 }
+
+export type Plumbing = ReturnType<typeof useSettingsPlumbing>;

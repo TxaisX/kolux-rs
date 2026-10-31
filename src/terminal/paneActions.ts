@@ -65,15 +65,9 @@ export function paneActions(s: WindowState, p: ReturnType<typeof useSettingsPlum
     setSettingsOpen, setSheet, setSidebarOpen, setStacked, setTabColors, setToast, setZoom, settings, settingsOpen, stamp, statusOf, switchAccount, titles,
     unreadPanes
   } = s;
-  const {
-    showRight
-  } = p;
-  const {
-    inGitFor, launch, lineupsOf, pretrust, projectFor
-  } = la;
-  const {
-    prRows
-  } = x;
+  const { showRight } = p;
+  const { inGitFor, launch, lineupsOf, pretrust, projectFor } = la;
+  const { prRows } = x;
   const addShell = (dir: string | null, branch: string | null) => {
     const key = nextKey.current++;
     setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: "shell", program: null, args: [] }]);
@@ -607,3 +601,5 @@ export function paneActions(s: WindowState, p: ReturnType<typeof useSettingsPlum
     addPreset,
   };
 }
+
+export type PaneActions = ReturnType<typeof paneActions>;

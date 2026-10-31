@@ -33,9 +33,7 @@ export function launchActions(s: WindowState, p: ReturnType<typeof useSettingsPl
     activeDir, agents, defaultId, focused, nextKey, panes, projects, setActiveDir, setAgentSel, setFocused, setLaunching, setNotice, setPage, setPanes,
     setRefresh, setScreen, setSettings, setSheet, setTabColors, setToast, settings, sheet
   } = s;
-  const {
-    settingsRef
-  } = p;
+  const { settingsRef } = p;
   const lineupsOf = (s: Record<string, unknown>) => (s[LAST_LINEUP_KEY] ?? {}) as Record<string, Lineup>;
   const rememberLineup = (batch: number) => {
     const wait = late.pendingLineup.current[batch];
@@ -318,3 +316,5 @@ export function launchActions(s: WindowState, p: ReturnType<typeof useSettingsPl
     fixWithAI, projectFor, launch,
   };
 }
+
+export type LaunchActions = ReturnType<typeof launchActions>;

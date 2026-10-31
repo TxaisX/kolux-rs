@@ -1,0 +1,84 @@
+// The pane grid's layout for this render, moved out of App.tsx as it was (cycle 2, the App.tsx split): the cells
+// and the ones shown (TERM-013 zoom), the dragged column and row weights and the divider drag (TERM-010/035),
+// Move to Tab (TERM-016), the needs strip's sessions (TERM-029) and each cell's tab on top (TERM-040).
+// A plain function: it holds no hooks.
+import { stripOn } from "../settings/general";
+import { moveToTab, tidyWeights } from "../shell/tidy";
+import { sameDir } from "../workspaces";
+import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, tracks } from "./dividers";
+import { cellsOf, columnsFor, rowsFor, zoomedGroup } from "./grid";
+import { waitingInGrid } from "./tabs";
+import type { WindowState } from "../shell/windowStore";
+import type { Screens } from "../chrome/useScreens";
+
+export function paneGrid({ activeDir, activeTab, dragRef, panes, setActiveTab, setFocused, setPanes, setWeights, settings, stacked, statusOf, terminals, weights, zoom }: Pick<WindowState, "activeDir" | "activeTab" | "dragRef" | "panes" | "setActiveTab" | "setFocused" | "setPanes" | "setWeights" | "settings" | "stacked" | "statusOf" | "weights" | "zoom"> & Pick<Screens, "terminals">) {
+  const cells = cellsOf(panes);
+  const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
+  const zoomed = terminals ? zoomedGroup(zoom, shown.map((c) => c.group)) : null;
+  const gridCount = zoomed === null ? shown.length : 1;
+  // TERM-010: the grid's column and row weights, even until a divider is dragged; a drag starts on
+  // the grid's own gap, the grid takes the pointer so a release outside the window still ends it,
+  // and the end is announced so panes send their program the final size once.
+  const gridCols = columnsFor(gridCount, stacked[activeDir ?? ""]);
+  const gridRows = rowsFor(gridCount, stacked[activeDir ?? ""]);
+  const weightKey = (axis: "col" | "row") => `${activeDir ?? ""}|${axis}|${axis === "col" ? gridCols : gridRows}`;
+  const weightsOf = (axis: "col" | "row") => weights[weightKey(axis)] ?? Array<number>(axis === "col" ? gridCols : gridRows).fill(1);
+  // TERM-035: Equalize drops the dragged weights of this folder's grid, so every column and row is the same size again.
+  // TERM-008: Equalize also tidies: every dragged size of this folder goes, whatever the pane count was when it was dragged.
+  const equalizePanes = () => setWeights((w) => tidyWeights(w, activeDir ?? null));
+  // TERM-016: Move to Tab folds a pane into the cell beside it; only its group changes, so the session and its run stay.
+  const moveOutToTab = (key: number) => {
+    const r = moveToTab(panes, key);
+    if (!r) return;
+    setPanes(r.panes);
+    setActiveTab((m) => ({ ...m, [r.group]: key }));
+    setFocused(key);
+  };
+  const gapUnder = (g: HTMLElement, x: number, y: number) => {
+    const rects = [...g.querySelectorAll<HTMLElement>(":scope > .cell:not([hidden])")].map((c) => c.getBoundingClientRect());
+    const cols = tracks(rects, "x");
+    const rows = tracks(rects, "y");
+    const gap = gapAt(x, y, cols, rows);
+    return gap && { gap, px: (gap.axis === "col" ? cols : rows).reduce((a, t) => a + t.end - t.start, 0) };
+  };
+  const onDividerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!terminals || e.target !== e.currentTarget || e.button !== 0) return;
+    const hit = gapUnder(e.currentTarget, e.clientX, e.clientY);
+    if (!hit) return;
+    dragRef.current = { gap: hit.gap, at: hit.gap.axis === "col" ? e.clientX : e.clientY, start: weightsOf(hit.gap.axis), px: hit.px };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // a synthetic pointer has nothing to capture
+    }
+    document.documentElement.setAttribute(DRAG_ATTR, hit.gap.axis);
+    e.preventDefault();
+  };
+  const onDividerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) {
+      if (terminals && e.target === e.currentTarget) {
+        const hit = gapUnder(e.currentTarget, e.clientX, e.clientY);
+        e.currentTarget.style.cursor = hit ? `${hit.gap.axis}-resize` : "";
+      }
+      return;
+    }
+    const now = d.gap.axis === "col" ? e.clientX : e.clientY;
+    setWeights((w) => ({ ...w, [weightKey(d.gap.axis)]: dragWeights(d.start, d.gap.i, now - d.at, d.px) }));
+  };
+  const endDividerDrag = () => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    document.documentElement.removeAttribute(DRAG_ATTR);
+    window.dispatchEvent(new Event(DIVIDER_DONE));
+  };
+  // TERM-029: this grid's sessions waiting on a permission or a question, in grid order.
+  const waiting = stripOn(settings) ? waitingInGrid(shown.flatMap((c) => c.panes.map((p) => p.key)), Object.fromEntries(panes.map((p) => [p.key, statusOf(p)]))).map((k) => panes.find((p) => p.key === k)!) : [];
+  const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
+  return {
+    cells, shown, zoomed, gridCount, gridCols, gridRows, weightKey, weightsOf, equalizePanes, moveOutToTab, gapUnder, onDividerDown, onDividerMove,
+    endDividerDrag, waiting, activeOf,
+  };
+}
+
+export type PaneGrid = ReturnType<typeof paneGrid>;
