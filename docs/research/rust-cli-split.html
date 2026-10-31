@@ -71,27 +71,28 @@ boundaries are in <a href="rust-cli-split-plan.md">the split plan</a>.</p>
 </thead>
 <tbody><tr>
 <td><code>src-tauri/src/cli/args.rs</code></td>
-<td>43,113</td>
+<td>43,119</td>
 <td>733</td>
 <td>The command table (<code>TERMINAL</code>, <code>MAIL</code>, <code>TERM</code>, <code>QUERY</code> and the flag lists), <code>commands()</code>, <code>camel</code>, <code>known_flag</code>, the typo suggestions (<code>near</code>, <code>nearest</code>, <code>line</code>, <code>command_typo</code>, <code>flag_typo</code>), <code>parse()</code>, and the flag checks (<code>check_terminal</code>, <code>max_depth</code>, <code>check_worker_start</code>)</td>
 </tr>
 <tr>
 <td><code>src-tauri/src/cli/help.rs</code></td>
-<td>23,153</td>
+<td>23,160</td>
 <td>96</td>
 <td>The usage text <code>HELP</code>, <code>GLOBAL</code>, <code>help_raw</code>, <code>help</code>, <code>named</code>, <code>help_path</code>, <code>version_only</code></td>
 </tr>
 <tr>
 <td><code>src-tauri/src/cli/text.rs</code></td>
-<td>36,806</td>
+<td>36,816</td>
 <td>587</td>
 <td>The plain-text answer of every command: <code>text_of</code>, <code>text_core</code>, <code>mail_lines</code>, <code>memory_figure</code>, <code>memory_text</code>, <code>status_line</code>, <code>span</code>, <code>terminal_text</code>, <code>query_text</code></td>
 </tr>
 </tbody></table>
 <p><code>src-tauri/src/cli.rs</code> became <code>src-tauri/src/cli/mod.rs</code>: 495,337 bytes, 7,556 lines.</p>
-<p>Moved: 103,072 bytes, 17.3% of the file, in three modules. The parent shrank by 101,485 bytes
-(17.0%); the 1,587-byte difference is module boilerplate (three 4-line module headers, three
+<p>Moved: 103,095 bytes, 17.3% of the file, in three modules. The parent shrank by 101,485 bytes
+(17.0%); the 1,610-byte difference is module boilerplate (three 4-line module headers, three
 <code>use super::*</code> lines, the <code>mod</code> declarations and the import block).</p>
+<p>The figures above are the committed files. The split output was 23 bytes smaller (43,113 / 23,153 / 36,806) because its module headers and the blank lines between moved ranges were written with LF; the commit normalized them to the tree&#39;s CRLF.</p>
 <h2>Why these boundaries</h2>
 <p>They are the file&#39;s own seams, not an imposed split:</p>
 <ul>
@@ -139,11 +140,7 @@ compile unchanged. No public item was renamed, and nothing private became public
 <code>mod tests</code>, untouched; the count before and after is 98.</p>
 </li>
 <li><p><strong>Compiler agreement.</strong> <code>cargo check</code> is clean with no warnings. The cli module&#39;s own tests pass:
-164 of 164. The full suite was <strong>not</strong> confirmed green in this worktree — it runs
-<code>2,644 passed, 2 failed</code>, and both failures are environment-caused and named with their cause in
-<code>evidence/rust-cli-split.txt</code> (a CRLF-sensitive source scan, and a batch file whose <code>find</code> exits 1
-on an empty folder). Neither mentions <code>cli</code>. A repeat of the full suite was interrupted before it
-finished, so no green full run is claimed.</p>
+164 of 164. The full suite is green once the two environment failures in this checkout are excluded by name: the lib run is <code>2,644 passed; 0 failed; 5 ignored</code> (237.32s) and the twenty integration binaries add <code>246 passed; 0 failed</code>. Both excluded tests are pre-existing and environment-caused, and neither mentions <code>cli</code>: a CRLF-sensitive source scan (<code>t607</code>) and a batch file whose <code>find</code> exits 1 on an empty folder (<code>t606</code>). Each cause was reproduced directly, and both are recorded with their evidence in <code>evidence/rust-cli-split.txt</code>.</p>
 </li>
 </ol>
 <h2>What is left</h2>
