@@ -130,12 +130,25 @@ fn recursive_delete(c: &Read, base: &Base) -> bool {
     // relative cd may land anywhere, so it makes the folder unknown.
     let cdpath = c.text.to_ascii_uppercase().contains("CDPATH") || std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
     let paired = windows.then(|| pair(&c.chains[1], &c.chains[2])).flatten();
+    // T-604b (c): find's `-delete` may sit in a part the reading split off (an escaped `\(` group),
+    // so a find anywhere in a command that holds `-delete` is read as a delete.
+    let find_deletes = c.text.contains("-delete");
+    let how = How { cdpath, find_deletes };
     c.chains.iter().enumerate().any(|(i, chain)| {
         if i == 2 && paired.is_some() {
             return false;
         }
-        deletes_outside(chain.iter(), base, cdpath)
-    }) || paired.is_some_and(|chain| deletes_outside(chain.iter(), base, cdpath))
+        deletes_outside(chain.iter(), base, how)
+    }) || paired.is_some_and(|chain| deletes_outside(chain.iter(), base, how))
+}
+
+/// What `deletes_outside` needs to know about the whole command.
+#[derive(Clone, Copy)]
+struct How {
+    /// CDPATH may apply, so a relative cd is unknown (round 7).
+    cdpath: bool,
+    /// The command holds `-delete`, so a find in it deletes (T-604b).
+    find_deletes: bool,
 }
 
 /// Whether a path lost its meaning in the `Bash` reading, so on a Windows base only its `Shell`
@@ -165,18 +178,32 @@ fn pair(shell: &[Seg], bash: &[Seg]) -> Option<Vec<Seg>> {
         .collect()
 }
 
-fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, cdpath: bool) -> bool {
+fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, how: How) -> bool {
+    let cdpath = how.cdpath;
     let mut dir = base.cwd.clone().or_else(|| base.workspace.clone());
-    for full in chain {
+    let mut chain = chain.peekable();
+    while let Some(full) = chain.next() {
         let seg = full.program_words();
         let p = program(seg);
         let args: Vec<&str> = seg[1..].iter().map(String::as_str).collect();
         // A wrapper's own folder option (env -C, sudo -D, start /D, wsl --cd) is a cd for the
-        // program it runs only (round 7 review of PR #15).
-        let here = match wrapper_folder(&full.words[..full.at]) {
-            Some(f) => cd_to(&f, dir.as_deref(), base, cdpath),
-            None => dir.clone(),
+        // program it runs only (round 7 review of PR #15); T-604b (b): nested wrappers' folders are
+        // joined in order, as each wrapper starts the next in its own folder.
+        let here = wrapper_folders(&full.words[..full.at]).into_iter().fold(dir.clone(), |d, f| f.and_then(|f| cd_to(&f, d.as_deref(), base, cdpath)));
+        // T-604b (c): the other recursive deletes, each judged by its targets as rm -rf is.
+        let other = match p.as_str() {
+            "find" if how.find_deletes => Some(find_targets(&args)),
+            "rimraf" => Some(args.iter().filter(|a| !a.starts_with('-')).map(|a| a.to_string()).collect()),
+            "robocopy" => robocopy_target(&args),
+            "[io.directory]::delete" | "[system.io.directory]::delete" => directory_delete(chain.peek().map(|s| s.words.as_slice())),
+            _ => None,
         };
+        if let Some(targets) = other {
+            if targets.is_empty() || targets.iter().any(|t| unclear_target(t) || risky(t, here.as_deref(), base)) {
+                return true;
+            }
+            continue;
+        }
         match p.as_str() {
             "cd" | "chdir" | "set-location" | "sl" | "pushd" | "push-location" => {
                 let target = args.iter().find(|a| !(a.starts_with('-') && a.len() > 1) && !a.eq_ignore_ascii_case("/d"));
@@ -189,7 +216,12 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, cdpath
             "popd" | "pop-location" => dir = None,
             "rm" | "rd" | "rmdir" | "del" | "erase" | "remove-item" | "ri" => {
                 if let Some(targets) = delete_targets(&p, &args) {
-                    if targets.is_empty() || targets.iter().any(|t| unclear_target(t) || risky(t, here.as_deref(), base)) {
+                    // T-604b (d): whether a PowerShell wildcard can match `..` is unproven, so a
+                    // PowerShell delete with any wildcard asks.
+                    // ponytail: `rm`, `del` and `rd` are PowerShell aliases too; they are read as bash
+                    // and cmd read them, since the command does not say which shell runs it.
+                    let ps_wild = matches!(p.as_str(), "remove-item" | "ri") && targets.iter().any(|t| t.contains(['*', '?', '[']));
+                    if ps_wild || targets.is_empty() || targets.iter().any(|t| unclear_target(t) || risky(t, here.as_deref(), base)) {
                         return true;
                     }
                 }
@@ -210,10 +242,13 @@ fn cd_to(t: &str, dir: Option<&str>, base: &Base, cdpath: bool) -> Option<String
     locate(t, dir, base)
 }
 
-/// The folder a wrapper in `w` (the words before the program) tells the program to start in:
-/// env's -C / --chdir, sudo's -D / --chdir, cmd start's /D and wsl's --cd; the last one counts.
-fn wrapper_folder(w: &[String]) -> Option<String> {
-    let mut found = None;
+/// The folders the wrappers in `w` (the words before the program) tell the program to start in, in
+/// order: env's -C / --chdir, sudo's -D / --chdir, cmd start's /D and wsl's --cd. Each wrapper starts
+/// the next in its folder, so they are joined in turn (T-604b (b)); one wrapper naming two is None
+/// (unknown: which one it uses is the program's own choice).
+fn wrapper_folders(w: &[String]) -> Vec<Option<String>> {
+    let mut out = Vec::new();
+    let mut found: Option<Option<String>> = None;
     let mut wrapper = String::new();
     let mut i = 0;
     while i < w.len() {
@@ -230,17 +265,57 @@ fn wrapper_folder(w: &[String]) -> Option<String> {
             _ => None,
         };
         if value.is_some() {
-            found = value;
+            found = Some(if found.is_some() { None } else { value });
             i += if o.len() <= 2 || o == "--chdir" || o == "--cd" { 2 } else { 1 };
             continue;
         }
         let name = program(&w[i..]);
         if WRAPPERS.iter().any(|(n, _)| *n == name) {
+            out.extend(found.take());
             wrapper = name;
         }
         i += 1;
     }
-    found
+    out.extend(found);
+    out
+}
+
+/// T-604b (c): the start points of a `find` (after its -H, -L, -P, -D and -O options, up to the first
+/// expression word); none means `.`, as find does.
+fn find_targets(args: &[&str]) -> Vec<String> {
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        match *a {
+            "-H" | "-L" | "-P" => i += 1,
+            "-D" => i += 2,
+            o if o.starts_with("-O") => i += 1,
+            _ => break,
+        }
+    }
+    let starts: Vec<String> = args[i.min(args.len())..].iter().take_while(|a| !(a.starts_with(['-', '(', ')', '!', ',']) || a.is_empty())).map(|a| a.to_string()).collect();
+    if starts.is_empty() { vec![".".to_string()] } else { starts }
+}
+
+/// T-604b (c): what `robocopy <source> <destination> ... /MIR` (or /PURGE) deletes: the files of the
+/// destination its source lacks, so the destination is its target; None without either switch. A
+/// word of a slash, letters and an optional `:value` is a switch (`/tmp` among them, so a destination
+/// written so is missing and the delete asks).
+fn robocopy_target(args: &[&str]) -> Option<Vec<String>> {
+    let switch = |a: &str| a.strip_prefix('/').is_some_and(|r| r.split(':').next().is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-')));
+    let mirrors = args.iter().any(|a| switch(a) && (a.eq_ignore_ascii_case("/mir") || a.eq_ignore_ascii_case("/purge")));
+    let places: Vec<&str> = args.iter().copied().filter(|a| !switch(a)).collect();
+    mirrors.then(|| places.get(1).map(|d| vec![d.to_string()]).unwrap_or_default())
+}
+
+/// T-604b (c): `[IO.Directory]::Delete(path, recursive)`: the reading splits its bracket off, so its
+/// arguments are the next command's words. A true second argument (anything but `$false`, `0` or
+/// `false`) makes it recursive; a missing argument list is unknown (empty, so it asks).
+fn directory_delete(next: Option<&[String]>) -> Option<Vec<String>> {
+    let Some(words) = next else { return Some(Vec::new()) };
+    let joined = words.join(" ");
+    let parts: Vec<&str> = joined.split(',').map(str::trim).collect();
+    let recursive = parts.get(1).is_some_and(|f| !(f.eq_ignore_ascii_case("$false") || *f == "0" || f.eq_ignore_ascii_case("false")));
+    recursive.then(|| vec![parts[0].to_string()])
 }
 
 /// The targets of a recursive delete, or None when the command is not recursive: rm's -r in any
@@ -326,12 +401,43 @@ fn risky(target: &str, dir: Option<&str>, base: &Base) -> bool {
     let Some(path) = locate(&t, dir, base) else { return true };
     // HOME and its ancestors are never temp deletes, even when HOME lies under a temp root.
     let reaches_home = base.home.as_deref().is_some_and(|h| under(&norm(h), &path));
-    if !reaches_home && base.temp.iter().any(|r| under(&path, &norm(r))) {
-        return false;
+    if !reaches_home {
+        if let Some(root) = base.temp.iter().find(|r| under(&path, &norm(r))) {
+            // T-604b (a): a link on the way may lead out of the temp folder.
+            return links_out(&path, &norm(root), base);
+        }
     }
     let Some(ws) = base.workspace.as_deref().or(base.cwd.as_deref()) else { return true };
     let ws = norm(ws);
     path == ws || under(&path, &format!("{ws}/.git")) || !under(&path, &ws)
+}
+
+/// T-604b (a): whether a delete of `path`, under the temp root `root`, goes through a link (or
+/// junction) below the root that leads out of every temp root, or to HOME or above it. A link is
+/// resolved on disk; one that cannot be resolved (it leads nowhere, or the rest of the path is not
+/// there) counts as leading out. A path with no link on the way stays where its text says.
+/// ponytail: only the temp exemption follows links; a link inside the workspace is judged as text.
+fn links_out(path: &str, root: &str, base: &Base) -> bool {
+    let rest = path[root.len()..].trim_start_matches('/');
+    let mut at = std::path::PathBuf::from(root);
+    let mut linked = false;
+    for part in rest.split('/').filter(|p| !p.is_empty()) {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_symlink() => {
+                linked = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    if !linked {
+        return false;
+    }
+    let Ok(real) = std::fs::canonicalize(path) else { return true };
+    let reaches_home = base.home.as_deref().and_then(|h| std::fs::canonicalize(h).ok()).is_some_and(|h| h.starts_with(&real));
+    reaches_home || !base.temp.iter().filter_map(|r| std::fs::canonicalize(r).ok()).any(|r| real.starts_with(r))
 }
 
 /// Where `arg` points as text, or None when it cannot be known: a variable, another user's home,
@@ -4134,4 +4240,130 @@ mod tests {
         assert!(broken.is_empty(), "{} of 20000 generated inputs changed on a second mask", broken.len());
     }
 
+
+    /// T-604b (a), review of PR #15: a recursive delete under the temp folder runs only when no link
+    /// on the way leads out of it; a link is resolved, and one that leads elsewhere (or cannot be
+    /// resolved) asks. A real folder, or a link to another temp folder, still runs.
+    #[cfg(unix)]
+    #[test]
+    fn t604b_a_delete_through_a_link_in_the_temp_folder_is_judged_where_the_link_leads() {
+        let root = std::env::temp_dir().join(format!("krs-t604b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("real/sub")).unwrap();
+        std::os::unix::fs::symlink("/etc", root.join("out")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("inner")).unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("dangling")).unwrap();
+        let r = root.display().to_string();
+        let b = Base { workspace: Some("/home/me/app".into()), cwd: Some("/home/me/app".into()), home: Some("/home/me".into()), temp: vec![r.clone()] };
+        let h = |c: &str| check(c, &b, &json!({})).map(|r| r.id);
+        let mut missed: Vec<String> = Vec::new();
+        for c in [format!("rm -rf {r}/out"), format!("rm -rf {r}/out/"), format!("rm -rf {r}/out/sub"), format!("rm -rf {r}/out/*"), format!("Remove-Item -Recurse -Force {r}/out"), format!("cd {r} && rm -rf out"), format!("rm -rf {r}/dangling/x")] {
+            if h(&c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", h(&c)));
+            }
+        }
+        for c in [format!("rm -rf {r}/real"), format!("rm -rf {r}/real/sub"), format!("rm -rf {r}/inner/sub"), format!("rm -rf {r}/not-made-yet"), format!("cd {r} && rm -rf real")] {
+            if h(&c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", h(&c)));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (b), review of PR #15 round 8: nested folder wrappers are joined as the shell runs them
+    /// (`env -C .. env -C x` is `../x`); one wrapper given two folders makes the folder unknown.
+    #[test]
+    fn t604b_nested_folder_wrappers_are_joined_in_order() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["env -C .. env -C sub rm -rf x", "sudo -D .. env -C other rm -rf build", "env -C .. -C app rm -rf build", "env -C /home env -C me rm -rf app"] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["env -C build env -C .. rm -rf out", "env -C .. env -C app rm -rf build", "env -C src env -C web rm -rf dist", "env -C /tmp env -C x rm -rf y"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (c), review of PR #15: `find ... -delete`, `rimraf`, `[IO.Directory]::Delete(path, $true)`
+    /// and `robocopy /MIR` are recursive deletes of their targets, judged by the same rule as rm -rf.
+    #[test]
+    fn t604b_find_delete_rimraf_directory_delete_and_robocopy_mir_are_recursive_deletes() {
+        let win = Base { workspace: Some("C:\\Users\\me\\app".into()), cwd: Some("C:\\Users\\me\\app".into()), home: Some("C:\\Users\\me".into()), temp: vec!["C:\\Users\\me\\AppData\\Local\\Temp".into()] };
+        let w = |c: &str| check(c, &win, &json!({})).map(|r| r.id);
+        let mut missed: Vec<String> = Vec::new();
+        for c in [
+            "find .. -name x -delete",
+            "find / -delete",
+            "find ~ -type f -delete",
+            "find -L /etc -name '*.conf' -delete",
+            "find . -delete",
+            "find $DIR -delete",
+            "cd .. && find app -delete",
+            "rimraf ../other",
+            "npx rimraf /",
+            "pnpm exec rimraf ~/code",
+            "rimraf --glob '../**'",
+            "[IO.Directory]::Delete('/home/me/other', $true)",
+            "[System.IO.Directory]::Delete(\"..\", $true)",
+            "pwsh -c \"[System.IO.Directory]::Delete('../x', $true)\"",
+            "[io.directory]::delete( '/etc' , 1 )",
+            "robocopy empty ../other /MIR",
+            "robocopy.exe empty /home/me /mir /njh",
+            "robocopy empty .. /PURGE",
+        ] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["[IO.Directory]::Delete('C:\\Users\\me\\other', $true)", "robocopy empty C:\\Users\\me\\other /MIR", "find C:\\Users -delete"] {
+            if w(c) != Some("delete") {
+                missed.push(format!("should ask on Windows (delete): {c:?}, got {:?}", w(c)));
+            }
+        }
+        for c in [
+            "find build -name '*.o' -delete",
+            "find .. -name x -print",
+            "find /tmp/cache -delete",
+            "rimraf dist",
+            "npx rimraf dist build/out",
+            "[IO.Directory]::Delete('dist', $true)",
+            "[IO.Directory]::Delete('/home/me/other')",
+            "[IO.Directory]::Delete('/home/me/other', $false)",
+            "robocopy src dist /MIR",
+            "robocopy ../a ../b",
+            "echo find / -delete",
+        ] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        if w("robocopy src C:\\Users\\me\\app\\dist /MIR").is_some() {
+            missed.push("should run on Windows: robocopy src C:\\Users\\me\\app\\dist /MIR".into());
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (d), review of PR #15 round 8: how PowerShell's wildcards treat `..` is unproven, so a
+    /// PowerShell delete (Remove-Item, ri) with any wildcard in a target asks; bash and cmd wildcards
+    /// are judged as before.
+    #[test]
+    fn t604b_a_powershell_delete_with_a_wildcard_asks() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["Remove-Item -Recurse -Force build/*", "Remove-Item -Recurse -Force *.log", "ri -r -fo build\\.?", "Remove-Item -Path 'out/[ab]*' -Recurse", "cd build; Remove-Item -Recurse -Force .*"] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in ["rm -rf build/*", "del /s /q dist\\*.o", "Remove-Item -Recurse -Force build", "Remove-Item -Recurse -Force .\\build\\out"] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
 }
