@@ -73,7 +73,7 @@ Public API rule: anything that is `pub` today stays `pub` in its new module and 
 `crate::cli::FILE`, `crate::cli::STATES` and the rest keep the same paths. Private helpers used by
 `mod.rs` become `pub(super)`; that is a widening inside `cli` only, never outside it.
 
-## First slice: `args.rs` + `help.rs` + `text.rs` (103,072 B measured, 3 modules)
+## First slice: `args.rs` + `help.rs` + `text.rs` (103,095 B measured, 3 modules)
 
 Why this one first:
 
@@ -87,7 +87,7 @@ Why this one first:
   behaviour. They are also the piece most likely to grow, and they are the reason `text_core` is a
   single 280-line match.
 - Together they are the "shared arg parsing", "help output" and "shared output/JSON shaping" of
-  the task's own example grouping, and they clear 103,072 B, 17.3% of the file, without touching the
+  the task's own example grouping, and they clear 103,095 B, 17.3% of the file, without touching the
   dispatcher.
 
 Rejected for the first slice:
