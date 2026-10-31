@@ -168,7 +168,9 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
       expect(r.notes).toMatch(/^- Agents start faster\n- Terminals keep their place\n/);
       expect(t.gh().map((c) => c.args.slice(0, 2).join(" "))).toEqual(["release view", "release create", "release upload"]);
       const [, create, upload] = t.gh().map((c) => c.args);
-      expect(create.slice(2, 5)).toEqual(["v0.1.8", "--repo", FEED_REPO]);
+      // APP-060 / APP-031: the tag names the commit that was built, not whatever main is at publish time.
+      expect(create.slice(2, 5)).toEqual(["v0.1.8", "--target", r.sha]);
+      expect(create.slice(5, 7)).toEqual(["--repo", FEED_REPO]);
       expect(create.slice(-2).map((f) => path.basename(f))).toEqual([installerName("0.1.8"), installerName("0.1.8") + ".sig"]);
       expect(path.basename(upload.at(-1))).toBe("latest.json"); // APP-031: the manifest goes up last
     } finally {
