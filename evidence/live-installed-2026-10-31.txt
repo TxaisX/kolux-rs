@@ -7,7 +7,7 @@ home (G:/Temp/live-installed/home), so "a profile that has never run Kolux RS" i
 uninstalling anything, and nothing touched Txais's own profile or credentials.
 
 Harness: node scripts/prove/live-installed.mjs start | js <expr> | do key|click|shot|wait | stop
-  - the installed exe: C:\Users\XiongT\AppData\Local\Kolux RS\kolux-rs.exe, FileVersion 0.1.2
+  - the installed exe: %USERPROFILE%\AppData\Local\Kolux RS\kolux-rs.exe, FileVersion 0.1.2
   - env: WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333, USERPROFILE/APPDATA/
     LOCALAPPDATA/TEMP to the throwaway home, CLAUDE_CONFIG_DIR and CODEX_HOME to its tmp folder
   - the app allows one copy, so a run starts by closing the running copy the way the X button does
@@ -78,11 +78,11 @@ Read on this PC (installed 0.1.2, built 2026-10-30 23:31 UTC, before the cli-pat
 
   saved User Path length:                1815 characters (above the NSIS 1,024-character limit)
   Kolux RS bin on the saved User Path:   NO
-  Kolux RS bin inside Kolux's processes: YES (C:\Users\XiongT\AppData\Local\Kolux RS\bin)
+  Kolux RS bin inside Kolux's processes: YES (%USERPROFILE%\AppData\Local\Kolux RS\bin)
   <install>\kolux-path-pending.txt:      absent (this build predates DT-C55's hand-off file)
 
 Three dead entries also sit on the saved User Path, all naming folders that no longer exist:
-  25 : C:\Users\XiongT\AppData\Local\Programs\kolux\resources\bin
+  25 : %USERPROFILE%\AppData\Local\Programs\kolux\resources\bin
   27 : G:\Dev\kolux-workspaces\kolux\resume-check\dist\win-unpacked\resources\bin
   28 : G:\Dev\kolux-workspaces\kolux\cold-restore\dist\win-unpacked\resources\bin
 

@@ -85,7 +85,7 @@ await scenario(
     h.log(`launch 2 screen: ${excerpt(screen2, 4)}`);
     const after = await claudes();
     for (const l of after) h.log(`launch 2 claude: ${l.replace(/\\/g, "/").slice(0, 240)}`);
-    h.check("exactly one Claude runs and its exe is the Claude on the registry PATH", after.length === 1 && norm(after[0].split("|")[1]) === norm("C:/Users/XiongT/.local/bin/claude.exe"), `count=${after.length}`);
+    h.check("exactly one Claude runs and its exe is the Claude on the registry PATH", after.length === 1 && norm(after[0].split("|")[1]) === norm("%USERPROFILE%/.local/bin/claude.exe"), `count=${after.length}`);
     h.check("it was started on the resume line with the saved session id", after.length === 1 && after[0].includes(sess) && /--resume|(^| )-r /.test(after[0]), `resume=${/--resume/.test(after[0] ?? "")} id=${(after[0] ?? "").includes(sess)}`);
     h.check("one Claude pane is shown (the tab list and the panes agree)", (await app.shown(CLAUDE)) === 1, `${await app.shown(CLAUDE)}`);
     const keptKey = saved().find((p) => p.session === sess)?.key;

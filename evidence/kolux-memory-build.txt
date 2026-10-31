@@ -2,11 +2,11 @@ Kolux memory - local build, queries and gates
 Run: 2026-10-31, branch lane/memory (from main b44f887b) + this change
 
 $ node tools/kolux-memory/cli.mjs build --github
-built C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs\memory\kolux-memory.db
+built %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs\memory\kolux-memory.db
 {"sessions":59,"messages":1356,"tools":10646,"commits":2944,"prs":36,"releases":3,"cards":1264,"evidence":2530,"documents":58,"handoffs":5,"work_items":0}
 
 $ node tools/kolux-memory/cli.mjs status
-memory database: C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs\memory\kolux-memory.db  (73.3 MB, built 2026-10-31T14:39:29.413Z)
+memory database: %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs\memory\kolux-memory.db  (73.3 MB, built 2026-10-31T14:39:29.413Z)
   sessions 59  messages 1356  tools 10646  agents 5
   P0 cards 215/228 passing, 13 open
   evidence 2530 (4 FAIL)  documents 58  handoffs 5

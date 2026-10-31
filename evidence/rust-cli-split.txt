@@ -107,7 +107,7 @@ whole suite is now accounted for. Every line below is a real `test result:` line
   Why cards_10 failed in the earlier run: the integration tests under src-tauri/tests/scratch_root
   refuse to run unless USERPROFILE, HOME, CLAUDE_CONFIG_DIR and CODEX_HOME all sit under a folder
   marked .kolux-rs-scratch. Without that they panic before doing anything ("no .kolux-rs-scratch
-  marker in any folder above C:\Users\XiongT"), which is what produced 6 passed / 34 failed. Under
+  marker in any folder above %USERPROFILE%"), which is what produced 6 passed / 34 failed. Under
   `. ./scripts/test-env.ps1` the same binary is 40 of 40.
 
 6. The pure-move proof, re-run against the commit

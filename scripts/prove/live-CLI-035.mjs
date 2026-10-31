@@ -35,7 +35,7 @@ await scenario(
     const lines = (await app.ps(`Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | ForEach-Object { "$($_.ProcessId)|$($_.ExecutablePath)|$($_.CommandLine)" }`)).split(/\r?\n/).filter(Boolean);
     const mine = lines.filter((l) => claudes.some((c) => l.startsWith(`${c.pid}|`)));
     for (const l of mine) h.log(`worker process: ${l.replace(/\\/g, "/").slice(0, 330)}`);
-    h.check("exactly one Claude process runs under the app and its exe is the Claude on the registry PATH", mine.length === 1 && norm(mine[0].split("|")[1]) === norm("C:/Users/XiongT/.local/bin/claude.exe"), `count=${mine.length} exe=${mine[0]?.split("|")[1]}`);
+    h.check("exactly one Claude process runs under the app and its exe is the Claude on the registry PATH", mine.length === 1 && norm(mine[0].split("|")[1]) === norm("%USERPROFILE%/.local/bin/claude.exe"), `count=${mine.length} exe=${mine[0]?.split("|")[1]}`);
     h.check("it was started with --model haiku (the routed model)", mine.length === 1 && /--model[ =]haiku/.test(mine[0]), (mine[0] ?? "").replace(/\\/g, "/").slice(-160));
     const w = await cli(ctx, "orchestration worker-list");
     h.log(`worker-list: exit=${w.exit} ${w.raw.slice(0, 400).replace(/\s+/g, " ")}`);

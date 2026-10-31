@@ -8,8 +8,8 @@ All keys below are fake strings made for this proof; no real sign-in was used.
    settings.json  "claudeOauthToken": "kolux-sealed:v1:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA..." (DPAPI blob), "theme": "classic" kept
    vault/claude/fake.json  kolux-sealed:v1:AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA...
    logs/kolux.log  "secrets: one-off sealing pass sealed 1 settings field(s) and 1 file(s)"
-   icacls <profile>      TxaisX\XiongT:(OI)(CI)(F)   (inheritance removed: only this user)
-   icacls settings.json  TxaisX\XiongT:(I)(F)
+   icacls <profile>      <user>:(OI)(CI)(F)   (inheritance removed: only this user)
+   icacls settings.json  <user>:(I)(F)
 3. Second launch (pass already done, skipped): secret_status claudeOauthToken -> true (still works);
    get_settings as the window sees it -> {"theme":"classic"} (no secret reaches the window).
 4. "Connect" by key: secret_set claudeOauthToken = "sk-ant-oat01-FAKE-T038-connected", then the window

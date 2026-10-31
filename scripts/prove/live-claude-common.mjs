@@ -6,7 +6,7 @@ import { ACCOUNT_A, CLAUDE, LOGS, NeedsLogin, ROOT, excerpt, reporter, sleep, st
 import { checker, pickScreen } from "./live-views-dom.mjs";
 
 export { CLAUDE, excerpt, sleep, waitFor, git, ACCOUNT_A, BASE } from "./live-common.mjs";
-export const CLAUDE_EXE = "C:/Users/XiongT/.local/bin/claude.exe"; // what the registry PATH resolves (TERM-120, batch 8)
+export const CLAUDE_EXE = "%USERPROFILE%/.local/bin/claude.exe"; // what the registry PATH resolves (TERM-120, batch 8)
 export const DATE = "2026-10-28";
 const MARK = (id) => `<<live-v13:${id}>>`;
 const redact = (s) => String(s).replace(/[\w.+-]+@[\w.-]+\.\w+/g, "<account-a>").replace(/C:[\\/]+Users[\\/]+XiongT/gi, "<home>").replace(/Users[\\/]+txais/gi, "<home>");
