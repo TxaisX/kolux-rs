@@ -14,6 +14,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PORT = Number(process.env.PROVE_CDP || 9333);
@@ -190,7 +191,7 @@ export async function closeRunning() {
 
 const PIDFILE = join(BASE, 'app.pid');
 const cmd = process.argv[2];
-if (cmd === 'start') {
+if (isMain && cmd === 'start') {
   const fresh = process.env.PROVE_HOME !== 'keep';
   const paths = prepareHome(fresh);
   if (process.env.PROVE_KILL === '1') await run('taskkill', ['/IM', 'kolux-rs.exe', '/T', '/F']).catch(() => {});
@@ -205,12 +206,12 @@ if (cmd === 'start') {
   page.close();
   process.exit(0);
 }
-if (cmd === 'stop') {
+if (isMain && cmd === 'stop') {
   await closeRunning();
   console.log('closed');
   process.exit(0);
 }
-if (cmd === 'probe') {
+if (isMain && cmd === 'probe') {
   const pid = Number(readFileSync(PIDFILE, 'utf8'));
   const page = await attach();
   await sleep(800);
@@ -226,14 +227,14 @@ if (cmd === 'probe') {
   page.close();
   process.exit(0);
 }
-if (cmd === 'js') {
+if (isMain && cmd === 'js') {
   const page = await attach();
   const out = await page.eval(process.argv[3]);
   console.log(typeof out === 'string' ? out : JSON.stringify(out, null, 2));
   page.close();
   process.exit(0);
 }
-if (cmd === 'do') {
+if (isMain && cmd === 'do') {
   // A short scripted action against the running instance: key/click/type/text/shot/wait.
   const page = await attach();
   const action = process.argv[3];
@@ -250,7 +251,7 @@ if (cmd === 'do') {
   page.close();
   process.exit(0);
 }
-if (cmd) {
+if (isMain && cmd) {
   console.log('commands: start | stop | probe | js "<expr>" | do key|click|text|shot|wait <arg>');
   process.exit(2);
 }
