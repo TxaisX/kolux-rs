@@ -193,10 +193,14 @@ fn term017_box2_text_printed_in_one_session_never_shows_in_another() {
     let (ma, mb) = ("KOLUXAAAA17", "KOLUXBBBB17");
     a.session.write(format!("echo {ma}\r").as_bytes()).unwrap();
     b.session.write(format!("echo {mb}\r").as_bytes()).unwrap();
-    assert!(a.until(30, |s| s.text().matches(ma).count() >= 2), "A ran its echo: {:?}", a.text());
-    assert!(b.until(30, |s| s.text().matches(mb).count() >= 2), "B ran its echo: {:?}", b.text());
-    assert!(!a.text().contains(mb), "B's text reached A: {:?}", a.text());
-    assert!(!b.text().contains(ma), "A's text reached B: {:?}", b.text());
+    // The marker must arrive as the shell's output line. Counting every occurrence also counts
+    // the typed command and PSReadLine's history suggestion, which is shared between the two
+    // shells on a CI runner and says nothing about where the output went.
+    let printed = |text: &str, marker: &str| text.lines().any(|l| l.contains(marker) && !l.contains("echo "));
+    assert!(a.until(30, |s| printed(&s.text(), ma)), "A ran its echo: {:?}", a.text());
+    assert!(b.until(30, |s| printed(&s.text(), mb)), "B ran its echo: {:?}", b.text());
+    assert!(!printed(&a.text(), mb), "B's text reached A: {:?}", a.text());
+    assert!(!printed(&b.text(), ma), "A's text reached B: {:?}", b.text());
     // a pane remounted by a move asks for its terminal by pane key and is handed the one still running, never a fresh one
     let back = kolux_rs_lib::terminal::attach_answer(5, Some(42), 5);
     assert_eq!((back.state, back.id), ("attached", Some(42)));

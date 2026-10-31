@@ -1,8 +1,8 @@
-// LIVE proof, CLI-035 box 1 (spec/20): from a shell pane of the hidden app, `kolux-dev orchestration worker-start --spec x --tier build`
+﻿// LIVE proof, CLI-035 box 1 (spec/20): from a shell pane of the hidden app, `kolux-dev orchestration worker-start --spec x --tier build`
 // starts a REAL Claude worker on the model routed for build and prints a ready receipt. The routing is a saved Settings pick (build ->
 // haiku, so the session is cheap); no --agent is given, so the tier runs on the default agent. Asserted: the receipt, the worker's
 // process command line (the resolved exe and the --model it got) and the sidebar worktree/terminal.
-import { scenario, sleep } from "./live-claude-common.mjs";
+import { scenario, sleep, CLAUDE_EXE } from "./live-claude-common.mjs";
 import { cli, terminals } from "./live-orch-common.mjs";
 import { rowsOf, selectRow } from "./live-cli-common.mjs";
 
@@ -35,7 +35,7 @@ await scenario(
     const lines = (await app.ps(`Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | ForEach-Object { "$($_.ProcessId)|$($_.ExecutablePath)|$($_.CommandLine)" }`)).split(/\r?\n/).filter(Boolean);
     const mine = lines.filter((l) => claudes.some((c) => l.startsWith(`${c.pid}|`)));
     for (const l of mine) h.log(`worker process: ${l.replace(/\\/g, "/").slice(0, 330)}`);
-    h.check("exactly one Claude process runs under the app and its exe is the Claude on the registry PATH", mine.length === 1 && norm(mine[0].split("|")[1]) === norm("%USERPROFILE%/.local/bin/claude.exe"), `count=${mine.length} exe=${mine[0]?.split("|")[1]}`);
+    h.check("exactly one Claude process runs under the app and its exe is the Claude on the registry PATH", mine.length === 1 && norm(mine[0].split("|")[1]) === norm(CLAUDE_EXE), `count=${mine.length} exe=${mine[0]?.split("|")[1]}`);
     h.check("it was started with --model haiku (the routed model)", mine.length === 1 && /--model[ =]haiku/.test(mine[0]), (mine[0] ?? "").replace(/\\/g, "/").slice(-160));
     const w = await cli(ctx, "orchestration worker-list");
     h.log(`worker-list: exit=${w.exit} ${w.raw.slice(0, 400).replace(/\s+/g, " ")}`);
@@ -60,3 +60,4 @@ await scenario(
     }
   },
 );
+

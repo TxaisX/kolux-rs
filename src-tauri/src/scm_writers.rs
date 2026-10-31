@@ -857,7 +857,9 @@ mod tests {
     fn stand_in(dir: &Path) -> std::path::PathBuf {
         if cfg!(windows) {
             let f = dir.join("stand-in.cmd");
-            std::fs::write(&f, "@echo off\r\ncd\r\necho %*\r\ndir /b /a 2>nul | find /c /v \"\"\r\n").unwrap();
+            // `find /c` prints 0 for empty input but exits 1, and this script ends on that line, so
+            // the writer would read a successful run as a failed agent. A real agent exits 0.
+            std::fs::write(&f, "@echo off\r\ncd\r\necho %*\r\ndir /b /a 2>nul | find /c /v \"\"\r\nexit /b 0\r\n").unwrap();
             return f;
         }
         let f = dir.join("stand-in");

@@ -1,4 +1,4 @@
-// APP-059: the release job. Builds main in a checkout kept only for releases, one build at a time,
+﻿// APP-059: the release job. Builds main in a checkout kept only for releases, one build at a time,
 // gives it the next patch version, smoke-tests the result, signs the installer and publishes the
 // installer, its signature and the update manifest (latest.json) with notes listing the shipped
 // commits. `pnpm ship --main` starts it in the background; it can also be run by hand.
@@ -15,12 +15,17 @@
 //                                      (default ~/.kolux-rs/release-signing/kolux-rs.key)
 //              KOLUX_RELEASE_KEY_PASSWORD  the key's password, when it has one
 //              KOLUX_RELEASE_PUBLISH_DIR   publish into this folder instead of GitHub (rehearsal)
+//              KOLUX_RELEASE_ALLOW_RED=1   publish even when CI for the commit is red (recovery only)
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { decide, POLL_MS } from "./ci-gate.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 export const FEED_REPO = "TxaisX/kolux-rs";
 export const NOTES_MAX = 30;
@@ -190,6 +195,34 @@ function sh(cmd, args, opts = {}) {
 }
 const git = (dir, ...args) => sh("git", ["-C", dir, ...args]);
 
+/**
+ * APP-060: the same gate the workflow runs, for the local path. The workflow refused a red commit
+ * and the hand-run path did not, which is how 0.1.4 was published over a failing CI. A rehearsal
+ * (KOLUX_RELEASE_PUBLISH_DIR) writes to a local folder and is exempt; the only way past the gate
+ * for the real feed is the explicit KOLUX_RELEASE_ALLOW_RED=1, which says so loudly.
+ */
+export function requireGreenCi(sha, env = process.env, exec = sh) {
+  if (env.KOLUX_RELEASE_PUBLISH_DIR) return;
+  if (env.KOLUX_RELEASE_ALLOW_RED === "1") {
+    say("WARNING: KOLUX_RELEASE_ALLOW_RED=1 is set, so the CI gate is skipped. Use this only to recover a build already known good.");
+    return;
+  }
+  const start = Date.now();
+  for (;;) {
+    let runs;
+    try {
+      runs = JSON.parse(exec("gh", ["run", "list", "--workflow", "ci.yml", "--commit", sha, "--json", "status,conclusion,url", "--limit", "20"], { env: ghEnv(env) }) || "[]");
+    } catch (e) {
+      throw new Error(`could not ask GitHub whether CI passed for ${sha.slice(0, 7)}: ${e.message}. Nothing was published.`);
+    }
+    const d = decide(runs, sha, Date.now() - start);
+    say(`CI gate: ${d.reason}`);
+    if (d.verdict === "pass") return;
+    if (d.verdict === "refuse") throw new Error(d.reason);
+    sleepSync(POLL_MS);
+  }
+}
+
 function latestRelease(env, repo, exec) {
   if (env.KOLUX_RELEASE_PUBLISH_DIR) {
     const pub = path.resolve(env.KOLUX_RELEASE_PUBLISH_DIR);
@@ -250,6 +283,9 @@ export function buildOnce(o, env = process.env, exec = sh) {
     say(`dry run: would set version ${version}, run pnpm install and pnpm tauri build --bundles nsis with no secret in reach, smoke-test, sign with tauri signer and ${keyFile(env)}, then publish ${installerName(version)}, its .sig and latest.json to ${env.KOLUX_RELEASE_PUBLISH_DIR ? path.resolve(env.KOLUX_RELEASE_PUBLISH_DIR) : FEED_REPO}`);
     return { version, sha, notes, dryRun: true };
   }
+
+  // APP-060: refuse a red commit before spending twenty minutes on the build.
+  requireGreenCi(sha, env, exec);
 
   // 3. Build. It needs only the key's public half, which the app carries; the private half is checked
   // up front unless a later step brings it (--build-only).
@@ -333,6 +369,9 @@ export function finish(o, env, exec, out) {
   } else {
     const repo = o.repo || git(checkoutDir(env), "remote", "get-url", "origin");
     if (!onGitHub(repo, env)) throw new Error(`the source repository ${repo} is not on GitHub, so nothing is published; set KOLUX_RELEASE_PUBLISH_DIR to rehearse`);
+    // APP-060: check again at the moment of publishing, so a --finish hours later cannot slip past a
+    // gate that was green when the build started.
+    requireGreenCi(sha, env, exec);
     // APP-031: the manifest goes up last, so a release is never announced before its installer is there.
     const files = [installerName(version), installerName(version) + ".sig"].map((f) => path.join(out, f));
     exec("gh", ["release", "create", `v${version}`, "--repo", FEED_REPO, "--title", `Kolux RS ${version}`, "--notes-file", path.join(out, "notes.md"), ...files], { env: ghEnv(env) });
@@ -373,3 +412,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     process.exit(1);
   }
 }
+

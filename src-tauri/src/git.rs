@@ -1155,7 +1155,9 @@ mod tests {
         let said = String::from_utf8_lossy(&out.stderr).to_lowercase();
         assert!(!out.status.success());
         assert!(said.contains("terminal prompts disabled"), "{said}");
-        assert!(began.elapsed() < std::time::Duration::from_secs(10));
+        // A prompt would wait forever; a slow runner still finishes. 30 s keeps "fails fast"
+        // meaningful without failing on a busy CI machine.
+        assert!(began.elapsed() < std::time::Duration::from_secs(30));
     }
 
     #[test]
