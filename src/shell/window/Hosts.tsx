@@ -5,22 +5,22 @@
 import StatusBar from "../../chrome/StatusBar";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "../../chrome/statusItems";
 import EditMenuHost from "../../editmenu/EditMenuHost";
-import ReviewNotes from "../../editor/ReviewNotes";
 import { plainNote } from "../../editor/fileNotes";
 import { reviewOn, startChoices } from "../../editor/notes";
-import FeedbackDialog from "../../feedback/FeedbackDialog";
 import FloatingLayer from "../../floating/FloatingLayer";
-import Guides from "../../onboarding/Guides";
-import Wizard from "../../onboarding/Wizard";
 import { hooksOn } from "../../onboarding/hooksOn";
 import type { KindKey } from "../../settings/notifications";
 import { BringSkillsUp } from "../../skills/SkillBarItem";
-import SkillUpdateNotice from "../../skills/SkillUpdateNotice";
 import { toggleSkills } from "../../skills/nav";
 import { windowLoaded } from "../../status/manage";
 import { tabName } from "../../terminal/tabName";
-import UpdateCenter from "../../update/UpdateCenter";
 import { useWindow } from "./store";
+import { SkillUpdateNotice } from "../../lazy/pages";
+import { Guides } from "../../lazy/pages";
+import { Wizard } from "../../lazy/pages";
+import { ReviewNotes } from "../../lazy/pages";
+import { UpdateCenter } from "../../lazy/pages";
+import { FeedbackDialog } from "../../lazy/pages";
 
 export default function WindowHosts() {
   const {

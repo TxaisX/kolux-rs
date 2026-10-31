@@ -2,12 +2,12 @@
 // page (SESS-018), moved out of shell/WindowView.tsx as it was. Both places build it here, so the
 // seat defaults, the offered lineup and the saved shapes cannot drift apart.
 import type { Pane } from "../../App";
-import ChooserPane from "../../launch/ChooserPane";
 import { chooserClosable } from "../../launch/chooserClosable";
 import { seatDefault } from "../../launch/defaultSeat";
 import { SAVED_SHAPES_KEY, applyLineup, defaultCopies, offeredLineup, restoreShape, type SavedShape, type Seat } from "../../launch/seats";
 import { panesIn } from "../../workspaces";
 import { useWindow } from "./store";
+import { ChooserPane } from "../../lazy/pages";
 
 export default function SeatChooser({ pane: p, hidden, focused, onFocus, onClose, sheetOf = null }: {
   pane: Pane & { seats: Seat[] };

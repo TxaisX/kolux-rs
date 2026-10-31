@@ -7,7 +7,6 @@ import Ask from "../../chrome/Ask";
 import { Kbd } from "../../keys/KeymapContext";
 import { reloadAsk } from "../../keys/commands";
 import { noteUse } from "../../onboarding/features";
-import FolderRenameAsk from "../../projects/FolderRenameAsk";
 import WorktreePalette, { dirMark, dirMonitoring } from "../../projects/WorktreePalette";
 import { workItem } from "../../projects/model";
 import { SCM_LINKED_PR_KEY, linkedPrs } from "../../scm/model";
@@ -15,17 +14,18 @@ import { TAB_COLORS, setTabColor, tabMenuHead } from "../../terminal/tabColor";
 import { splitMenuState } from "../../terminal/tabSplit";
 import { tabName } from "../../terminal/tabName";
 import { pasteHosts } from "../../tasks/pasteHosts";
-import { openInBrowser } from "../../browser/BrowserPane";
+import { openInBrowser } from "../../browser/openIn";
 import { sameDir } from "../../workspaces";
-import SettingsPage from "../../settings/SettingsPage";
-import TrustPrompt from "../../setup/TrustPrompt";
-import WorkspaceBoard from "../../board/WorkspaceBoard";
-import AboutPanel from "../AboutPanel";
-import LinkAskHost from "../LinkAskDialog";
+import { AboutPanel } from "../../lazy/pages";
+import { LinkAskHost } from "../../lazy/pages";
 import TabSearch from "../TabSearch";
 import { quitQuestion } from "../closeAsk";
 import { closeRows } from "./tabMenu";
 import { useWindow } from "./store";
+import { SettingsPage } from "../../lazy/pages";
+import { WorkspaceBoard } from "../../lazy/pages";
+import { FolderRenameAsk } from "../../lazy/pages";
+import { TrustPrompt } from "../../lazy/pages";
 
 export default function WindowDialogs() {
   const {

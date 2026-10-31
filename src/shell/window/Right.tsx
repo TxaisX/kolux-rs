@@ -3,28 +3,28 @@
 // (GIT-004, GIT-012, VIEW-073), the past-sessions tab (VIEW-080), the attached-worktrees and checks
 // tabs, the Continue / Fix / Start host (T-187-b, T-189-b) and the Explorer (EDIT-033).
 import { invoke } from "@tauri-apps/api/core";
-import AgentStartHost from "../../agentstart/AgentStartHost";
 import RightSidebar, { RIGHT_KEYS, clampWidth } from "../../chrome/RightSidebar";
-import Explorer from "../../editor/Explorer";
-import AddProjectRow from "../../editor/AddProjectRow";
 import { clearDelivered } from "../../editor/diffNotes";
 import { noteTarget } from "../../editor/fileNotes";
 import { menuAgents } from "../../launch/agents";
 import { AttachedWorktreesTab, FolderChecksTab } from "../../projects/AttachedTabs.tsx";
 import { type Created, type Project } from "../../projects/model";
 import { applySettings } from "../../projects/settingWrite";
-import ChecksPanel from "../../scm/ChecksPanel";
-import LineNotes from "../../scm/LineNotes";
-import SourceControlPanel from "../../scm/SourceControlPanel";
 import { writerOf } from "../../scm/generate";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_LINKED_PR_KEY, SCM_VIEW_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "../../scm/model";
 import { aiControlsShown } from "../../scm/rules";
 import { DIFF_SPLIT_KEY, diffSplitOf } from "../../scm/split";
-import AgentsPanel from "../../sessions/AgentsPanel";
 import { FOLDER_TAB_KEY, rememberTab } from "../../sessions/folderTabs";
 import { saveChanged } from "../../settings/saveChanged";
 import { panesIn } from "../../workspaces";
 import { useWindow } from "./store";
+import { AgentsPanel } from "../../lazy/pages";
+import { Explorer } from "../../lazy/pages";
+import { AddProjectRow } from "../../lazy/pages";
+import { SourceControlPanel } from "../../lazy/pages";
+import { ChecksPanel } from "../../lazy/pages";
+import { LineNotes } from "../../lazy/pages";
+import { AgentStartHost } from "../../lazy/pages";
 
 export default function WindowRight() {
   const {

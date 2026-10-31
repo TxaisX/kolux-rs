@@ -14,6 +14,7 @@ import { installMenuWheel } from "./settings/menuWheel";
 import { LAYOUT_FIELD, restoreAsks, restoreLayout, stillThere, type SavedLayout } from "./terminal/layout";
 import { sessionOrder } from "./sessions/restoreOrder";
 import "./styles.css";
+import { prefetch } from "./lazy/deferred";
 import TowerWindow from "./tower/TowerWindow";
 import { isTowerWindow } from "./tower/ownWindow";
 import { showStartFailure } from "./tower/startFailed";
@@ -54,7 +55,14 @@ async function start() {
       </React.StrictMode>,
     );
   draw(first, saved !== null);
-  requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      void getCurrentWindow().show().catch(() => {});
+      // Cycle 3 (first load): the pages, the editor and the browser pane are read in the background now
+      // that the first frame is up, so opening one stays as quick as it was while the start stays small.
+      prefetch();
+    }),
+  );
   // T-597 (F05-app-shell-launch.2): a start that timed out keeps waiting; when the settings answer, the
   // same steps run on them and the window is drawn again with the saved tabs back. A tab opened in the
   // meantime closes then: it was never saved.

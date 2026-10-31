@@ -3,7 +3,7 @@
 // one listener never goes stale (PROJ-077, CLI-026/027), and a run's own tab closing when its agent exits
 // (AUTO-011). Called where they sat, so the window's hook order is unchanged.
 import { openRunTab, paneOfTerminal, runTabEnded, touchRunTab, typedInRunTab } from "../automations/runTab";
-import { missingFileToast } from "../editor/linkClicks";
+import { missingFileToast } from "../editor/missingFile";
 import { setupRequestOf } from "../orchestration/workerSetup";
 import { sameDir } from "../workspaces";
 import type { CliFile, CliWorkspace } from "./model";

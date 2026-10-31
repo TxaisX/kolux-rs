@@ -4,11 +4,6 @@
 // (TERM-013, TERM-042, TERM-045, TERM-106, STAT-050, ACCT-023). A pane's key is still the key of its
 // terminal, so a layout change never remounts it (TERM-017).
 import type { Pane } from "../../App";
-import BrowserPane, { openInBrowser } from "../../browser/BrowserPane";
-import AllChangesPane from "../../editor/AllChangesPane";
-import DiffPane from "../../editor/DiffPane";
-import EditorPane from "../../editor/EditorPane";
-import PreviewPane from "../../editor/PreviewPane";
 import { keyOf } from "../../editor/buffers";
 import { sendTargets } from "../../editor/notes";
 import { forget, hooksMuted, promptReturned } from "../../board/chip";
@@ -31,6 +26,12 @@ import { invoke } from "@tauri-apps/api/core";
 import SeatChooser from "./SeatChooser";
 import TerminalPane from "../../terminal/TerminalPane";
 import { useWindow } from "./store";
+import { EditorPane } from "../../lazy/panes";
+import { DiffPane } from "../../lazy/panes";
+import { AllChangesPane } from "../../lazy/panes";
+import { PreviewPane } from "../../lazy/panes";
+import { BrowserPane } from "../../lazy/panes";
+import { openInBrowser } from "../../browser/openIn";
 
 export default function WindowPane({ pane: p, active }: { pane: Pane; active: number }) {
   const {

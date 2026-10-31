@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import { fixChecks } from "../agentstart/host";
-import { openInBrowser } from "../browser/BrowserPane";
+import { openInBrowser } from "../browser/openIn";
 import { useSettings } from "../settings/useSettings";
 import GhBanner, { classify } from "../tasks/GhBanner";
 import CommentsPanel from "./CommentsPanel";

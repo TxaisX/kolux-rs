@@ -84,10 +84,10 @@ import { hasSpot, jumpSpot, onReveal, revealAt, spotRange, takeSpot } from "./se
 import "./editor-extras.css";
 import { pasteGuard } from "./paste";
 
-/** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
-export const editors = new Map<number, () => Promise<void>>();
-/** EDIT-007: Copy Context for each open editor pane; false when this tab cannot copy that way. */
-export const copiers = new Map<number, () => boolean>();
+// Cycle 3 (first load): the two latches the window's Mod+S and Copy Context call live in keys/handles.ts
+// now, so the shortcut router holds them without loading this pane; filled here while a tab is open.
+import { copiers, editors } from "../keys/handles";
+export { copiers, editors };
 
 /** EDIT-003 (T-073-a, T-073-c): Mod+S for an editor tab or an unstaged diff tab. The write carries
  *  the hash of the disk copy the tab loaded; a refusal because the file moved on calls
