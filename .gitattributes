@@ -8,3 +8,6 @@
 src/editor/__fixtures__/* -text
 # MERGE 117/118: an autocrlf checkout wrote STATE-history.md with CRLF and the merge kept both copies.
 *.md text eol=lf
+# Docs builder: scripts/docs/build.mjs writes LF, and `--check` compares bytes, so an autocrlf
+# checkout with CRLF would report every generated page as stale forever.
+docs/**/*.html text eol=lf
