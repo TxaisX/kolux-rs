@@ -98,9 +98,14 @@
 .chat-top { margin-left: 8px; background: none; border: 0; padding: 0; font: inherit; font-size: 11px; color: var(--fg-faint); cursor: pointer; }
 .chat-top:hover, .chat-top:focus-visible { color: var(--fg); }
 .chat-jump { position: absolute; right: 16px; bottom: calc(var(--chat-box-h, 56px) + 12px); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
-.chat-composer { position: relative; border-top: 1px solid var(--line-subtle); padding: 10px 12px; display: flex; gap: 8px; align-items: flex-end; }
-.chat-box { flex: 1; min-width: 0; resize: none; font: inherit; line-height: 1.4; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--input-bg); color: var(--fg); overflow-y: auto; }
-.chat-box:focus { outline: none; border-color: var(--line-focus); }
+/* The composer is one material and the focus target: a floating box with a shadow ring, not a
+   bordered bar. Ring thickness swaps by mode (inner in dark), so focus never changes the size. */
+.chat-composer { position: relative; margin: 8px 10px 10px; padding: 8px; display: flex; gap: 8px; align-items: flex-end; border-radius: var(--kx-radius-composer); background: var(--input-bg); box-shadow: var(--kx-shadow-composer); transition: box-shadow var(--kx-dur-snap) var(--kx-ease-snap); }
+/* Lift only when the shell itself is hovered, never while one of its controls is. */
+.chat-composer:hover:not(:focus-within):not(:has(button:hover, a:hover, [role='button']:hover, label:hover)) { box-shadow: var(--kx-shadow-composer-hover); }
+.chat-composer:focus-within { box-shadow: var(--kx-shadow-composer-focus); }
+.chat-box { flex: 1; min-width: 0; resize: none; font: inherit; line-height: 1.4; padding: 4px 2px; border: 0; border-radius: 0; background: transparent; color: var(--fg); overflow-y: auto; }
+.chat-box:focus { outline: none; }
 .chat-box:disabled { color: var(--fg-faint); }
 /* CHAT-018: Send turns into Stop while a turn runs; it sits above the pane's own controls so it can always be clicked */
 .chat-send { position: relative; z-index: 6; flex: none; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip-bg); color: var(--fg); font: inherit; cursor: pointer; }
