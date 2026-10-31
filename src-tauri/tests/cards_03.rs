@@ -95,7 +95,16 @@ impl Shell {
     fn start(dir: &str) -> Shell {
         let out = Arc::new(Mutex::new(Vec::<u8>::new()));
         let sink = out.clone();
-        let session = PtySession::spawn_first(shell_commands(Some(dir), None), 120, 30, move |c| sink.lock().unwrap().extend_from_slice(c), |_| {}).expect("a shell starts");
+        let mut cmds = shell_commands(Some(dir), None);
+        // A profile is the user's, not the test's: a runner profile that starts a child makes the
+        // idle shell look busy and lets the two-shell test see its neighbour's history.
+        if let Some(first) = cmds.first_mut() {
+            let name = first.get_argv().first().map(|a| a.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+            if name.ends_with("pwsh.exe") || name.ends_with("powershell.exe") {
+                first.arg("-NoProfile");
+            }
+        }
+        let session = PtySession::spawn_first(cmds, 120, 30, move |c| sink.lock().unwrap().extend_from_slice(c), |_| {}).expect("a shell starts");
         Shell { out, session, answered: 0 }
     }
 
