@@ -61,7 +61,7 @@ import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/met
 import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
 import { labelOf } from "../keys/keymap";
-import { attachPaste } from "./paste";
+import { attachPaste, pasteFromClipboard } from "./paste";
 import { attachScreenshotPaste, clipboardImage, pasteImage, type Deps as ShotDeps } from "./screenshotPaste";
 import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
 import { INPUT_SOURCE_ACTION, KittyKeyboard, latinControl } from "./kittyKeys";
@@ -1093,14 +1093,18 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       if (currentText().copyOnSelect) copier(term.hasSelection() ? term.getSelection() : "");
     });
     // TERM-070: the menu and chord paste read the clipboard themselves; no text (or an unreadable clipboard) tries the image.
+    // TERM-068 box 2: that read is asynchronous, so the paste goes in only while this pane is still the
+    // focused one; switching to another pane while the clipboard is still being read cancels it instead of
+    // typing into the pane the user switched to.
     const pasteApi = () =>
-      void navigator.clipboard?.readText().then(
-        (t) => {
-          if (t) pasting.paste(t);
-          else void clipboardImage().then((f) => f && pasteImage(f, shotDeps));
-        },
-        (e) => clipboardImage().then((f) => (f ? pasteImage(f, shotDeps) : sayOnce("paste-refused", `The clipboard could not be read (${e instanceof Error ? e.message : String(e)})`, setFlash))),
-      );
+      void pasteFromClipboard({
+        read: () => navigator.clipboard.readText(),
+        image: clipboardImage,
+        pasteText: pasting.paste,
+        pasteImage: (f) => pasteImage(f, shotDeps),
+        focused: () => isFocused.current,
+        refused: (e) => sayOnce("paste-refused", `The clipboard could not be read (${e instanceof Error ? e.message : String(e)})`, setFlash),
+      });
     pasteRef.current = pasteApi;
     const rightClick = (e: MouseEvent) => {
       e.preventDefault();
