@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { build, openDb, resumeMarkdown, search, status } from "./lib.mjs";
+import { build, listItems, openDb, recordItem, resumeMarkdown, search, status } from "./lib.mjs";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "kolux-memory-test-"));
@@ -111,6 +111,38 @@ test("search and resume find the work", () => {
     assert.match(md, /APP-001/);
     assert.match(md, /P0 cards: \*\*1\/2\*\*/);
     assert.match(md, /Failures on open cards/);
+    db.close();
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("records a completed work item and finds it after a rebuild", () => {
+  const f = fixture();
+  try {
+    const opts = { sessions: f.sessions, repo: f.repo, vault: f.vault, db: f.db, github: false, git: false };
+    build(opts);
+    const rec = recordItem({ db: f.db, ledger: join(f.root, "work-items.jsonl"), agent: "memory-scout", title: "Shipped the local memory database", status: "done", detail: "PR #36 and the evidence file", evidence: "PR #36" });
+    assert.equal(rec.stored, true);
+    assert.equal(rec.item.title, "Shipped the local memory database");
+
+    let db = openDb(f.db);
+    let items = listItems(db, "memory-scout");
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, "done");
+    const hits = search(db, "Shipped local memory");
+    assert.ok(hits.some((h) => h.kind === "work"));
+    const md = resumeMarkdown(db, f.db);
+    assert.match(md, /Recorded work/);
+    assert.match(md, /Shipped the local memory database/);
+    db.close();
+
+    // A rebuild replays the ledger, so the record survives the database being replaced.
+    build(opts);
+    db = openDb(f.db);
+    items = listItems(db, "memory-scout");
+    assert.equal(items.length, 1);
+    assert.equal(items[0].title, "Shipped the local memory database");
     db.close();
   } finally {
     rmSync(f.root, { recursive: true, force: true });

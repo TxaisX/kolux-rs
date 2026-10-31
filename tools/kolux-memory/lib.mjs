@@ -13,11 +13,11 @@
 // Everything here is read-only against the sources. No source file is modified.
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
-export const SCHEMA = 1;
+export const SCHEMA = 2;
 
 export function defaults() {
   const home = homedir();
@@ -27,6 +27,7 @@ export function defaults() {
     repo: process.env.KOLUX_MEMORY_REPO || "G:/Dev/kolux-rs",
     vault: process.env.KOLUX_MEMORY_VAULT || "G:/Dev/Projects/Txais Brain",
     db: process.env.KOLUX_MEMORY_DB || join(appData, "com.txaisxiong.kolux-rs", "memory", "kolux-memory.db"),
+    ledger: process.env.KOLUX_MEMORY_LEDGER || "",
     github: false,
     git: true,
   };
@@ -268,6 +269,77 @@ function openRead(path) {
   return db;
 }
 
+/** Read the local work-item ledger; one JSON object per line. */
+export function readLedger(path) {
+  if (!existsSync(path)) return [];
+  const out = [];
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const x = JSON.parse(line);
+      if (!x || !x.title) continue;
+      out.push({
+        at: x.at || new Date().toISOString(),
+        agent: x.agent || "",
+        title: String(x.title),
+        status: x.status || "done",
+        detail: x.detail || "",
+        evidence: x.evidence || "",
+      });
+    } catch { /* a torn line is skipped, not fatal */ }
+  }
+  return out;
+}
+
+function workTable(db) {
+  db.exec("create table if not exists work_items(id integer primary key, at text, agent text, title text, status text, detail text, evidence text, source text)");
+}
+
+/** Append one completed work item to the ledger and, when the DB exists, to it. */
+export function recordItem(opts = {}) {
+  const dbPath = resolve(opts.db || defaults().db);
+  const ledger = resolve(opts.ledger || join(dirname(dbPath), "work-items.jsonl"));
+  const title = String(opts.title || "").trim();
+  if (!title) throw new Error("record needs --title");
+  const item = {
+    at: opts.at || new Date().toISOString(),
+    agent: String(opts.agent || "").trim(),
+    title,
+    status: String(opts.status || "done").trim(),
+    detail: String(opts.detail || "").trim(),
+    evidence: String(opts.evidence || "").trim(),
+  };
+  mkdirSync(dirname(ledger), { recursive: true });
+  appendFileSync(ledger, JSON.stringify(item) + "\n");
+  let id = null;
+  let stored = false;
+  if (existsSync(dbPath)) {
+    let db;
+    try {
+      db = new DatabaseSync(dbPath);
+      workTable(db);
+      const r = db.prepare("insert into work_items(at,agent,title,status,detail,evidence,source) values (?,?,?,?,?,?,?)").run(item.at, item.agent, item.title, item.status, item.detail, item.evidence, "ledger");
+      id = Number(r.lastInsertRowid);
+      db.prepare("insert into search(kind,ref,title,body) values ('work',?,?,?)").run(String(id), item.title, item.detail);
+      stored = true;
+    } catch {
+      // The ledger is the durable copy; the next build replays it.
+    } finally {
+      try { db?.close(); } catch { /* already closed */ }
+    }
+  }
+  return { item, ledger, id, stored };
+}
+
+/** Work items in the database, newest first. */
+export function listItems(db, agent = "", limit = 30) {
+  try {
+    return db.prepare("select * from work_items where (?='' or agent=?) order by at desc limit ?").all(agent, agent, limit);
+  } catch {
+    return [];
+  }
+}
+
 export function build(opts = {}) {
   const o = { ...defaults(), ...opts };
   const dbPath = resolve(o.db);
@@ -293,6 +365,7 @@ export function build(opts = {}) {
     create table agents(kind text, name text, sessions integer, messages integer, last_seen text, detail text, primary key(kind, name));
     create table events(id integer primary key, at text, kind text, ref text, summary text);
     create table worktrees(path text primary key, branch text, head text);
+    create table work_items(id integer primary key, at text, agent text, title text, status text, detail text, evidence text, source text);
     create virtual table search using fts5(kind, ref, title, body, tokenize='unicode61');
   `);
   // One transaction for the whole build. Without it each of the thousands of
@@ -312,9 +385,10 @@ export function build(opts = {}) {
   const insertHandoff = db.prepare("insert into handoffs values (?,?,?,?)");
   const insertEvent = db.prepare("insert into events(at,kind,ref,summary) values (?,?,?,?)");
   const insertWorktree = db.prepare("insert or replace into worktrees values (?,?,?)");
+  const insertWork = db.prepare("insert into work_items(at,agent,title,status,detail,evidence,source) values (?,?,?,?,?,?,?)");
   const insertSearch = db.prepare("insert into search(kind,ref,title,body) values (?,?,?,?)");
 
-  const counts = { sessions: 0, messages: 0, tools: 0, commits: 0, prs: 0, releases: 0, cards: 0, evidence: 0, documents: 0, handoffs: 0 };
+  const counts = { sessions: 0, messages: 0, tools: 0, commits: 0, prs: 0, releases: 0, cards: 0, evidence: 0, documents: 0, handoffs: 0, work_items: 0 };
 
   // ---- agent sessions -------------------------------------------------------
   let sessions = [];
@@ -486,6 +560,22 @@ export function build(opts = {}) {
   const models = db.prepare("select model as name, count(*) as sessions, sum(message_count) as messages, max(updated_at) as last_seen, group_concat(distinct agent) as detail from sessions where model<>'' group by model").all();
   for (const r of models) db.prepare("insert into agents values ('model',?,?,?,?,?)").run(r.name, r.sessions, r.messages || 0, r.last_seen, r.detail || "");
 
+  // ---- recorded work (the local ledger) ------------------------------------
+  // The ledger is the one part a rebuild cannot derive from history: a session
+  // writes a completed item there, and every later build replays it.
+  const ledgerPath = o.ledger || join(dirname(dbPath), "work-items.jsonl");
+  if (existsSync(ledgerPath)) {
+    const items = readLedger(ledgerPath);
+    for (const w of items) {
+      const r = insertWork.run(w.at, w.agent, w.title, w.status, w.detail, w.evidence, "ledger");
+      insertSearch.run("work", String(r.lastInsertRowid), w.title, w.detail);
+      insertEvent.run(w.at, "work", w.agent || "agent", w.title.slice(0, 300));
+      counts.work_items++;
+    }
+    insertMeta.run("ledger", ledgerPath);
+    debug(`${items.length} recorded work items`);
+  }
+
   insertMeta.run("schema", String(SCHEMA));
   insertMeta.run("built_at", new Date().toISOString());
   insertMeta.run("repo", resolve(o.repo));
@@ -521,13 +611,15 @@ export function status(db, path) {
   const prs = one("select count(*) n from prs");
   const releases = one("select count(*) n from releases");
   const agents = one("select count(*) n from agents");
+  let work = 0;
+  try { work = one("select count(*) n from work_items").n; } catch { /* older database */ }
   const built = db.prepare("select value from meta where key='built_at'").get()?.value || "";
   return {
     db: path, bytes: existsSync(path) ? statSync(path).size : 0, built,
     sessions: sessions.n, messages: sessions.m || 0, tools: tools.n,
     p0_pass: p0.p || 0, p0_total: p0.n, p0_open: openP0.n,
     evidence: evidence.n, evidence_fail: evidence.f || 0,
-    documents: docs.n, handoffs: handoffs.n, commits: commits.n, prs: prs.n, releases: releases.n, agents: agents.n,
+    documents: docs.n, handoffs: handoffs.n, commits: commits.n, prs: prs.n, releases: releases.n, agents: agents.n, work_items: work,
   };
 }
 
@@ -560,6 +652,8 @@ export function resumeMarkdown(db, path) {
   const st = status(db, path);
   const open = db.prepare("select id, tier, title, done, boxes, area from cards where tier='P0' and status='open' order by id").all();
   const fails = db.prepare("select e.path, e.card, e.modified_at, e.first_line from evidence e join cards c on c.id=e.card where e.status='fail' and c.tier='P0' and c.status='open' order by e.modified_at desc limit 8").all();
+  let work = [];
+  try { work = db.prepare("select at, agent, title, status from work_items order by at desc limit 10").all(); } catch { /* older database */ }
   const events = db.prepare("select at, kind, ref, summary from events where at>=? and kind in ('session','commit','pr','release') order by at desc limit 18").all(new Date(Date.now() - 3 * 86400000).toISOString());
   const agents = db.prepare("select kind, name, sessions, messages, last_seen from agents order by kind, sessions desc limit 12").all();
   const lines = [];
@@ -584,6 +678,10 @@ export function resumeMarkdown(db, path) {
   lines.push("## Failures on open cards", "");
   if (!fails.length) lines.push("None recorded for an open P0 card.");
   else for (const f of fails) lines.push(`- ${f.card || "?"} · ${f.path} · ${f.modified_at} · ${f.first_line}`);
+  lines.push("");
+  lines.push("## Recorded work", "");
+  if (!work.length) lines.push("None recorded yet. `record` appends one to the local ledger.");
+  else for (const w of work) lines.push(`- ${w.at} - ${w.agent || "agent"} - ${w.status} - ${w.title}`);
   lines.push("");
   lines.push("## Last 3 days", "");
   if (!events.length) lines.push("No events.");

@@ -1,4 +1,4 @@
-﻿# Kolux memory: resume
+# Kolux memory: resume
 
 Built 2026-10-31T14:33:36.960Z ┬╖ database C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs\memory\kolux-memory.db ┬╖ 72.0 MB
 

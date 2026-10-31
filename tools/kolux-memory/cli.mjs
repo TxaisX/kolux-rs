@@ -2,7 +2,7 @@
 // CLI for the local Kolux memory database. See README.md.
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { build, defaults, exportMarkdown, findSession, openDb, resumeMarkdown, search, status, timeline } from "./lib.mjs";
+import { build, defaults, exportMarkdown, findSession, listItems, openDb, recordItem, resumeMarkdown, search, status, timeline } from "./lib.mjs";
 
 function parseArgs(argv) {
   const o = { _: [] };
@@ -33,6 +33,9 @@ const HELP = `Kolux memory: a local record of what every agent worked on
   node tools/kolux-memory/cli.mjs session <id or title> [--db path]
   node tools/kolux-memory/cli.mjs agent <role or model> [--db path]
   node tools/kolux-memory/cli.mjs card <CARD-ID> [--db path]
+  node tools/kolux-memory/cli.mjs record --title "what was done" [--agent name]
+                                       [--status done] [--detail text] [--evidence path]
+  node tools/kolux-memory/cli.mjs items [--agent name] [--limit n] [--db path]
   node tools/kolux-memory/cli.mjs resume [--md path] [--db path]
   node tools/kolux-memory/cli.mjs export [--md path] [--db path]
 
@@ -51,6 +54,7 @@ function printStatus(s) {
   console.log(`  P0 cards ${s.p0_pass}/${s.p0_total} passing, ${s.p0_open} open`);
   console.log(`  evidence ${s.evidence} (${s.evidence_fail} FAIL)  documents ${s.documents}  handoffs ${s.handoffs}`);
   console.log(`  commits ${s.commits}  PRs ${s.prs}  releases ${s.releases}`);
+  console.log(`  recorded work items ${s.work_items || 0}`);
 }
 
 function main() {
@@ -67,10 +71,24 @@ function main() {
     return 0;
   }
 
+  if (cmd === "record") {
+    const r = recordItem({ db: dbPath(o), ledger: o.ledger, agent: o.agent, title: o.title, status: o.status, detail: o.detail, evidence: o.evidence, at: o.at });
+    console.log(`recorded "${r.item.title}" for ${r.item.agent || "agent"} (${r.item.status})`);
+    console.log(`ledger: ${r.ledger}${r.stored ? " (also in the database)" : " (next build will add it to the database)"}`);
+    return 0;
+  }
+
   const path = dbPath(o);
   const db = openDb(path);
 
   if (cmd === "status") { printStatus(status(db, path)); return 0; }
+
+  if (cmd === "items") {
+    const rows = listItems(db, o.agent || "", Number(o.limit) || 30);
+    console.log(`${rows.length} recorded item(s)${o.agent ? ` for ${o.agent}` : ""}`);
+    for (const w of rows) console.log(`  ${w.at}  ${(w.agent || "agent").padEnd(14)} ${String(w.status).padEnd(6)} ${w.title}`);
+    return 0;
+  }
 
   if (cmd === "search") {
     const q = o._.join(" ").trim();

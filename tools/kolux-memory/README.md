@@ -14,11 +14,15 @@ cd G:\Dev\kolux-rs
 node tools/kolux-memory/cli.mjs build --github
 node tools/kolux-memory/cli.mjs status
 node tools/kolux-memory/cli.mjs resume
+node tools/kolux-memory/cli.mjs record --agent memory-scout --title "Built the memory database (PR #36 open)" --status done --detail "PR #36" --evidence "PR #36"
+node tools/kolux-memory/cli.mjs items --agent memory-scout
 ```
 
-`resume` prints a handoff brief: the scoreboard, open P0 cards, failures on open cards, the last
-three days of sessions/commits/PRs/releases, and the agents that did the work. Run it at the start
-of a session. Run `build` again at the end so the next session sees the result.
+`resume` prints a handoff brief: the scoreboard, open P0 cards, failures on open cards, recorded
+work, the last three days of sessions/commits/PRs/releases, and the agents that did the work. Run it
+at the start of a session. Run `build` again at the end so the next session sees the result.
+`record` writes one completed item to a local ledger beside the database; a rebuild replays it, so
+the record survives the cache being replaced.
 
 ## Where the data comes from
 
@@ -27,6 +31,7 @@ of a session. Run `build` again at the end so the next session sees the result.
 | Agent session store | `~/.local/share/opencode/opencode.db` | Sessions, user/assistant text, tool calls, agents, models, cost |
 | Kolux repo | `G:\Dev\kolux-rs` | 2,900+ commits, worktrees, `spec/` cards, `evidence/` files, `docs/` |
 | Vault | `G:\Dev\Projects\Txais Brain` | Kolux project notes, syntheses, `.kolux/handoffs/` |
+| Local work ledger | `<db folder>\work-items.jsonl` | Completed items written with `record`; replayed on every build |
 | GitHub (optional, `--github`) | `TxaisX/kolux-rs` via `gh` | Pull requests and releases |
 
 Defaults can be overridden with `--sessions`, `--repo`, `--vault`, `--db`, or the environment
@@ -41,18 +46,19 @@ The default database is
 | Table | Rows on the author's machine | Purpose |
 |---|---|---|
 | `sessions` | 59 | one row per agent session, with agent, model, directory, cost, token counts |
-| `messages` | 1,296 | user and assistant text only; reasoning blocks are dropped |
-| `tools` | 10,300+ | tool name, status, input and output preview |
-| `commits` | 2,940 | every commit on every branch, with author, files, insertions |
-| `prs`, `releases` | 35, 3 | optional GitHub enrichment |
+| `messages` | 1,348 | user and assistant text only; reasoning blocks are dropped |
+| `tools` | 10,600+ | tool name, status, input and output preview |
+| `commits` | 2,944 | every commit on every branch, with author, files, insertions |
+| `prs`, `releases` | 36, 3 | optional GitHub enrichment |
 | `cards` | 1,264 | every spec card, tier, boxes, pass/open |
 | `evidence` | 2,530 | every evidence file, the card/task it names, PASS/FAIL |
 | `documents` | 58+ | Kolux project notes, syntheses, repo docs, handoffs |
 | `agents` | roles and models | who worked, how much, last seen |
-| `events` | merged | sessions, commits, PRs, releases, docs and evidence on one timeline |
+| `work_items` | the ledger | completed items recorded with `record`, newest first |
+| `events` | merged | sessions, commits, PRs, releases, docs, evidence and recorded work on one timeline |
 | `search` | FTS5 | full-text search across messages, tools, commits, evidence and docs |
 
-The database is a cache, not a source of truth. Delete it and rebuild at any time.
+The database is a cache, not a source of truth, except the work ledger: recorded items are replayed on every build. Delete the database and rebuild at any time; delete the ledger and only recorded items are lost.
 
 ## Commands
 
@@ -64,6 +70,8 @@ timeline [--days n] [--kind session|commit|pr|release|evidence|doc]
 session <id prefix or title>
 agent <role or model>
 card <CARD-ID>
+record --title "what was done" [--agent name] [--status done] [--detail text] [--evidence path]
+items [--agent name] [--limit n]
 resume [--md path]
 export [--md path]
 ```
@@ -93,8 +101,12 @@ node tools/kolux-memory/cli.mjs resume --md .\resume.md
 - One transaction per build, `journal_mode = memory`, then rename into place. A build over 59
   sessions, 2,940 commits and 2,530 evidence files takes about 7 seconds.
 - Rebuilds are idempotent; the temp file is discarded if a build fails.
+- The work ledger is append-only JSONL beside the database. `record` inserts into the live database
+  and appends to the ledger; every build replays the ledger, so a record survives a rebuild and a
+  deleted cache.
 - Sources are opened read-only. A missing source produces a smaller database, never a crash.
-- Tests use a synthetic machine: `node --test tools/kolux-memory/test.mjs`.
+- Tests use a synthetic machine: `node --test tools/kolux-memory/test.mjs` (5 tests, including a
+  record, a rebuild and a query back).
 
 ## Limits
 

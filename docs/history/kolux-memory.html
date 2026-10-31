@@ -74,6 +74,9 @@ The tool and its schema are the shared part.</p>
 <p>A shared file would mix machines, leak one profile&#39;s session text to another, and go stale the moment
 someone worked offline. A local build is smaller, private, and always current. <code>build</code> is idempotent
 and takes about 7 seconds; deleting the file costs nothing.</p>
+<p>History alone cannot hold everything. A session can record a completed item with <code>record</code>; that
+appends one line to <code>work-items.jsonl</code> beside the database. Every later <code>build</code> replays the ledger,
+so the record survives a rebuilt or deleted cache. The ledger is the part a rebuild cannot derive.</p>
 <h2>What it stores</h2>
 <table>
 <thead>
@@ -90,22 +93,22 @@ and takes about 7 seconds; deleting the file costs nothing.</p>
 </tr>
 <tr>
 <td><code>messages</code></td>
-<td>1,296</td>
+<td>1,348</td>
 <td>user and assistant text; reasoning is dropped</td>
 </tr>
 <tr>
 <td><code>tools</code></td>
-<td>10,300+</td>
+<td>10,600+</td>
 <td>tool name, status, input and output preview</td>
 </tr>
 <tr>
 <td><code>commits</code></td>
-<td>2,940</td>
+<td>2,944</td>
 <td>sha, author, date, subject, body, files, insertions, deletions</td>
 </tr>
 <tr>
 <td><code>prs</code>, <code>releases</code></td>
-<td>35, 3</td>
+<td>36, 3</td>
 <td>optional <code>gh</code> enrichment</td>
 </tr>
 <tr>
@@ -129,14 +132,19 @@ and takes about 7 seconds; deleting the file costs nothing.</p>
 <td>sessions, messages, last seen</td>
 </tr>
 <tr>
+<td><code>work_items</code></td>
+<td>the ledger</td>
+<td>completed items written with <code>record</code>, newest first</td>
+</tr>
+<tr>
 <td><code>events</code></td>
 <td>merged</td>
-<td>sessions, commits, PRs, releases, docs and evidence on one timeline</td>
+<td>sessions, commits, PRs, releases, docs, evidence and recorded work</td>
 </tr>
 <tr>
 <td><code>search</code></td>
 <td>FTS5</td>
-<td>full-text search across messages, tools, commits, evidence and docs</td>
+<td>full-text search across messages, tools, commits, evidence, docs and recorded work</td>
 </tr>
 </tbody></table>
 <h2>Commands</h2>
@@ -146,9 +154,12 @@ node tools/kolux-memory/cli.mjs resume
 node tools/kolux-memory/cli.mjs search &quot;first load&quot;
 node tools/kolux-memory/cli.mjs card BROW-008
 node tools/kolux-memory/cli.mjs timeline --days 2 --kind commit
+node tools/kolux-memory/cli.mjs record --agent memory-scout --title &quot;Built the memory database (PR #36 open)&quot; --status done --detail &quot;PR #36&quot;
+node tools/kolux-memory/cli.mjs items --agent memory-scout
 </code></pre>
-<p><code>resume</code> is the handoff brief: scoreboard, open P0 cards, failures on open cards, the last three days
-of work, and the agents involved. Run it at the start of a session, and <code>build</code> at the end.</p>
+<p><code>resume</code> is the handoff brief: scoreboard, open P0 cards, failures on open cards, recorded work, the
+last three days of work, and the agents involved. Run it at the start of a session, and <code>build</code> at
+the end.</p>
 <h2>Privacy</h2>
 <ul>
 <li>Local only. No network call unless <code>--github</code> is passed.</li>
@@ -161,15 +172,24 @@ do not commit it, attach it to an issue, or sync it to a shared drive.</li>
 <h2>Verification</h2>
 <pre><code class="language-powershell">node --test tools/kolux-memory/test.mjs
 </code></pre>
-<p>The four tests build a synthetic machine: a session store with a secret in a user message, a spec
+<p>The five tests build a synthetic machine: a session store with a secret in a user message, a spec
 with an open card and a struck card, evidence whose card is on line 2, and a missing-source case.
-They assert redaction, card state, evidence mapping, search and the resume brief.</p>
-<p>The first real build on this machine produced:</p>
-<pre><code>sessions 59  messages 1296  tools 10314  agents 5
+They assert redaction, card state, evidence mapping, search and the resume brief. The fifth records
+a completed item, queries it back, rebuilds the database and queries it again.</p>
+<p>The end-to-end build on this machine produced:</p>
+<pre><code>sessions 59  messages 1348  tools 10622  agents 5
 P0 cards 215/228 passing, 13 open
 evidence 2530 (4 FAIL)  documents 58  handoffs 5
-commits 2941  PRs 35  releases 3
-database 71.3 MB
+commits 2944  PRs 36  releases 3
+database 73.2 MB
+</code></pre>
+<p>A real record and query, in the same sample database:</p>
+<pre><code>$ node tools/kolux-memory/cli.mjs record --agent memory-scout --title &quot;Built the local Kolux memory database (PR #36 open)&quot; --status done --detail &quot;PR #36&quot;
+recorded &quot;Built the local Kolux memory database (PR #36 open)&quot; for memory-scout (done)
+
+$ node tools/kolux-memory/cli.mjs items --agent memory-scout
+1 recorded item(s) for memory-scout
+  2026-10-31T14:41:37.327Z  memory-scout  done  Built the local Kolux memory database (PR #36 open)
 </code></pre>
 <h2>Limits</h2>
 <ul>
