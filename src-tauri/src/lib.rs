@@ -245,6 +245,8 @@ pub fn run() {
             // T-283 (BROW-043): an earlier run's leftover browser helpers are closed, on a thread of
             // its own so a hanging listing never holds up start-up.
             browser::helpers::sweep_at_start(&dir);
+            // T-594: a user PATH too long for the installer gets <install>\bin added here, once per install.
+            cli::cli_register::path_at_start_now(&dir);
             if !job_ok {
                 diag::write(&dir, "kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
             }

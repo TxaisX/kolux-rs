@@ -129,6 +129,138 @@ pub fn windows_remove(store: &dyn UserPath, dir: &str, env: &dyn Fn(&str) -> Opt
     Ok(view("not-registered", dir, None))
 }
 
+// ------------------------------------------------------------------------ T-594: the installer's long-PATH hand-off
+
+/// The file the installer leaves in the install folder when the user PATH was too long for it to change
+/// (NSIS strings hold 1024 characters). Kolux adds the bin folder on its next start and deletes the file.
+pub const PATH_PENDING: &str = "kolux-path-pending.txt";
+
+/// The flag the uninstaller runs the app with: take the bin folder off the user PATH, never open a window.
+pub const UNINSTALL_PATH_FLAG: &str = "--uninstall-path";
+
+/// What the start-up step did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StartPath {
+    /// No hand-off file: the installer changed PATH itself, or this install was already handled.
+    NotAsked,
+    Added,
+    AlreadyThere,
+    /// Nothing was changed, and why.
+    Skipped(String),
+}
+
+/// T-594: once per install, the step the installer could not take. The hand-off file is deleted before
+/// anything else, so whatever happens next the step never runs again for this install: an entry the user
+/// later takes off stays off. An update reinstalls and leaves a new file, so it adds the folder back, as
+/// the installer itself does for a shorter PATH (open question for Txais: should a removal last?).
+/// The PATH is read and written as text, %VARIABLES% unexpanded; the one change is `;<dir>` at the end
+/// (no separator is trimmed, so `path_at_uninstall` gives back exactly what was there).
+pub fn path_at_start(marker: &Path, dir: &str, store: &dyn UserPath, env: &dyn Fn(&str) -> Option<String>) -> StartPath {
+    if !marker.exists() {
+        return StartPath::NotAsked;
+    }
+    if std::fs::remove_file(marker).is_err() || marker.exists() {
+        return StartPath::Skipped(format!("{} could not be deleted, so the PATH was left as it is (it would be added again on every start)", marker.display()));
+    }
+    let now = match store.read() {
+        Ok(v) => v.unwrap_or_default(),
+        Err(e) => return StartPath::Skipped(format!("Kolux cannot read your PATH ({e}); nothing was changed")),
+    };
+    // Any spelling of the folder counts, %LOCALAPPDATA%\... included (cli_register's own rule).
+    if path_has(&now, dir, env) {
+        return StartPath::AlreadyThere;
+    }
+    let next = if now.is_empty() { dir.to_string() } else { format!("{now};{dir}") };
+    if let Err(e) = store.write(&next) {
+        return StartPath::Skipped(format!("Windows refused the change to your PATH: {e}"));
+    }
+    match store.read() {
+        Ok(Some(v)) if path_has(&v, dir, env) => StartPath::Added,
+        _ => StartPath::Skipped(format!("{dir} is still not on your PATH after the change; something else holds that setting")),
+    }
+}
+
+pub fn wants_uninstall_path(args: &[String]) -> bool {
+    args.first().map(String::as_str) == Some(UNINSTALL_PATH_FLAG)
+}
+
+/// An entry that is the folder exactly as Kolux writes it: any letter case, with or without a trailing `\`.
+/// The installer's NSIS rule (KOLUX_PATH_CUT). A %VARIABLE%, quoted or slash-spelled entry is the user's own.
+fn ours_literally(entry: &str, dir: &str) -> bool {
+    let e = entry.strip_suffix('\\').unwrap_or(entry);
+    !e.is_empty() && e.eq_ignore_ascii_case(dir)
+}
+
+/// T-594, the uninstaller's step at any PATH length: takes off exactly the entries that are `dir` as Kolux
+/// wrote it, keeps every other entry (empty ones too) where it was, and reads the value back.
+/// `Ok(true)` when something was taken off, `Ok(false)` when there was nothing of ours (nothing is written).
+pub fn path_at_uninstall(marker: &Path, dir: &str, store: &dyn UserPath) -> Result<bool, String> {
+    let _ = std::fs::remove_file(marker);
+    let now = store.read().map_err(|e| format!("Kolux cannot read your PATH ({e}); nothing was changed"))?.unwrap_or_default();
+    if !now.split(';').any(|e| ours_literally(e, dir)) {
+        return Ok(false);
+    }
+    let next = now.split(';').filter(|e| !ours_literally(e, dir)).collect::<Vec<_>>().join(";");
+    store.write(&next).map_err(|e| format!("Windows refused the change to your PATH: {e}"))?;
+    let again = store.read().map_err(|e| format!("the change could not be checked afterwards: {e}"))?.unwrap_or_default();
+    if again.split(';').any(|e| ours_literally(e, dir)) {
+        return Err(format!("{dir} is still on your PATH after the change"));
+    }
+    Ok(true)
+}
+
+/// The install folder's hand-off file and bin folder, for the running program; None in a development
+/// build (no bin\kolux.exe beside it), which never touches the PATH this way.
+fn install_bin() -> Option<(PathBuf, String)> {
+    let app = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let bin = app.join("bin");
+    bin.join("kolux.exe").is_file().then(|| (app.join(PATH_PENDING), bin.display().to_string()))
+}
+
+/// Start-up (lib.rs setup): the installer's hand-off, on a thread of its own (the broadcast after a
+/// change can wait up to 2 s); the outcome goes to the log.
+pub fn path_at_start_now(log_dir: &Path) {
+    let log = log_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let Some((marker, dir)) = install_bin() else { return };
+        #[cfg(windows)]
+        let done = path_at_start(&marker, &dir, &Registry, &real_env);
+        #[cfg(not(windows))]
+        let done = {
+            let _ = (&marker, &dir);
+            StartPath::NotAsked
+        };
+        let line = match done {
+            StartPath::NotAsked => return,
+            StartPath::Added => format!("kolux-rs: added {dir} to the user PATH, which was too long for the installer (T-594)"),
+            StartPath::AlreadyThere => format!("kolux-rs: {dir} is already on the user PATH (T-594)"),
+            StartPath::Skipped(why) => format!("kolux-rs: the user PATH was not changed: {why} (T-594)"),
+        };
+        crate::diag::write(&log, &line);
+    });
+}
+
+/// The binary's hook for the uninstaller (`<app>.exe --uninstall-path`): never opens the window.
+/// Exit 0: taken off; 2: there was nothing of ours; 1: it could not be taken off.
+pub fn uninstall_main(args: &[String]) -> Option<i32> {
+    if !wants_uninstall_path(args) {
+        return None;
+    }
+    let Some((marker, dir)) = install_bin() else { return Some(2) };
+    #[cfg(windows)]
+    let done = path_at_uninstall(&marker, &dir, &Registry);
+    #[cfg(not(windows))]
+    let done: Result<bool, String> = {
+        let _ = (&marker, &dir);
+        Ok(false)
+    };
+    Some(match done {
+        Ok(true) => 0,
+        Ok(false) => 2,
+        Err(_) => 1,
+    })
+}
+
 #[cfg(windows)]
 pub struct Registry;
 
@@ -916,6 +1048,124 @@ mod tests {
         assert!(launcher_follow(&target, &old, true).is_none());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "#!/bin/sh\necho mine\n");
         assert!(launcher_follow(&target, Path::new("/opt/kolux/kolux"), true).is_none(), "only an AppImage follows");
+    }
+
+    /// T-594: Txais's user PATH is 1,815 characters; NSIS can change at most 1,023, so the installer
+    /// leaves the hand-off file and Kolux adds the bin folder when it starts.
+    const BIN: &str = r"C:\Users\me\AppData\Local\Kolux RS\bin";
+
+    fn long_path() -> String {
+        let mut p = String::from(r"%SystemRoot%\system32;%SystemRoot%;%USERPROFILE%\.cargo\bin;;%LOCALAPPDATA%\Microsoft\WindowsApps;C:\Program Files\Git\cmd");
+        let mut i = 0;
+        while p.len() < 1801 {
+            p.push_str(&format!(r";C:\Tools\some-long-tool-folder-{i:03}\bin"));
+            i += 1;
+        }
+        p.truncate(1801);
+        p.push_str(r";%APPDATA%\npm");
+        assert_eq!(p.chars().count(), 1815);
+        p
+    }
+
+    fn pending(tag: &str) -> (crate::test_dir::TempDir, PathBuf) {
+        let d = scratch(tag);
+        let m = d.join(PATH_PENDING);
+        std::fs::write(&m, "x").unwrap();
+        (d, m)
+    }
+
+    #[test]
+    fn t594_a_path_over_1024_characters_gains_the_bin_folder_once_and_is_otherwise_unchanged() {
+        let before = long_path();
+        assert!(before.len() > 1024 && before.contains("%SystemRoot%"), "{}", before.len());
+        let f = Fake::new(Some(&before));
+        let (_d, m) = pending("t594-add");
+        assert_eq!(path_at_start(&m, BIN, &f, &env), StartPath::Added);
+        let after = f.value.borrow().clone().unwrap();
+        // Everything the user had is there byte for byte, %VARIABLES% unexpanded; ours is the one new entry.
+        assert_eq!(after, format!("{before};{BIN}"));
+        assert_eq!(after.split(';').filter(|e| *e == BIN).count(), 1);
+        assert_eq!(*f.writes.borrow(), 1);
+        assert!(!m.exists(), "the hand-off file is used up");
+    }
+
+    #[test]
+    fn t594_a_second_start_adds_nothing() {
+        let f = Fake::new(Some(&long_path()));
+        let (_d, m) = pending("t594-twice");
+        assert_eq!(path_at_start(&m, BIN, &f, &env), StartPath::Added);
+        let once = f.value.borrow().clone();
+        assert_eq!(path_at_start(&m, BIN, &f, &env), StartPath::NotAsked);
+        // Even a hand-off file left by a second install over it adds no second entry.
+        std::fs::write(&m, "x").unwrap();
+        assert_eq!(path_at_start(&m, BIN, &f, &env), StartPath::AlreadyThere);
+        assert_eq!((f.value.borrow().clone(), *f.writes.borrow()), (once, 1));
+    }
+
+    #[test]
+    fn t594_an_entry_the_user_removed_stays_removed() {
+        let before = long_path();
+        let f = Fake::new(Some(&before));
+        let (_d, m) = pending("t594-removed");
+        assert_eq!(path_at_start(&m, BIN, &f, &env), StartPath::Added);
+        // The user takes it off (Settings > CLI > Remove, or Windows settings).
+        windows_remove(&f, BIN, &env).unwrap();
+        assert_eq!(f.value.borrow().clone().unwrap(), before);
+        let writes = *f.writes.borrow();
+        for _ in 0..3 {
+            assert_eq!(path_at_start(&m, BIN, &f, &env), StartPath::NotAsked);
+        }
+        assert_eq!((f.value.borrow().clone().unwrap(), *f.writes.borrow()), (before, writes));
+    }
+
+    #[test]
+    fn t594_the_hand_off_is_used_up_even_when_the_path_cannot_be_read_and_a_variable_spelling_counts_as_there() {
+        let mut f = Fake::new(Some(&long_path()));
+        f.unreadable = true;
+        let (_d, m) = pending("t594-unreadable");
+        assert!(matches!(path_at_start(&m, BIN, &f, &env), StartPath::Skipped(_)));
+        assert!(!m.exists());
+        assert_eq!(*f.writes.borrow(), 0);
+        // The user already has it as %LOCALAPPDATA%\Kolux RS\bin: nothing is added.
+        let mine = format!(r"{};%LOCALAPPDATA%\Kolux RS\bin", long_path());
+        let g = Fake::new(Some(&mine));
+        std::fs::write(&m, "x").unwrap();
+        assert_eq!(path_at_start(&m, BIN, &g, &env), StartPath::AlreadyThere);
+        assert_eq!((g.value.borrow().clone().unwrap(), *g.writes.borrow()), (mine, 0));
+    }
+
+    #[test]
+    fn t594_uninstall_takes_off_only_our_entry_and_the_path_is_back_exactly() {
+        let before = long_path();
+        let f = Fake::new(Some(&before));
+        let (_d, m) = pending("t594-uninstall");
+        path_at_start(&m, BIN, &f, &env);
+        assert_eq!(path_at_uninstall(&m, BIN, &f), Ok(true));
+        assert_eq!(f.value.borrow().clone().unwrap(), before, "back exactly, %VARIABLES% and the empty entry kept");
+        // Our entry in the middle, a trailing-slash copy, look-alikes and the user's %VARIABLE% spelling:
+        // only the two plain spellings of our folder go.
+        let mixed = format!(r"C:\a;{BIN};{BIN}2;%LOCALAPPDATA%\Kolux RS\bin;;C:\Users\me\AppData\Local\Kolux RS\BIN\;{}", long_path());
+        let g = Fake::new(Some(&mixed));
+        std::fs::write(&m, "x").unwrap();
+        assert_eq!(path_at_uninstall(&m, BIN, &g), Ok(true));
+        assert_eq!(g.value.borrow().clone().unwrap(), format!(r"C:\a;{BIN}2;%LOCALAPPDATA%\Kolux RS\bin;;{}", long_path()));
+        assert!(!m.exists(), "the hand-off file goes with the install");
+        // Nothing of ours: nothing is written.
+        let w = *g.writes.borrow();
+        assert_eq!(path_at_uninstall(&m, BIN, &g), Ok(false));
+        assert_eq!(*g.writes.borrow(), w);
+        // A change that did not take is an error, never a success.
+        let mut h = Fake::new(Some(&format!("C:\\a;{BIN}")));
+        h.refuses = true;
+        assert!(path_at_uninstall(&m, BIN, &h).is_err());
+    }
+
+    #[test]
+    fn t594_the_uninstall_flag_is_its_own_and_no_other_run_takes_it() {
+        assert!(wants_uninstall_path(&[UNINSTALL_PATH_FLAG.to_string()]));
+        assert!(!wants_uninstall_path(&[]));
+        assert!(!wants_uninstall_path(&["--install-agents".to_string()]));
+        assert!(!crate::agents::agent_install::wants_install(&[UNINSTALL_PATH_FLAG.to_string()]));
     }
 
     #[cfg(windows)]
