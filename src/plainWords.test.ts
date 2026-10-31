@@ -9,11 +9,12 @@ import ts from "typescript";
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 import { BANNED, GLOSSARY, jargon, CONNECT } from "./glossary";
+import { windowFiles } from "./shell/windowSource";
 import { AddProjectView } from "./projects/AddProject";
 import StartGit from "./projects/StartGit";
 
 /** In-scope screens: onboarding, Add Project, the folder-without-Git dialog, the launcher, the landing notices, the sidebar, the Connect cards, error toasts. */
-const SOURCES = import.meta.glob(
+const BASE_SCREENS = import.meta.glob(
   [
     "./onboarding/Wizard.tsx",
     "./projects/AddProject.tsx",
@@ -33,39 +34,21 @@ const SOURCES = import.meta.glob(
     "./settings/SignInNotice.tsx",
     "./settings/KeyLostNotice.tsx",
     "./App.tsx",
-    // Cycle 2: the files App.tsx was split into, read as App.tsx is (toasts and notices only).
-    "./shell/windowStore.ts",
-    "./shell/useWindowStart.ts",
-    "./settings/useSettingsPlumbing.ts",
-    "./chrome/useWindowChrome.ts",
-    "./browser/useBrowserChords.ts",
-    "./launch/launchActions.ts",
-    "./terminal/paneActions.ts",
-    "./editor/reviewActions.ts",
-    "./terminal/tabName.tsx",
-    "./shell/windowLate.ts",
-    "./keys/useWindowKeys.ts",
-    "./shell/useWindowSave.ts",
-    "./projects/useCliBridge.ts",
-    "./chrome/useScreens.tsx",
-    "./status/useStatusSurfaces.ts",
-    "./agents/useRailAndTower.ts",
-    "./terminal/useLayoutReport.ts",
-    "./terminal/paneGrid.ts",
-    "./shell/WindowView.tsx",
-    "./shell/windowBag.ts",
   ],
   { query: "?raw", import: "default", eager: true },
 ) as Record<string, string>;
+/** Cycle 3: the window's own files come from shell/windowSource.ts, which reads the shell/window folder whole
+ *  (so a new surface module is scanned by existing) and the window's outside files from one checked list. */
+const SOURCES = { ...windowFiles, ...BASE_SCREENS };
 const SCREENS = Object.keys(SOURCES);
 /** Only these attributes are read as text on screen; title and aria-label are hover/explanation. */
 const SHOWN_ATTRS = new Set(["placeholder", "alt"]);
 /** Calls whose text lands in a toast or notice line. */
-const TOASTS = new Set(["say", "setNotice", "setMessage", "setError"]);
+const TOASTS = new Set(["say", "setNotice", "setToast", "setMessage", "setError"]);
 /** Object fields the Connect cards print as their headline and detail lines. */
 const SHOWN_FIELDS = new Set(["headline", "detail", "text"]);
-/** Files whose JSX is not a newcomer screen as a whole; only their toasts count. */
-const TOASTS_ONLY = new Set(["./App.tsx", "./shell/windowStore.ts", "./shell/useWindowStart.ts", "./settings/useSettingsPlumbing.ts", "./chrome/useWindowChrome.ts", "./browser/useBrowserChords.ts", "./launch/launchActions.ts", "./terminal/paneActions.ts", "./editor/reviewActions.ts", "./terminal/tabName.tsx", "./shell/windowLate.ts", "./keys/useWindowKeys.ts", "./shell/useWindowSave.ts", "./projects/useCliBridge.ts", "./chrome/useScreens.tsx", "./status/useStatusSurfaces.ts", "./agents/useRailAndTower.ts", "./terminal/useLayoutReport.ts", "./terminal/paneGrid.ts", "./shell/WindowView.tsx", "./shell/windowBag.ts"]);
+/** The window's files are not newcomer screens as a whole; only their toasts count (as App.tsx did). */
+const TOASTS_ONLY = new Set(Object.keys(windowFiles));
 /** SettingsPage also holds pages beyond the Connect cards (project pages, the settings list). */
 const CARDS_ONLY: Record<string, (n: ts.Node) => boolean> = {
   "./settings/SettingsPage.tsx": (n) => ts.isFunctionDeclaration(n) && n.name?.text === "ClaudeCardView",
@@ -103,9 +86,15 @@ function shownText(file: string): string[] {
 }
 
 test("ONB-036: no banned word in the text shown on a newcomer screen", () => {
-  expect(SCREENS).toHaveLength(38); // a renamed file must not drop out of the scan silently
   const found = SCREENS.flatMap((f) => shownText(f).flatMap((t) => jargon(t).map((w) => `${f}: "${w}" in "${t.trim()}"`)));
   expect(found).toEqual([]);
+});
+
+test("ONB-036: the scan reads the base screens and every window module, so the list cannot shrink silently", () => {
+  // A renamed base screen leaves the glob: 18 is the named list's guard.
+  expect(Object.keys(BASE_SCREENS)).toHaveLength(18);
+  // The window's list is shell/windowSource.ts's, read whole (its own test proves the folder joins there).
+  for (const [file, text] of Object.entries(windowFiles)) expect(SOURCES[file], file).toBe(text);
 });
 
 test("ONB-036: the scan does find a banned word, and leaves product names alone", () => {
