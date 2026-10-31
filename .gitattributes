@@ -4,5 +4,7 @@
 *.sh text eol=lf
 # Council ruling 2026-10-14: lane patches apply byte-exact; never convert their line ends.
 *.patch -text
+# T-603 (DT-C57): the editor fixture for a file that mixes CRLF and LF lines keeps its exact bytes.
+src/editor/__fixtures__/* -text
 # MERGE 117/118: an autocrlf checkout wrote STATE-history.md with CRLF and the merge kept both copies.
 *.md text eol=lf

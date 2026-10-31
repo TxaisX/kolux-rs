@@ -2,7 +2,7 @@
 // buffer: what is typed in one is copied into the others, so two split panes edit one text; the
 // buffer remembers what is on disk, so a tab is unsaved only while its text differs from that by
 // more than trailing whitespace; a save writes the file once and leaves every view clean.
-import { Annotation, Compartment, EditorState, Text, type Extension, type StateEffect, type Transaction, type ChangeSet } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, StateEffect, StateField, Text, type Extension, type Transaction, type ChangeSet } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
 
 /** Marks a change Kolux made itself (a copy from the twin view, a reload), not the user's typing. */
@@ -12,16 +12,70 @@ export const synced = Annotation.define<boolean>();
 // T-603: the separator sits in a compartment that a reload using other line ends throughout switches (replaceAll), and
 // text the rich view or the notebook view hands the editor gets the editor's own line breaks (withLineBreaks).
 const lineEnds = new Compartment();
-const lineEndOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
-/** T-603: the one line end `text` uses throughout, or null when it has none or mixes CRLF with bare LF. */
+
+// DT-C57 (T-603, Txais 2026-10-31, option a): a file that holds both CRLF and LF lines draws every line on its own and
+// is saved ending by ending, byte for byte. One separator cannot split both kinds, so such a file's document holds no
+// CR at all (nothing joins, nothing shows a control character) and each line's own ending is kept beside it in
+// `endsField`; `fileText` puts the endings back, and `save` writes that.
+const mixedEnds = (text: string) => text.includes("\r\n") && /(^|[^\r])\n/.test(text);
+/** The text an editor draws for `text`: a mixed file's CRLFs are held aside (see `fileText`). */
+export const docText = (text: string) => (mixedEnds(text) ? text.replace(/\r\n/g, "\n") : text);
+const lineEndOf = (text: string) => (mixedEnds(text) ? "\n" : text.includes("\r\n") ? "\r\n" : "\n");
+
+/** The ending after each line but the last, in order: one entry per line break the file has. */
+type Ends = readonly string[];
+const setEnds = StateEffect.define<Ends>();
+/** The endings of a mixed file's lines; empty for a file with one kind of ending throughout. */
+const endsField = StateField.define<Ends>({
+  create: () => [],
+  update(ends, tr) {
+    for (const e of tr.effects) if (e.is(setEnds)) return e.value;
+    return tr.docChanged && ends.length ? mapEnds(tr.startState.doc, tr.changes, tr.newDoc, ends) : ends;
+  },
+});
+/** T-603: the endings of `text`, one per line break, when it mixes CRLF and LF; else none. */
+const endsOf = (text: string): Ends => (mixedEnds(text) ? text.split("\n").slice(0, -1).map((l) => (l.endsWith("\r") ? "\r\n" : "\n")) : []);
+
+/** DT-C57: each break of the new document keeps the ending of the old break it stands for; a break the edit added takes
+ *  the ending of the line beside it. Each old break is carried forward through the change; a new break at that same place
+ *  is that line's own, and one at a place no old break reached was added by the edit. */
+function mapEnds(oldDoc: Text, changes: ChangeSet, newDoc: Text, ends: Ends): Ends {
+  const at = new Map<number, number>();
+  for (let i = 1; i < oldDoc.lines; i++) at.set(changes.mapPos(oldDoc.line(i + 1).from - 1, 1), i - 1);
+  const out: string[] = [];
+  for (let i = 1; i < newDoc.lines; i++) {
+    const j = at.get(newDoc.line(i + 1).from - 1);
+    out.push(j === undefined ? (out[i - 2] ?? ends[0] ?? "\n") : ends[Math.min(j, ends.length - 1)]);
+  }
+  return out;
+}
+
+/** The text of the file an editor state would save: its lines with each line's own ending (a state built without the
+ *  endings, or a file with one kind throughout, is its document as before). */
+export function fileText(state: EditorState): string {
+  const ends = state.field(endsField, false) ?? [];
+  if (!ends.length) return state.sliceDoc();
+  let out = "";
+  for (let i = 1; i <= state.doc.lines; i++) {
+    out += state.doc.line(i).text;
+    if (i < state.doc.lines) out += ends[Math.min(i - 1, ends.length - 1)];
+  }
+  return out;
+}
+
+/** T-603: the one line end `text` uses throughout, or null when it has none. A mixed file is split on LF, its CRs
+ *  held aside, so every line is drawn on its own. */
 const soleLineEnd = (text: string): string | null => {
+  if (mixedEnds(text)) return "\n";
   const crlf = text.includes("\r\n");
   return crlf === /(^|[^\r])\n/.test(text) ? null : crlf ? "\r\n" : "\n";
 };
-/** The line separator of an editor showing `text` (EditorPane, DiffPane). */
-export const lineEndsFor = (text: string): Extension => lineEnds.of(EditorState.lineSeparator.of(lineEndOf(text)));
+/** The line separator of an editor showing `text` (EditorPane, DiffPane), and the mixed file's line endings. */
+export const lineEndsFor = (text: string): Extension => [lineEnds.of(EditorState.lineSeparator.of(lineEndOf(text))), endsField.init(() => endsOf(text))];
 /** T-603 (F01-editor.2): a change worked out on doc.toString() (lines joined with \n), its line breaks as `state` splits them. */
-export const withLineBreaks = <C extends { insert: string }>(state: EditorState, c: C): C => ({ ...c, insert: c.insert.replace(/\r?\n/g, state.lineBreak) });
+export const withLineBreaks = <C extends { insert: string }>(state: EditorState, c: C): C =>
+  state.lineBreak === "\n" ? c : { ...c, insert: c.insert.replace(/\r?\n/g, state.lineBreak) };
+
 
 /** The part of an editor view a buffer needs; EditorView fits it, and the tests use plain states. */
 export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string | Text }; effects?: StateEffect<unknown> | readonly StateEffect<unknown>[]; annotations: Annotation<unknown> | readonly Annotation<unknown>[] }) => void };
@@ -55,7 +109,7 @@ export async function loadText(read: () => Promise<string>, tries = 3, wait = 30
 export const keyOf = (path: string) => (/^[a-z]:[\\/]/i.test(path) ? path.replace(/\\/g, "/").toLowerCase() : path);
 export const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 
-// sliceDoc, not doc.toString(): it joins lines with the file's own line end (CRLF stays CRLF).
+// fileText, not sliceDoc(): a mixed file's endings are held beside the document (T-603, DT-C57).
 type Buffer = { disk: string; views: Set<View>; listeners: Set<() => void> };
 const buffers = new Map<string, Buffer>();
 
@@ -67,17 +121,20 @@ function buf(path: string): Buffer {
 }
 const tell = (b: Buffer) => b.listeners.forEach((f) => f());
 
-/** The text a newly attached view should show: a twin's current text, else what was read. T-603: the twin's lines and
- *  separator too, as a change relayed between views that split the text differently does not fit (a twin that kept LF
- *  through a mixed reload, while the at-open rule gives the mixed file CRLF). */
+/** The text a newly attached view should show: a twin's current text, else what was read. T-603: the twin's lines,
+ *  separator and per-line endings too, as a change relayed between views that split the text differently does not fit. */
 export function attach(path: string, view: View, disk: string): void {
   const b = buf(path);
   if (b.views.size === 0) b.disk = disk;
   const twin = [...b.views][0];
   b.views.add(view);
-  if (twin && (twin.state.lineBreak !== view.state.lineBreak || twin.state.sliceDoc() !== view.state.sliceDoc())) {
+  if (twin && (twin.state.lineBreak !== view.state.lineBreak || fileText(twin.state) !== fileText(view.state))) {
     const end = twin.state.lineBreak;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: twin.state.doc }, effects: view.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations: synced.of(true) });
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: twin.state.doc },
+      effects: [...(view.state.lineBreak === end ? [] : [lineEnds.reconfigure(EditorState.lineSeparator.of(end))]), setEnds.of(twin.state.field(endsField, false) ?? [])],
+      annotations: synced.of(true),
+    });
   }
   tell(b);
 }
@@ -99,7 +156,7 @@ export function relay(path: string, from: View, tr: Transaction): void {
 export function isDirty(path: string): boolean {
   const b = buffers.get(keyOf(path));
   const v = b && [...b.views][0];
-  return !!v && !sameText(v.state.sliceDoc(), b.disk);
+  return !!v && !sameText(fileText(v.state), b.disk);
 }
 
 /** EDIT-003 (T-073-a): lowercase hex SHA-256 of a text's UTF-8 bytes. file_read returns the file's
@@ -121,7 +178,7 @@ export async function save(path: string, write: (text: string, loadedHash?: stri
   const b = buf(path);
   const v = [...b.views][0];
   if (!v) return;
-  const text = v.state.sliceDoc();
+  const text = fileText(v.state);
   await write(text, force ? undefined : await hashOf(b.disk));
   b.disk = text;
   tell(b);
@@ -130,19 +187,24 @@ export async function save(path: string, write: (text: string, loadedHash?: stri
 /** Text Kolux puts in itself (a reload): every view shows it and none is unsaved. `undoable`
  *  (EDIT-003's Reload) makes it one step of its own in each view's undo history, so Ctrl+Z or the
  *  toast's Undo brings the edits back. T-603 (F01-editor.4): text that uses one line end throughout,
- *  other than the view's, switches the view's separator; text that mixes CRLF with bare LF, or has no
- *  line end, keeps the view's own (switching would merge each line of the other kind into its
- *  neighbour). It goes in already split into lines (the transaction splits a string on the separator
- *  it starts with). */
+ *  other than the view's, switches the view's separator; a mixed file is split on LF with its CRs held
+ *  aside, so every line is drawn on its own (DT-C57). It goes in already split into lines (the
+ *  transaction splits a string on the separator it starts with). */
 export function replaceAll(path: string, text: string, undoable = false): void {
   const b = buf(path);
   b.disk = text;
   const annotations = undoable ? [synced.of(true), isolateHistory.of("full")] : synced.of(true);
   const sole = soleLineEnd(text);
+  const shown = docText(text);
+  const ends = endsOf(text);
   for (const v of b.views) {
-    if (v.state.sliceDoc() === text) continue;
+    if (fileText(v.state) === text) continue;
     const end = sole ?? v.state.lineBreak;
-    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: Text.of(text.split(end)) }, effects: v.state.lineBreak === end ? [] : lineEnds.reconfigure(EditorState.lineSeparator.of(end)), annotations });
+    v.dispatch({
+      changes: { from: 0, to: v.state.doc.length, insert: Text.of(end === "\r\n" ? text.split(end) : shown.split("\n")) },
+      effects: [...(v.state.lineBreak === end ? [] : [lineEnds.reconfigure(EditorState.lineSeparator.of(end))]), setEnds.of(ends)],
+      annotations,
+    });
   }
   tell(b);
 }
@@ -156,10 +218,17 @@ export function subscribe(path: string, f: () => void): () => void {
   };
 }
 
-/** The open text of a file, or null when no editor has it open (a preview then reads the disk). */
+/** The open text of a file as the editor draws it, or null when no editor has it open (a preview then reads the disk).
+ *  A mixed file's text here has no CRs: `fileTextOf` is what a save writes. */
 export function textOf(path: string): string | null {
   const v = buffers.get(keyOf(path))?.views.values().next().value;
   return v ? v.state.sliceDoc() : null;
+}
+
+/** The text a save of the open file would write (T-603: a mixed file's own endings are here), or null. */
+export function fileTextOf(path: string): string | null {
+  const v = buffers.get(keyOf(path))?.views.values().next().value;
+  return v ? fileText(v.state) : null;
 }
 
 /** The text of the open file and the disk copy it was typed over, for the drafts (EDIT-004). */
@@ -179,12 +248,12 @@ export function carryOver(moves: [string, string][]): string[] {
   const made: string[] = [];
   for (const [k, b] of buffers) {
     const v = [...b.views][0];
-    if (!v || sameText(v.state.sliceDoc(), b.disk)) continue;
+    if (!v || sameText(fileText(v.state), b.disk)) continue;
     for (const [from, to] of moves) {
       const f = keyOf(from);
       if (k !== f && !k.startsWith(f + "/")) continue;
       const nk = keyOf(to) + k.slice(f.length);
-      carried.set(nk, { text: v.state.sliceDoc(), disk: b.disk });
+      carried.set(nk, { text: fileText(v.state), disk: b.disk });
       made.push(nk);
       break;
     }
@@ -208,8 +277,8 @@ export type Held = { path: string; text: string; disk: string };
 export function heldOf(path: string): Held | null {
   const b = buffers.get(keyOf(path));
   const v = b && [...b.views][0];
-  if (!b || !v || sameText(v.state.sliceDoc(), b.disk)) return null;
-  return { path, text: v.state.sliceDoc(), disk: b.disk };
+  if (!b || !v || sameText(fileText(v.state), b.disk)) return null;
+  return { path, text: fileText(v.state), disk: b.disk };
 }
 
 /** How a view opening `path` starts. `text` is what it shows; `base` is the disk copy the buffer

@@ -23,7 +23,7 @@ import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
-import { attach, baseName, detach, heldOf, isDirty, lineEndsFor, opening, relay, replaceAll, subscribe, textOf, type Held } from "./buffers";
+import { attach, baseName, detach, docText, fileTextOf, heldOf, isDirty, lineEndsFor, opening, relay, replaceAll, subscribe, type Held } from "./buffers";
 import { confirmed } from "./fileMoved";
 import { keepUnsaved, keptToast } from "./unsavedCopy";
 import { copiers, editors, look, saveFile, StaleNotice } from "./EditorPane";
@@ -322,11 +322,11 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
     let b: EditorView;
     let merge: MergeView | null = null;
     if (split) {
-      merge = new MergeView({ a: { doc: s.original, extensions: [...common, EditorState.readOnly.of(true), EditorView.editable.of(false), noteTools(act.current, "old")] }, b: { doc: modified, extensions: right }, parent: host.current, gutter: true, diffConfig });
+      merge = new MergeView({ a: { doc: docText(s.original), extensions: [...common, lineEndsFor(s.original), EditorState.readOnly.of(true), EditorView.editable.of(false), noteTools(act.current, "old")] }, b: { doc: docText(modified), extensions: right }, parent: host.current, gutter: true, diffConfig });
       a = merge.a;
       b = merge.b;
     } else {
-      b = new EditorView({ doc: modified, parent: host.current, extensions: [...right, oldNoteField(act.current), unifiedMergeView({ original: s.original, mergeControls: false, gutter: true, diffConfig })] });
+      b = new EditorView({ doc: docText(modified), parent: host.current, extensions: [...right, oldNoteField(act.current), unifiedMergeView({ original: docText(s.original), mergeControls: false, gutter: true, diffConfig })] });
     }
     views.current = { a, b };
     a?.dispatch({ effects: setNotes.of(noteRef.current.notes) });
@@ -342,7 +342,7 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
         void keepUnsaved(path, keep).then(
           (kept) => {
             // The copy is written: the tab shows the disk, unless the user typed meanwhile.
-            if (textOf(path) === keep) replaceAll(path, s.modified);
+            if (fileTextOf(path) === keep) replaceAll(path, s.modified);
             report.current.onToast?.(keptToast(name, kept));
             confirmed(path);
           },
