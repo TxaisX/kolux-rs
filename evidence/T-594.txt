@@ -245,3 +245,21 @@ broadcast are unproved until the live check below.
    Note: Settings > CLI > Register (step 5) trims trailing ';' before appending (cli_register path_with), so
    if the step-0 text ended in ';' the only fc difference is that one ';'. To test the exact round trip, skip
    step 5 (or do it last, after step 6, with a fresh install).
+
+--- review fixes (2026-10-31, coordinator)
+1. KOLUX_PATH_APP_REMOVE now starts with the template's own check:
+   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+   (name and arguments from tauri-bundler 2.8.1 utils.nsh:22; the template calls it only AFTER
+   NSIS_HOOK_PREUNINSTALL, installer.nsi:754-758). Cancelling at its prompt aborts the uninstall before the
+   PATH entry is touched. The wrapper defines a stand-in with the same ${UniqueID}/label pattern and calls it
+   a second time right after the hook, as the template does, so a label clash would fail the compile.
+2. cli_register.rs path_at_start: comment that a crash between the delete and the write skips the add (safe,
+   recoverable with Settings > CLI > Register).
+$ makensis -WX -V3 -DOUT=<scratch>/hc.exe evidence/T-594-hooks-check.nsi
+Install: 1 page (64 bytes), 1 section (4120 bytes), 160 instructions (4480 bytes), 68 strings (2436 bytes), 1 language table (194 bytes).
+Uninstall: 1 page (128 bytes), 1 section (4120 bytes), 144 instructions (4032 bytes), 65 strings (2070 bytes), 1 language table (194 bytes).
+with headers exit 0
+$ makensis -WX -V1 -DALONE=1 -DOUT=<scratch>/ha.exe evidence/T-594-hooks-check.nsi
+alone exit 0
+Live check addition: with Kolux open, start the uninstall and press Cancel at "Kolux RS is running": the
+uninstall stops and `reg query HKCU\Environment /v Path` still shows <install>\bin.

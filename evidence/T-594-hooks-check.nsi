@@ -9,6 +9,7 @@
 !endif
 Unicode true
 !define MAINBINARYNAME "kolux-rs"
+!define PRODUCTNAME "Kolux RS"
 !ifndef ALONE
   !include FileFunc.nsh
   !include x64.nsh
@@ -21,6 +22,22 @@ OutFile "${OUT}"
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Kolux RS"
 
+; Stand-in for the template's CheckIfAppIsRunning (tauri-bundler 2.8.1 utils.nsh:22, which needs the
+; nsis_tauri_utils plugin): same arguments, same ${UniqueID}/label pattern, so a second call in the same
+; section (as the template makes right after NSIS_HOOK_PREUNINSTALL) proves the labels do not collide.
+!macro CheckIfAppIsRunning executableName productName
+  !define UniqueID ${__LINE__}
+  StrCpy $R0 "${executableName} ${productName}"
+  ${If} $R0 == ""
+    Goto cancel_${UniqueID}
+  ${EndIf}
+  Goto app_check_done_${UniqueID}
+  cancel_${UniqueID}:
+    Abort
+  app_check_done_${UniqueID}:
+    !undef UniqueID
+!macroend
+
 Section Install
   SetOutPath "$INSTDIR"
   !insertmacro NSIS_HOOK_POSTINSTALL
@@ -29,5 +46,6 @@ SectionEnd
 
 Section Uninstall
   !insertmacro NSIS_HOOK_PREUNINSTALL
+  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   !insertmacro NSIS_HOOK_POSTUNINSTALL
 SectionEnd

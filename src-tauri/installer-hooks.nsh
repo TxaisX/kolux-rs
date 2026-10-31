@@ -233,6 +233,10 @@
 ; off; 2: nothing of ours there; anything else: not done (the NSIS step after the files go tries for a short
 ; PATH). The hand-off file is deleted too, so the install folder can go.
 !macro KOLUX_PATH_APP_REMOVE
+  ; The template's running-app check first (it runs it again after this hook): a user who cancels at its
+  ; prompt aborts the uninstall here, before the PATH entry is touched. It uses $R0-$R3, as the template's
+  ; own call does.
+  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   Push $R0
   ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
     ClearErrors

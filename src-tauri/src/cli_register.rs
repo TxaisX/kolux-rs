@@ -159,6 +159,7 @@ pub fn path_at_start(marker: &Path, dir: &str, store: &dyn UserPath, env: &dyn F
     if !marker.exists() {
         return StartPath::NotAsked;
     }
+    // A crash between this delete and the write below skips the add: safe (nothing changed) and recoverable with Settings > CLI > Register.
     if std::fs::remove_file(marker).is_err() || marker.exists() {
         return StartPath::Skipped(format!("{} could not be deleted, so the PATH was left as it is (it would be added again on every start)", marker.display()));
     }
