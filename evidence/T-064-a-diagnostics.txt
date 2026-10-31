@@ -45,7 +45,7 @@ fake key in the clipboard: 0 (0 = absent)   [grep -c 'FAKEKEY\|PLANTED' on the c
 
 == 3. a review copy (first run) ==
 after "Write a review copy and open it": the file opened in the system's text editor
-on disk: -rw-r--r-- 1 XiongT 197121 506 Oct 12 23:09 ...\com.txaisxiong.kolux-rs.core\diagnostics-review.txt
+on disk: -rw-r--r-- 1 <user> 197121 506 Oct 12 23:09 ...\com.txaisxiong.kolux-rs.core\diagnostics-review.txt
 secrets in the review copy: 0 (0 = absent); masked lines: 3
 after "Throw the review copy away": "Review copy thrown away."
 after: ls: cannot access '...\diagnostics-review.txt': No such file or directory

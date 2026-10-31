@@ -16,9 +16,9 @@ Codex home: codex\config.toml (69 bytes) and codex\hooks.json (209 bytes, anothe
 deb82796875e4f535956e65b64001b6474b0984a5d1cea7d762037b9f737e80c *codex/hooks.json
 6309c8458e4d6d112b375f8582ebececb263ea6c4aa40bbf254ffe7da972fac5 *codex/config.toml
 codex folder (ls -la, parent entry left out):
-  drwxr-xr-x 1 XiongT 197121   0 12:45:09 .
-  -rw-r--r-- 1 XiongT 197121  69 12:45:09 config.toml
-  -rw-r--r-- 1 XiongT 197121 209 12:45:09 hooks.json
+  drwxr-xr-x 1 <user> 197121   0 12:45:09 .
+  -rw-r--r-- 1 <user> 197121  69 12:45:09 config.toml
+  -rw-r--r-- 1 <user> 197121 209 12:45:09 hooks.json
 After launch with the switch off (default): sha256sum -c pre.sha -> all three OK.
 
 == unit tests: cargo test t_152 -- --nocapture --test-threads=1 (scratch env above)

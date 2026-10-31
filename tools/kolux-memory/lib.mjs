@@ -16,6 +16,9 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 export const SCHEMA = 2;
 
@@ -24,8 +27,8 @@ export function defaults() {
   const appData = process.env.APPDATA || join(home, "AppData", "Roaming");
   return {
     sessions: process.env.KOLUX_MEMORY_SESSIONS || join(home, ".local", "share", "opencode", "opencode.db"),
-    repo: process.env.KOLUX_MEMORY_REPO || "G:/Dev/kolux-rs",
-    vault: process.env.KOLUX_MEMORY_VAULT || "G:/Dev/Projects/Txais Brain",
+    repo: process.env.KOLUX_MEMORY_REPO || REPO,
+    vault: process.env.KOLUX_MEMORY_VAULT || join(REPO, "..", "Projects", "Txais Brain"),
     db: process.env.KOLUX_MEMORY_DB || join(appData, "com.txaisxiong.kolux-rs", "memory", "kolux-memory.db"),
     ledger: process.env.KOLUX_MEMORY_LEDGER || "",
     github: false,
