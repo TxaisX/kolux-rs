@@ -24,6 +24,7 @@ export default function SeatChooser({ pane: p, hidden, focused, onFocus, onClose
   } = useWindow();
   return (
     <ChooserPane
+      key={p.key}
       number={p.key}
       hidden={hidden}
       focused={focused}

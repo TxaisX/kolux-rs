@@ -32,7 +32,7 @@ import SeatChooser from "./SeatChooser";
 import TerminalPane from "../../terminal/TerminalPane";
 import { useWindow } from "./store";
 
-export default function Pane({ pane: p, active }: { pane: Pane; active: number }) {
+export default function WindowPane({ pane: p, active }: { pane: Pane; active: number }) {
   const {
     terminals, settingsOpen, board, focused, closePane, setFocused, settings, agentsScreen, titles, liveIds, notes,
     setNotes, notesFor, putNote, dropNotes, openDiff, openFile, followLink, pasteInto, restoredKeys, projects,

@@ -44,7 +44,7 @@ const SCREENS = Object.keys(SOURCES);
 /** Only these attributes are read as text on screen; title and aria-label are hover/explanation. */
 const SHOWN_ATTRS = new Set(["placeholder", "alt"]);
 /** Calls whose text lands in a toast or notice line. */
-const TOASTS = new Set(["say", "setNotice", "setMessage", "setError"]);
+const TOASTS = new Set(["say", "setNotice", "setToast", "setMessage", "setError"]);
 /** Object fields the Connect cards print as their headline and detail lines. */
 const SHOWN_FIELDS = new Set(["headline", "detail", "text"]);
 /** The window's files are not newcomer screens as a whole; only their toasts count (as App.tsx did). */

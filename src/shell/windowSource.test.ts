@@ -20,19 +20,36 @@ test("the window's drawing folder joins the source tests whole", () => {
 });
 
 test("the window's files outside the drawing folder are all present, so a rename cannot quietly drop one", () => {
-  // App.tsx + WindowView.tsx + the 6 shell files beside it + the 14 hooks the App.tsx split made.
-  expect(Object.keys(windowFiles).filter((f) => !f.startsWith("./shell/window/"))).toHaveLength(21);
+  // App.tsx + WindowView.tsx + the 6 shell files beside it, the 5 the split's review found missing
+  // from every source test, and the 14 hooks the App.tsx split made.
+  expect(Object.keys(windowFiles).filter((f) => !f.startsWith("./shell/window/"))).toHaveLength(26);
   for (const f of ["./App.tsx", "./shell/WindowView.tsx", "./shell/windowStore.ts", "./shell/windowBag.ts", "./shell/useWindowSave.ts", "./settings/useSettingsPlumbing.ts"]) {
     expect(windowFiles[f], f).toBeTruthy();
   }
 });
 
-test("every module WindowView.tsx imports joins the scan", () => {
-  const view = windowFiles["./shell/WindowView.tsx"];
-  const specs = [...view.matchAll(/from "(\.[^"]+)"/g)].map((m) => m[1]).filter((s) => s.startsWith("./"));
-  expect(specs.length).toBeGreaterThan(3);
-  for (const spec of specs) {
-    const base = `./shell/${spec.replace(/^\.\//, "")}`;
-    expect(Object.keys(windowFiles).some((f) => f === `${base}.tsx` || f === `${base}.ts`), spec).toBe(true);
+test("every import a window surface makes of a module under src/shell joins the scan", () => {
+  // The folder glob covers shell/window/*; this covers the other half: a surface that imports a new
+  // module under src/shell (a sibling file, a hook moved out) must be added to windowSource.ts, or the
+  // seven source tests that read windowSource silently stop seeing that code.
+  const specs: { file: string; spec: string }[] = [];
+  for (const [file, text] of Object.entries(DRAWING)) {
+    for (const m of text.matchAll(/from "(\.[^"]+)"/g)) specs.push({ file, spec: m[1] });
   }
+  expect(specs.length).toBeGreaterThan(20);
+  const missing: string[] = [];
+  for (const { file, spec } of specs) {
+    const parts = rel(file).split("/");
+    parts.pop();
+    for (const seg of spec.split("/")) {
+      if (seg === ".") continue;
+      if (seg === "..") parts.pop();
+      else parts.push(seg);
+    }
+    const base = parts.join("/").replace(/\.(ts|tsx)$/, "");
+    if (!base.startsWith("./shell/")) continue; // other folders are components, never window source text
+    const hit = Object.keys(windowFiles).some((f) => f === `${base}.ts` || f === `${base}.tsx`);
+    if (!hit) missing.push(`${file} imports ${spec} (${base})`);
+  }
+  expect(missing, "add these to shell/windowSource.ts OUTSIDE, or they leave the source tests").toEqual([]);
 });
