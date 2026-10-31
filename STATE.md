@@ -50,6 +50,17 @@ recorded default until told otherwise; nothing here blocks a pass.
   that folder's name, the PNG shows in the viewer, a PDF opens in its own app, and the same file written
   again refreshes its one entry instead of adding a second. Codex and other agents are not captured yet
   (only Claude Code's transcripts are read), which is the next slice if Txais wants it.
+- [coordinator] 2026-10-31 · **Cycle 3 landed** (TERM-068 complete, the window split, first load 3.18 → 1.86 MB,
+  T-603 mixed endings, deletes that start at a link ask, the changed-files count off the window thread). Main is
+  pushed; `evidence/cycle3-merge.txt` has the record, the gate lines and the smoke result.
+- [coordinator] 2026-10-31 · **SAFE-004 box 3 is deliberately open** (DT-C59): the 3-second fallback was built and
+  reverted on your word; the safe default stands. Nothing else changed on that card.
+- [coordinator] 2026-10-31 · **First load is 1.86 MB, under the 2 MB guard but not under the 1.5 MB bar.** The
+  remaining cut (the editor store stops carrying CodeMirror, measured at 1,470,936 bytes) is being redone on the
+  current main as lane3/first-load-3; the first attempt conflicted with T-603 and was backed out rather than
+  landing a wrong editor.
+- [coordinator] 2026-10-31 · **0.1.3 is being released from this main.** It carries the PATH fix (PR #19) and
+  delete safety (PR #21), which is what A-1, D-1, D-2, D-3 and D-4 are then proven on.
 - [product-ux] 2026-10-30 · Open: live Windows checks for T-608 to T-612 (steps in each evidence/T-6xx.txt):
   the consent line on a fresh profile and the one-time card on an old one; a hand-started Claude asking permission
   shows Needs you on the Board, Tower, Inbox, needs strip, bell and sidebar; Review changes from a Done card and an
