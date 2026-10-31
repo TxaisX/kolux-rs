@@ -153,7 +153,7 @@ Changes can be retried safely: pass the same `--retry-request <id>` and the work
 
 A task whose worker has failed three times is held back: Kolux no longer hands it out. `task-list` shows its status as "held" instead of "ready", and `--ready` leaves it out. `--status held` lists only held tasks. With `--json`, a held task also carries `failures` (the count) and `held` ("held (3 failures)"). The plain-text line shows only the word "held", not the count.
 
-There is no command-line way to free a held task yet. The reset action exists inside the app (`task_reset`, which clears the failure count), but no button or command calls it today.
+`orchestration task-reset --id <task>` frees a held task: it closes the breaker, so the task lists as ready again, and the failed records stay. The app itself has no button for it.
 
 ### Worker commands
 

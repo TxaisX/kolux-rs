@@ -1608,13 +1608,6 @@ pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> 
     register_project(&*store.lock().map_err(|e| e.to_string())?, found)
 }
 
-/// PROJ-041: the new worktrees made outside Kolux, for the sidebar's count line.
-#[tauri::command]
-pub async fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
-    let (project, all) = scan(&git, &store, &project_id)?;
-    unseen_of(&*store.lock().map_err(|e| e.to_string())?, &project, all)
-}
-
 /// A project's workspaces and the ones made outside Kolux that were not seen yet (T-442-c).
 #[derive(Debug, serde::Serialize)]
 pub struct Scanned {
@@ -1622,7 +1615,7 @@ pub struct Scanned {
     pub unseen: Vec<Worktree>,
 }
 
-/// Both answers of `workspace_list` and `workspace_unseen` from one scan of one project.
+/// Both answers, the workspaces and the unseen ones, from one scan of one project.
 pub fn scanned_of(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Scanned, String> {
     let list = decorate(store, project, all)?;
     let unseen = unseen_in(store, project, list.clone())?;
@@ -1925,19 +1918,6 @@ fn rekey_workspace(store: &Store, project: &Project, from: &str, to: &str) -> Re
 #[tauri::command(async)]
 pub fn workspace_move_folder(git: State<'_, Git>, store: StoreState<'_>, path: String, name: String) -> Result<String, String> {
     move_folder(&git, &store, &path, &name)
-}
-
-#[tauri::command(async)]
-pub fn workspace_rename_after_work(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String, reply: String) -> Result<RenameAnswer, String> {
-    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
-    rename_after_work(&git, &store, &project, &path, &reply)
-}
-
-/// PROJ-039: the composer calls this when the name it created a workspace with was Kolux's own
-/// suggestion left as it was, so the first work can rename it.
-#[tauri::command]
-pub fn workspace_mark_suggested(store: StoreState<'_>, path: String, suggested: bool) -> Result<(), String> {
-    mark_suggested(&*store.lock().map_err(|e| e.to_string())?, &path, suggested)
 }
 
 /// Whether the workspace at `path` is linked to a pull request (PROJ-060's details), in which

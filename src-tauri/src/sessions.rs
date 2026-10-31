@@ -88,14 +88,6 @@ pub fn claude_sessions(projects: &Path, workspace: &str) -> Vec<PastSession> {
     out
 }
 
-/// PROJ-087: the past Claude sessions for one workspace folder, newest first. An unknown config
-/// folder or a workspace with no history is an empty list, not an error.
-#[tauri::command]
-pub async fn claude_workspace_sessions(workspace: String) -> Result<Vec<PastSession>, String> {
-    let Some(projects) = crate::capture::claude_dir().map(|d| d.join("projects")) else { return Ok(Vec::new()) };
-    tauri::async_runtime::spawn_blocking(move || claude_sessions(&projects, &workspace)).await.map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

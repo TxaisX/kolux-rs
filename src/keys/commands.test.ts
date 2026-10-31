@@ -3,7 +3,7 @@
 // runs; the commands that had no handler (the audit's five, plus Force Reload and Hard Reload, whose
 // chords nothing in the window answered) now each do something, or are gone.
 import { expect, test } from "vitest";
-import app from "../App.tsx?raw";
+import { windowSource as app } from "../shell/windowSource";
 import { actions, actionById, sameAs } from "./actions";
 import { matchEvent, resolve, type KeyLike } from "./keymap";
 import { commandRows, forceReload, reloadAsk, renameTarget, windowCommand } from "./commands";
@@ -29,7 +29,7 @@ function spies() {
 function handled(id: string): boolean {
   if (sameAs[id]) return handled(sameAs[id]);
   if (windowCommand(id, spies().calls) || SCREEN_OF[id]) return true;
-  if (id.startsWith("tab.newAgent.")) return SOURCES["../App.tsx"].includes(`hit.id.startsWith("tab.newAgent.")`);
+  if (id.startsWith("tab.newAgent.")) return app.includes(`hit.id.startsWith("tab.newAgent.")`);
   return named(id);
 }
 

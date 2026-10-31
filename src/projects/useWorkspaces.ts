@@ -115,3 +115,5 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
   const projectOf = (cwd: string | null): string | null => (cwd ? (Object.entries(owner).find(([dir]) => sameDir(dir, cwd))?.[1] ?? null) : null);
   return { afterSetup, startSetup, select, removedAll, removed, projectOf };
 }
+
+export type WorkspaceActions = ReturnType<typeof useWorkspaceActions>;

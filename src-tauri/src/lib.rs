@@ -134,12 +134,6 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
     Ok(secrets::without_secrets(store.lock().map_err(|e| e.to_string())?.settings()))
 }
 
-/// after-list #39: set once if settings were read from the last good copy; the window shows it in the notice bar.
-#[tauri::command]
-fn settings_fallback_notice(store: tauri::State<'_, Mutex<Store>>) -> Option<String> {
-    store.lock().ok().and_then(|s| s.take_fallback_notice())
-}
-
 /// Writes only the settings the window changed (`set`, and `remove` for ones it cleared) over what
 /// is on disk, so a key Kolux itself wrote meanwhile (a printed pull request link) is kept.
 /// T-075 (APP-048): `async`, so the synced write (two files, fsync each) runs off the window's
@@ -525,7 +519,6 @@ pub fn run() {
             app_info,
             edit_menu::edit_menu_ready,
             get_settings,
-            settings_fallback_notice,
             settings_patch,
             notify,
             notifications::notification_test,
@@ -533,11 +526,9 @@ pub fn run() {
             notifications::notification_sound_load,
             notifications::open_notification_settings,
             notifications::notify_event, // STAT-044
-            notifications::notification_clicked, // STAT-044
             hooks::agent_hooks::agent_hooks_sync,
             hooks::agent_hooks::agent_hooks_file,
             hooks::agent_hooks::saved::agent_status_saved,
-            hooks::agent_hooks::saved::agent_resumable,
             tray::tray_close_requested, // APP-007 (tray FIX-1): the page asks before the main window closes
             tray::tray_ping, // STAT-047: the tray dot lights before any toast switch is consulted
             protected::protected_rules,
@@ -545,14 +536,12 @@ pub fn run() {
             protected_custom::protected_attempts,
             protected_custom::protected_attempts_clear,
             hooks::claude_usage,
-            hooks::claude_usage_of,
             sysmem::process_memory,
             fonts::list_fonts,
             term_import::term_import_ghostty,
             term_import::term_import_ghostty_theme,
             term_import::term_import_warp,
             resources::resources,
-            sessions::claude_workspace_sessions,
             sessions::list::sessions_list,
             sessions::list::session_resume_plan,
             sessions::files::session_delete, sessions::files::session_reveal, sessions::files::session_open,
@@ -604,7 +593,6 @@ pub fn run() {
             projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,
-            projects::workspace_unseen,
             projects::workspace_scan,
             projects::workspace_seen,
             projects::workspace_hide,
@@ -637,12 +625,9 @@ pub fn run() {
             cleanup::cleanup_scan,
             cleanup::branch_delete_kept,
             cleanup::cleanup_sizes,
-            labels::labels_list,
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
-            projects::workspace_rename_after_work,
-            projects::workspace_mark_suggested,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             projects::git_first_commit_preview,
@@ -662,7 +647,6 @@ pub fn run() {
             agents::agent_install::agents_install_many,
             agents::open_install_page,
             agents::inventory::session_tabs,
-            orchestration::task_reset,
             orchestration::worker_labels,
             orchestration::setup_gate::worker_setup_settled,
             prompt_answer::prompt_read,
@@ -808,7 +792,6 @@ pub fn run() {
             install::agent_can_install,
             install::agent_install,
             install::agent_install_cancel,
-            install::agent_install_dismiss,
             grok::grok_status,
             grok::grok_sign_in,
             grok::grok_cancel,
@@ -858,7 +841,6 @@ pub fn run() {
             files::file_write_picture,
             files::file_stamps,
             files::file_pick,
-            floating_trust::floating_trusted,
             floating_trust::floating_pick,
             floating_trust::floating_start,
             files::md_list,
@@ -936,7 +918,6 @@ pub fn run() {
             update::update_last_attempt,
             update::update_compat,
             lifecycle::close_alive,
-            lifecycle::app_restart,
             lifecycle::open_files_take, // APP-019: the page drains the markdown files the system handed over
             tray::tray_close_switch_available, // APP-007: Settings hides the close-to-tray switch where it cannot work
             usage_alerts::usage_alerts_fired,

@@ -27,7 +27,6 @@ use tauri::Manager;
 
 use crate::final_save;
 use crate::state::Store;
-use crate::terminal::Terminals;
 
 // ---------------------------------------------------------------- APP-001: one copy
 
@@ -632,18 +631,6 @@ pub fn save_point(app: &tauri::AppHandle, unsaved_drafts: usize) -> Result<final
         crate::diag::write(&dir, &format!("save point: {} (APP-011)", report.line()));
     }
     restart_allowed(&report, true, unsaved_drafts).map(|()| report)
-}
-
-/// Restart Kolux: the page flushes its pending layout write first and says how many editor drafts
-/// are unsaved; the save point runs; a save point that falls short refuses the restart and nothing
-/// changes. Otherwise the shells end and the app starts again.
-#[tauri::command]
-pub fn app_restart(app: tauri::AppHandle, unsaved: Option<usize>) -> Result<(), String> {
-    save_point(&app, unsaved.unwrap_or(0))?;
-    final_save::begin();
-    app.state::<Terminals>().kill_all();
-    crate::procs::hand_off(true);
-    app.restart();
 }
 
 // ---------------------------------------------------------------- APP-020: the search path

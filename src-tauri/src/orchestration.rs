@@ -1638,17 +1638,6 @@ pub fn breaker_reset(tasks: &[Value], dispatches: &mut [Value], task: &str, run:
     Ok(json!({ "id": task, "runId": run, "status": tasks[i]["status"], "failures": 0, "cleared": cleared }))
 }
 
-/// ORCH-035 (T-279-c): the reset action for the window's task view: closes a held task's breaker.
-#[tauri::command]
-pub fn task_reset(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, task: String, run: Option<String>) -> Result<Value, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let load = |k: &str| kept::load::<Vec<Value>>(&store, k);
-    let (tasks, mut dispatches) = (load(TASKS_KEY)?, load(DISPATCHES_KEY)?);
-    let out = breaker_reset(&tasks, &mut dispatches, &task, run.as_deref(), wall_ms()).map_err(|e| format!("{}: {}", e.code, e.message))?;
-    store.set(DISPATCHES_KEY, &Value::Array(dispatches).to_string()).map_err(|e| e.to_string())?;
-    Ok(out)
-}
-
 /// ORCH-013: may `task` go to the agent in terminal `to`? Gives the task index and the agent.
 /// ORCH-035: a task whose dispatches failed `BREAKER_TRIPS` times is turned away (breaker_open),
 /// and so is a terminal that already holds an unfinished dispatch (busy).

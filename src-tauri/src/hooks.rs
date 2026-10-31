@@ -612,14 +612,6 @@ pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Resu
     Ok(limits_of(&store, crate::claude_accounts::active_dir(&store).as_deref()))
 }
 
-/// T-548-b: the windows one config folder's reports carried, for a pane on another account.
-// Unregistered until lib.rs lists it (evidence/fix-hooks-fix-T-548-b-lib.rs.patch).
-#[tauri::command]
-pub fn claude_usage_of(store: tauri::State<'_, Mutex<crate::state::Store>>, config_dir: Option<String>) -> Result<Vec<Limit>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(limits_of(&store, config_dir.as_deref()))
-}
-
 fn limits_of(store: &crate::state::Store, dir: Option<&str>) -> Vec<Limit> {
     store.get(&limits_key(dir)).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }

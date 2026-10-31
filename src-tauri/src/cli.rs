@@ -3231,7 +3231,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             m.once(retry, |_| o::abandon(&mut tasks, &mut dispatches, &id, run.as_deref(), now_ms()))?
         }
         TASK_RESET => {
-            // ORCH-035 (T-279-d): the same breaker_reset the window's task_reset command runs.
+            // ORCH-035 (T-279-d): breaker_reset closes the held task's breaker (the window's own task_reset command was never called and is gone, cycle 2).
             let id = text("id").ok_or_else(|| Fail::args("--id is required"))?;
             m.once(retry, |_| o::breaker_reset(&tasks, &mut dispatches, &id, run.as_deref(), now_ms()))?
         }

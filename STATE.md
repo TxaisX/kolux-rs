@@ -204,6 +204,17 @@ recorded default until told otherwise; nothing here blocks a pass.
   PowerShell aliases still follow the bash and cmd wildcard rules.
 - 2026-10-31 · [data-loss] T-613b · Review: a commit held only by a tag still keeps its branch (safe, some noise).
 
+- 2026-10-31 · [engineering] App split · Review: src/App.tsx is 221 lines, but shell/WindowView.tsx is one 1,077-line
+  function unpacking about 330 names from one bag, and shell/windowStore.ts is a run of useState calls, not a store.
+  Split WindowView into per-surface components with narrow props or context, behind a reducer or store they subscribe
+  to. src/shell/windowSource.ts:4 lists the window's files by hand for seven source tests; guard it (assert it covers
+  App.tsx's local imports).
+- 2026-10-31 · [engineering] First load · 3.366 MB raw / 1.028 MB gzip against the 1.5 MB bar (evidence/T-ENG-first-load.txt):
+  main.tsx needs the App chunk (2,359 kB) for the first frame. Load CodeMirror, Lexical, highlight.js and the browser
+  and PDF panes on first use.
+- 2026-10-31 · [engineering] Test time · `pnpm test` from a clean shell: 1 min 52 s, 5,131 passed, 3 failed (SET-006-link and
+  the two richCodeColourTime timing tests, failing on main too), so it is not green yet (evidence/T-ENG-test-time.txt).
+
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-13 · [main] T-543-b · done: no default pane, 5 unbuilt controls hidden, real hooks badge, Codex pill needs an account, Reopen closed tab unbound and hidden (T-164-b not wired), first screen Terminals (DT-C40); smoke 5/5 first run; evidence/T-543-b.txt
 - 2026-10-13 · [main] T-543 · done: App.tsx agent status, settings, workspaces, palette/notice/toast, kits and wizard moved into six hooks as they were, hook order unchanged; lib.rs save_settings deleted, setup log lines go to diag, handler list grouped by module (per-module start() left: needs files outside the pass) · evidence/smoke-2e6821b.txt + evidence/smoke-97bb712.txt

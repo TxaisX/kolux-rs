@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { chipOf, forget, hooksMuted, needsAttention, needsYou, paneAgent, paneStatus, promptReturned, ringsBell, type Lane } from "./chip";
 import { IDLE, reduceIdentity, type Identity } from "../terminal/shellMarks";
 import type { Agent } from "../chrome/VendorMark";
-import app from "../App.tsx?raw";
+import { windowSource as app } from "../shell/windowSource";
 import { towerRows } from "../tower/tower";
 import { inboxItems, sourceOf, type Group } from "../inbox/inbox";
 import type { AgentState } from "../projects/rows";

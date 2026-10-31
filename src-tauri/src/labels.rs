@@ -38,11 +38,6 @@ pub fn label_of(path: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// The address a label is reached at.
-pub fn address_of(label: &str) -> String {
-    format!("http://{label}.localhost:{PORT}/")
-}
-
 /// The label in a Host header (`foo.localhost:4580`, `FOO.localhost`); None for anything else.
 pub fn host_label(host: &str) -> Option<String> {
     let host = host.trim().to_ascii_lowercase();
@@ -103,20 +98,6 @@ pub fn start(resolve: Resolve) -> Result<u16, String> {
     Ok(port)
 }
 
-/// One workspace's label address, for the UI.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Label {
-    pub path: String,
-    pub label: String,
-    pub address: String,
-}
-
-/// The label addresses of `paths` when the setting is on; none at all when it is off.
-pub fn list_of(on: bool, paths: &[String]) -> Vec<Label> {
-    if !on { return Vec::new() }
-    paths.iter().map(|p| { let label = label_of(p); Label { path: p.clone(), address: address_of(&label), label } }).filter(|l| !l.label.is_empty()).collect()
-}
-
 /// Every known workspace of every Git project: the main folders and the worktrees Kolux has seen.
 fn workspace_paths(store: &crate::state::Store) -> Vec<String> {
     crate::projects::load_projects(store)
@@ -144,12 +125,6 @@ pub fn resolve_in(app: &tauri::AppHandle, label: &str) -> Option<String> {
     // The Ports back end's own command (VIEW-078), so this module needs nothing private from it.
     let rows = tauri::async_runtime::block_on(crate::ports::ports_list(app.state::<crate::terminal::Terminals>(), vec![path.clone()], path)).ok()?;
     first_target(rows)
-}
-
-#[tauri::command]
-pub fn labels_list(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Result<Vec<Label>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(list_of(enabled(&store.settings()), &workspace_paths(&store)))
 }
 
 /// Accepts connections until the listener is dropped; each one is forwarded on its own thread.
@@ -209,7 +184,6 @@ mod tests {
         assert!(enabled(&serde_json::json!({ SETTING: true })));
         assert_eq!(label_of("G:\\w\\My Repo\\Fix Login_2"), "fix-login-2");
         assert_eq!(label_of("/home/x/a/"), "a");
-        assert_eq!(address_of("a"), "http://a.localhost:4580/");
         assert_eq!(host_label("a.localhost:4580"), Some("a".into()));
         assert_eq!(host_label("Fix-Login.LOCALHOST"), Some("fix-login".into()));
         assert_eq!(host_label("localhost:4580"), None);
@@ -283,8 +257,6 @@ mod tests {
         let proxy = l.local_addr().unwrap().port();
         std::thread::spawn(move || serve(l, resolve));
         assert!(ask(proxy, &format!("a.localhost:{proxy}")).starts_with("HTTP/1.1 404"), "off (the default): no label address serves anything");
-        assert_eq!(list_of(false, &["G:\\w\\a".into()]), vec![], "off: no label addresses exist");
-        assert_eq!(list_of(true, &["G:\\w\\a".into()])[0].address, "http://a.localhost:4580/");
         ON.store(true, Ordering::Relaxed);
 
         let out = ask(proxy, &format!("a.localhost:{proxy}"));
