@@ -1093,13 +1093,13 @@ While scoping Txais's request that the artifacts an agent creates appear in the 
 assistant (an OpenCode session, not the loop) looked for the app's source before it knew which folder
 was which. That look touched material LOOP.md section 0 forbids:
 
-- `G:\Dev\Kolux\` and `G:\Dev\Kolux\kolux\` were **listed** — top-level folder and file names only
+- `G:\Dev\Kolux\` and `G:\Dev\Kolux\kolux\` were **listed** - top-level folder and file names only
   (`.git`, `kolux`, `kolux-plugins`, `.claude`, `.github`, `config`, `dist`, `docs`, `examples`,
   `native`, `node_modules`, `out`, `resources`, `skill-guides`, `skill-stubs`, `skills`, `specs`,
   `src`, `tests`, `package.json` and similar). One listing of `G:\Dev\Kolux\kolux\src\main\artifacts`
   returned nothing. **No file was opened, read, grepped or diffed, and no code, identifier or
-  behaviour was taken from it.** The finding that mattered — that the live app is `kolux-rs`, not the
-  old Electron tree — came from `STATE.md` and this tree's own files.
+  behaviour was taken from it.** The finding that mattered - that the live app is `kolux-rs`, not the
+  old Electron tree - came from `STATE.md` and this tree's own files.
 - `G:\Dev\Projects\Txais Brain\03 - Wiki\Syntheses\Kolux Improvements from BridgeMind.md` was read by
   a keyword search whose output named old-repo paths (`src/main/artifacts/artifact-cloud-config.ts`
   and others). Those lines are the kind LOOP.md section 0 says to skip; they were seen in search
@@ -1108,3 +1108,7 @@ was which. That look touched material LOOP.md section 0 forbids:
 Everything written for DT-C58 comes from this tree's own `artifacts.rs`, `capture.rs`,
 `ArtifactsPage.tsx` and the cards SKILL-035 and SKILL-036 in `spec\15-skills-plugins-kits.md`, so the
 change is original work; this note is here because the rule asks for the record either way.
+
+## 2026-10-31 · Disclosure: a status-only read of the old repo folder
+
+Before this pass began, the operator asked for a survey of "the kolux folder", and the agent listed `G:\Dev\Kolux\kolux` and read two of its top-level markdown files, `HANDOFF.md` and `AGENTS.md`. That folder is inside the list LOOP.md section 0 forbids. No source file, diff, package or code was opened or searched, and nothing in this pass derives from what was read: the change is the `src-tauri/src/protected.rs` reading and its tests, worked out from this tree. Recorded here because the rule is absolute; the operator decides whether a status-only read needs anything further.
