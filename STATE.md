@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 718 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 719 / 775 tasks  ·  P0 cards passing: 208 / 228 cards  ·  cutline 0 / 18 left  ·  merge gate 0 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -49,9 +49,9 @@ recorded default until told otherwise; nothing here blocks a pass.
   shows Needs you on the Board, Tower, Inbox, needs strip, bell and sidebar; Review changes from a Done card and an
   Inbox row; Show Floor, Space, Workspace Statuses, Artifacts and Skills from the palette; Rename worktree from the
   palette with the sidebar closed; Open a session with no workspace asks for a folder; Escape closes the Tip.
-- [integrator] 2026-10-30 · Open: reclaim the old Kolux (about 408 GB), as in docs/reclaim-old-kolux.md. (1) Archive
-  TxaisX/kolux and TxaisX/kolux-releases on GitHub (Settings > Danger Zone > Archive this repository). (2) Sign test
-  account A in at its new folder G:\Temp\live-signin\account-a. (3) Uninstall the old app, then run
+- [integrator] 2026-10-30 · Open: reclaim the old Kolux (about 408 GB), as in docs/reclaim-old-kolux.md (the old GitHub
+  repos are already removed, Txais 2026-10-31). (1) Sign test account A in at its new folder
+  G:\Temp\live-signin\account-a. (2) Uninstall the old app, then run
   scripts/reclaim-old-kolux.ps1 (look first, move anything that is not an old-repo copy out of the backups folder, then
   -Delete and type DELETE). Leave ~/.kolux/agent-hooks alone for now.
 - [reliability] 2026-10-30 · Open: live Windows checks on the installed build. T-565 (round 1 review fixed): Escape
@@ -76,21 +76,13 @@ recorded default until told otherwise; nothing here blocks a pass.
   ending on the next save. Nothing changes until you pick (T-603).
 - [updates] 2026-10-30 · The feed is now the public TxaisX/kolux-rs itself (DT-R40); the signing key is at
   ~/.kolux-rs/release-signing/kolux-rs.key (no password) and releases ship from the owner's PC
-  (`node scripts/release.mjs`). Only for release.yml on GitHub's runners: lift the GitHub Actions billing block
-  (Settings > Billing and plans) and add the secrets KOLUX_RELEASE_KEY (the key file's text) and
-  KOLUX_RELEASE_PUBKEY (its .pub); KOLUX_RELEASES_TOKEN is no longer needed (T-622).
-- [release-ci] 2026-10-30 · Question (optional, X-proc.13): should CI fail on every new high-severity library advisory
-  (`pnpm audit --audit-level high` added to the ci.yml checks)? It is a one-line change, but it can turn builds red without
-  any code change. Not added; nothing changes until you say yes.
-- [release-ci] 2026-10-30 · Optional repository setting: protect the release job with a GitHub environment that needs a
-  reviewer's approval before it signs and publishes (GitHub repository Settings > Environments). Only you can set it.
-- [release-ci] 2026-10-30 · Open: live proofs. APP-025 box 2 (a downloaded update installs and Kolux comes back), APP-059
-  box 1 and APP-060 box 1 (a real release run) need the CI billing block lifted (X-proc.2) and the signing secrets; APP-043
-  (Restart Kolux and both safe-graphics restarts come back) needs one check on the installed Windows build (T-592).
-- [release-ci] 2026-10-30 · Follow-ups from the PR #9 review, not built: (1) sign in a separate job from a
-  downloaded artifact; today the sign step runs in the build job, next to node_modules the build step's install scripts
-  wrote. (2) scripts/license-check.mjs: anchor the MIT and BSD-2 patterns on the full licence text. (3)
-  richCodeColourTime.test.ts: its 500 ms limit needs more headroom on CI runners.
+  (`node scripts/release.mjs`). GitHub CI is not used (DT-C54), so no billing change, releases repo or
+  release secrets are needed (T-622).
+- [release-ci] 2026-10-30 · Open: live proofs. APP-025 box 2 (a downloaded update installs on a plain quit) and APP-043 (T-592)
+  are on docs/live-proofs-windows.md. APP-059 box 1 and APP-060 box 1 (a release run on GitHub's runners) are not
+  applicable (DT-C54).
+- [release-ci] 2026-10-30 · Follow-ups from the PR #9 review, not built: scripts/license-check.mjs: anchor the MIT
+  and BSD-2 patterns on the full licence text. (The CI-only items were dropped with DT-C54.)
 - [status-hooks] 2026-10-30 · Question (T-585): a helper agent whose stop is lost without an Esc, or a background helper
   that stays silent from an Esc until the next prompt, can still keep a pane "working". Clearing those needs a signal Kolux
   does not have yet (for example Claude's Stop event listing which helpers are still alive, which is not confirmed). Should
@@ -174,7 +166,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-30 · [status-hooks] T-583 · The order of a pane's status events is kept by one app-wide lock held only around the status step, the emit and the after-queue; a protected-command reply is worked out per connection, outside that lock, so one slow hook never holds up another pane.
 - 2026-10-30 · [release-ci] T-588 · CI release signing acts only on the build this run's `--build-only` recorded, never on the newest output folder; a run on an already-released main ends with "nothing was built, nothing to sign".
 - 2026-10-30 · [cli] T-596 · `--wait-submit` is capped at 300 s, the same cap as `kolux wait --timeout`; both the command line and the app refuse values outside 1 to 300.
-- 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters is left untouched, and the installer log says to use Settings > CLI > Register (NSIS string limit). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
+- 2026-10-30 · [cli] T-594 · The installer adds <install>\bin to the user PATH on every install or update when it is missing. A user PATH longer than 1023 characters (Txais's is 1,815; the first live check failed, 2026-10-31) is left to the app: the installer writes kolux-path-pending.txt and Kolux adds the bin folder once at its next start (%VARIABLES% kept, REG_EXPAND_SZ); uninstall runs the app's own --uninstall-path, after the app-running check, to remove exactly our entry at any length (cycle 2, DT-C55). Open question for Txais, not blocking: should removing kolux in Settings > CLI stick across updates? Today the next update adds it back.
 - 2026-10-30 · [editor] T-601 · A click on a collapsible section's heading (<summary>) keeps its normal action, so the section still opens. Mermaid's protected settings also cover fontFamily, altFontFamily and htmlLabels, so a diagram cannot change them. A note's inline style attributes are dropped.
 - 2026-10-30 · [editor] T-602 · A note whose table has a row holding more cells than its header opens in source view, with the banner saying why.
 - 2026-10-30 · [editor] T-603 · A reload switches a tab's line ending only when the new text uses one line ending throughout; text that mixes them keeps the tab's own. A second tab of an open file takes the first tab's line ending.
