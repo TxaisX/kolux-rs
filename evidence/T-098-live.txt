@@ -2,7 +2,7 @@ T-098 live test, 2026-10-12, lane app on port 1422 (pid 43856), throwaway repos 
 Projects alpha (main checkout plus worktrees fix-login, api-fix and a hidden old-thing) and beta.
 A stand-in claude.cmd (prints one line and exits) stood in for Claude; CLAUDE_CONFIG_DIR pointed at a temp folder.
 Keys were sent through the webview debugger as real key presses. Each step prints the sidebar rows in order (* = selected).
-Side effect: a Claude tab opened while no workspace was shown made a worktree under C:/Users/XiongT/kolux-rs/workspaces/beta; it was removed with git worktree remove and the empty beta folder deleted.
+Side effect: a Claude tab opened while no workspace was shown made a worktree under %USERPROFILE%/kolux-rs/workspaces/beta; it was removed with git worktree remove and the empty beta folder deleted.
 
 == start
 "beta | alpha | alpha-ws\\api-fix | alpha-ws\\fix-login || active=TEXTAREA"
@@ -33,11 +33,11 @@ Side effect: a Claude tab opened while no workspace was shown made a worktree un
 == Ctrl+Shift+0: the list takes focus
 "beta | alpha | alpha-ws\\fix-login | alpha-ws\\api-fix * || active=Show G:\\Temp\\release-T-098\\alpha-ws\\api-fix"
 == grouped by status, sorted by name; a stand-in Claude ran and finished in one workspace (Done group)
-"how C:\\Users\\XiongT\\kolux-rs\\workspaces\\beta\\nimble-starfish * | beta | alpha | alpha-ws\\api-fix | alpha-ws\\fix-login || active=TEXTAREA"
+"how %USERPROFILE%\\kolux-rs\\workspaces\\beta\\nimble-starfish * | beta | alpha | alpha-ws\\api-fix | alpha-ws\\fix-login || active=TEXTAREA"
 == Ctrl+5
-"how C:\\Users\\XiongT\\kolux-rs\\workspaces\\beta\\nimble-starfish | beta | alpha | alpha-ws\\api-fix | alpha-ws\\fix-login * || active=TEXTAREA"
+"how %USERPROFILE%\\kolux-rs\\workspaces\\beta\\nimble-starfish | beta | alpha | alpha-ws\\api-fix | alpha-ws\\fix-login * || active=TEXTAREA"
 == Ctrl+Shift+Down on the last row: wraps into the Done group
-"how C:\\Users\\XiongT\\kolux-rs\\workspaces\\beta\\nimble-starfish * | beta | alpha | alpha-ws\\api-fix | alpha-ws\\fix-login || active=BODY"
+"how %USERPROFILE%\\kolux-rs\\workspaces\\beta\\nimble-starfish * | beta | alpha | alpha-ws\\api-fix | alpha-ws\\fix-login || active=BODY"
 == fold the Done group
 "Done1 expanded=false ; Idle4 expanded=true"
 == Ctrl+4 (fourth visible row)

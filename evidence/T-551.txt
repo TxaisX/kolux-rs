@@ -1,7 +1,7 @@
 # T-551 evidence: installed codex --help (DT-C46)
 
 Command: `codex --help` (CODEX_HOME=G:\Temp\orch-t551\codex-home, the only codex invocation run)
-Version: `codex --version` -> codex-cli 0.156.1 (at C:/Users/XiongT/AppData/Roaming/npm/codex)
+Version: `codex --version` -> codex-cli 0.156.1 (at %USERPROFILE%/AppData/Roaming/npm/codex)
 Date: 2026-10-13
 
 Confirmed in THIS installed codex:

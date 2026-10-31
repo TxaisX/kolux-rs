@@ -1,17 +1,1 @@
-��node.exe : $ node scripts/evidence/smoke.mjs "--port" "1426" "--cdp" "9246" "--identifier" 
-"com.txaisxiong.kolux-rs.look.smoke" "--temp" "G:/Temp/smoke-look"
-At C:\Users\XiongT\.local\bin\pnpm.ps1:24 char:5
-+     & "node$exe"  "$basedir/../../../../Program Files/nodejs/node_mod ...
-+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: ($ node scripts/...emp/smoke-look":String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
-launching: pnpm tauri dev (identifier com.txaisxiong.kolux-rs.look.smoke, vite 1426, CDP 9246; log G:\Temp\smoke-look\tauri-dev.log)
-app pid 29192; window: moved
-setup: G:\Temp\smoke-look\repo added as a project; 1 shell pane shown
-no process from the temp folder survived the close
-PASS 1: grid 4 -> 6 (3 shells + 1 empty -> 3 shells + 3 empty); all 3 shells echoed the marker set before the change (same PTY processes)
-PASS 2: Mod+S wrote notes.txt: disk now holds "typed by smoke 1791910750296" plus the original line (42 bytes)
-PASS 3: Discard asked first ("Discard changes to notes.txt?", buttons Cancel / Discard); after "Cancel" notes.txt and git status are unchanged
-PASS 4: Claude pane's dot reads "status: Working" after the stand-in posted SessionStart + UserPromptSubmit; hooks installed into the scratch G:\Temp\smoke-look\claude-config\settings.json
-smoke: 4/4 flows passed
-smoke exit 0
+潮敤攮數㨠␠渠摯⁥捳楲瑰⽳癥摩湥散猯潭敫洮獪∠ⴭ潰瑲•ㄢ㈴∶∠ⴭ摣≰∠㈹㘴•ⴢ椭敤瑮晩敩≲ഠ∊潣⹭硴楡硳潩杮欮汯硵爭⹳潬歯献潭敫•ⴢ琭浥≰∠㩇启浥⽰浳歯ⵥ潬歯ഢ䄊⁴㩃啜敳獲塜潩杮屔氮捯污扜湩灜灮⹭獰㨱㐲挠慨㩲വ⬊††☠∠潮敤攤數•∠戤獡摥物ⸯ⼮⸮ⸯ⼮⸮倯潲牧浡䘠汩獥港摯橥⽳潮敤浟摯⸠⸮਍‫††繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾繾ൾ †⬠䌠瑡来牯䥹普⁯††††㨠丠瑯灓捥晩敩㩤⠠․潮敤猠牣灩獴ⸯ⸮浥⽰浳歯ⵥ潬歯㨢瑓楲杮 嵛‬敒潭整硅散瑰潩൮ †⬠䘠汵祬畑污晩敩䕤牲牯摉㨠丠瑡癩䍥浯慭摮牅潲൲氊畡据楨杮›湰浰琠畡楲搠癥⠠摩湥楴楦牥挠浯琮慸獩楸湯⹧潫畬⵸獲氮潯⹫浳歯ⱥ瘠瑩⁥㐱㘲‬䑃⁐㈹㘴※潬⁧㩇呜浥屰浳歯ⵥ潬歯瑜畡楲搭癥氮杯ഩ愊灰瀠摩㈠ㄹ㈹※楷摮睯›潭敶൤猊瑥灵›㩇呜浥屰浳歯ⵥ潬歯牜灥⁯摡敤⁤獡愠瀠潲敪瑣※‱桳汥⁬慰敮猠潨湷਍潮瀠潲散獳映潲⁭桴⁥整灭映汯敤⁲畳癲癩摥琠敨挠潬敳਍䅐卓ㄠ›牧摩㐠ⴠ‾‶㌨猠敨汬⁳‫‱浥瑰⁹㸭㌠猠敨汬⁳‫″浥瑰⥹※污⁬″桳汥獬攠档敯⁤桴⁥慭歲牥猠瑥戠晥牯⁥桴⁥档湡敧⠠慳敭倠奔瀠潲散獳獥ഩ倊十⁓㨲䴠摯匫眠潲整渠瑯獥琮瑸›楤歳渠睯栠汯獤∠祴数⁤祢猠潭敫ㄠ㤷㤱〱㔷㈰㘹•汰獵琠敨漠楲楧慮⁬楬敮⠠㈴戠瑹獥ഩ倊十⁓㨳䐠獩慣摲愠歳摥映物瑳⠠䐢獩慣摲挠慨杮獥琠⁯潮整⹳硴㽴Ⱒ戠瑵潴獮䌠湡散⁬ 楄捳牡⥤※晡整⁲䌢湡散≬渠瑯獥琮瑸愠摮朠瑩猠慴畴⁳牡⁥湵档湡敧൤倊十⁓㨴䌠慬摵⁥慰敮猧搠瑯爠慥獤∠瑳瑡獵›潗歲湩≧愠瑦牥琠敨猠慴摮椭⁮潰瑳摥匠獥楳湯瑓牡⁴‫獕牥牐浯瑰畓浢瑩※潨歯⁳湩瑳污敬⁤湩潴琠敨猠牣瑡档䜠尺敔灭獜潭敫氭潯屫汣畡敤挭湯楦屧敳瑴湩獧樮潳൮猊潭敫›⼴‴汦睯⁳慰獳摥਍浳歯⁥硥瑩〠਍

@@ -1,7 +1,7 @@
 T-097 live proof, 2026-10-09, lane/release debug build (kolux-dev.exe and kolux-rs.exe side by side in
 src-tauri\target\debug; the app built by tauri dev with the lane's identifier, so its data folder is
 %APPDATA%\com.txaisxiong.kolux-rs.release). Every kolux-dev call ran with
-KOLUX_USER_DATA_PATH=C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.release (COMPAT 7) so it
+KOLUX_USER_DATA_PATH=%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.release (COMPAT 7) so it
 reached this lane's app and no other.
 
 App minimised -> brought to the front (evidence T-097-minimised-comes-to-front.png)

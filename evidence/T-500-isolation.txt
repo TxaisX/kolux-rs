@@ -31,12 +31,12 @@ done => 2026-10-13T14:34:19.384Z
 
 == 3. The app's own dev origin typed in the address bar (http://localhost:1420/kolux-probe) ==
 The tab loaded a second copy of the app UI. From that tab's page, over CDP:
-app_info => ALLOWED: {"version":"0.1.0","profileDir":"C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.browser","startCount":2}
+app_info => ALLOWED: {"version":"0.1.0","profileDir":"%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.browser","startCount":2}
 get_settings => ALLOWED: {"appearanceMode":"dark","uiLook":"new"}
 
 == 4. The artifact scheme host typed in the address bar (http://kolux-artifact.localhost/x/index.html) ==
 The artifacts protocol answered the browser tab ("not in this artifact"); typeof window.__TAURI_INTERNALS__ => object.
-app_info => ALLOWED: {"version":"0.1.0","profileDir":"C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.browser","startCount":2}
+app_info => ALLOWED: {"version":"0.1.0","profileDir":"%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.browser","startCount":2}
 get_settings => ALLOWED: {"appearanceMode":"dark","uiLook":"new"}
 
 == Reading ==

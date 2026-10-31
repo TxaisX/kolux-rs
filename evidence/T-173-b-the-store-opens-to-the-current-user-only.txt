@@ -1,9 +1,9 @@
 T-173-b live proof, 2026-10-13: the lane's dev app folder after its last launch (the orchestration store is the orchestration.* rows of state.db there; -wal and -shm are SQLite's companion files). Every entry below is the current user alone; (I) means inherited from the folder, which the app limits to the user at each launch.
 
-C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration TxaisX\XiongT:(OI)(CI)(F)
-C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration\state.db TxaisX\XiongT:(I)(F)
-C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration\state.db-wal TxaisX\XiongT:(I)(F)
-C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration\state.db-shm TxaisX\XiongT:(I)(F)
+%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration <user>:(OI)(CI)(F)
+%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration\state.db <user>:(I)(F)
+%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration\state.db-wal <user>:(I)(F)
+%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.orchestration\state.db-shm <user>:(I)(F)
 
 orchestration rows in state.db: ['orchestration.dispatches', 'orchestration.mail', 'orchestration.tasks']
 

@@ -19,7 +19,7 @@ const CLIENTS = [/\bfetch\(\s*["'`]https?:/, /XMLHttpRequest/, /sendBeacon/, /ne
 const ALLOWED = {
   "src-tauri/src/artifacts.rs": [/\breqwest::/], // the script CDNs, when saving an artifact for offline use
   "src-tauri/src/browser.rs": [/\breqwest::/], // the open page's own site icon (APP-070: sites the user opens in the browser pane)
-  "src-tauri/src/update.rs": [/tauri_plugin_updater/, /reqwest::/], // GitHub Releases (APP-031 checks the installer the manifest names is there)
+  "src-tauri/src/update.rs": [/tauri_plugin_updater/, /\breqwest::/], // GitHub Releases (APP-031 checks the installer the manifest names is there)
   "src-tauri/src/lib.rs": [/tauri_plugin_updater/],
   "src-tauri/src/cli.rs": [/TcpStream::connect/], // kolux-dev talking to the app on 127.0.0.1
 };

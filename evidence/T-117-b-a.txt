@@ -7,10 +7,10 @@ Before (T-117-b-a-before.png): sidebar demo > main > auth, login.
 
 From the repo folder:
   kolux-dev worktree set --worktree name:login --display-name "Login page" --issue 12 --comment "second try" --parent-worktree name:auth
-  updated Login page  [txais-xiong/login]  C:\Users\XiongT\kolux-rs\workspaces-worktrees\demo\login
+  updated Login page  [txais-xiong/login]  %USERPROFILE%\kolux-rs\workspaces-worktrees\demo\login
   linked #12
   comment second try
-  parent C:\Users\XiongT\kolux-rs\workspaces-worktrees\demo\auth
+  parent %USERPROFILE%\kolux-rs\workspaces-worktrees\demo\auth
   exit=0
 After (T-117-b-a-set.png): with no reload, the sidebar shows auth with a chevron and "Login page" nested under it.
 Palette (T-117-b-a-linked.png): Ctrl+J query "12" -> WORKTREES: Login page | txais-xiong/login · #12 · second try · demo

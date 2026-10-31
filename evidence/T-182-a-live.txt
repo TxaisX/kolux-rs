@@ -15,7 +15,7 @@ APP-020: a new terminal's search path (kolux-dev terminal create, cmd set PATH):
 terminal PATH entries: 59; registry machine+user entries: 38; registry entries missing from the terminal: 0
 first three terminal entries:
   G:\Dev\kolux-rs-lanes\release\src-tauri\target\debug
-  C:\Users\XiongT\.volta\bin
+  %USERPROFILE%\.volta\bin
   G:\Dev\kolux-rs-lanes\release\src-tauri\target\debug\build\kolux-rs-384e89e8df7a019c\out
 app start folder kept (stub at entry 12): 12:G:\Temp\release-T-182a\stub
 Volta (Node version manager) bin at entry 2, system Node at entry 36

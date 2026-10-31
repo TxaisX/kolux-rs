@@ -3,13 +3,13 @@ term-1 = the app's PowerShell pane, term-2 = a Claude Code pane made by `worktre
 `$K` = src-tauri/target/debug/kolux-dev.exe with KOLUX_USER_DATA_PATH pointing at the lane's data folder.
 
 $ $K terminal read --terminal term-1 --limit 5
-PS C:\Users\XiongT>
+PS %USERPROFILE%>
 -- cursor 0
 exit 0
 
 $ $K terminal read --terminal term-1 --screen --json      (47 rows; row 0 shown, the rest "")
     "rows": [
-      "PS C:\\Users\\XiongT> ",
+      "PS %USERPROFILE%> ",
       "",
 exit 0
 
@@ -18,23 +18,23 @@ sent text+enter to term-1
 exit 0
 
 $ $K terminal read --terminal term-1                      (the stream: the line editor's redraw left "e> " in line 1)
-PS C:\Users\XiongT> e> echo hello-from-cli; Write-Host "A`e[5CB"; 1..3 | % { "line $_" }
+PS %USERPROFILE%> e> echo hello-from-cli; Write-Host "A`e[5CB"; 1..3 | % { "line $_" }
 hello-from-cli
 Ae[5CB
 line 1
 line 2
 line 3
-PS C:\Users\XiongT>
+PS %USERPROFILE%>
 -- cursor 6
 
 $ $K terminal read --terminal term-1 --screen | grep -v '^$'
-PS C:\Users\XiongT> echo hello-from-cli; Write-Host "A`e[5CB"; 1..3 | % { "line $_" }
+PS %USERPROFILE%> echo hello-from-cli; Write-Host "A`e[5CB"; 1..3 | % { "line $_" }
 hello-from-cli
 Ae[5CB
 line 1
 line 2
 line 3
-PS C:\Users\XiongT>
+PS %USERPROFILE%>
 
 $ $K terminal read --terminal term-1 --cursor 2 --limit 2
 warning: more lines follow; read on with --cursor 4

@@ -6,7 +6,7 @@ were put back as they were; no log line was added).
 == 1. app closed, cli.json left behind by the coordinator's earlier kill
 {"port":63082,"token":"685fd3ef42d2328bb1045a050c6e24b3","pid":18748}
 17:21:19.219
-stale: Kolux's startup file C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.release\cli.json was left behind but nothing answers (No connection could be made because the target machine actively refused it. (os error 10061)); `kolux-dev open` starts it again
+stale: Kolux's startup file %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.release\cli.json was left behind but nothing answers (No connection could be made because the target machine actively refused it. (os error 10061)); `kolux-dev open` starts it again
 exit 0
 {
   "requestId": "77ec-18ddeee2072a4df0",
@@ -14,7 +14,7 @@ exit 0
   "result": {
     "state": "stale",
     "detail": "No connection could be made because the target machine actively refused it. (os error 10061)",
-    "file": "C:\\Users\\XiongT\\AppData\\Roaming\\com.txaisxiong.kolux-rs.release\\cli.json",
+    "file": "%USERPROFILE%\\AppData\\Roaming\\com.txaisxiong.kolux-rs.release\\cli.json",
     "pid": 18748
   },
   "meta": {
@@ -49,7 +49,7 @@ exit 0
 SUCCESS: The process with PID 42848 has been terminated.
 agent-hooks-endpoint.txt
 cli.json
-stale: Kolux's startup file C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.release\cli.json was left behind but nothing answers (No connection could be made because the target machine actively refused it. (os error 10061)); `kolux-dev open` starts it again
+stale: Kolux's startup file %USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.release\cli.json was left behind but nothing answers (No connection could be made because the target machine actively refused it. (os error 10061)); `kolux-dev open` starts it again
 exit 0
 {
   "requestId": "ab4c-18ddeeee17c9ad84",
@@ -57,7 +57,7 @@ exit 0
   "result": {
     "state": "stale",
     "detail": "No connection could be made because the target machine actively refused it. (os error 10061)",
-    "file": "C:\\Users\\XiongT\\AppData\\Roaming\\com.txaisxiong.kolux-rs.release\\cli.json",
+    "file": "%USERPROFILE%\\AppData\\Roaming\\com.txaisxiong.kolux-rs.release\\cli.json",
     "pid": 42848
   },
   "meta": {

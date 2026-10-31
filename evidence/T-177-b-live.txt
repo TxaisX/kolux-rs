@@ -4,7 +4,7 @@ dev build on port 1422, CDP 9232, window on the second screen. Lane profile back
 
 Setup: throwaway project G:/Temp/release-T-177/repo (committed a.ts "export const a = 1;", b.md "# Title / Some text.",
 notes.txt "line one / line two") added with project_add; a second workspace t177del made through the app (workspace_create),
-at C:/Users/XiongT/kolux-rs/workspaces/repo/t177del.
+at %USERPROFILE%/kolux-rs/workspaces/repo/t177del.
 
 1. Drafts typed and never saved: repo/a.ts "/* draft A */ ", repo/b.md switched to Source and "DRAFT-B " typed (caret 8),
    t177del/notes.txt "WT-DRAFT ". editor_sessions_get then showed two sessions (repo: a.ts front + b.md; t177del: notes.txt),

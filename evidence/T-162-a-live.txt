@@ -3,7 +3,7 @@ app (port 1422), window moved to the second screen by pid; lane profile backed u
 state.db, -wal, -shm all same). Test repo G:/Temp/release-T-162a/kb: main at 6d66593 (two), feat/x at 9e4f21b (one).
 
 1. Delete such a workspace: the branch stays and the note offers to delete it
-   - workspace_open_branch feat/x -> C:/Users/XiongT/kolux-rs/workspaces/kb/feat-x
+   - workspace_open_branch feat/x -> %USERPROFILE%/kolux-rs/workspaces/kb/feat-x
    - selected it (a shell opened there), Ctrl+Shift+Backspace, Remove -> "Terminal 2 is still running ..." -> Force delete
    - note: "removed the workspace and its folder; branch feat/x stays"  [Delete branch]   (T-162-a-kept.png)
    - git branch -v: feat/x 9e4f21b one; git worktree list: main only

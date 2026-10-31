@@ -42,23 +42,23 @@ exit code: 0
 sent text+enter to term-1
 exit code: 0
 [01:27:15.679] $ kolux.exe terminal read --terminal term-1      (the kept stream, cursor-numbered)
-PS C:\Users\XiongT> echo t079b-marker-one; echo t079b-maecho t079b-marker-one; echo t079b-marker-two
+PS %USERPROFILE%> echo t079b-marker-one; echo t079b-maecho t079b-marker-one; echo t079b-marker-two
 t079b-marker-one
 t079b-marker-two
-PS C:\Users\XiongT> 
+PS %USERPROFILE%> 
 -- cursor 3
 exit code: 0
 [01:27:15.812] $ kolux.exe terminal read --terminal term-1 --screen | grep -v '^\s*$'      (only the visible screen, blank rows dropped here)
-PS C:\Users\XiongT> echo t079b-marker-one; echo t079b-marker-two
+PS %USERPROFILE%> echo t079b-marker-one; echo t079b-marker-two
 t079b-marker-one
 t079b-marker-two
-PS C:\Users\XiongT>
+PS %USERPROFILE%>
 exit code: 0
 [01:27:16.041] $ kolux.exe terminal read --terminal term-1 --limit 2      (line cap: the last 2 kept lines)
 warning: older lines were left out by --limit; page through them with --cursor
 t079b-marker-one
 t079b-marker-two
-PS C:\Users\XiongT> 
+PS %USERPROFILE%> 
 -- cursor 3
 exit code: 0
 [01:27:16.179] $ kolux.exe terminal read --terminal term-1 --cursor 1 --limit 1      (paging from a cursor)
@@ -81,7 +81,7 @@ warning: older lines were left out by --limit; page through them with --cursor
         "text": "t079b-marker-two"
       }
     ],
-    "pending": "PS C:\\Users\\XiongT> ",
+    "pending": "PS %USERPROFILE%> ",
     "cursor": 3,
     "oldest": 1,
     "dropped": false,
@@ -121,7 +121,7 @@ exit code: 0
 Approximate round trip times in milli-seconds:
     Minimum = 0ms, Maximum = 0ms, Average = 0ms
 Control-C
-PS C:\Users\XiongT>
+PS %USERPROFILE%>
 exit code: 0
 [01:27:29.191] $ kolux.exe terminal wait --terminal term-1 --for tui-idle --timeout-ms 10000      (quiet 3 s without hooks = idle)
 warning: no status hooks report for term-1; idle means 3 s without output

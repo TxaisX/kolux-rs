@@ -1,10 +1,10 @@
 T-161-b live proof (PROJ-072 Recover from a failed delete), lane release dev app (port 1422), window moved to the
 second screen by pid; lane profile backed up and restored (cmp: settings.json, state.db, -wal, -shm all same).
 Test repo G:/Temp/release-T-161b/del (one commit); project added with project_add, workspaces term-ws, hand-ws
-(and a stray term-ws-2) made with workspace_create under C:/Users/XiongT/kolux-rs/workspaces/del/.
+(and a stray term-ws-2) made with workspace_create under %USERPROFILE%/kolux-rs/workspaces/del/.
 
 1. A terminal still running in the folder
-   - Selected term-ws: a PowerShell opened in C:/Users/XiongT/kolux-rs/workspaces/del/term-ws (status bar: 2 terminals).
+   - Selected term-ws: a PowerShell opened in %USERPROFILE%/kolux-rs/workspaces/del/term-ws (status bar: 2 terminals).
    - Ctrl+Shift+Backspace: "Remove term-ws and its folder? ... Nothing uncommitted is there."  [Remove] [Keep]
    - Remove: the folder stays and the question reads
      "Terminal 2 is still running in this folder. Force delete ends it and deletes the workspace."  [Force delete] [Keep]
