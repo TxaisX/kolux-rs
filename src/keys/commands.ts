@@ -54,15 +54,24 @@ export function renameTarget<W extends { path: string }>(activeDir: string | nul
 }
 
 /** Review of PR #16 (APP-009): Force Reload throws away what the page holds, so with unsaved editor text it asks
- *  first (`ask`, the native confirm) and reloads only on yes; with none it reloads at once. True when it reloaded. */
-export function forceReload(unsaved: readonly string[], ask: (question: string) => boolean, reload: () => void): boolean {
-  if (unsaved.length > 0 && !ask(reloadQuestion(unsaved))) return false;
+ *  first and reloads only on yes; with none it reloads at once. `ask` opens the app's own question (chrome/Ask, as
+ *  the close question does, reloadAsk below) and its Reload button reloads. True when it reloaded now. */
+export function forceReload(unsaved: readonly string[], ask: (files: string[]) => void, reload: () => void): boolean {
+  if (unsaved.length > 0) {
+    ask([...unsaved]);
+    return false;
+  }
   reload();
   return true;
 }
 
-/** The question Force Reload asks over unsaved text, naming up to three files. */
+/** The sentence Force Reload's question says over unsaved text, naming up to three files. */
 export function reloadQuestion(unsaved: readonly string[]): string {
   const names = unsaved.length > 3 ? `${unsaved.slice(0, 3).join(", ")} and ${unsaved.length - 3} more` : unsaved.join(", ");
   return `Reload Kolux? Unsaved changes in ${names} will be lost.`;
+}
+
+/** Review of PR #16 (a): Force Reload's question in the app's own dialog (chrome/Ask), worded like the close question. */
+export function reloadAsk(unsaved: readonly string[]): { title: string; body: string; confirm: string } {
+  return { title: "Reload with unsaved changes?", body: reloadQuestion(unsaved), confirm: "Reload without saving" };
 }

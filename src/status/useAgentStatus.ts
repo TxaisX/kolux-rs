@@ -149,9 +149,12 @@ type EventsDeps = Pick<Status, "setCrew" | "setTurn" | "setStale" | "hookRef" | 
   inView: (key: number) => boolean;
   setToast: (text: string) => void;
   tabName: (p: Pane, titles: Record<number, string>) => string;
+  /** Review of PR #16 (d): plain terminal panes whose hand-started agent has gone (board/chip.ts hooksMuted): their
+   *  late hook events are dropped, until a new agent starts there (its shell marks, or its own fresh SessionStart). */
+  muted?: { current: Record<number, boolean> };
 };
 
-export function useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir }: EventsDeps) {
+export function useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir, muted }: EventsDeps) {
   // STAT-041: the note names the repository when more than one has agents running.
   const repoOf = (p: Pane): string | null => {
     const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
@@ -194,6 +197,16 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   quietRef.current = quiet;
   const panesRef = useRef(panes);
   panesRef.current = panes;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+  /** Whether a hook event for `paneKey` is dropped; a fresh start lifts the pane's mute. */
+  const droppedLate = (paneKey: number, fresh: boolean | undefined): boolean => {
+    const m = mutedRef.current;
+    if (!m?.current[paneKey]) return false;
+    if (!fresh) return true;
+    m.current = { ...m.current, [paneKey]: false };
+    return false;
+  };
   // USAGE-001: the stamp of each reading a clear forgot.
   const floorRef = useRef<Record<number, Floor>>({});
   // USAGE-001: what each pane's gauge shows, kept beside the state so the listeners decide outside
@@ -220,6 +233,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string; fresh?: boolean } & Turn>("agent-status", (e) => {
       const { paneKey, state, children, tool, detail, ask, reply, wrote, boundary, stop, plan, planCut, session, monitoring, fresh } = e.payload;
       // STAT-031 / T-275: a closed tab's late event, or a retired pane's, changes nothing.
+      // Review of PR #16 (d): a late Stop or done from an agent that already gave the prompt back changes nothing.
+      if (droppedLate(paneKey, fresh)) return;
       if (!admit(ledger, paneKey, new Set(panesRef.current.map((x) => x.key)), { state, fresh })) return;
       // SESS-030: the newest session id is what a restart resumes (a /clear or a resume brings a new one).
       // ACCT-063: the pane owns the session it reports; another pane holding the same id lets go of it.

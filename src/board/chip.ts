@@ -94,13 +94,27 @@ export function paneStatus(agent: string, hook: AgentState | undefined, guess: A
 }
 
 /** T-608: what needs you, the same on every surface: a permission or a question (STAT-050, VIEW-023, TERM-029).
- *  A stop (blocked, interrupted) reads Stopped on the Board and the Tower; the bell and the Inbox still count
- *  it, as on main (needsAttention below, inbox.ts NEEDS). */
+ *  A stop (blocked, interrupted) reads Stopped on the Board and the Tower. DT-C52 (Txais, 2026-10-31): Ctrl+J
+ *  (TERM-030) and the tab badges (TERM-055) count only this too, not the pane header's own attention flag. */
 export const needsYou = (state: AgentState | undefined): boolean => state === "permission" || state === "waiting";
 
-/** Review of PR #16: what the bell counts, as on main (the pane header's attention tone): a prompt, and also a
- *  stop (blocked: a limit or a sign-in; interrupted). Whether a stop should keep counting is a question for Txais. */
+/** What the bell counts (the pane header's attention tone): a prompt, and also a stop (blocked: a limit or a
+ *  sign-in; interrupted). DT-C52 (Txais, 2026-10-31): a blocked pane still counts as needing you on the bell and in
+ *  the Inbox. */
 export const needsAttention = (state: AgentState | undefined): boolean => needsYou(state) || state === "blocked" || state === "interrupted";
+
+/** Review of PR #16 (c): whether a pane rings the bell, as on main before PR #16: its one status needs attention,
+ *  or its header's own attention flag is up (TerminalPane onNeedsYou), which also covers a program that failed to
+ *  start (status.ts headerOf "failed"). */
+export const ringsBell = (state: AgentState | undefined, headerNeeds: boolean): boolean => needsAttention(state) || headerNeeds;
+
+/** Review of PR #16 (d): whether a plain terminal pane ignores hook words now. Once a hand-started agent's prompt has
+ *  returned (promptReturned), a late Stop or done hook from it is dropped, until a new agent is recognised in the
+ *  pane (the shell marks name one). `was` is the pane's flag before this identity change. */
+export function hooksMuted(was: boolean, p: LaunchRecord & { agent: Agent }, before: Identity | undefined, now: Identity): boolean {
+  if (promptReturned(p, before, now)) return true;
+  return now.agent !== null ? false : was;
+}
 
 /** The most urgent signal wins: an approval, then working, then done, then idle; with no evidence the line stays empty. */
 export function chipOf(s: Signal, now: number): Chip | null {

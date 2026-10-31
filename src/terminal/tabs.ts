@@ -1,10 +1,12 @@
 // Tab badges (TERM-055) and the unread rule for a finish or a bell (TERM-118). Pure, tested on
-// its own. ponytail: the permission badge is fed by `needs`, which the status hooks fill (T-025).
+// its own. The permission badge is fed by `needs`: the pane's one status is a permission or a question
+// (board/chip.ts needsYou, DT-C52), never the pane header's own attention flag.
 
 import type { AgentState } from "../projects/rows";
 
 /** `background` is the radio mark for an agent whose turn is over while Kolux watches its background work (STAT-024); only the palette rows carry it so far (VIEW-040). */
-export type Badge = "working" | "background" | "permission" | "unread" | "done" | null;
+/** `stopped` (DT-C52): a blocked or interrupted agent, the Stopped the Board and the Tower show; it is not a question. */
+export type Badge = "working" | "background" | "permission" | "unread" | "done" | "stopped" | null;
 
 /**
  * The one badge a tab shows: a working agent spins, one waiting on the user shows the question
@@ -15,6 +17,7 @@ export function tabBadge(agent: string, running: boolean | undefined, needs: boo
   if (agent === "shell") return unread ? "unread" : null;
   if (running !== false) {
     if (needs) return "permission";
+    if (hook === "blocked" || hook === "interrupted") return unread ? "unread" : "stopped";
     // STAT-001: the hook says the turn is over while the program still runs.
     if (hook === "done") return unread ? "unread" : "done";
     return "working";
