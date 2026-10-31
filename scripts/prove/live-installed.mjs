@@ -16,6 +16,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+// True when this file is run as a script (`node scripts/prove/live-installed.mjs start`), false when
+// a check imports `attach`/`sleep` from it. Without this every command below is skipped on import...
+// except that it was never defined, so the whole harness threw ReferenceError before doing anything.
+const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PORT = Number(process.env.PROVE_CDP || 9333);
 const BASE = process.env.PROVE_BASE || 'G:/Temp/live-installed';
@@ -28,6 +33,34 @@ export const run = (file, a, opt = {}) =>
       err ? reject(Object.assign(err, { stdout, stderr })) : resolve({ stdout, stderr }),
     ),
   );
+
+/**
+ * True when this process is itself running inside a Kolux terminal.
+ *
+ * start/stop close every kolux-rs window, so running them from a Kolux terminal kills the app, the
+ * terminal service under it, and the proof — taking the caller's own session with it. A proof is
+ * started from a plain Windows Terminal or PowerShell window instead, which is why this guard exists
+ * rather than a comment. Walks the parent chain because no environment variable marks the case.
+ */
+async function insideKoluxTerminal() {
+  if (process.platform !== 'win32') return false;
+  const ps = [
+    `$p = ${process.pid}`,
+    `for ($i = 0; $i -lt 12; $i++) {`,
+    `  $x = Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue`,
+    `  if (-not $x) { break }`,
+    `  if ($x.Name -match '^kolux-rs\\.exe$') { 'yes'; break }`,
+    `  $p = $x.ParentProcessId`,
+    `  if (-not $p -or $p -eq 0) { break }`,
+    `}`,
+  ].join('; ');
+  try {
+    const r = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    return r.stdout.trim().endsWith('yes');
+  } catch {
+    return false; // a check that cannot tell must not block a legitimate run
+  }
+}
 
 export async function waitFor(what, probe, ms = 20000, every = 250) {
   const end = Date.now() + ms;
@@ -191,6 +224,17 @@ export async function closeRunning() {
 
 const PIDFILE = join(BASE, 'app.pid');
 const cmd = process.argv[2];
+
+// A proof that closes the app cannot run from a terminal the app is hosting: it would kill the
+// terminal service, the proof, and the caller's own session. Say so instead of doing it.
+if (isMain && (cmd === 'start' || cmd === 'stop') && (await insideKoluxTerminal())) {
+  console.error(
+    'refusing: start/stop close every Kolux window, and this process is running inside a Kolux\n' +
+      'terminal. That would end the session running the proof. Run it from a plain Windows Terminal\n' +
+      'or PowerShell window instead:  node scripts/prove/live-installed.mjs start',
+  );
+  process.exit(2);
+}
 if (isMain && cmd === 'start') {
   const fresh = process.env.PROVE_HOME !== 'keep';
   const paths = prepareHome(fresh);
