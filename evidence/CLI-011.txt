@@ -15,7 +15,7 @@ src-tauri/src/cli/mod.rs:680-689   the client: `grant` reads the app's pid from 
 src-tauri/src/cli/text.rs:368-371  "Kolux is ready; its window is in front" only when `raised` is not false; when it is
     false: "Kolux is ready; its window was restored, but Windows kept another window in front". A started app keeps
     "Kolux started and is ready".
-src-tauri/src/cli/mod.rs:1019-1027 (`app.open` on the app's side) is unchanged: it still unminimizes, shows and focuses
+src-tauri/src/cli/mod.rs:1041-1049 (`app.open` on the app's side) is unchanged: it still unminimizes, shows and focuses
     through ctx.front and fails the request when the window is gone; the new dispatch test pins that.
 docs/guide/command-line.md         the `kolux open` row and a paragraph on the two lines and `result.raised`.
 docs/live-proofs-windows.md B-5    now also asks for `kolux open --json` printing "raised": true.
@@ -79,7 +79,10 @@ test cli011_box1_app_closed_open_launches_it_and_exits_zero_once_ready ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 1.01s
 $ cargo check --target x86_64-pc-windows-gnu --all-targets
     Finished `dev` profile [unoptimized] target(s) in 1m 24s     exit 0 (the AllowSetForegroundWindow / raise_by_pid arm compiles)
-$ cargo clippy --all-targets -- -D warnings
+$ cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings       (the project's clean gate; review fix)
+    Finished `dev` profile [unoptimized] target(s) in 4m 34s   exit=0, 0 warnings, 0 errors
+    (so the new Windows arm, cfg!(windows).then(|| raise_by_pid(...)) and the `grant` closure, carries no lint)
+$ cargo clippy --all-targets -- -D warnings                                        (Linux host, kept for the record)
 exit 101 with 94 errors, every one a pre-existing dead-code or unused-variable lint on Linux in files this unit does
 not touch (browser_crash.rs 38, browser_holder.rs 7, browser_certs.rs 6, badge.rs 5, lifecycle.rs RAISE_WAIT /
 Claim::Second, cli_register.rs real_env ...). The same command on plain origin/main (3af39cf3, changes stashed) gives
@@ -94,6 +97,18 @@ invoke-contract not needed).
 PLAN.md: no task line is CLI-011's own (T-075-b, T-249-b and T-595 cover other parts of the card and are ticked), so
 none is changed. Spec card CLI-011 box 2 stays unticked (live-only). DECISIONS.md DT-C62 added. docs/guide and the
 live proof sheet updated as above.
+
+--- review fixes (PR #58, 2026-11-01)
+1. The app-side `app.open` pointer above read 1019-1027 (copied from the brief); on this branch the arm is at
+   mod.rs:1041-1049. Corrected.
+2. clippy had been run only on the Linux host, which is not clean on main. The project's clean gate was run on this
+   branch: cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> Finished, exit=0, nothing
+   reported in src/cli/mod.rs or src/cli/text.rs (recorded under "other checks" above).
+3. The PR #58 description ended with the comment trailer; it now ends with the PR-body trailer the brief asks for
+   (edited on GitHub, no repo file involved).
+No code changed in this fix, so no new test: the clippy gate is the proof the review asked for.
+$ npx tsc --noEmit                               exit 0
+$ node scripts/plan-check.mjs                    plan-check: OK
 
 --- what is left
 Box 2 itself is live-only: on Txais's PC, with Kolux running and minimised, `kolux open` in an ordinary terminal
