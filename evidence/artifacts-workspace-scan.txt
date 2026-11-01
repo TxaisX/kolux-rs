@@ -100,7 +100,8 @@ cargo test --lib artifacts:
     test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 2570 filtered out
 vitest run src/artifacts: 14 passed (3 files), including the four above.
 tsc --noEmit: pass. node scripts/plan-check.mjs: OK. node scripts/invoke-contract.mjs: OK (706 calls by name against 445 commands).
-AFTER_WINDOWS
+cargo check --target x86_64-pc-windows-gnu --all-targets: Finished (5m 52s), no errors.
+cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings: Finished (8m 21s), clean.
 
 Proof, round 1 (still holds)
 - The round-1 tests cover every top-level file and the dotfile/partial/subfolder exclusions, first
