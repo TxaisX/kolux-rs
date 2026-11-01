@@ -3877,16 +3877,24 @@ mod tests {
         let paths: Vec<&str> = commands().iter().map(|c| c.0).collect();
         let groups: Vec<&str> = paths.iter().map(|p| p.split(' ').next().unwrap()).collect();
         for (name, text) in local_cli::guides() {
-            let w: Vec<&str> = text.split(|c: char| c.is_whitespace() || "`'\"()[]|".contains(c)).filter(|s| !s.is_empty()).collect();
-            for i in 0..w.len() {
-                if (w[i] == "kolux" || w[i] == "kolux-dev") && i + 1 < w.len() && groups.contains(&w[i + 1]) {
-                    let one = w[i + 1];
-                    let two = w.get(i + 2).map(|v| format!("{one} {v}")).unwrap_or_default();
-                    assert!(paths.contains(&one) || paths.contains(&two.as_str()), "{name} names kolux {two}, which is not a command");
-                }
-                if let Some(flag) = w[i].strip_prefix("--") {
-                    let flag = flag.split('=').next().unwrap().trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
-                    assert!(flag.is_empty() || ["json", "help", "version"].contains(&flag) || known_flag(flag) || SWITCHES.contains(&flag), "{name} names --{flag}, which no command takes");
+            // A guide also shows other tools (npx hyperframes snapshot --at ...), whose flags are
+            // theirs, not Kolux's; only a line that invokes kolux is judged for its flags.
+            for line in text.lines() {
+                let w: Vec<&str> = line.split(|c: char| c.is_whitespace() || "`'\"()[]|".contains(c)).filter(|s| !s.is_empty()).collect();
+                let kolux_line = w.iter().any(|t| *t == "kolux" || *t == "kolux-dev");
+                for i in 0..w.len() {
+                    if (w[i] == "kolux" || w[i] == "kolux-dev") && i + 1 < w.len() && groups.contains(&w[i + 1]) {
+                        let one = w[i + 1];
+                        let two = w.get(i + 2).map(|v| format!("{one} {v}")).unwrap_or_default();
+                        assert!(paths.contains(&one) || paths.contains(&two.as_str()), "{name} names kolux {two}, which is not a command");
+                    }
+                    if !kolux_line {
+                        continue;
+                    }
+                    if let Some(flag) = w[i].strip_prefix("--") {
+                        let flag = flag.split('=').next().unwrap().trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+                        assert!(flag.is_empty() || ["json", "help", "version"].contains(&flag) || known_flag(flag) || SWITCHES.contains(&flag), "{name} names --{flag}, which no command takes");
+                    }
                 }
             }
         }
