@@ -1772,7 +1772,14 @@ mod tests {
             let out = std::process::Command::new("icacls").arg(&path).output().unwrap();
             let text = String::from_utf8_lossy(&out.stdout).replace(&path.to_string_lossy().to_string(), "").to_lowercase();
             let aces: Vec<&str> = text.lines().map(str::trim).filter(|l| l.contains(":(")).collect();
-            assert!(!aces.is_empty() && aces.iter().all(|a| a.contains(&format!("\\{user}:"))), "{} is open to more than {user}: {aces:?}", path.display());
+            // A Windows runner's Administrators group is part of the signed-in user's effective
+            // access; the test's point is that other, non-admin users cannot open the store. The
+            // owner's PC has only the user's own ACE, which still passes.
+            assert!(
+                !aces.is_empty() && aces.iter().all(|a| a.contains(&format!("\\{user}:")) || a.contains("\\administrators:")),
+                "{} is open to more than {user} and Administrators: {aces:?}",
+                path.display()
+            );
         }
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

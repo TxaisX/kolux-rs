@@ -11,7 +11,7 @@ export type Probe = "page" | "error-page" | "no-answer";
 export type Phase = "blank" | "loading" | "ok" | "recovering" | "failed" | "crashed" | "closed";
 /** `recovery`: the load in flight is the automatic reload of a dead page, so what it lands on is
  *  judged as crash recovery (BROW-009), not as a network failure. */
-export type Health = { phase: Phase; url: string; misses: number; recoveries: number; recovery: boolean; /** Row 954 (c): the closed phase is a rebuild whose open failed. */ openFailed?: boolean };
+export type Health = { phase: Phase; url: string; misses: number; recoveries: number; recovery: boolean; /** Row 954 (c): the closed phase is a rebuild whose open failed. */ openFailed?: boolean; /** BROW-008: probes seen while a typed navigation is still loading. */ loadingProbes: number };
 export type Event =
   | { t: "started"; url: string }
   | { t: "finished"; url: string }
@@ -19,7 +19,7 @@ export type Event =
   /** The user pressed Retry on the overlay, or any other reload trigger while it shows. */
   | { t: "retry" }
   /** The user typed an address: a new page gets its own recovery allowance. */
-  | { t: "navigate" }
+  | { t: "navigate"; url?: string }
   /** T-283 (BROW-010): the computer woke from sleep; every pane hears the one signal. */
   | { t: "woke" }
   /** Row 954 (b): a page destroyed its own tab; `reopen` is false when it keeps doing it. */
@@ -37,45 +37,62 @@ export const DEAD_AFTER = 3;
 export const MAX_RECOVERIES = 1;
 /** How often the page is probed while on screen (BROW-008: about four times a second). */
 export const PROBE_MS = 250;
+/** BROW-008: a typed navigation that never commits (a refused certificate) stays at about:blank.
+ *  After this many probes (about 8 s at PROBE_MS) that is a failed load, not a slow one. */
+export const LOADING_GRACE = 32;
 
-export const fresh = (): Health => ({ phase: "blank", url: "", misses: 0, recoveries: 0, recovery: false });
+export const fresh = (): Health => ({ phase: "blank", url: "", misses: 0, recoveries: 0, recovery: false, loadingProbes: 0 });
 
 export function step(h: Health, e: Event): [Health, Action] {
   switch (e.t) {
     case "started":
-      return [{ ...h, phase: "loading", url: e.url, misses: 0, recovery: h.phase === "recovering" }, "none"];
+      // A refused certificate reports its navigation start as about:blank, which is not an address
+      // the overlay can diagnose. Keep the address the user typed.
+      return [{ ...h, phase: "loading", url: e.url && e.url !== "about:blank" ? e.url : h.url, misses: 0, recovery: h.phase === "recovering", loadingProbes: 0 }, "none"];
     case "finished":
       // The probe decides what finished: a page, or the engine's error page. A reload the pane
       // ordered for a dead page stays "recovering" until the probe hears the page again.
-      if (h.phase === "loading") return [{ ...h, phase: h.recovery ? "recovering" : "ok", url: e.url, misses: 0, recovery: false }, "none"];
+      if (h.phase === "loading") return [{ ...h, phase: h.recovery ? "recovering" : "ok", url: e.url && e.url !== "about:blank" ? e.url : h.url, misses: 0, recovery: false, loadingProbes: 0 }, "none"];
       return [h, "none"];
     case "retry":
       // A crashed page already got its one automatic reload and did not come back: the page
       // behind the overlay is dead, so Retry builds it again instead of reloading it.
-      return [{ ...h, misses: 0, recoveries: 0, recovery: false, openFailed: false }, h.phase === "crashed" || h.phase === "closed" ? "rebuild" : "reload"];
+      return [{ ...h, misses: 0, recoveries: 0, recovery: false, openFailed: false, loadingProbes: 0 }, h.phase === "crashed" || h.phase === "closed" ? "rebuild" : "reload"];
     case "navigate":
-      return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "none"];
+      // A typed address starts a load here, before the engine's own "started" arrives. A refused
+      // certificate never sends one and never sends "finished"; the probe's grace below catches it.
+      return [{ ...h, phase: "loading", url: e.url ?? h.url, misses: 0, recoveries: 0, recovery: false, loadingProbes: 0 }, "none"];
     case "woke":
       // A page that showed the overlay is tried again; any other page keeps being probed and gets
       // a fresh automatic reload if sleep took it. A blank tab has nothing to recheck.
       if (h.phase === "blank") return [h, "none"];
-      if (h.phase === "failed" || h.phase === "crashed") return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "reload"];
-      return [{ ...h, misses: 0, recoveries: 0 }, "none"];
+      if (h.phase === "failed" || h.phase === "crashed") return [{ ...h, misses: 0, recoveries: 0, recovery: false, loadingProbes: 0 }, "reload"];
+      return [{ ...h, misses: 0, recoveries: 0, loadingProbes: 0 }, "none"];
     case "selfclosed":
       // The destroyed page answers no probe, so the dead-page count must not run: the tab is
       // "loading" until the rebuilt page's own load events arrive. Left closed, the overlay speaks.
-      return e.reopen ? [{ ...h, phase: "loading", misses: 0, recovery: false }, "rebuild"] : [{ ...h, phase: "closed", misses: 0 }, "overlay"];
+      return e.reopen ? [{ ...h, phase: "loading", misses: 0, recovery: false, loadingProbes: 0 }, "rebuild"] : [{ ...h, phase: "closed", misses: 0, loadingProbes: 0 }, "overlay"];
     case "openfailed":
-      return [{ ...h, phase: "closed", misses: 0, recovery: false, openFailed: true }, "overlay"];
+      return [{ ...h, phase: "closed", misses: 0, recovery: false, openFailed: true, loadingProbes: 0 }, "overlay"];
     case "probe":
       return probed(h, e.answer);
   }
 }
 
 function probed(h: Health, answer: Probe): [Health, Action] {
-  // While the overlay is up the page is hidden under it; while a load is in flight the page is
-  // waited for (BROW-009), and a blank tab has nothing to probe.
-  if (h.phase === "failed" || h.phase === "crashed" || h.phase === "closed" || h.phase === "loading" || h.phase === "blank") return [h, "none"];
+  // While the overlay is up the page is hidden under it; a blank tab has nothing to probe. A
+  // loading page is probed so a failed certificate can be told from a slow one (see below).
+  if (h.phase === "failed" || h.phase === "crashed" || h.phase === "closed" || h.phase === "blank") return [h, "none"];
+  if (h.phase === "loading") {
+    if (answer === "error-page") {
+      const loadingProbes = h.loadingProbes + 1;
+      if (loadingProbes >= LOADING_GRACE) return [{ ...h, phase: "failed", misses: 0, loadingProbes: 0 }, "overlay"];
+      return [{ ...h, loadingProbes }, "none"];
+    }
+    // A page that commits without a "finished" event is alive; a silence is left to the load.
+    if (answer === "page") return [{ ...h, phase: "ok", misses: 0, loadingProbes: 0 }, "none"];
+    return [{ ...h, loadingProbes: 0 }, "none"];
+  }
   switch (answer) {
     case "page":
       return [{ ...h, phase: "ok", misses: 0 }, "none"];

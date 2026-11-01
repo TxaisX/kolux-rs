@@ -191,7 +191,9 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, how: H
         // T-604b follow-up (cycle 3): the reading splits at `(` and `)`, so the expression after an
         // escaped group (`find .. \( -name x -delete \)`) lands in the next parts. A command never
         // starts with `-`, `!` or `,`, so those parts are put back before find is judged; an empty
-        // part is skipped and a real command ends the group.
+        // part is skipped and a real command ends the group. T-604b (e): keeping the escaped group
+        // whole means its start points are seen, and a start point that is a link is judged where it
+        // leads.
         if p == "find" {
             let mut words: Vec<&str> = args.clone();
             while let Some(next) = chain.peek() {
@@ -204,9 +206,14 @@ fn deletes_outside<'a>(chain: impl Iterator<Item = &'a Seg>, base: &Base, how: H
                 }
             }
             if words.contains(&"-delete") {
+                // T-604b (e): -L (and its older name -follow) follows links found inside the tree too,
+                // where no reading can tell where they lead, so a delete under it asks outright.
+                if words.iter().any(|a| *a == "-L" || *a == "-follow") {
+                    return true;
+                }
                 let ws = base.workspace.as_deref().or(base.cwd.as_deref()).map(norm);
                 let root = |t: &str| ws.is_some() && locate(t, here.as_deref(), base) == ws;
-                if find_targets(&words).iter().any(|t| unclear_target(t) || (risky(t, here.as_deref(), base) && !root(t))) {
+                if find_targets(&words).iter().any(|t| unclear_target(t) || start_links_out(t, here.as_deref(), base) || (risky_following_links(t, here.as_deref(), base) && !root(t))) {
                     return true;
                 }
             }
@@ -313,8 +320,22 @@ fn find_targets(args: &[&str]) -> Vec<String> {
             _ => break,
         }
     }
-    let starts: Vec<String> = args[i.min(args.len())..].iter().take_while(|a| !(a.starts_with(['-', '(', ')', '!', ',']) || **a == "\\" || a.is_empty())).map(|a| a.to_string()).collect();
+    let starts: Vec<String> = args[i.min(args.len())..].iter().take_while(|a| {
+        let bare = a.trim_start_matches('\\');
+        !(a.is_empty() || bare.is_empty() || bare.starts_with(['-', '(', ')', '!', ',']))
+    }).map(|a| a.to_string()).collect();
     if starts.is_empty() { vec![".".to_string()] } else { starts }
+}
+
+/// T-604b (e): find follows a symbolic link named as a start point (POSIX requires it), so one
+/// that resolves outside the workspace asks even when its text lies inside.
+/// ponytail: a start point that is not there is left to the text check; find errors on a dangling
+/// link and deletes nothing.
+fn start_links_out(t: &str, dir: Option<&str>, base: &Base) -> bool {
+    let Some(ws) = base.workspace.as_deref().or(base.cwd.as_deref()) else { return false };
+    let Some(path) = locate(t, dir, base) else { return false };
+    let (Ok(real), Ok(root)) = (std::fs::canonicalize(&path), std::fs::canonicalize(ws)) else { return false };
+    !real.starts_with(&root)
 }
 
 /// T-604b (c): what `robocopy <source> <destination> ... /MIR` (or /PURGE) deletes: the files of the
@@ -408,7 +429,17 @@ fn unclear_target(t: &str) -> bool {
 /// Whether deleting `target` must ask: unknown, outside the workspace, the workspace itself or
 /// its git folder; a temp location runs; a wildcard (`*`, `?`, `[`) in the last part is judged by its
 /// folder, and one in a folder part always asks.
+/// T-604b (e): find follows a link named as a start point (POSIX requires it), so the last part is
+/// judged where it leads instead of asking the way a plain `rm link` does.
+fn risky_following_links(target: &str, dir: Option<&str>, base: &Base) -> bool {
+    risky_at(target, dir, base, true)
+}
+
 fn risky(target: &str, dir: Option<&str>, base: &Base) -> bool {
+    risky_at(target, dir, base, false)
+}
+
+fn risky_at(target: &str, dir: Option<&str>, base: &Base, follow_last: bool) -> bool {
     const WILD: [char; 3] = ['*', '?', '['];
     let t = target.replace('\\', "/");
     // T-604 (round 5 review of PR #15): a wildcard in a folder part cannot be judged as written
@@ -426,7 +457,7 @@ fn risky(target: &str, dir: Option<&str>, base: &Base) -> bool {
         let temp: Vec<String> = base.temp.iter().map(|r| norm(r)).collect();
         if let Some(root) = temp.iter().find(|r| under(&path, r)) {
             // T-604b (a): a link on the way may lead out of the temp folder.
-            return link_answers(&path, root, &temp, None, base);
+            return link_answers(&path, root, &temp, None, base, follow_last);
         }
     }
     let Some(ws) = base.workspace.as_deref().or(base.cwd.as_deref()) else { return true };
@@ -434,7 +465,7 @@ fn risky(target: &str, dir: Option<&str>, base: &Base) -> bool {
     let git = format!("{ws}/.git");
     if path == ws || under(&path, &git) || !under(&path, &ws) { return true; }
     // T-604b follow-up (cycle 3): a delete at or through a link is judged where the link leads.
-    link_answers(&path, &ws, std::slice::from_ref(&ws), Some(&git), base)
+    link_answers(&path, &ws, std::slice::from_ref(&ws), Some(&git), base, follow_last)
 }
 
 /// T-604b (a) and its cycle-3 follow-up: whether a delete of `path` under `root` goes through a link (a
@@ -444,7 +475,7 @@ fn risky(target: &str, dir: Option<&str>, base: &Base) -> bool {
 /// and out of `git` when one is given, runs; one that leads elsewhere, or cannot be resolved (it leads
 /// nowhere, or the rest of the path is not there), asks. A path with no link on the way stays where its text
 /// says.
-fn link_answers(path: &str, root: &str, roots: &[String], git: Option<&str>, base: &Base) -> bool {
+fn link_answers(path: &str, root: &str, roots: &[String], git: Option<&str>, base: &Base, follow_last: bool) -> bool {
     let rest = path.get(root.len()..).unwrap_or("").trim_start_matches('/');
     let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
     let mut at = std::path::PathBuf::from(root);
@@ -453,7 +484,7 @@ fn link_answers(path: &str, root: &str, roots: &[String], git: Option<&str>, bas
         at.push(part);
         match std::fs::symlink_metadata(&at) {
             Ok(m) if m.file_type().is_symlink() => {
-                if i + 1 == parts.len() {
+                if i + 1 == parts.len() && !follow_last {
                     return true;
                 }
                 linked = true;
@@ -881,7 +912,11 @@ fn split(text: &str, r: Reading, open: &mut bool) -> Vec<String> {
     let mut parts = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
+    // T-604b (e): an odd run of backslashes before a bracket escapes it (`\(` is find's own group),
+    // so it is not a command separator.
+    let mut slashes = 0u32;
     for c in text.chars() {
+        let escaped = slashes % 2 == 1;
         match quote {
             Some(q) if c == q => {
                 quote = None;
@@ -892,9 +927,11 @@ fn split(text: &str, r: Reading, open: &mut bool) -> Vec<String> {
                 quote = Some(c);
                 cur.push(c);
             }
+            None if escaped && matches!(c, '(' | ')' | '{' | '}') => cur.push(c),
             None if matches!(c, ';' | '&' | '|' | '\n' | '(' | ')' | '{' | '}') => parts.push(std::mem::take(&mut cur)),
             None => cur.push(c),
         }
+        slashes = if quote.is_none() && c == '\\' { slashes + 1 } else { 0 };
     }
     *open |= quote.is_some();
     parts.push(cur);
@@ -4397,7 +4434,7 @@ mod tests {
     #[test]
     fn t604b_find_is_judged_by_its_own_delete_word_and_where_it_starts() {
         let mut missed: Vec<String> = Vec::new();
-        for c in ["find .. -delete", "find / -name x -delete", "find ~ -delete"] {
+        for c in ["find .. -delete", "find / -name x -delete", "find ~ -delete", "find -L . -name '*.log' -delete", "find . -follow -name x -delete", "find -L build -delete"] {
             if hit(c) != Some("delete") {
                 missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
             }
@@ -4408,6 +4445,78 @@ mod tests {
             }
         }
         assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (e): an escaped `\(` group is find's own expression, not a new command, so the
+    /// `-delete` after it is read with find's start points; a start point outside still asks.
+    #[test]
+    fn t604b_e_find_delete_after_an_escaped_group_is_judged_by_its_start_points() {
+        let mut missed: Vec<String> = Vec::new();
+        for c in [
+            r"find .. \( -name x -o -name y \) -delete",
+            r"find ~ \( -name '*.log' \) -delete",
+            r"cd .. && find . \( -name x \) -delete",
+            r"find / \( -name x \) -delete",
+        ] {
+            if hit(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", hit(c)));
+            }
+        }
+        for c in [
+            r"find . \( -name '*.pyc' -o -name '*.log' \) -delete",
+            r"find build \( -name x \) -delete",
+            r"find . -name x \( -delete \)",
+            r"echo find .. \( -name x \) -delete",
+        ] {
+            if hit(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", hit(c)));
+            }
+        }
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    /// T-604b (e): find follows a link named as a start point, so one inside the workspace that
+    /// leads out of it asks, while one that stays inside still runs. A symlink on Unix; a junction
+    /// on Windows, where making a symlink needs a privilege the build machine may not have.
+    fn start_point_link_is_judged_where_it_leads(link: &dyn Fn(&std::path::Path, &std::path::Path)) {
+        let root = std::env::temp_dir().join(format!("krs-t604b-e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let app = root.join("app");
+        let other = root.join("other");
+        std::fs::create_dir_all(app.join("sub")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        link(&other, &app.join("out"));
+        link(&app.join("sub"), &app.join("inner"));
+        let b = Base { workspace: Some(app.display().to_string()), cwd: Some(app.display().to_string()), home: Some(root.join("home").display().to_string()), temp: vec![root.join("tmp").display().to_string()] };
+        let h = |c: &str| check(c, &b, &json!({})).map(|r| r.id);
+        let mut missed: Vec<String> = Vec::new();
+        for c in ["find out -delete", "find out/ -delete", "find out -name x -delete", "find out inner/../out -delete"] {
+            if h(c) != Some("delete") {
+                missed.push(format!("should ask (delete): {c:?}, got {:?}", h(c)));
+            }
+        }
+        for c in ["find . -delete", "find inner -delete", "find sub -name x -delete", "find ./out -print"] {
+            if h(c).is_some() {
+                missed.push(format!("should run: {c:?}, got {:?}", h(c)));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(missed.is_empty(), "{missed:#?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn t604b_e_a_find_start_point_that_is_a_link_is_judged_where_it_leads() {
+        start_point_link_is_judged_where_it_leads(&|target, at| std::os::unix::fs::symlink(target, at).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn t604b_e_a_find_start_point_that_is_a_junction_is_judged_where_it_leads() {
+        start_point_link_is_judged_where_it_leads(&|target, at| {
+            let made = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path $env:KOLUX_J_AT -Target $env:KOLUX_J_TARGET | Out-Null"]).env("KOLUX_J_AT", at).env("KOLUX_J_TARGET", target).status().is_ok_and(|s| s.success());
+            assert!(made, "could not make a junction at {}", at.display());
+        });
     }
 
     /// T-604b (d), review of PR #15 round 8: how PowerShell's wildcards treat `..` is unproven, so a

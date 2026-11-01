@@ -6,6 +6,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { TERM, addProjectAndOpen, fmt, installProbe, pageErrors, paneText, seedProfile, slash, stats, typeInto } from "./lib.mjs";
 import { BIG, buildRepo } from "./s10-repo.mjs";
 
@@ -16,7 +17,8 @@ const GAP_MS = 250;
 const RUN_MS = 60000;
 const KEY_GAP_MS = 50;
 const REPO = process.env.S10_REPO || "G:/Temp/stress-s10/repo";
-const SLOT = "G:/Dev/kolux-rs-slots/slot.mjs";
+const ROOT = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
+const SLOT = process.env.KOLUX_SLOTS ? join(process.env.KOLUX_SLOTS, "slot.mjs") : join(ROOT, "..", "kolux-rs-slots", "slot.mjs");
 const DIAG = process.env.S10_DIAG === "1";
 const DIAG_LOG = "G:/Temp/stress-logs/s10-diag.log";
 
