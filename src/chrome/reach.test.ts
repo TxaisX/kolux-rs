@@ -4,6 +4,7 @@
 import { expect, test } from "vitest";
 import { SCREEN_IDS, screens } from "./TopBar";
 import { SCREEN_OF, screenRows } from "./reach";
+import { menuScreen } from "./chromeItems";
 import { actionById } from "../keys/actions";
 import { commandRows } from "../keys/commands";
 import { resolve } from "../keys/keymap";
@@ -35,4 +36,10 @@ test("T-610: the workspace board is reached by its command and is no longer a se
   expect(title).toBe("Show Workspace Statuses");
   expect(screens.find((s) => s.id === "board")!.label).toBe("Board"); // VIEW-001's Board keeps its name
   expect(title).not.toMatch(/board/i);
+});
+
+test("T-610: Floor is in the View menu too (DT-08), so a Workspace View click on it shows the screen the palette's command shows", () => {
+  expect(menuScreen("screen.floor")).toBe(SCREEN_OF["view.floor"]);
+  // The switcher's four are there as well, Tower included, so the menu mirrors the top bar.
+  for (const s of screens) expect(menuScreen(`screen.${s.id}`), s.id).toBe(s.id);
 });

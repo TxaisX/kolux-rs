@@ -3,6 +3,7 @@
 // command palette gives Automations a second way in. One switch per item: `automationsButton` is
 // both SET-020's Automations button and VIEW-011's title-bar button (title bar and sidebar alike).
 import { readStatusBar, STATUS_ITEMS } from "./statusItems";
+import type { Screen } from "./TopBar";
 
 export const CHROME = [
   { id: "titleBarAppName", label: "Show app name in the title bar", short: "App name", dflt: false },
@@ -29,10 +30,11 @@ export function windowSummary(s: Record<string, unknown>): string {
 // state to the menu on every change (screen, chrome switches, shortcuts), so the menu's ticks agree
 // with each Settings switch (SET-020) and its accelerators follow the Shortcuts page (SET-009).
 /** Menu items that carry the in-app shortcut of the keymap action with the same id. */
-export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle", "zoom.in", "zoom.out", "zoom.reset"] as const;
+export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle", "zoom.in", "zoom.out", "zoom.reset", "screen.floor"] as const;
 /** Menu items whose hint is the chord of a keymap action with another id: the menu zoom is the saved
- *  interface zoom (SET-019), which has its own keys, while zoom.* in the keymap is the terminal zoom (TERM-078). */
-const HINT_FROM: Record<string, string> = { "zoom.in": "ui.zoomIn", "zoom.out": "ui.zoomOut", "zoom.reset": "ui.zoomReset" };
+ *  interface zoom (SET-019), which has its own keys, while zoom.* in the keymap is the terminal zoom (TERM-078);
+ *  View > Workspace View > Floor shows view.floor's keys, VIEW-013's compat id (DT-08, T-610). */
+const HINT_FROM: Record<string, string> = { "zoom.in": "ui.zoomIn", "zoom.out": "ui.zoomOut", "zoom.reset": "ui.zoomReset", "screen.floor": "view.floor" };
 
 const MENU_KEY = /^([A-Z]|[0-9]|F([1-9]|1[0-9]|2[0-4])|Comma|Equal|Minus|Period|Slash|Backslash|BracketLeft|BracketRight|Semicolon|Quote|Backquote|Tab|Enter|Space|Arrow(Up|Down|Left|Right)|Numpad(Add|Subtract|Multiply|Divide|[0-9]))$/;
 const MENU_MOD: Record<string, string> = { Mod: "CmdOrCtrl", Ctrl: "Ctrl", Cmd: "Super", Meta: "Super", Alt: "Alt", Shift: "Shift" };
@@ -84,9 +86,11 @@ export function menuSettingFlip(s: Record<string, unknown>, id: string): [string
   return item ? [item.id, !chromeShown(s, item.id)] : null;
 }
 
+/** The screens View > Workspace View lists (menu.rs SCREENS): the switcher's four and Floor (DT-08, T-610). */
+const MENU_SCREENS: readonly Screen[] = ["agents", "board", "terminals", "tower", "floor"];
 /** A Workspace View pick: the screen it shows, or null for any other item. */
-export function menuScreen(id: string): "agents" | "board" | "terminals" | null {
-  return id === "screen.agents" ? "agents" : id === "screen.board" ? "board" : id === "screen.terminals" ? "terminals" : null;
+export function menuScreen(id: string): Screen | null {
+  return MENU_SCREENS.find((s) => id === `screen.${s}`) ?? null;
 }
 
 // APP-009 Help / T-248-b: what a help.* menu click does. The page owns these (the guide, the tour and

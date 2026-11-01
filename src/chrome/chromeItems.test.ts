@@ -68,7 +68,18 @@ describe("T-248-a menu bar state (APP-009, SET-020, SET-009)", () => {
     expect(menuSettingFlip({ automationsButton: false }, "set.automationsButton")).toEqual(["automationsButton", true]);
     expect(menuSettingFlip({}, "app.settings")).toBeNull();
     expect(menuScreen("screen.board")).toBe("board");
-    expect(menuScreen("screen.tower")).toBeNull();
+    // T-610 / DT-08: the View menu lists the switcher's four and Floor, so each click shows its screen.
+    expect(menuScreen("screen.tower")).toBe("tower");
+    expect(menuScreen("screen.floor")).toBe("floor");
+    expect(menuScreen("screen.inbox")).toBeNull();
+    expect(menuScreen("app.settings")).toBeNull();
+  });
+
+  it("T-610 / DT-08: the Floor item carries view.floor's chord (VIEW-013's compat id), so a bound Floor shows its keys in the menu", () => {
+    const st = menuBarState({}, "floor", (id) => (id === "view.floor" ? ["Mod+Alt+F"] : undefined));
+    expect(st.screen).toBe("floor");
+    expect(st.accelerators["screen.floor"]).toBe("CmdOrCtrl+Alt+F");
+    expect(menuBarState({}, "floor", () => undefined).accelerators["screen.floor"]).toBe(""); // shipped unbound (COMPAT 4.3)
   });
 
   it("Edit goes to a focused field, else only Copy and Select All reach the terminal, and Paste waits", () => {

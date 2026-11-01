@@ -131,8 +131,10 @@ pub enum Node {
     Sub { label: &'static str, items: Vec<Node> },
 }
 
-/// The three switcher screens the View menu picks between (T-054).
-pub const SCREENS: [(&str, &str, &str); 3] = [("screen.agents", "Agents", "agents"), ("screen.board", "Board", "board"), ("screen.terminals", "Terminals", "terminals")];
+/// The screens the View menu picks between (T-054): the switcher's four in its cycle order (VIEW-002), then Floor,
+/// which has no sidebar item and is reached from the palette and this menu (VIEW-013, DT-08; T-610). Floor's item
+/// carries `view.floor`'s chord: the page sends it under this item's id (chromeItems.ts HINT_FROM).
+pub const SCREENS: [(&str, &str, &str); 5] = [("screen.agents", "Agents", "agents"), ("screen.board", "Board", "board"), ("screen.terminals", "Terminals", "terminals"), ("screen.tower", "Tower", "tower"), ("screen.floor", "Floor", "floor")];
 
 /// The whole menu bar for one platform and one page state.
 pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
@@ -549,10 +551,11 @@ mod tests {
 
     #[test]
     fn t054_view_menu_ticks_exactly_the_current_screen_and_none_for_other_screens() {
-        for (screen, want) in [("agents", vec!["screen.agents"]), ("board", vec!["screen.board"]), ("terminals", vec!["screen.terminals"]), ("tower", vec![])] {
+        // T-610 / DT-08: the switcher's four and Floor; the Inbox (behind the bell) and the sidebar's screens tick nothing.
+        for (screen, want) in [("agents", vec!["screen.agents"]), ("board", vec!["screen.board"]), ("terminals", vec!["screen.terminals"]), ("tower", vec!["screen.tower"]), ("floor", vec!["screen.floor"]), ("inbox", vec![]), ("skills", vec![])] {
             let bar = spec(Os::Windows, &state(screen));
             let views = sub(sub(&bar, "View"), "Workspace View");
-            assert_eq!(ids(views), ["screen.agents", "screen.board", "screen.terminals"]);
+            assert_eq!(ids(views), ["screen.agents", "screen.board", "screen.terminals", "screen.tower", "screen.floor"]);
             assert_eq!(ticked(views), want, "screen {screen}");
         }
     }
