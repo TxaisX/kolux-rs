@@ -9,6 +9,7 @@ import { FileCode, Globe, Plus } from "./icons";
 import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import { markFor, type AgentInfo } from "../launch/PlusMenu";
+import StripTotals from "../usage/StripTotals";
 
 const choices = [1, 2, 4, 6];
 
@@ -37,11 +38,15 @@ export default function LayoutStrip({ count, onLayout, agents = [], shells = [],
           </button>
         ))}
       </div>
-      {preview && <span style={{ marginLeft: "auto" }}>{preview}</span>}
+      {/* The totals sit at the right end of the strip, immediately left of Preview. */}
+      <span className="strip-right" style={{ marginLeft: "auto" }}>
+        <StripTotals />
+        {preview}
+      </span>
       {onNewTab && (
         <button
           className="btn newtab"
-          style={preview ? { marginLeft: 8 } : undefined}
+          style={{ marginLeft: 8 }}
           aria-haspopup="menu"
           aria-expanded={at !== null}
           title="New tab beside the focused pane (Ctrl+T for a shell)"

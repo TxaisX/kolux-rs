@@ -25,7 +25,7 @@ diagnostics section: Diagnostics Kolux keeps a short log of its own starts, exit
 1791871786 pane env ANTHROPIC_API_KEY=sk-ant-PLANTED1234567890 DATABASE_URL=postgres://admin:PLANTEDPASS@db.example/app
 
 == who may read the logs folder (icacls) ==
-%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.core\logs TxaisX\XiongT:(I)(OI)(CI)(F)
+%USERPROFILE%\AppData\Roaming\com.txaisxiong.kolux-rs.core\logs <user>:(I)(OI)(CI)(F)
 (one entry, the user, inherited from the profile folder the sealing pass restricts)
 
 == 2. Copy diagnostics (second run, after the scrubber stopped masking the word after a "secrets:" prefix) ==
@@ -45,7 +45,7 @@ fake key in the clipboard: 0 (0 = absent)   [grep -c 'FAKEKEY\|PLANTED' on the c
 
 == 3. a review copy (first run) ==
 after "Write a review copy and open it": the file opened in the system's text editor
-on disk: -rw-r--r-- 1 XiongT 197121 506 Oct 12 23:09 ...\com.txaisxiong.kolux-rs.core\diagnostics-review.txt
+on disk: -rw-r--r-- 1 <user> 197121 506 Oct 12 23:09 ...\com.txaisxiong.kolux-rs.core\diagnostics-review.txt
 secrets in the review copy: 0 (0 = absent); masked lines: 3
 after "Throw the review copy away": "Review copy thrown away."
 after: ls: cannot access '...\diagnostics-review.txt': No such file or directory

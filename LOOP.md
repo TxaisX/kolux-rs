@@ -6,7 +6,7 @@ read code; he directs AI and judges results by what the app does. You work alone
 no human in the room. Every pass starts by reading this file and `STATE.md`, does ONE task, proves
 it, commits it, updates `STATE.md`, and ends.
 
-Repo: `G:\Dev\kolux-rs` (this folder). Everything you write lives here.
+Repo: this folder, the clone you are in. Everything you write lives here.
 
 ---
 
@@ -17,9 +17,9 @@ Kolux was built on someone else's MIT-licensed code (an app called Orca). Code d
 not his. So:
 
 **NEVER open, read, grep, list, diff, copy, or ask a subagent to look at:**
-- `G:\Dev\Kolux\` (the old repo) or any folder under it, including `node_modules`, `out`, `dist`, docs
-- `G:\Dev\kolux-scratch`, `G:\Dev\kolux-workspaces`, `G:\Dev\nightshift-workspaces`
-- `G:\Dev\backups\` (copies of the old repo live there)
+- the old Kolux repository or any folder under it, including `node_modules`, `out`, `dist`, docs
+- the scratch and workspace folders used by the old loops
+- the backups folder (copies of the old repo live there)
 - The installed app's program folder (`%LOCALAPPDATA%\Programs\kolux`): its bundled scripts and
   resources are old code
 - `provenance\dirty-room\` **in this repo's history only**: the extraction team's raw evidence (test titles,
@@ -44,7 +44,7 @@ not his. So:
 - **Txais's own profile data**, read only to build the importer and to learn the shapes the user owns:
   `%APPDATA%\kolux` and `~\.kolux` (settings, accounts, keybindings, saved launch shapes, project lists).
   Never copy secrets into the repo or into `evidence\`; the `agent-hooks` folder stays forbidden.
-- Txais's own vault notes, read for behavior: `G:\Dev\Projects\Txais Brain\06 - Projects\Kolux\Kolux.md`
+- Txais's own vault notes, read for behavior: `06 - Projects/Kolux/Kolux.md` in the vault
   (its "Rebuild: Kolux RS" section explains this project), `...\06 - Projects\Kolux\Build Log.md`,
   `...\03 - Wiki\Syntheses\Kolux Improvements from BridgeMind.md`
   (use the "what the user gets" parts; skip any line naming files or code)
@@ -146,7 +146,7 @@ Then build `BEYOND.md` items one per pass, same rules as Phase 3.
    or revert, never skip or weaken a test.
 6. Commit locally with a message saying what the user can now do. End the message with:
    `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Never push, never create GitHub repos,
-   never touch anything outside `G:\Dev\kolux-rs`.
+   never touch anything outside this repository.
 7. Update `STATE.md`: task done, evidence path, next task, pass count, anything Txais must decide.
 8. End the pass.
 
