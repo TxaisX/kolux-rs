@@ -49,6 +49,11 @@ test("Gemini CLI's title symbols are its vendor mark, and its name counts in a f
   expect(who("✦ Gemini - port the claude importer")).toBe("gemini");
   expect(who("Gemini CLI")).toBe("gemini");
   expect(who("working - Gemini")).toBe("gemini");
+  // Some programs and terminals print the icon with the emoji presentation selector (U+FE0F) after it.
+  expect(who("✋️ Gemini")).toBe("gemini");
+  expect(who("✋️ Gemini - allow shell?")).toBe("gemini");
+  expect(who("✦️ Fix the codex login bug")).toBe("gemini");
+  expect(who("✋️ Claude Code")).toBe("unknown");
   // A Gemini symbol with another agent's name, or another agent's mark, is a conflict: nobody is credited.
   expect(who("✋ Claude Code")).toBe("unknown");
   expect(who("✦ Codex - thinking")).toBe("unknown");

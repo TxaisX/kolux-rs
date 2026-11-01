@@ -63,3 +63,40 @@ LEFT
   settings page; the reading does not depend on it, since the icon decides before the words.
 - Box 2 (Claude Code with a task that mentions Codex) was covered by T-124-b's titleOwner and
   stays on the live batch as before.
+
+REVIEW ROUND 1 (2026-11-01, lane5/T-124-d, PR #53): a Gemini icon with the emoji presentation selector is still
+Gemini's mark, and the node_modules link can no longer be committed by a lane worktree.
+PROBLEM 1 (reviewer, minor): some programs and terminals print the hand as "✋️" (U+270B then U+FE0F). titleState
+  tolerated it (includes("✋")), but titleOwner's MARKERS row /^[◇✋✦](?=\s|$)/u failed its lookahead on U+FE0F and
+  LEADING_GLYPHS did not strip it, so titleOwner("✋️ Gemini - allow shell?") credited nobody.
+FIX: src/status/titleOwner.ts MARKERS row is /^[◇✋✦]️?(?=\s|$)/u and LEADING_GLYPHS includes ️, so the
+  selector is allowed after an icon and stripped before the name is read ("✋️ Claude Code" is still the conflict it is).
+TEST FIRST (src/status/titleOwner.test.ts, T-124-d test): "✋️ Gemini" and "✋️ Gemini - allow shell?" credit gemini,
+  "✦️ Fix the codex login bug" credits gemini, "✋️ Claude Code" is unknown.
+  BEFORE
+    $ VITEST_MAX_WORKERS=2 npx vitest run src/status/titleOwner.test.ts
+     × Gemini CLI's title symbols are its vendor mark, and its name counts in a fixed place like the others (STAT-033, T-124-d)
+     AssertionError: expected '' to be 'gemini'
+     Test Files  1 failed (1) · Tests  1 failed | 3 passed (4)
+  AFTER
+    $ VITEST_MAX_WORKERS=2 npx vitest run src/status/titleOwner.test.ts
+     Test Files  1 passed (1) · Tests  4 passed (4)
+    $ VITEST_MAX_WORKERS=2 npx vitest run src/status src/terminal
+     Test Files  117 passed (117) · Tests  711 passed (711)
+    $ npx tsc --noEmit            exit 0
+    $ node scripts/plan-check.mjs plan-check: OK
+PROBLEM 2 (reviewer, minor): .gitignore line 2 was "node_modules/", which matches a folder only, never a symlink, so a
+  lane worktree that links node_modules to the main checkout and runs git add -A commits the link (a51db1e7 did; CI's
+  pnpm install then failed with EEXIST on a Windows checkout, fixed up by fbc93cb2 but the cause stayed).
+FIX: .gitignore line 2 is "node_modules" (no trailing slash): the folder and a link are both ignored.
+PROOF (a throwaway git repo in the scratchpad holding a node_modules -> /home/user/kolux-rs/node_modules link):
+    with "node_modules/":  $ git check-ignore -v node_modules   -> no match, exit 1 (the link would be added)
+    with "node_modules":   $ git check-ignore -v node_modules   -> .gitignore:1:node_modules	node_modules, exit 0
+  and in this worktree, which holds the link: $ git check-ignore -v node_modules -> .gitignore:2:node_modules	node_modules
+  (before the change the only match came from the main checkout's .git/info/exclude, which a fresh clone or CI does not have).
+NOT CHANGED (reviewer, minor): fbc93cb2's Co-Authored-By trailer names the wrong model line. Amending it rewrites a commit
+  already on origin/lane5/T-124-d, which needs a force-push; this lane never force-pushes. The integrator can squash-merge
+  PR #53 (the squash message then carries the mandated two trailer lines) or note it in the merge record. The commits from
+  this round carry the right trailer.
+LEFT: unchanged from above (STAT-033 box 1, the live Gemini CLI run on the Windows PC). Whether a real Gemini CLI title
+  carries the selector is not documented on the settings page; both spellings now read the same.

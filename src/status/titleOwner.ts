@@ -27,18 +27,19 @@ const NAMES: readonly (readonly [RegExp, readonly string[]])[] = [
 ];
 
 // Vendor markers: printed by the agent itself at the start of its title. Gemini CLI's are its
-// status icons (T-124-d, public settings reference): Ready ◇, Action Required ✋, Working ✦.
+// status icons (T-124-d, public settings reference): Ready ◇, Action Required ✋, Working ✦; some
+// programs and terminals add the emoji presentation selector (U+FE0F) after an icon, so it is allowed.
 const MARKERS: readonly (readonly [RegExp, readonly string[]])[] = [
   [/^✳/, ["claude"]],
   [/^π(?=\s|$)/, ["pi", "omp"]],
-  [/^[◇✋✦](?=\s|$)/u, ["gemini"]],
+  [/^[◇✋✦]️?(?=\s|$)/u, ["gemini"]],
 ];
 
 // A model name after an agent's name is the model, not the agent ("Claude Sonnet 4", "Claude 3.7").
 const MODEL_WORD = /^(sonnet|opus|haiku|instant|\d[\w.-]*|gpt[\w.-]*|o\d[\w.-]*)$/i;
 const SEPARATOR = /\s+[-|·—–]\s+|:\s+/;
-// Spinner frames, quarter circles and other leading decoration before the first word.
-const LEADING_GLYPHS = /^[\s⠀-⣿◐◓◑◒✳✢✶✻✽◇✋✦·•*>]+/u;
+// Spinner frames, quarter circles and other leading decoration (and a presentation selector) before the first word.
+const LEADING_GLYPHS = /^[\s⠀-⣿◐◓◑◒✳✢✶✻✽◇✋✦️·•*>]+/u;
 const PATH = /^(~|[a-zA-Z]:[\\/]|\\\\|\.{0,2}\/)/;
 
 function match(table: typeof NAMES, text: string): readonly string[] | null {
