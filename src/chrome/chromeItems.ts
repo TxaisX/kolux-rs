@@ -30,11 +30,13 @@ export function windowSummary(s: Record<string, unknown>): string {
 // state to the menu on every change (screen, chrome switches, shortcuts), so the menu's ticks agree
 // with each Settings switch (SET-020) and its accelerators follow the Shortcuts page (SET-009).
 /** Menu items that carry the in-app shortcut of the keymap action with the same id. */
-export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle", "zoom.in", "zoom.out", "zoom.reset", "screen.floor"] as const;
+export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle", "zoom.in", "zoom.out", "zoom.reset"] as const;
 /** Menu items whose hint is the chord of a keymap action with another id: the menu zoom is the saved
- *  interface zoom (SET-019), which has its own keys, while zoom.* in the keymap is the terminal zoom (TERM-078);
- *  View > Workspace View > Floor shows view.floor's keys, VIEW-013's compat id (DT-08, T-610). */
-const HINT_FROM: Record<string, string> = { "zoom.in": "ui.zoomIn", "zoom.out": "ui.zoomOut", "zoom.reset": "ui.zoomReset", "screen.floor": "view.floor" };
+ *  interface zoom (SET-019), which has its own keys, while zoom.* in the keymap is the terminal zoom (TERM-078).
+ *  The Workspace View items carry no chord (DT-C62): on a Mac a menu accelerator is a real key equivalent, and
+ *  Floor's would fire beside the window's toggle of the same chord (view.floor, useWindowKeys.ts), so the
+ *  palette's "Show Floor" row is where view.floor's keys are printed. */
+const HINT_FROM: Record<string, string> = { "zoom.in": "ui.zoomIn", "zoom.out": "ui.zoomOut", "zoom.reset": "ui.zoomReset" };
 
 const MENU_KEY = /^([A-Z]|[0-9]|F([1-9]|1[0-9]|2[0-4])|Comma|Equal|Minus|Period|Slash|Backslash|BracketLeft|BracketRight|Semicolon|Quote|Backquote|Tab|Enter|Space|Arrow(Up|Down|Left|Right)|Numpad(Add|Subtract|Multiply|Divide|[0-9]))$/;
 const MENU_MOD: Record<string, string> = { Mod: "CmdOrCtrl", Ctrl: "Ctrl", Cmd: "Super", Meta: "Super", Alt: "Alt", Shift: "Shift" };

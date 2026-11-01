@@ -43,3 +43,10 @@ test("T-610: Floor is in the View menu too (DT-08), so a Workspace View click on
   // The switcher's four are there as well, Tower included, so the menu mirrors the top bar.
   for (const s of screens) expect(menuScreen(`screen.${s.id}`), s.id).toBe(s.id);
 });
+
+test("T-610 / DT-C62: the palette's Show Floor row prints view.floor's keys once bound; the menu's Floor item prints none", () => {
+  const bound = resolve({ version: 1, keybindings: { "view.floor": "Mod+Alt+F" } }, "win32");
+  const row = commandRows(bound, [], undefined, () => {}).find((r) => r.label === "Show Floor")!;
+  expect(row.hint).toBe("Ctrl+Alt+F");
+  expect(commandRows(resolve(null, "win32"), [], undefined, () => {}).find((r) => r.label === "Show Floor")!.hint).toBeUndefined(); // shipped unbound (COMPAT 4.3)
+});
