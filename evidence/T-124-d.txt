@@ -1,0 +1,65 @@
+T-124-d · STAT-033 (rest of T-124-b): Gemini CLI's title symbols read into the title state · 2026-11-01
+Proved in the Linux cloud container (4 CPUs, node 22, vitest) on lane5/T-124-d from origin/main 3af39cf3.
+The app cannot be launched here; nothing was run on Txais's PC. Front-end only, no Rust changed.
+
+WHY THE BLOCKER WAS STALE
+PLAN.md T-124-d said the glyphs were "in neither the spec nor public docs". Gemini CLI's public
+settings reference (geminicli.com/docs/cli/settings, the `ui.dynamicWindowTitle` entry, read on
+2026-11-01, PROVENANCE.md) documents them: "Update the terminal window title with current status
+icons (Ready: ◇, Action Required: ✋, Working: ✦)", on by default. Behaviour only; no Gemini CLI
+code was opened. Nothing is guessed: the three icons and their meanings are exactly the page's.
+
+WHAT CHANGED
+1. src/terminal/status.ts titleState: after the Claude done star and the spinner marks, and before
+   the word rules, ✋ (U+270B) reads permission (Needs you), ✦ (U+2726) reads working and ◇ (U+25C7)
+   reads done, so the task text after a Gemini icon never changes the reading (same rule as the
+   Claude star, T-124-c). The permission words now include "action required". Paths still say
+   nothing: the path test runs first.
+2. src/status/titleOwner.ts: a MARKERS row credits a leading ◇, ✋ or ✦ (followed by a space or the
+   end) to gemini; a Gemini icon with another agent's name, or another agent's mark with the Gemini
+   name, is a conflict (unknown), as the card asks. The three icons join LEADING_GLYPHS so the name
+   after one is still read ("✋ Claude Code" is seen as the conflict it is). A NAMES row knows
+   "Gemini" / "Gemini CLI" as the title's first words or last part, like the other catalogue agents.
+3. docs/guide/board-agents-inbox.md: the "title stands in" paragraph names the Gemini icons and
+   the "action required" words.
+4. PROVENANCE.md: the dated public-doc line. PLAN.md: the T-124-d line carries the BUILT note and
+   stays unticked (the live box is open).
+
+TESTS WRITTEN FIRST
+- src/terminal/status.test.ts: "Gemini CLI's title symbols read like the other agents' marks ...
+  (STAT-033, T-124-d)": ✋ titles and "action required" read permission, ✦ titles read working,
+  ◇ titles read done even with "action required" after the diamond, an icon inside a path still
+  reads null, and headerOf on a hooks-off gemini pane with a ✋ title has needsYou true.
+- src/status/titleOwner.test.ts: "Gemini CLI's title symbols are its vendor mark ... (STAT-033,
+  T-124-d)": a leading icon credits gemini (also with task text that names codex or claude), the
+  Gemini name counts first or last, an icon plus "Claude Code" / "Codex" is unknown, the Claude
+  star plus "Gemini" is unknown, an icon mid-title or doubled, or "gemini" in the task text,
+  credits nobody.
+
+BEFORE (tests fail on origin/main code)
+  $ VITEST_MAX_WORKERS=2 npx vitest run src/terminal/status.test.ts src/status/titleOwner.test.ts
+   × Gemini CLI's title symbols are its vendor mark, and its name counts in a fixed place like the others (STAT-033, T-124-d) 12ms
+   × Gemini CLI's title symbols read like the other agents' marks: the hand is needs you, the four-point star is working, the diamond is ready (STAT-033, T-124-d) 9ms
+   FAIL src/status/titleOwner.test.ts > ... AssertionError: expected '' to be 'gemini'   (titleOwner.test.ts:46)
+   FAIL src/terminal/status.test.ts > ... AssertionError: expected null to be 'permission'   (status.test.ts:145)
+   Test Files  2 failed (2) · Tests  2 failed | 18 passed (20)
+
+AFTER
+  $ VITEST_MAX_WORKERS=2 npx vitest run src/terminal/status.test.ts src/status/titleOwner.test.ts
+   Test Files  2 passed (2) · Tests  20 passed (20)
+  $ VITEST_MAX_WORKERS=2 npx vitest run src/terminal src/status
+   Test Files  117 passed (117) · Tests  711 passed (711)
+  $ npx tsc --noEmit
+   exit 0, no output
+  $ node scripts/plan-check.mjs
+   plan-check: OK
+  No Rust changed: cargo clippy / the Windows cross-check were not needed. No Tauri command added
+  or renamed; no dependency changed.
+
+LEFT
+- STAT-033 box 1 is live-only and stays open: turn hooks off on the Windows PC, run a real Gemini
+  CLI with its default dynamic window title, trigger a permission, and see the pane read Needs
+  you. The title format around the icon (what Gemini prints after ✋) is not documented on the
+  settings page; the reading does not depend on it, since the icon decides before the words.
+- Box 2 (Claude Code with a task that mentions Codex) was covered by T-124-b's titleOwner and
+  stays on the live batch as before.
