@@ -1,7 +1,7 @@
-Artifacts: import a workspace's artifacts folder automatically, and play media in the tab
-Date: 2026-10-31
-Lane: lane/artifacts-auto
-Base: 282ae0be (origin/main)
+T-624 Artifacts: import a workspace's artifacts folder automatically, and play media in the tab - evidence
+Date: 2026-10-31 (round 2 after the PR #37 review, same day)
+Lane: lane/artifacts-auto (PR #37) · DT-C65, a DT-C58 follow-on
+Base: 3af39cf3 (origin/main, merged into the branch at 6df949b9)
 
 Why
 The library only knew pages added by hand and files Claude Code's Write tool made (DT-C58).
@@ -9,7 +9,7 @@ A file written by another agent, such as the design artifact in this workspace's
 folder, stayed invisible until Add artifact and a trip through the file picker. The user asked
 for it to land in the tab automatically, and for video, audio and other files to work there.
 
-What changed
+What changed (round 1)
 - src-tauri/src/artifacts.rs: artifacts_scan(path, project) and workspace_files(). The scan reads
   every top-level file in <workspace>/artifacts, whatever its extension, imports each once,
   refreshes a changed file by its origin instead of adding a second entry, skips entries the
@@ -24,26 +24,95 @@ What changed
 - src-tauri/src/lib.rs: registers artifacts_scan.
 - src/artifacts/ArtifactsPage.tsx: scans when the page opens and every 3 s while it is up, and
   refreshes the list when the scan imported something. Video plays in a native player, audio gets a
-  player panel, PDF is shown in the frame with an Open PDF fallback, and the Add dialog has a Video
-  and audio filter.
+  player panel, and the Add dialog has a Video and audio filter.
 - src/shell/window/Content.tsx: passes the active workspace and its project name.
-- src/styles.css: the media, audio and PDF viewer surfaces.
+- src/styles.css: the media and audio viewer surfaces.
 
-Proof
-- cargo test --lib artifacts::tests: 10 passed, 0 failed. The tests cover every top-level file and
-  the dotfile/partial/subfolder exclusions, first import, unchanged second scan, refresh of a
-  changed file, a fresh app run not re-adding entries, media kinds and MIME types, range parsing
-  and clamping, and a real media file served through the scheme as a 206 with the requested bytes.
-- pnpm exec tsc --noEmit: pass.
-- pnpm exec vitest run src/artifacts/ArtifactsPage.test.ts: 5 passed, including video, audio and PDF
-  view modes.
-- pnpm check: pass. invoke-contract: 705 invoke calls by name against 445 registered commands.
-- pnpm build: pass.
-- cargo clippy --lib -- -D warnings: clean.
+What changed (round 2: the review's blocker, two majors and three minors, each failing-first)
+- [blocker] A linked artifacts/ folder was followed out of the workspace. workspace_files() now
+  refuses a link or junction where the folder should be (fs::symlink_metadata is_dir, the idiom
+  files::list_templates uses; a Windows junction reads as a symlink there too) and keeps only a file
+  whose canonical path sits under the workspace's canonical path, so a linked file, a folder swapped
+  for a link between the check and the read, and a link to a share are all left out.
+- [major] Remove from library was undone on the next launch (or as soon as the file changed).
+  Library::remove notes the removed file's own (modified ms, length) in removed.json beside
+  library.json (a sidecar, so library.json keeps its bare-array shape for an older build) for any
+  entry whose origin is an absolute path to a file that is still there; the scan skips that exact
+  file; Library::add forgets the note (a hand add, a Claude Write or a rewrite restores the entry);
+  a note whose file is gone from disk is dropped at the next scan.
+- [major] artifacts_scan was a sync command: file copies (up to 100 MB) and CDN fetches (20 s a
+  script, up to 16) ran on the window's thread every 3 s. It is now `async fn` + spawn_blocking,
+  the shape artifact_add has (not `command(async)`, which would make fetch_script's block_on panic
+  inside the runtime); the path checks moved inside the worker too (a stat on a gone drive blocks);
+  the SCANNED map is try_lock'ed, so a tick that finds a scan running returns {changed: 0} instead
+  of queueing, and the page's own ticker drops a tick while the last invoke is still pending.
+- [minor] A restored file with an older mtime (cp -p, robocopy /COPY:DAT) was counted as changed
+  but never refreshed, and a page with assets was re-imported on every launch because the stored
+  size counts the assets. Entry gains an optional `stamp` (the origin file's modified ms and
+  length when stored; older entries have none and are refreshed once); the scan compares that
+  exact stamp, and Origin.at is now_ms so Library::add's "older publish never replaces a newer"
+  rule no longer blocks a restore.
+- [minor] A file the scan could not keep was retried and logged every 3 s forever. The scan returns
+  Scanned {changed, skipped}: a failed file goes into `seen` with its stamp (tried again only when
+  it changes) and its reason is returned; the page toasts each reason once ("Not kept in Artifacts:
+  clip.mkv is larger than 100 MB").
+- [minor] The PDF frame had no sandbox. A sandboxed frame cannot run the PDF viewer (the HTML
+  sandbox always disables plugins, no token re-enables them) and an unsandboxed one follows a link
+  inside the PDF in-app, so the in-frame PDF view is dropped: view("pdf") is "app" and a PDF opens
+  in its own app with the Open PDF button, as DT-C58 already had it. The .art-pdf styles go with it.
+  The test now asserts every iframe on the page carries sandbox=.
+- Bookkeeping: PLAN.md T-624 (artifacts lane), DECISIONS.md DT-C65, docs/guide/files-and-browser.md
+  "The Artifacts tab" and a feature-index row.
 
-Live proof pending
+Proof, round 2: failing first
+cargo test --lib artifacts, before the fixes (new tests against the round-1 code):
+    failures:
+        artifacts::tests::a_file_that_cannot_be_kept_is_reported_once_and_not_retried
+        artifacts::tests::a_linked_artifacts_folder_is_not_followed
+        artifacts::tests::a_removed_workspace_file_stays_removed_until_it_changes
+        artifacts::tests::a_restored_file_with_an_older_mtime_is_refreshed
+        artifacts::tests::workspace_artifacts_are_found_imported_once_and_refreshed_on_change
+    test result: FAILED. 10 passed; 5 failed; 0 ignored; 0 measured; 2570 filtered out
+    assertion `left == right` failed: the next app run must keep it removed too  left: 1 right: 0
+    assertion `left == right` failed: a restored file counted as changed must also be refreshed  left: "A" right: "Restored"
+    assertion `left == right` failed: a new app run does not re-add a page whose stored size includes its assets  left: 1 right: 0
+    (the_scan_command_runs_off_the_window_thread, run alone after its source slice was cut at #[cfg(test)]:)
+    panicked at src/artifacts.rs:1056:59: artifacts_scan must be an async command: it copies files and fetches scripts
+    test result: FAILED. 0 passed; 1 failed
+vitest run src/artifacts, before the page fix:
+    × shows a page or text in the frame, an image as a picture, media as a player, and a PDF or the rest in its own app
+      AssertionError: expected 'pdf' to be 'app'
+    × every viewer frame on the page is sandboxed
+      <iframe className="art-frame" title={current.title} src={viewerUrl(current)} />: expected ... to match /\ssandbox=/
+    × a scan tick that finds the last scan still running does nothing   (ticker is not a function)
+    × a file the scan could not keep is told once, not every three seconds   (newlySkipped is not a function)
+    Tests  4 failed | 10 passed (14)
+
+Proof, round 2: passing after
+cargo test --lib artifacts:
+    test artifacts::tests::a_linked_artifacts_folder_is_not_followed ... ok
+    test artifacts::tests::a_removed_workspace_file_stays_removed_until_it_changes ... ok
+    test artifacts::tests::a_restored_file_with_an_older_mtime_is_refreshed ... ok
+    test artifacts::tests::a_file_that_cannot_be_kept_is_reported_once_and_not_retried ... ok
+    test artifacts::tests::the_scan_command_runs_off_the_window_thread ... ok
+    test artifacts::tests::workspace_artifacts_are_found_imported_once_and_refreshed_on_change ... ok
+    (and the nine round-1 tests)
+    test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 2570 filtered out
+vitest run src/artifacts: 14 passed (3 files), including the four above.
+tsc --noEmit: pass. node scripts/plan-check.mjs: OK. node scripts/invoke-contract.mjs: OK (706 calls by name against 445 commands).
+AFTER_WINDOWS
+
+Proof, round 1 (still holds)
+- The round-1 tests cover every top-level file and the dotfile/partial/subfolder exclusions, first
+  import, unchanged second scan, refresh of a changed file, a fresh app run not re-adding entries,
+  media kinds and MIME types, range parsing and clamping, and a real media file served through the
+  scheme as a 206 with the requested bytes.
+
+Live proof pending (batched)
 This lane has not been launched as a GUI in this pass, so the command has not been exercised through
 the running app. On the first Artifacts open with a workspace that has a top-level artifacts/ file,
-the file is imported automatically. A video or audio entry plays in the tab; a PDF shows in the
-frame; other documents offer Open. The 30 second Kolux ad MP4 in the vault is 7.7 MB, well under the
-100 MB cap, and its range requests are covered by the scheme test.
+the file is imported automatically; × on its row keeps it out until the file changes; a video or
+audio entry plays in the tab; a PDF or other document offers Open. The 30 second Kolux ad MP4 in
+the vault is 7.7 MB, well under the 100 MB cap, and its range requests are covered by the scheme
+test. The junction case (mklink /J artifacts ...) is covered by symlink_metadata reporting a
+junction as a link (PROVENANCE.md:392); the unit test makes a Unix symlink.

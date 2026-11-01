@@ -65,7 +65,17 @@ pub struct Entry {
     pub page: String,
     /// "ok", "unavailable" (on a network share, never read) or "remote" (a machine this one cannot read).
     pub state: String,
+    /// The origin file's own (modified ms, length) when it was stored, so the workspace scan can tell
+    /// the exact file it holds from a changed one; `size` holds a page's assets and scripts too. None
+    /// for an entry stored before this field existed, or one whose file was never read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<(u64, u64)>,
 }
+
+/// The removed entries the workspace scan must not bring back: origin -> the file's (modified ms,
+/// length) at removal. A later rewrite has a new stamp and is imported again. Kept beside
+/// library.json in its own file, so the index keeps its shape for an older build.
+const REMOVED: &str = "removed.json";
 
 /// An entry as the library page gets it: whether its stored page is still on disk.
 #[derive(serde::Serialize)]
@@ -340,6 +350,32 @@ impl Library {
         crate::files::write_text(&self.index(), &String::from_utf8_lossy(&text))
     }
 
+    /// The removed origins the scan must leave alone (see REMOVED). Callers hold `lock`.
+    pub fn removed(&self) -> HashMap<String, (u64, u64)> {
+        fs::read(self.dir.join(REMOVED)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    fn write_removed(&self, map: &HashMap<String, (u64, u64)>) {
+        if map.is_empty() {
+            let _ = fs::remove_file(self.dir.join(REMOVED));
+            return;
+        }
+        if let Ok(text) = serde_json::to_vec_pretty(map) {
+            let _ = fs::create_dir_all(&self.dir);
+            let _ = crate::files::write_text(&self.dir.join(REMOVED), &String::from_utf8_lossy(&text));
+        }
+    }
+
+    /// Forgets the tombstones of `origins` (a file stored again, or one that is gone).
+    fn forget_removed(&self, origins: &[String]) {
+        let mut map = self.removed();
+        let before = map.len();
+        map.retain(|k, _| !origins.contains(k));
+        if map.len() != before {
+            self.write_removed(&map);
+        }
+    }
+
     /// Newest first.
     pub fn list(&self) -> Vec<Listed> {
         let _g = self.lock.lock();
@@ -361,7 +397,7 @@ impl Library {
         }
         let name = file_name(src);
         let kind = kind_of(src);
-        let mut entry = Entry { id: id.clone(), title: name.clone(), source: from.source.into(), kind: kind.into(), origin: from.origin, project: from.project, session: from.session, added: from.at, size: 0, page: name.clone(), state: "unavailable".into() };
+        let mut entry = Entry { id: id.clone(), title: name.clone(), source: from.source.into(), kind: kind.into(), origin: from.origin, project: from.project, session: from.session, added: from.at, size: 0, page: name.clone(), state: "unavailable".into(), stamp: None };
         if !src.is_absolute() {
             entry.state = "remote".into();
         } else if !on_network_share(src) {
@@ -370,6 +406,7 @@ impl Library {
             if len > cap {
                 return Err(format!("{name} is larger than {} MB", cap / (1024 * 1024)));
             }
+            entry.stamp = Some((modified_ms(src), len));
             let tmp = self.dir.join(format!(".new-{id}"));
             let _ = fs::remove_dir_all(&tmp);
             fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
@@ -397,6 +434,8 @@ impl Library {
         list.retain(|e| e.id != id);
         list.push(entry.clone());
         self.write(&list)?;
+        // Stored again by hand, by a Claude Write or by the scan: an earlier remove no longer applies.
+        self.forget_removed(std::slice::from_ref(&entry.origin));
         Ok(entry)
     }
 
@@ -423,13 +462,30 @@ impl Library {
         total
     }
 
+    /// Drops the entry and its stored copy. When its origin is a file that is still there, the scan
+    /// is told not to bring that exact file back (REMOVED); a URL origin leaves no such note.
     pub fn remove(&self, id: &str) -> Result<(), String> {
         let _g = self.lock.lock();
         let mut list = self.read();
+        let gone: Vec<Entry> = list.iter().filter(|e| e.id == id).cloned().collect();
         list.retain(|e| e.id != id);
         self.write(&list)?;
         if id.bytes().all(|c| c.is_ascii_hexdigit()) && !id.is_empty() {
             let _ = fs::remove_dir_all(self.dir.join(id));
+        }
+        let mut removed = self.removed();
+        let mut noted = false;
+        for e in gone {
+            let path = Path::new(&e.origin);
+            if path.is_absolute() {
+                if let Some(meta) = fs::metadata(path).ok().filter(|m| m.is_file()) {
+                    removed.insert(e.origin.clone(), (modified_ms(path), meta.len()));
+                    noted = true;
+                }
+            }
+        }
+        if noted {
+            self.write_removed(&removed);
         }
         Ok(())
     }
@@ -457,13 +513,21 @@ pub const WORKSPACE_DIR: &str = "artifacts";
 
 /// Every file directly in `<workspace>/artifacts`, in a stable order, whatever its extension.
 /// Subfolders are not entries: they hold a page's own assets (copied with the page) or a test run's
-/// screenshots, not a second deliverable. A symlink is not a file here, so the scan never leaves the
-/// folder, and a dotfile or a half-written download is not an artifact.
+/// screenshots, not a second deliverable. The scan never leaves the folder: a link or junction where
+/// the folder should be is not followed (read_dir would follow it; symlink_metadata's is_dir is false
+/// for one, the idiom files::list_templates uses), a linked file inside it is not a file, and each
+/// file's real path has to sit under the workspace's. A dotfile or a half-written download is not an
+/// artifact.
 pub fn workspace_files(workspace: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for entry in fs::read_dir(workspace.join(WORKSPACE_DIR)).into_iter().flatten().flatten() {
+    let dir = workspace.join(WORKSPACE_DIR);
+    if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+        return out;
+    }
+    let Ok(real_ws) = fs::canonicalize(workspace) else { return out };
+    for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
         let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_file()) && is_workspace_file(&path) {
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) && is_workspace_file(&path) && fs::canonicalize(&path).is_ok_and(|real| real.starts_with(&real_ws)) {
             out.push(path);
         }
     }
@@ -484,13 +548,28 @@ fn modified_ms(path: &Path) -> u64 {
 /// that has not changed. One map for the app's life; the library is the durable record.
 static SCANNED: OnceLock<Mutex<HashMap<String, (u64, u64)>>> = OnceLock::new();
 
+/// What one scan did: how many entries it stored or refreshed, and one reason per file it could
+/// not keep (over the cap, unreadable), so the page can tell the user once.
+#[derive(Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scanned {
+    pub changed: usize,
+    pub skipped: Vec<String>,
+}
+
 /// Imports every kept file under `<workspace>/artifacts`, one entry per file. A changed file
-/// refreshes its origin instead of adding a second entry. `seen` is the caller's memory of
-/// unchanged files; a file whose store fails stays out of it so a later scan can retry.
-pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, seen: &mut HashMap<String, (u64, u64)>) -> usize {
+/// (a new modified time or length, even an older time: a restore from a backup) refreshes its
+/// origin instead of adding a second entry; the exact file the library holds, or one the user
+/// removed since, is left alone. `seen` is the caller's memory of files it has judged, so a file
+/// that cannot be kept is reported once and tried again only when it changes.
+pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, seen: &mut HashMap<String, (u64, u64)>) -> Scanned {
     let project = project.filter(|p| !p.trim().is_empty()).or_else(|| workspace.file_name().map(|n| n.to_string_lossy().into_owned()));
-    let known: HashMap<String, (u64, u64)> = lib.list().into_iter().map(|e| (e.entry.origin, (e.entry.added, e.entry.size))).collect();
-    let mut changed = 0;
+    let known: HashMap<String, Option<(u64, u64)>> = lib.list().into_iter().map(|e| (e.entry.origin, e.entry.stamp)).collect();
+    let removed = {
+        let _g = lib.lock.lock();
+        lib.removed()
+    };
+    let mut out = Scanned::default();
     for file in workspace_files(workspace) {
         let Ok(meta) = fs::metadata(&file) else { continue };
         let stamp = (modified_ms(&file), meta.len());
@@ -498,42 +577,61 @@ pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, 
         if seen.get(&key) == Some(&stamp) {
             continue;
         }
-        // The library already holds this exact file from an earlier run: remember it and move on.
-        if known.get(&key).is_some_and(|&(added, size)| size == meta.len() && added >= stamp.0) {
+        // The library already holds this exact file, or the user removed this exact file: move on.
+        if known.get(&key) == Some(&Some(stamp)) || removed.get(&key) == Some(&stamp) {
             seen.insert(key, stamp);
             continue;
         }
-        let from = Origin { origin: key, source: "workspace", project: project.clone(), session: None, at: stamp.0.max(1) };
+        // Added now: `added` is when the entry was stored, the file's own time lives in its stamp.
+        let from = Origin { origin: key.clone(), source: "workspace", project: project.clone(), session: None, at: now_ms() };
         match lib.add(&file, from, fetch) {
-            Ok(_) => {
-                seen.insert(file.to_string_lossy().into_owned(), stamp);
-                changed += 1;
+            Ok(_) => out.changed += 1,
+            Err(e) => {
+                eprintln!("artifacts: could not keep {}: {e}", file.display());
+                out.skipped.push(e);
             }
-            Err(e) => eprintln!("artifacts: could not keep {}: {e}", file.display()),
         }
+        seen.insert(key, stamp);
     }
-    changed
+    // A removed file that is gone from the folder needs no note any more.
+    let gone: Vec<String> = removed.keys().filter(|k| !Path::new(k).is_file()).cloned().collect();
+    if !gone.is_empty() {
+        let _g = lib.lock.lock();
+        lib.forget_removed(&gone);
+    }
+    out
 }
 
 /// Scans the active workspace's `artifacts/` folder. The Artifacts page calls this when it opens and
 /// every few seconds, so a page an agent writes lands in the tab without Add artifact. A network
-/// share is left alone (DT-R21); the library never reads one.
+/// share is left alone (DT-R21); the library never reads one. Async and on a blocking worker, like
+/// `artifact_add`: the scan copies files of up to MAX_FILE and fetches a page's CDN scripts with a
+/// 20 s timeout each, none of which may hold the window's thread (and the path checks stat a drive
+/// that may be gone). A tick that finds the last scan still running does nothing; the next retries.
 #[tauri::command]
-pub fn artifacts_scan(app: tauri::AppHandle, path: String, project: Option<String>) -> Result<usize, String> {
-    let workspace = PathBuf::from(path);
-    if !workspace.is_absolute() || !workspace.is_dir() || on_network_share(&workspace) {
-        return Ok(0);
-    }
+pub async fn artifacts_scan(app: tauri::AppHandle, path: String, project: Option<String>) -> Result<Scanned, String> {
     use tauri::{Emitter, Manager};
-    let lib = app.state::<Library>();
-    let changed = {
-        let mut seen = SCANNED.get_or_init(Default::default).lock().map_err(|e| e.to_string())?;
-        scan_workspace(lib.inner(), &workspace, project, &|u| fetch_script(&app, u), &mut seen)
-    };
-    if changed > 0 {
-        let _ = app.emit(crate::capture::EVENT, ());
-    }
-    Ok(changed)
+    tauri::async_runtime::spawn_blocking(move || {
+        let workspace = PathBuf::from(path);
+        if !workspace.is_absolute() || !workspace.is_dir() || on_network_share(&workspace) {
+            return Ok(Scanned::default());
+        }
+        let lib = app.state::<Library>();
+        let scanned = {
+            let mut seen = match SCANNED.get_or_init(Default::default).try_lock() {
+                Ok(seen) => seen,
+                Err(std::sync::TryLockError::WouldBlock) => return Ok(Scanned::default()),
+                Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+            };
+            scan_workspace(lib.inner(), &workspace, project, &|u| fetch_script(&app, u), &mut seen)
+        };
+        if scanned.changed > 0 {
+            let _ = app.emit(crate::capture::EVENT, ());
+        }
+        Ok(scanned)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn mime(path: &str) -> &'static str {
@@ -899,20 +997,152 @@ mod tests {
 
         let lib = Library::new(root.join("lib"));
         let mut seen = std::collections::HashMap::new();
-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 4);
+        let scan = |seen: &mut HashMap<String, (u64, u64)>| scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, seen);
+        assert_eq!(scan(&mut seen), Scanned { changed: 4, skipped: vec![] });
         let first = lib.list();
         assert_eq!(first.len(), 4);
         assert!(first.iter().all(|e| e.entry.source == "workspace" && e.entry.project.as_deref() == Some("Project")));
-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 0, "an unchanged folder adds nothing");
+        assert_eq!(scan(&mut seen).changed, 0, "an unchanged folder adds nothing");
 
         fs::write(ws.join("artifacts").join("a.html"), "<title>A2</title>").unwrap();
-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen), 1, "only the changed page is refreshed");
+        assert_eq!(scan(&mut seen).changed, 1, "only the changed page is refreshed");
         let again = lib.list();
         assert_eq!(again.len(), 4);
         assert!(again.iter().any(|e| e.entry.title == "A2"));
         let mut fresh = std::collections::HashMap::new();
-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut fresh), 0, "a new app run does not re-add entries the library already holds");
+        assert_eq!(scan(&mut fresh).changed, 0, "a new app run does not re-add entries the library already holds");
+
+        // A page with its own assets: the stored size counts the assets too, which must not read as a change.
+        fs::write(ws.join("artifacts").join("nested").join("c.png"), b"pngpngpng").unwrap();
+        fs::write(ws.join("artifacts").join("site.html"), "<title>Site</title><img src=\"nested/c.png\">").unwrap();
+        assert_eq!(scan(&mut fresh).changed, 1);
+        let site = lib.list().into_iter().find(|e| e.entry.title == "Site").unwrap();
+        assert!(site.entry.size > fs::metadata(ws.join("artifacts").join("site.html")).unwrap().len(), "the stored size holds the page and its asset");
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(scan(&mut fresh).changed, 0, "a new app run does not re-add a page whose stored size includes its assets");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_artifacts_folder_is_not_followed() {
+        let root = temp_dir("linked");
+        let ws = root.join("Project");
+        let outside = root.join("outside");
+        fs::create_dir_all(&ws).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("id_rsa"), "SECRET").unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join("artifacts")).unwrap();
+        assert!(workspace_files(&ws).is_empty(), "a linked artifacts/ folder is never followed");
+        let lib = Library::new(root.join("lib"));
+        let mut seen = HashMap::new();
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen).changed, 0);
+        assert!(lib.list().is_empty());
+        // A real folder still yields its file, and a linked file inside it is not followed either.
+        fs::remove_file(ws.join("artifacts")).unwrap();
+        fs::create_dir_all(ws.join("artifacts")).unwrap();
+        fs::write(ws.join("artifacts").join("a.txt"), "ok").unwrap();
+        std::os::unix::fs::symlink(outside.join("id_rsa"), ws.join("artifacts").join("key.txt")).unwrap();
+        assert_eq!(workspace_files(&ws), vec![ws.join("artifacts").join("a.txt")]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_removed_workspace_file_stays_removed_until_it_changes() {
+        let root = temp_dir("removed");
+        let ws = root.join("Project");
+        fs::create_dir_all(ws.join("artifacts").join("img")).unwrap();
+        let a = ws.join("artifacts").join("a.html");
+        fs::write(&a, "<title>A</title>").unwrap();
+        let lib = Library::new(root.join("lib"));
+        let scan = |seen: &mut HashMap<String, (u64, u64)>| scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, seen).changed;
+        let mut seen = HashMap::new();
+        assert_eq!(scan(&mut seen), 1);
+        let id = lib.list()[0].entry.id.clone();
+        lib.remove(&id).unwrap();
+        assert_eq!(scan(&mut seen), 0, "the same run keeps it removed");
+        assert!(lib.list().is_empty());
+        let mut fresh = HashMap::new();
+        assert_eq!(scan(&mut fresh), 0, "the next app run must keep it removed too");
+        assert!(lib.list().is_empty(), "a removed entry does not come back on the next launch");
+        // A real rewrite is a new deliverable and is imported again.
+        fs::write(&a, "<title>A rewritten</title>").unwrap();
+        let mut fresh = HashMap::new();
+        assert_eq!(scan(&mut fresh), 1, "a rewritten file is imported again");
+        assert_eq!(lib.list()[0].entry.title, "A rewritten");
+        // Removed again: a page with assets is kept removed by the file's own stamp, not the stored size.
+        fs::write(ws.join("artifacts").join("img").join("p.png"), b"png").unwrap();
+        fs::write(&a, "<title>With asset</title><img src=\"img/p.png\">").unwrap();
+        let mut fresh = HashMap::new();
+        assert_eq!(scan(&mut fresh), 1);
+        lib.remove(&id).unwrap();
+        let mut fresh = HashMap::new();
+        assert_eq!(scan(&mut fresh), 0, "a removed page with assets stays removed");
+        assert!(lib.list().is_empty());
+        // Adding the same file by hand after a remove keeps it: the remove is forgotten.
+        let hand = lib.add(&a, Origin::hand(&a), &|_| None).unwrap();
+        assert_eq!(hand.id, id);
+        let mut fresh = HashMap::new();
+        assert_eq!(scan(&mut fresh), 0);
+        assert_eq!(lib.list().len(), 1, "a hand-added file is kept after an earlier remove");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_restored_file_with_an_older_mtime_is_refreshed() {
+        let root = temp_dir("restored");
+        let ws = root.join("Project");
+        fs::create_dir_all(ws.join("artifacts")).unwrap();
+        let a = ws.join("artifacts").join("a.html");
+        fs::write(&a, "<title>A</title>").unwrap();
+        let lib = Library::new(root.join("lib"));
+        let mut seen = HashMap::new();
+        assert_eq!(scan_workspace(&lib, &ws, None, &|_| None, &mut seen).changed, 1);
+        // Restored from a backup that kept the old time (cp -p, robocopy /COPY:DAT): older mtime, new content.
+        fs::write(&a, "<title>Restored</title>").unwrap();
+        let older = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        fs::File::options().write(true).open(&a).unwrap().set_modified(older).unwrap();
+        let mut fresh = HashMap::new();
+        assert_eq!(scan_workspace(&lib, &ws, None, &|_| None, &mut fresh).changed, 1);
+        let list = lib.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].entry.title, "Restored", "a restored file counted as changed must also be refreshed");
+        assert_eq!(scan_workspace(&lib, &ws, None, &|_| None, &mut HashMap::new()).changed, 0, "and it is then known");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_kept_is_reported_once_and_not_retried() {
+        let root = temp_dir("toobig");
+        let ws = root.join("Project");
+        fs::create_dir_all(ws.join("artifacts")).unwrap();
+        // A sparse file over the cap: nothing is written, only its length.
+        fs::File::create(ws.join("artifacts").join("clip.mkv")).unwrap().set_len(MAX_FILE + 1).unwrap();
+        fs::write(ws.join("artifacts").join("ok.txt"), "fine").unwrap();
+        let lib = Library::new(root.join("lib"));
+        let mut seen = HashMap::new();
+        let first = scan_workspace(&lib, &ws, None, &|_| None, &mut seen);
+        assert_eq!(first, Scanned { changed: 1, skipped: vec!["clip.mkv is larger than 100 MB".into()] });
+        assert_eq!(lib.list().len(), 1);
+        let second = scan_workspace(&lib, &ws, None, &|_| None, &mut seen);
+        assert_eq!(second, Scanned::default(), "the same unchanged file is neither retried nor reported again");
+        // A change to the file is tried again.
+        fs::File::options().write(true).open(ws.join("artifacts").join("clip.mkv")).unwrap().set_len(10).unwrap();
+        assert_eq!(scan_workspace(&lib, &ws, None, &|_| None, &mut seen).changed, 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_scan_command_runs_off_the_window_thread() {
+        // An AppHandle is not to be had in a unit test, so the shape is checked in the source: like
+        // artifact_add, the scan is async and does its copies and fetches on a blocking worker, and a
+        // tick that finds one running does nothing instead of queueing behind it.
+        let src = include_str!("artifacts.rs");
+        let src = &src[..src.find("#[cfg(test)]").unwrap()]; // the code, not this test's own words
+        let at = src.find("pub async fn artifacts_scan(").expect("artifacts_scan must be an async command: it copies files and fetches scripts");
+        let body = &src[at..at + 1200];
+        assert!(body.contains("spawn_blocking"), "the scan runs on a blocking worker");
+        assert!(body.contains("try_lock()"), "an overlapping tick does not wait");
     }
 
     #[test]

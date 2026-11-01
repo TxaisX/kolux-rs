@@ -48,14 +48,38 @@ export function group(list: Artifact[]): { project: string; items: Artifact[] }[
   return [...by].map(([project, items]) => ({ project, items })).sort((x, y) => y.items[0].added - x.items[0].added);
 }
 
-/** How the viewer shows an entry: in the frame, as a picture or media, or not at all. */
-export function view(kind: string | undefined): "frame" | "image" | "video" | "audio" | "pdf" | "app" {
+/** How the viewer shows an entry: in the frame, as a picture or media, or not at all. A PDF is
+ * not framed: a sandboxed frame cannot run the PDF viewer, and an unsandboxed one would follow a
+ * link inside the PDF in-app, so it opens in its own app like a document. */
+export function view(kind: string | undefined): "frame" | "image" | "video" | "audio" | "app" {
   if (kind === "image") return "image";
   if (kind === "video") return "video";
   if (kind === "audio") return "audio";
-  if (kind === "pdf") return "pdf";
   if (kind === undefined || kind === "page" || kind === "text") return "frame";
   return "app";
+}
+
+/** What one workspace scan did, as the Rust command reports it. */
+export type Scanned = { changed: number; skipped: string[] };
+
+/** One run at a time: a tick that finds the last run still going does nothing, so a slow import
+ * never piles up calls behind it. */
+export function ticker(run: () => Promise<unknown>): () => void {
+  let busy = false;
+  return () => {
+    if (busy) return;
+    busy = true;
+    void run().finally(() => {
+      busy = false;
+    });
+  };
+}
+
+/** The skipped reasons not told yet; `told` remembers them so a file over the cap is mentioned once. */
+export function newlySkipped(skipped: string[], told: Set<string>): string[] {
+  const fresh = skipped.filter((s) => !told.has(s));
+  for (const s of fresh) told.add(s);
+  return fresh;
 }
 
 /** The file's own type, for the small tag beside its title. */
@@ -91,6 +115,7 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement>(null);
+  const told = useRef(new Set<string>());
 
   const refresh = useCallback(
     () => invoke<Artifact[]>("artifacts_list").then(setList, (e) => onToast(`Could not read the library: ${e}`)),
@@ -105,23 +130,29 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
 
   // SKILL-036: a workspace keeps its finished files in `artifacts/`. Import that folder when the
   // page opens and watch it while it is up, so an agent's new page is already in the tab without
-  // Add artifact. The Rust scan remembers unchanged files and only re-imports a changed one.
+  // Add artifact. The Rust scan remembers unchanged files and only re-imports a changed one; a file
+  // it cannot keep (over the cap, unreadable) is named once. One scan at a time: a tick that finds
+  // the last one still running is dropped.
   useEffect(() => {
     if (!workspace) return;
     let live = true;
-    const scan = () =>
-      invoke<number>("artifacts_scan", { path: workspace, project })
-        .then((n) => {
-          if (live && n > 0) void refresh();
+    const scan = ticker(() =>
+      invoke<Scanned>("artifacts_scan", { path: workspace, project })
+        .then((r) => {
+          if (!live) return;
+          if (r.changed > 0) void refresh();
+          const fresh = newlySkipped(r.skipped, told.current);
+          if (fresh.length) onToast(`Not kept in Artifacts: ${fresh.join("; ")}`);
         })
-        .catch(() => {});
-    void scan();
+        .catch(() => {}),
+    );
+    scan();
     const timer = window.setInterval(scan, 3000);
     return () => {
       live = false;
       window.clearInterval(timer);
     };
-  }, [workspace, project, refresh]);
+  }, [workspace, project, refresh, onToast]);
 
   // A link clicked inside the viewer: only messages from our own frame count.
   useEffect(() => {
@@ -230,12 +261,6 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
           <div className="art-audio">
             <span>{current.title}</span>
             <audio src={viewerUrl(current)} controls preload="metadata" aria-label={current.title} />
-          </div>
-        )}
-        {current?.state === "ok" && current.stored && view(current.kind) === "pdf" && (
-          <div className="art-pdf">
-            <iframe className="art-frame" title={current.title} src={viewerUrl(current)} />
-            <button className="btn art-open" onClick={() => void openFile(current)}>Open PDF</button>
           </div>
         )}
         {current?.state === "ok" && current.stored && view(current.kind) === "app" && (
