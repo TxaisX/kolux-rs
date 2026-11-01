@@ -28,11 +28,56 @@ Proof
   descriptions, alias resolution, references and the Higgsfield MCP URL.
 - pnpm check: pass (plan, workflow and invoke contract OK).
 - cargo clippy --lib -- -D warnings: clean.
-- Higgsfield access on this machine at build time: higgsfield 1.1.24, account txiong530@gmail.com,
-  starter plan, 215.15 credits. The guide tells a new machine to run `higgsfield auth login`.
+- Higgsfield access on this machine at build time: higgsfield 1.1.24, and `account status` answered
+  with an authenticated account. The guide tells a new machine to install the CLI and run
+  `higgsfield auth login`.
 
 Use
 - In the app: Skills > Built into Kolux > video.
 - In any terminal: kolux skills list; kolux skills get video; kolux skills get video --reference
   higgsfield.
 - A remote-MCP client can add https://mcp.higgsfield.ai/mcp; the CLI remains the fallback.
+
+ROUND 2 (2026-11-01, lane/video-skill, after the PR #38 review)
+Findings addressed
+- The guide-flag test had been narrowed by 44a943a9: `if !kolux_line { continue; }` skipped every
+  `--flag` on a line without the word kolux, in every guide, so 28 lines of the four existing guides
+  (automations.md, worktrees.md, json.md, orchestration tasks/mail/gates) lost their check.
+  src-tauri/src/cli/mod.rs now exempts only the guides named in FOREIGN_TOOL_GUIDES (`video`), and a
+  guard asserts that automations, worktrees, tasks and mail still have their non-kolux flag lines
+  judged (at least 7, 2, 8 and 3 flags), so the exemption cannot widen again unnoticed.
+- The bundled set is recorded: DECISIONS.md DT-C64 (video joins; DT-24 superseded for this one
+  addition), COMPAT.md SKILL-029 row reads five names, PLAN.md T-623, PROVENANCE.md two dated
+  public-doc lines (HyperFrames package skill docs, Higgsfield CLI and npm listing),
+  docs/guide/command-line.md names the five topics. STATE.md is the integrator's: it needs a
+  "Decisions made for Txais" line for DT-C64 and a "Needs Txais" note that spec/15 SKILL-029
+  (lines 557, 564) and SKILL-030 box 1 still say four names because spec files are not rewritten.
+- references/hyperframes.md: the skeleton's <audio> carries id="music" and the Media list says every
+  <audio> needs an id or it is left out of the mix (HyperFrames' own skill doc, rule 8, and its
+  `media_missing_id` check in references/format.md of the 0.8.229 package); no crossorigin.
+- references/higgsfield.md and SKILL.md: `npm install -g @higgsfield/cli` is the first line of
+  Check access, so a fresh machine knows where the CLI comes from (npm lists it as MIT, bins
+  `higgsfield` and `higgs`); SKILL.md no longer assumes an already-authenticated CLI.
+- The personal account data (email, plan, credit balance) is gone from this file. The integrator
+  squash-merges the PR so it never enters main's history.
+
+Proof of the test fix (CARGO_TARGET_DIR shared, scripts/test-env.sh sourced, filter
+the_skill_guides_name_only; automations.md line 10 typoed to `--precheck-timeoutt` for A and B)
+  A  branch test as it was (mod.rs stashed) + typo:   test result: ok. 1 passed   (exit 0: the stale flag passed)
+  B  restored test + typo:                            exit 101
+       panicked at src/cli/mod.rs:3907:25:
+       kolux-cli/automations names --precheck-timeoutt, which no command takes
+  C  restored test, typo reverted:                    test result: ok. 1 passed; 0 failed  (exit 0)
+  D  cargo test --lib cli::local_cli::tests:           test result: ok. 3 passed; 0 failed  (the five names, the alias,
+                                                       the reference list and the MCP endpoint, with the edited guides)
+Other gates (worktree, this round)
+  npx tsc --noEmit: exit 0.   node scripts/plan-check.mjs: plan-check OK (done 720/776; T-623 ticked).
+  (src-tauri) cargo check --target x86_64-pc-windows-gnu --all-targets: Finished, exit 0.
+  (src-tauri) cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings: Finished, exit 0.
+  No dependency changed (license-check not needed); no Tauri command added (invoke-contract not needed).
+
+Still left
+- Live, on the Windows PC: Skills page shows a "video" row under Built into Kolux and `kolux skills get video`
+  prints the guide with the app closed; a fresh machine runs the Check access block of references/higgsfield.md
+  end to end (npm install, auth login, account status).
+- STATE.md lines for DT-C64 (integrator). spec/15 SKILL-029 and SKILL-030 box 1 still read four names.

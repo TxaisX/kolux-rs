@@ -1077,6 +1077,10 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-26 · prove T-033-d · this tree's own SourceControlPanel, AllChangesPane, scm status watcher and the T-033-c GIT_TRACE2 method; claude --help text for --permission-mode as given; no outside source
 > 2026-10-26 · close T-234-b and T-323-c · this tree's own editor, browser and settings code only; no outside source
 
+> 2026-10-31 · T-623 (lane/video-skill, DT-C64) · public doc: HyperFrames CLI help and the skill docs inside its npm package (0.8.227 and 0.8.229: the composition data-* attributes, the paused-timeline key, lint, check, snapshot and render commands, the audio id rule) · areas 15 · own words, command names and attribute names only; nothing copied, nothing of the package bundled
+
+> 2026-10-31 · T-623 (lane/video-skill, DT-C64) · public doc: Higgsfield CLI help (--version, account status, auth login, generate create and its flags), the @higgsfield/cli npm listing (name, license, install command) and higgsfield.ai docs (model ids, the remote MCP endpoint) · areas 15 · own words; nothing copied, nothing of the package bundled
+
 ## 2026-10-30 · Old-app material removed (Txais's request)
 
 On 2026-10-30 Txais asked for "removing the original kolux and all of its information beside the documentation build of this application so that we can keep a digital report on it in the github repo".

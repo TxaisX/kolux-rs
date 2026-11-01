@@ -7,6 +7,7 @@ endpoint is `https://mcp.higgsfield.ai/mcp` for clients that support remote MCP.
 ## Check access
 
 ```bash
+npm install -g @higgsfield/cli   # once per machine; puts `higgsfield` on the PATH
 higgsfield --version
 higgsfield account status        # shows the account, plan and credits
 higgsfield auth login            # only when status says not authenticated

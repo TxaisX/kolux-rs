@@ -25,7 +25,7 @@ does the motion; the renderer seeks it frame by frame.
     <div class="clip scene" data-start="0" data-duration="6" data-track-index="0">
       <h1 id="headline">One window. Twelve agents.</h1>
     </div>
-    <audio src="assets/music.mp3" data-start="0" data-duration="30" data-volume="0.8"></audio>
+    <audio id="music" src="assets/music.mp3" data-start="0" data-duration="30" data-volume="0.8"></audio>
   </div>
   <script>
     const tl = gsap.timeline({ paused: true });
@@ -61,7 +61,9 @@ renders in a minute or two locally. Verify with `ffprobe -show_entries format=du
 - Images: `<img src="assets/hero.png">`; preload before the timeline seeks.
 - Video: `<video src="assets/shot.mp4">` must be a **direct child of the root**, never inside a
   scene wrapper; the framework owns playback.
-- Audio: `<audio src="assets/music.mp3" data-start="0" data-duration="30">` also direct child.
+- Audio: `<audio id="music" src="assets/music.mp3" data-start="0" data-duration="30">` also
+  direct child. Every `<audio>` needs an `id` or it is left out of the mix (`check` reports it
+  as `media_missing_id`). No `crossorigin` on any media element.
 - Download every generated asset into `assets/`; never rely on a remote URL at render time.
 
 ## Determinism rules

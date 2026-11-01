@@ -15,8 +15,9 @@ by HyperFrames, with Higgsfield filling the few assets the UI cannot provide.
   and transition. It is deterministic, so what you check is what renders. `npx hyperframes`
   works without a global install (Node 22+ and FFmpeg are required).
 - **Higgsfield** generates images, video shots and audio. Use it for a hero backdrop, a texture,
-  a soundtrack or a shot with a person or a place. Use the CLI that is already authenticated on
-  this machine, or the remote MCP endpoint in `references/higgsfield.md`.
+  a soundtrack or a shot with a person or a place. Use the CLI once `npm install -g @higgsfield/cli`
+  and `higgsfield auth login` have run on this machine, or the remote MCP endpoint in
+  `references/higgsfield.md`.
 - **The real app** is the best source of product UI. Capture the running app, or build a small
   HTML demo and screenshot it with Playwright. Never let an image model draw the product UI:
   its text and interface details are unreliable, and a wrong label ruins the film.
