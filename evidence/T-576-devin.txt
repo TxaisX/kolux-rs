@@ -3,7 +3,7 @@ T-576 fix 6: live KOLUX_INSTALL_AGENTS_ONLY=devin runs, 2026-10-28, scratch KOLU
 RUN 1 (before the fix: no early end). Wait for the 10-minute deadline.
 started pid 49064
 [7s] powershell.exe 33240 "C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; irm https://static.devin.ai/cli/s
-[22s] devin.exe 46580 "C:\Users\XiongT\AppData\Local\devin\cli\bin\devin.exe" setup
+[22s] devin.exe 46580 "%USERPROFILE%\AppData\Local\devin\cli\bin\devin.exe" setup
 exited=True after 606s code=0
 kolux.log:
 1793240755 agent install devin: failed: The install took longer than its time limit, so Kolux stopped it.

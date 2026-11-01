@@ -1,17 +1,17 @@
-// LIVE proof, SESS-030 boxes 1 and 2 (spec/02): a REAL Claude conversation carries on in the same pane after
+﻿// LIVE proof, SESS-030 boxes 1 and 2 (spec/02): a REAL Claude conversation carries on in the same pane after
 //   b1: the app is quit through its window and reopened with the same profile;
 //   b2: the app process is killed (only the pid this script started, then its recorded children) and reopened.
 // Usage: node live-SESS-030.mjs b1|b2. Asserted on Kolux's side: the session id in the saved layout, the restart line (--resume <id>) on
 // the process, one Claude only, the pane key unchanged, and the agent's answer after the reopen (it names the code only the first prompt held).
 import { readFileSync } from "node:fs";
-import { scenario, send, sleep, excerpt } from "./live-claude-common.mjs";
+import { scenario, send, sleep, excerpt, CLAUDE_EXE } from "./live-claude-common.mjs";
 import { waitFor, CLAUDE, dismissFirstRun } from "./live-common.mjs";
 
 const mode = process.argv[2] === "b2" ? "b2" : "b1";
 const CODE = mode === "b1" ? "blue-heron-5521" : "green-otter-6637";
 const norm = (p) => String(p ?? "").replace(/\\/g, "/").toLowerCase();
 const count = (t, s) => t.split(s).length - 1;
-const flat = (t) => t.replace(/[│╭╮╰╯]/g, " ").replace(/\s+/g, " ");
+const flat = (t) => t.replace(/[â”‚â•­â•®â•°â•¯]/g, " ").replace(/\s+/g, " ");
 
 await scenario(
   `SESS-030-${mode}`,
@@ -85,7 +85,7 @@ await scenario(
     h.log(`launch 2 screen: ${excerpt(screen2, 4)}`);
     const after = await claudes();
     for (const l of after) h.log(`launch 2 claude: ${l.replace(/\\/g, "/").slice(0, 240)}`);
-    h.check("exactly one Claude runs and its exe is the Claude on the registry PATH", after.length === 1 && norm(after[0].split("|")[1]) === norm("C:/Users/XiongT/.local/bin/claude.exe"), `count=${after.length}`);
+    h.check("exactly one Claude runs and its exe is the Claude on the registry PATH", after.length === 1 && norm(after[0].split("|")[1]) === norm(CLAUDE_EXE), `count=${after.length}`);
     h.check("it was started on the resume line with the saved session id", after.length === 1 && after[0].includes(sess) && /--resume|(^| )-r /.test(after[0]), `resume=${/--resume/.test(after[0] ?? "")} id=${(after[0] ?? "").includes(sess)}`);
     h.check("one Claude pane is shown (the tab list and the panes agree)", (await app.shown(CLAUDE)) === 1, `${await app.shown(CLAUDE)}`);
     const keptKey = saved().find((p) => p.session === sess)?.key;
@@ -98,7 +98,7 @@ await scenario(
     const sawWork = await ctx.waitEvent((e) => e.t >= t2 && e.state === "done", 120000, "the agent to answer").then(() => true, () => false);
     await sleep(1500);
     const rows = await rowsWith();
-    const answer = rows.find((l) => new RegExp(`^●\\s*\`?${CODE}`).test(l));
+    const answer = rows.find((l) => new RegExp(`^â—\\s*\`?${CODE}`).test(l));
     h.log(`after the reopen: screen rows holding the code: ${n0} before the question, ${rows.length} after; answer row: ${answer ?? "(none)"}; rows: ${JSON.stringify(rows.map((l) => l.slice(0, 80)))}; tail: ${excerpt(await ctx.screenText(), 6)}`);
     h.check("the resumed agent answers with the code from before the quit", sawWork && !!answer, `answer row ${answer ?? "none"}`);
     const key2 = await ctx.paneKey();
@@ -106,3 +106,4 @@ await scenario(
     h.log(`screenshot: ${await h.shot("after")}`);
   },
 );
+

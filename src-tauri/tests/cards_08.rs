@@ -868,12 +868,15 @@ fn orch018_box1_a_claude_light_tier_worker_starts_on_haiku_with_no_effort_settin
     };
     let terminals = Terminals::default();
     let ctx = Ctx { claude_config: root.join(".claude.json"), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+    let claude_installed = kolux_rs_lib::agents::agent_list().iter().any(|a| a.id == "claude" && a.installed);
+    if !claude_installed {
+        eprintln!("Claude Code is not installed here, so box 1 cannot be shown");
+        return;
+    }
     let (command, mut args) = typed("orchestration worker-start --spec x --tier light");
     args["timeoutMs"] = json!("1");
     let req = Request { id: "r".into(), token: String::new(), command, cwd: repo.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
-    let claude_installed = kolux_rs_lib::agents::agent_list().iter().any(|a| a.id == "claude" && a.installed);
     let out = dispatch(&ctx, &req).unwrap_err();
-    assert!(claude_installed, "Claude Code is not installed here, so box 1 cannot be shown: {}", out.message);
     // No window opens a terminal, so the start times out; the receipt still says what it launched.
     assert_eq!(out.code, "timeout", "{}", out.message);
     assert_eq!((out.data["agent"].as_str(), out.data["tier"].as_str(), out.data["model"].as_str()), (Some("claude"), Some("light"), Some("haiku")), "{}", out.data);

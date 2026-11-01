@@ -66,7 +66,7 @@ Kolux RS uses them.
 5. **Look first.** Open PowerShell 7 (start menu: "PowerShell 7", or type `pwsh` in a terminal), go to
    this repository's folder, and run the script without `-Delete`:
    ```
-   cd G:\Dev\kolux-rs
+   cd <your clone of kolux-rs>
    pwsh -NoProfile -File scripts\reclaim-old-kolux.ps1
    ```
    This only lists the 5 folders and their sizes; it deletes nothing. Check the list.

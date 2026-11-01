@@ -395,6 +395,10 @@ pub fn startup_check_here(profile: &Path) -> PermReport {
 
 /// How long the page may go without a heartbeat once it has sent one.
 pub const STALL: Duration = Duration::from_secs(20);
+
+/// How often a running app says so in its own log. Without it, `kolux.log` only changes when
+/// something happens, so a healthy app and a stopped one look the same from the file.
+pub const ALIVE_EVERY: Duration = Duration::from_secs(300);
 /// How long the first load may take before it counts as stalled (a loaded PC takes a while).
 pub const FIRST_LOAD: Duration = Duration::from_secs(90);
 /// Recoveries inside this window ...
@@ -574,8 +578,17 @@ pub fn watch_start(app: tauri::AppHandle, perm: Option<String>) {
     let install = install_dir().unwrap_or_default();
     let mut wake = Wake::new(std::time::SystemTime::now());
     let mut sampled: Option<Instant> = None;
+    let mut beat = Instant::now();
     let spawned = std::thread::Builder::new().name("interface-watch".into()).spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
+        // APP-069: a line every five minutes, so the log shows a gap when the app stops instead of
+        // going quiet while it is still running.
+        if beat.elapsed() >= ALIVE_EVERY {
+            beat = Instant::now();
+            if let Ok(d) = app.path().app_data_dir() {
+                crate::diag::write(&d, "alive: the app, its window and the interface watch are running");
+            }
+        }
         // T-286-b (APP-040): a memory reading for the next crash report, and new crash dumps.
         if sampled.is_none_or(|t| t.elapsed() >= SAMPLE_EVERY) {
             sampled = Some(Instant::now());

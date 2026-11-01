@@ -13,7 +13,7 @@ opening the sheet at 20:16:32.03
 PASS the New session sheet opens with the Seat 1 AI choices: 570 ms after the click
 AI choices: ["Claude Code","Codex","Grok","Terminal"]
 screenshot: G:/Temp/live-v8-logs/962-1-chooser.png
-Grok: {"text":"Grok","title":"C:\\Users\\XiongT\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe"}; model choices ["Grok 4.6","Grok 4.5","Program default"] (the built-in list holds only "Grok 4")
+Grok: {"text":"Grok","title":"%USERPROFILE%\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe"}; model choices ["Grok 4.6","Grok 4.5","Program default"] (the built-in list holds only "Grok 4")
 PASS Grok's model choices come from its own listing (more than the built-in default alone): ["Grok 4.6","Grok 4.5","Program default"] (polled up to 15 s)
 screenshot: G:/Temp/live-v8-logs/962-1-grok.png
 Cursor: {"text":"Cursor","title":"G:\\Temp\\live-v8\\standin-962-1\\cursor-agent.cmd"}
@@ -41,7 +41,7 @@ opening the sheet at 20:17:11.83
 PASS the New session sheet opens with the Seat 1 AI choices: 489 ms after the click
 AI choices: ["Claude Code","Codex","Grok","Terminal"]
 screenshot: G:/Temp/live-v8-logs/962-2-chooser.png
-Grok: {"text":"Grok","title":"C:\\Users\\XiongT\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe"}; model choices ["Grok 4.6","Grok 4.5","Program default"] (the built-in list holds only "Grok 4")
+Grok: {"text":"Grok","title":"%USERPROFILE%\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe"}; model choices ["Grok 4.6","Grok 4.5","Program default"] (the built-in list holds only "Grok 4")
 PASS Grok's model choices come from its own listing (more than the built-in default alone): ["Grok 4.6","Grok 4.5","Program default"] (polled up to 15 s)
 screenshot: G:/Temp/live-v8-logs/962-2-grok.png
 Cursor: {"text":"Cursor","title":"G:\\Temp\\live-v8\\standin-962-2\\cursor-agent.cmd"}
@@ -72,7 +72,7 @@ opening the sheet at 20:17:59.01
 PASS the New session sheet opens with the Seat 1 AI choices: 487 ms after the click
 AI choices: ["Claude Code","Codex","Grok","Terminal"]
 screenshot: G:/Temp/live-v8-logs/962-3-chooser.png
-Grok: {"text":"Grok","title":"C:\\Users\\XiongT\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe"}; model choices ["Grok 4.6","Grok 4.5","Program default"] (the built-in list holds only "Grok 4")
+Grok: {"text":"Grok","title":"%USERPROFILE%\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe"}; model choices ["Grok 4.6","Grok 4.5","Program default"] (the built-in list holds only "Grok 4")
 PASS Grok's model choices come from its own listing (more than the built-in default alone): ["Grok 4.6","Grok 4.5","Program default"] (polled up to 15 s)
 screenshot: G:/Temp/live-v8-logs/962-3-grok.png
 Cursor: {"text":"Cursor","title":"G:\\Temp\\live-v8\\standin-962-3\\cursor-agent.cmd"}

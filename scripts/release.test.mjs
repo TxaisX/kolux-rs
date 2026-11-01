@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -55,7 +55,9 @@ describe("one build at a time (APP-059)", () => {
     expect(takeQueued(dir)).toBe(true);
     expect(takeQueued(dir)).toBe(false); // three ships, one extra build
     expect(acquire(dir, { pid: 4, isAlive: () => false })).toBe("locked"); // holder died
-    unlock(dir);
+    unlock(dir, 3); // a build that no longer owns the lock leaves it alone
+    expect(fs.existsSync(dir + ".lock")).toBe(true);
+    unlock(dir, 4);
     expect(fs.existsSync(dir + ".lock")).toBe(false);
   });
 });
@@ -134,6 +136,8 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
     const exec = (cmd, args, opts = {}) => {
       const name = cmd === process.execPath && args[0]?.endsWith("tauri.js") ? `tauri ${args[1]}` : path.basename(cmd);
       calls.push({ name, args, env: opts.env ?? process.env });
+      // APP-060: the gate asks for the CI runs of the commit; a green run lets the release go on.
+      if (name === "gh" && args[0] === "run" && args[1] === "list") return JSON.stringify([{ status: "completed", conclusion: "success", url: "" }]);
       if (name === "gh" && args[1] === "view") {
         if (!latest) throw new Error("gh: release not found");
         return JSON.stringify(latest);
@@ -152,7 +156,7 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
       }
       return "";
     };
-    return { calls, exec, gh: () => calls.filter((c) => c.name === "gh") };
+    return { calls, exec, gh: () => calls.filter((c) => c.name === "gh" && c.args[0] !== "run") };
   }
 
   it("inside GitHub Actions, from the local checkout release.yml passes, it asks gh for the newest release and publishes the next", () => {
@@ -164,9 +168,41 @@ describe("release job publishing to GitHub, with gh stubbed (APP-059, DT-R11)", 
       expect(r.notes).toMatch(/^- Agents start faster\n- Terminals keep their place\n/);
       expect(t.gh().map((c) => c.args.slice(0, 2).join(" "))).toEqual(["release view", "release create", "release upload"]);
       const [, create, upload] = t.gh().map((c) => c.args);
-      expect(create.slice(2, 5)).toEqual(["v0.1.8", "--repo", FEED_REPO]);
+      // APP-060 / APP-031: the tag names the commit that was built, not whatever main is at publish time.
+      expect(create.slice(2, 5)).toEqual(["v0.1.8", "--target", r.sha]);
+      expect(create.slice(5, 7)).toEqual(["--repo", FEED_REPO]);
       expect(create.slice(-2).map((f) => path.basename(f))).toEqual([installerName("0.1.8"), installerName("0.1.8") + ".sig"]);
       expect(path.basename(upload.at(-1))).toBe("latest.json"); // APP-031: the manifest goes up last
+    } finally {
+      s.done();
+    }
+  });
+
+  it("refuses a commit whose CI is red, before it builds or publishes anything", () => {
+    const s = scratch();
+    try {
+      const t = tools(s.checkout, null);
+      const red = (cmd, args, opts) =>
+        path.basename(cmd) === "gh" && args[0] === "run" && args[1] === "list"
+          ? JSON.stringify([{ status: "completed", conclusion: "failure", url: "https://example.invalid/run" }])
+          : t.exec(cmd, args, opts);
+      expect(() => buildOnce({ repo: s.origin }, s.env, red)).toThrow(/CI for commit .* ended "failure"/);
+      expect(t.gh().some((c) => c.args[1] === "create"), "no release is created").toBe(false);
+    } finally {
+      s.done();
+    }
+  });
+
+  it("lets a recovery publish past a red commit only when KOLUX_RELEASE_ALLOW_RED=1 says so", () => {
+    const s = scratch();
+    try {
+      const t = tools(s.checkout, null);
+      const red = (cmd, args, opts) =>
+        path.basename(cmd) === "gh" && args[0] === "run" && args[1] === "list"
+          ? JSON.stringify([{ status: "completed", conclusion: "failure", url: "" }])
+          : t.exec(cmd, args, opts);
+      const r = buildOnce({ repo: s.origin }, { ...s.env, KOLUX_RELEASE_ALLOW_RED: "1" }, red);
+      expect(r).toMatchObject({ published: true });
     } finally {
       s.done();
     }
@@ -362,3 +398,6 @@ describe("ship options (APP-058)", () => {
     expect(() => parseArgs(["--rebase"])).toThrow(/unknown option/);
   });
 });
+
+
+

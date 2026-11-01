@@ -149,8 +149,8 @@ Acceptance:
         and Retry; start a server and press Retry → the page loads. (Reworded per Txais 2026-10-28
         decisions file, A2: port 9 is on Chromium's blocked-port list.)
         (live, free port 55726; evidence/cards-BROW-008.txt)
-  - [ ] Open a public site with a broken certificate → certificate wording and no local-server
-        advice.
+  - [x] Open a public site with a broken certificate → certificate wording and no local-server
+        advice. (live, 0.1.4 + BROW-008 fix, local build; evidence/live-installed-b7.txt)
 Compat: —
 Source: D-13-008
 
