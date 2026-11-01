@@ -1,0 +1,95 @@
+ports-stop (lane5/ports-stop from origin/main 3af39cf3, 2026-11-01): the Stop safety guards of PR #42 (lane/ports), ported
+onto main's Ports code. PR #42 branched 2026-10-19, had no common ancestor with main and its ports.rs was never wired into
+lib.rs there (its tests never ran in CI); it is replaced by this unit. Route A of the brief: main's scan stays as it is
+(netstat -ano, pane-ancestry tie, own rows first then at most 12 external, 10 s cadence with the popover closed, no per-scan
+memory reads of other processes, non-Windows shows no ports and no error). Only what a Stop may end changed. No app launched
+here (Linux container): on-screen behaviour is LIVE PROOF PENDING at the end. Logs in the session scratchpad
+(ports-stop-logs/red.log, red-vitest.log, green-ports.log, green-vitest.log, tsc.log, win-check.log, win-clippy.log).
+
+What the user can do now: a Stop in the Ports popover ends only the program the row showed. A process id that now belongs
+to another program is refused ("process N now belongs to another program; nothing was stopped"): the start time travels
+with the row, is read again in a fresh scan and once more right before the kill, and all three must agree. A port also
+held by a program outside the workspace, by Kolux itself or by a system process is refused as a whole (every holder is
+checked before anything is ended). A stop is licensed only by a workspace folder at least two folders deep, no home
+folder (USERPROFILE, HOMEDRIVE+HOMEPATH, HOME, the terminals' home) and no parent of one, with a .git on disk, that the
+project store lists or Git lists for the project whose folder holds it. After the kill Kolux waits up to 2 s for the
+program to be gone and reports one still running. A port already gone, or now held by a program the user never saw,
+counts as success and ends nothing. A printed address labels a port only when the terminal that printed it started the
+holder (terminal A's "http://localhost:3000" never labels terminal B's server). The kept rule stays: only a program
+started from a Kolux pane in the workspace gets a Stop at all (external rows have none).
+
+Changes
+- src-tauri/src/ports.rs: PortRow gains `started` (the holder's start time as text; empty for an external row and where the
+  system keeps none) and `terminal` (the Kolux terminal whose shell started the holder; None for an external row).
+  rows_for takes sessions as (id, shell pid, folder) and a start-time reader, asked once per own holder, never for an
+  external one. New pure guards: stop_target (gone / every holder own / no Kolux or system pid / same start time),
+  same_start (strict on Windows: a withheld start time never confirms a pid), depth, folder_check (depth >= 2, no home
+  or parent of one, has .git, known), known_workspace (store first; Git only for the one project whose folder holds the
+  path), homes_from. start_time(pid) on Windows: OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) + GetProcessTimes, no
+  memory read, no new Cargo feature. ports_stop takes `started`, reads the store before the blocking part, runs the scan,
+  stop_target, folder_check (Git last), the third start-time reading, kill_tree, then wait_gone(2 s). ports_list unchanged
+  in contract (rows carry the two new fields).
+- src-tauri/src/labels.rs: the PROJ-088 test row literal gains the two fields (no behaviour change).
+- src/ports/ports.ts: PortRow with started/terminal; PrintedUrls keyed by terminal and port, forPort answers only for a
+  holder under the printing terminal; stopArgs builds what a Stop sends (started as a string).
+- src/ports/PortsItem.tsx: records each output chunk under its terminal id; Stop sends stopArgs. Cadence untouched.
+- src/look/cardPorts.test.ts: the row helper gains the two fields. cardPorts.ts itself is unchanged.
+- DECISIONS.md DT-C64, docs/guide/terminals.md "Ports in the status bar", settings.md status bar items list,
+  feature-index.md T-226 row, PLAN.md T-226 note.
+
+Red first (tests written before the code)
+  cargo test --lib ports::   -> 39 compile errors (red.log): "cannot find function `stop_target`" x8, `folder_check` x7,
+    `same_start_on` x4, `known_workspace` x4, `depth` x3, "cannot find type `Target`" x3, "no field `started`/`terminal`
+    on type `ports::PortRow`" x4, "this function takes 5 arguments but 6 arguments were supplied" (rows_for).
+  vitest src/ports              -> Tests 2 failed | 7 passed (red-vitest.log):
+    x VIEW-078 a printed address binds only to a program under the terminal that printed it
+      AssertionError: expected 'http://localhost:3000/b' to be 'http://localhost:3000/a' (main keys addresses by port only)
+    x VIEW-078 a Stop sends back the start time it saw, as text, so a reused process id is refused
+      TypeError: stopArgs is not a function
+  One test was corrected after its first green run, not weakened: the "parent of a home" case used C:\Users, which the
+  depth rule refuses first (depth 1); it now also checks a parent deep enough (D:\people\home) for the home message, keeps
+  C:\Users as refused, and adds the sibling-prefix case (D:\people\homely is allowed).
+
+Green (same commands after the code)
+  (cd src-tauri && . ../scripts/test-env.sh && cargo test --lib -- ports:: labels::)
+    test result: ok. 24 passed; 0 failed (ports:: 17 incl. the 9 new view078_stop_* tests, labels:: 5, browser::ports 3)
+  VITEST_MAX_WORKERS=2 npx vitest run src/ports src/look src/chrome
+    Test Files 28 passed (28) · Tests 150 passed (150)
+  npx tsc --noEmit                                  -> clean (exit 0)
+  node scripts/plan-check.mjs                       -> plan-check: OK
+  node scripts/invoke-contract.mjs                  -> 705 invoke calls against 444 registered commands: OK (no new command;
+                                                       ports_stop gained the `started` argument, sent by stopArgs)
+  cargo check --target x86_64-pc-windows-gnu --all-targets      -> Finished, check exit 0 (win-check.log)
+  cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> clean, clippy exit 0 (win-clippy.log; a first run flagged
+                                                       too_many_arguments on ports_stop, so it takes an AppHandle for its three states; the window's call is unchanged)
+  No dependency change (license-check not needed).
+
+What the new Rust tests prove (src-tauri/src/ports.rs, all pure, run on every platform)
+  view078_stop_a_row_names_the_terminal_that_started_it_and_when_it_started: own row carries terminal 7 and "t4242";
+    the external row carries None and "".
+  view078_stop_a_port_nothing_holds_or_that_another_program_now_holds_is_gone: Target::Gone both ways.
+  view078_stop_every_holder_is_checked_so_a_second_holder_outside_the_workspace_refuses: the error names pid 6000.
+  view078_stop_kolux_itself_and_system_processes_are_refused: self pid, pid 4, and a port shared with Kolux.
+  view078_stop_a_reused_process_id_is_refused_as_stale: "100" vs "200" refused, equal passes; same_start_on strict rules.
+  view078_stop_a_home_folder_its_parents_a_shallow_folder_and_a_folder_without_git_are_refused: home, deep parent of a
+    home, C:\Users, spelling (c:/users/TXAIS/), C:\work (depth), no .git, unknown; the good folder passes; depth edges.
+  view078_stop_the_store_licenses_a_workspace_and_git_is_asked_only_for_the_project_holding_it: a store hit spawns no
+    git; a miss asks git for exactly the containing project; a folder under no project asks nothing.
+  view078_stop_the_homes_a_stop_refuses_come_from_every_home_variable: USERPROFILE, HOMEDRIVE+HOMEPATH, HOME, pty home.
+  Existing view078_* and row75_* tests kept (sessions gained an id, rows_for a start-time reader).
+What the new TS tests prove (src/ports/ports.test.ts): an address printed in terminal 8 labels the holder under 8, not
+  under 7 or 9, never an external row, and the right holder is found among several on one port; stopArgs carries started
+  as a string.
+
+Not ported on purpose (refuted or out of scope per the brief): the branch's per-scan ReadProcessMemory cwd reads and
+  GetExtendedTcpTable scan, its 3 s closed cadence, dropping the external-row cap, the lsof scan on non-Windows, and
+  the rule that any process whose cwd is in a worktree can be stopped (main keeps: a Kolux pane must have started it).
+
+LEFT (live, needs the Windows app)
+  1. Start a dev server on 5173 in a workspace pane -> "Ports 1"; click -> row with its printed URL; Stop -> row gone, note
+     "Stopped port 5173" (VIEW-078 box 1 stays open until seen).
+  2. Stop a row, then at once stop it again from a stale popover -> "already gone" success, nothing else ended; start another
+     program that reuses the pid (hard to force; the unit test stands in) -> "now belongs to another program".
+  3. A workspace registered at a home folder, or a folder with no .git -> Stop refused with the named reason, process alive.
+  4. A port a second, external program also holds -> Stop refused naming that pid.
+  5. Two panes printing the same http://localhost:3000 -> each row shows the address its own terminal printed.

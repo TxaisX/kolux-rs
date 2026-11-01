@@ -171,6 +171,19 @@ Web addresses, `file://` links and file paths printed in a pane are links. A pla
 - A file path, such as `src/app.ts:42` or `C:\work\notes.txt`, is read against the pane's folder and opened with the program Windows uses for that kind of file. It must be an existing file. A path on another computer is refused, and a program file is shown in its folder instead of being run (see [Safety](safety.md)). The `:42` is not used yet; the editor does not jump to a line from here.
 - A link a program prints on purpose (PowerShell does this) is clickable too.
 
+## Ports in the status bar
+
+The **Ports** item in the status bar counts the ports the active workspace is listening on. Click it for the list: each port with the address its dev server printed (when a Kolux terminal in this workspace printed it; an address printed in another terminal never labels this one's server), an **Open** button (the Kolux browser; Shift+Ctrl-click opens your system browser) and a **Stop** button. Ports held by programs outside the workspace are listed as "external", at most twelve of them, and have no Stop. A failed scan names its problem and keeps the last good list.
+
+Stop ends the program behind the port with everything it started, but only when it is sure what it ends:
+
+- The program must be the one the row showed. If that process has already ended, the stop counts as done and ends nothing, even when a new program has since taken the port. If the process id now belongs to a different program, the stop is refused: "process N now belongs to another program; nothing was stopped".
+- Every program holding the port must belong to the workspace. A port also held by a program outside it, by Kolux itself or by a system process is refused as a whole.
+- The workspace folder must be a real Git worktree that Kolux knows (a project folder or one of its worktrees), at least two folders deep. A home folder, or a folder above one, is never a place Kolux stops programs in.
+- After the stop, Kolux waits up to two seconds for the program to be gone and tells you if it is still running.
+
+A refused stop says why under the title of the list; nothing is ended.
+
 ## New lines and other keyboards
 
 In a Claude or Codex pane, **Shift+Enter** (or Ctrl+Enter) puts a new line in your prompt instead of sending it; plain Enter still sends. In a shell pane Enter stays Enter. A pane that began as an agent but fell back to a shell counts as a shell.
