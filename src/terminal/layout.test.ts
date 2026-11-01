@@ -2,7 +2,7 @@
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
 import { sessionOrder } from "../sessions/restoreOrder";
-import { layoutOf, marksOf, restoreAsks, restoreLayout, reviveSaved, stillThere } from "./layout";
+import { layoutOf, marksOf, panesWantingListedSession, restoreAsks, restoreLayout, reviveSaved, stillThere } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
 
@@ -148,4 +148,26 @@ test("ux-fix-1: nine panes, four running shells and five empty choosers, come ba
   expect(reviveSaved(back.panes[4]).seats).toEqual([{ agent: null, model: null }]);
   expect(reviveSaved(back.panes[8]).seats).toEqual([{ agent: "codex", model: null }]);
   expect(restoreAsks(back.panes[8])).toBe(false); // a chooser asks for no start line
+});
+
+test("T-066-e: the panes whose session the agent's own sessions list is asked for: started id-only agent tabs with no id, never a hook-fed or a settled one; `taken` holds every id the other panes hold", () => {
+  const cursor = { ...shell(2, "C:\\w\\a"), agentId: "cursor", program: "cursor" };
+  const cursorKnown = { ...shell(3, "C:\\w\\a"), agentId: "cursor", program: "cursor", session: "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b" };
+  const claude = { ...shell(4, "C:\\w\\a"), agent: "claude" as const, agentId: "claude", program: "claude" }; // its hooks report the id
+  const codexKnown = { ...shell(5, "C:\\w\\a"), agent: "codex" as const, agentId: "codex", program: null, session: "thr_22" };
+  const goose = { ...shell(6, "C:\\w\\b"), agentId: "goose", program: "goose" };
+  const gooseFork = { ...shell(7, "C:\\w\\b"), agentId: "goose", program: "goose", forkOf: "20261013_080000_b2" };
+  const chooser = shell(8, "C:\\w\\a", { seats: [{ agent: "cursor", model: null }], agentId: "cursor" }); // pre-picked, never started
+  const editor = shell(9, "C:\\w\\a", { kind: "editor", path: "C:\\w\\a\\x.md", agentId: "cursor" });
+  const nowhere = { ...shell(10, null), agentId: "cursor", program: "cursor" };
+  const plain = shell(11, "C:\\w\\a");
+  const want = panesWantingListedSession([shell(1, null), cursor, cursorKnown, claude, codexKnown, goose, gooseFork, chooser, editor, nowhere, plain]);
+  expect(want.asks).toEqual([
+    { key: 2, agent: "cursor", folder: "C:\\w\\a" },
+    { key: 6, agent: "goose", folder: "C:\\w\\b" },
+    { key: 7, agent: "goose", folder: "C:\\w\\b" },
+  ]);
+  // Every id a pane holds, and the session a fork came from (a fork is never resumed as its source).
+  expect(want.taken).toEqual(["3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b", "thr_22", "20261013_080000_b2"]);
+  expect(panesWantingListedSession([claude, codexKnown, plain])).toEqual({ asks: [], taken: ["thr_22"] });
 });

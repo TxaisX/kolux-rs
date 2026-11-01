@@ -155,7 +155,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const setupExits = useRef<Record<number, (code: number | null) => void>>({});
   // The page, screen and layout writes, and the quit question (shell/useWindowSave.ts).
   const save = useWindowSave({
-    activeDir, activeTab, classic, dirty, focused, page, panes, pinned, read, running, saveSetting, screen, setHist, setNotice, setScreen, setSettings,
+    activeDir, activeTab, classic, dirty, focused, page, panes, pinned, read, running, saveSetting, screen, setHist, setNotice, setPanes, setScreen, setSettings,
     settings, settingsRead, settingsRef, stacked, tabColors
   });
 

@@ -85,6 +85,30 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
   return tidy(kept, activeTab, focused, activeDir, stacked);
 }
 
+/** The agents whose own status hooks hand Kolux their session id, so their sessions list is never asked. */
+export const HOOK_FED_AGENTS: readonly string[] = ["claude", "codex"];
+
+export type ListedAsk = { key: number; agent: string; folder: string };
+
+/** T-066-e (SESS-030, source 2 of terminal_session_id.rs): the panes whose session id the window asks the
+ * agent's own sessions command for when it writes the layout down: each started agent tab that holds no
+ * session id yet and whose agent does not report one through hooks (`HOOK_FED_AGENTS`), with its folder to
+ * run the command in. A chooser never started, a non-terminal tab and a tab with no folder are not asked.
+ * `taken` is every session id some pane holds, and the session each fork came from (a fork is never resumed
+ * as its source), so the answer is never a session another pane resumes: the never-twice rule. */
+export function panesWantingListedSession(panes: LivePane[]): { asks: ListedAsk[]; taken: string[] } {
+  const asks: ListedAsk[] = [];
+  const taken: string[] = [];
+  for (const p of panes) {
+    if (p.session) taken.push(p.session);
+    if (p.forkOf && !taken.includes(p.forkOf)) taken.push(p.forkOf);
+    const chooser = !!p.seats && p.program === null && !p.kind;
+    if (p.session || p.kind || chooser || !p.agentId || !p.cwd || HOOK_FED_AGENTS.includes(p.agentId)) continue;
+    asks.push({ key: p.key, agent: p.agentId, folder: p.cwd });
+  }
+  return { asks, taken };
+}
+
 /** A saved pane as App's live pane: a saved chooser gets its seat back (the agent it was pre-set to, else blank). */
 export function reviveSaved(p: SavedPane): Omit<SavedPane, "chooser"> & { seats?: { agent: string | null; model: string | null }[] } {
   const { chooser, ...rest } = p;
