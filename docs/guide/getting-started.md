@@ -10,7 +10,7 @@ On a fresh install Kolux opens a four-step dialog, "Get started with Kolux". Eac
 |---|---|---|
 | 1. Welcome | Read the idea: several AIs can work on your files at the same time | Get started |
 | 2. Connect an AI | Link at least one AI. The main button stays off until one is connected. Under the AI cards is one line, "Kolux will add its status hooks to each AI's settings, so it can show you which one needs you.", beside a switch that is on. Continue (or "I'll do this later") records the switch as your answer; Back does not | Continue (or "I'll do this later") |
-| 3. Your work | Pick a folder, or Continue without one. Pick a folder closes setup and opens Add Project; the folder you add then starts your default agent | Continue |
+| 3. Your work | Pick a folder, or Continue without one. Pick a folder closes setup and opens Add Project; if you have chosen a default agent, it starts in the folder you add (nothing starts while Default agent is Auto) | Continue |
 | 4. Open a session | A switch, "Tell me whenever an AI finishes", turns on notifications. The main button starts the first AI offered in the project in front. With no project yet, it closes setup and opens Add Project instead, and that AI starts in the folder you pick | Open a session |
 
 You can reopen the dialog later: click the "?" (Help) button at the bottom of the sidebar, then Onboarding.
