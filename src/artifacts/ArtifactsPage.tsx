@@ -101,24 +101,33 @@ export function viewerUrl(a: Pick<Artifact, "id" | "page">, windows = navigator.
   return `${base}/${a.id}/${a.page.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** Where the focus has been: whether the viewer frame holds it now, when it last took it from
+ * Kolux's own window, and when the user last pressed a pointer or key in Kolux's own window
+ * (performance.now() times). A click inside the frame reaches none of Kolux's listeners. */
+export type FrameFocus = { frameFocused: boolean; frameFocusedAt: number; ownInputAt: number };
+
 /** The link a message from the viewer asks to open, or null. Only our own frame may ask, and only
- * while the user is acting: a click inside the frame counts for its ancestors too (transient
- * activation reaches every ancestor window), while a page's own script posting on load, or in a
- * loop, has no activation and opens nothing. A web view without userActivation opens nothing
- * either, since it cannot tell the two apart. */
-export function viewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, nav: Navigator = navigator): string | null {
+ * for a click made inside it: the user's activation has to be live (a click inside the frame counts
+ * for its ancestors too), the frame has to hold the focus, and it has to have taken the focus after
+ * the user's last input in Kolux itself. Activation alone is not enough: a row click in the list
+ * activates Kolux's own window for a few seconds, which is long enough for the picked page to load
+ * and post, and so does a later click or key press anywhere in Kolux. A page's own script posting on
+ * load, or in a loop, therefore opens nothing; nor does any message in a web view without
+ * userActivation, since it cannot tell the cases apart. */
+export function viewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, focus: FrameFocus, nav: Navigator = navigator): string | null {
   if (!frameWindow || e.source !== frameWindow) return null;
   const data = e.data as { koluxOpen?: unknown } | null | undefined;
   if (typeof data?.koluxOpen !== "string") return null;
   const activation = (nav as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
   if (!activation?.isActive) return null;
+  if (!focus.frameFocused || !(focus.frameFocusedAt > focus.ownInputAt)) return null;
   return data.koluxOpen;
 }
 
 /** Hands a clicked link from the viewer to the system browser (`open_external` lets only web and mail
- * links through); a message without a user gesture does nothing. */
-export function openViewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, nav: Navigator = navigator): Promise<unknown> | null {
-  const url = viewerLink(e, frameWindow, nav);
+ * links through); a message that does not come from a click inside the frame does nothing. */
+export function openViewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, focus: FrameFocus, nav: Navigator = navigator): Promise<unknown> | null {
+  const url = viewerLink(e, frameWindow, focus, nav);
   return url === null ? null : invoke("open_external", { url });
 }
 
@@ -175,13 +184,35 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
     };
   }, [workspace, project, refresh, onToast]);
 
-  // A link clicked inside the viewer: only a message from our own frame, while the user is acting.
+  // A link clicked inside the viewer: only a message from our own frame, for a click inside it.
+  // Kolux's own pointer and key presses are noted in the capture phase (a click inside the frame
+  // never reaches them), and so is the moment the frame takes the focus from Kolux's window
+  // (clicking into a frame blurs the window and makes the frame element the active one).
+  const ownInputAt = useRef(0);
+  const frameFocusedAt = useRef(0);
   useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      openViewerLink(e, frame.current?.contentWindow)?.catch((err) => onToast(String(err)));
+    const own = () => void (ownInputAt.current = performance.now());
+    const focusMoved = () => {
+      if (frame.current && document.activeElement === frame.current) frameFocusedAt.current = performance.now();
     };
+    const onBlur = () => {
+      focusMoved();
+      // Some web views move the active element just after the blur.
+      window.setTimeout(focusMoved, 0);
+    };
+    const onMessage = (e: MessageEvent) => {
+      const focused = !!frame.current && document.activeElement === frame.current;
+      openViewerLink(e, frame.current?.contentWindow, { frameFocused: focused, frameFocusedAt: frameFocusedAt.current, ownInputAt: ownInputAt.current })?.catch((err) => onToast(String(err)));
+    };
+    const inputs = ["pointerdown", "mousedown", "keydown", "touchend"] as const;
+    for (const t of inputs) window.addEventListener(t, own, true);
+    window.addEventListener("blur", onBlur);
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      for (const t of inputs) window.removeEventListener(t, own, true);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("message", onMessage);
+    };
   }, []);
 
   const shown = useMemo(() => group((list ?? []).filter((a) => matches(a.title, query))), [list, query]);

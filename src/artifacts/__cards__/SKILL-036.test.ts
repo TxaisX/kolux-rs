@@ -28,18 +28,25 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => Promise.resolve(h.pick
 
 let doc: FakeDocument;
 let messageHandlers: ((e: unknown) => void)[] = [];
+/** The other listeners the page puts on its window (pointerdown, keydown, blur and so on), by type. */
+let winHandlers: Record<string, ((e: unknown) => void)[]> = {};
+const fireWin = (t: string) => (winHandlers[t] ?? []).forEach((fn) => fn({ type: t }));
 let unmount: () => Promise<void> = async () => {};
 beforeEach(() => {
   const dom = installDom();
   doc = dom.doc;
   messageHandlers = [];
+  winHandlers = {};
   Object.assign(dom.win, {
     setInterval,
     clearInterval,
     setTimeout,
     clearTimeout,
-    addEventListener: (t: string, fn: (e: unknown) => void) => void (t === "message" && messageHandlers.push(fn)),
-    removeEventListener: (t: string, fn: (e: unknown) => void) => void (messageHandlers = messageHandlers.filter((f) => f !== fn || t !== "message")),
+    addEventListener: (t: string, fn: (e: unknown) => void) => void (t === "message" ? messageHandlers.push(fn) : (winHandlers[t] ??= []).push(fn)),
+    removeEventListener: (t: string, fn: (e: unknown) => void) => {
+      if (t === "message") messageHandlers = messageHandlers.filter((f) => f !== fn);
+      else winHandlers[t] = (winHandlers[t] ?? []).filter((f) => f !== fn);
+    },
   });
   h.lib = [];
   h.picks = [];
@@ -120,13 +127,16 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
   // In the library page: the message from its own frame becomes open_external; Kolux itself navigates nowhere.
   h.lib = [{ id: replay.id, title: "Viewed", added: 1 }];
   const c = await page();
+  // The row click reaches Kolux's own window first (its pointerdown), and leaves the focus on the row.
+  fireWin("pointerdown");
+  doc.activeElement = rows(c)[0];
   await click(c, rows(c)[0]);
   await until(() => find(c, (n) => n.localName === "iframe").length === 1);
   const frame = find(c, (n) => n.localName === "iframe")[0] as FakeNode & { contentWindow?: unknown };
   const own = {};
   frame.contentWindow = own;
   expect(messageHandlers).toHaveLength(1);
-  // The user is clicking inside the frame: transient activation reaches the frame's ancestors.
+  // The row click left Kolux's window with live activation (it lasts a few seconds).
   const activation = { isActive: true };
   vi.stubGlobal("navigator", { ...globalThis.navigator, userActivation: activation });
   const deliver = async (source: unknown, data: unknown) => {
@@ -135,10 +145,16 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
   };
   await deliver({}, { koluxOpen: "https://elsewhere.invalid/" }); // not our frame
   await deliver(own, { somethingElse: 1 });
-  // A page's own script posting the message on load, with no user gesture, opens nothing.
+  // The page's own script posts on load, right after the row click: the activation is the row
+  // click's, the focus is on the row, so nothing opens.
+  await deliver(own, { koluxOpen: "https://elsewhere.invalid/?d=load" });
+  // Nor with no activation at all.
   activation.isActive = false;
   await deliver(own, { koluxOpen: "https://elsewhere.invalid/?d=secret" });
   expect(h.calls.filter((x) => x.cmd === "open_external")).toEqual([]);
+  // The user clicks into the frame: Kolux's window loses the focus to it, and the click inside is live activation.
+  doc.activeElement = frame;
+  fireWin("blur");
   activation.isActive = true;
   for (const m of v.posted) await deliver(own, m.msg);
   expect(h.calls.filter((x) => x.cmd === "open_external").map((x) => x.args)).toEqual([{ url: "https://example.invalid/x?q=1" }, { url: "mailto:someone@example.invalid" }]);
@@ -147,6 +163,13 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
   h.openError = "file:///x is not a web or mail link";
   await deliver(own, { koluxOpen: "file:///x" });
   expect(toasts).toEqual(["file:///x is not a web or mail link"]);
+  // Back in Kolux: typing in the search box (a key press in Kolux's own window) moves the focus out
+  // of the frame, and a page posting in a loop opens nothing more, though activation is live again.
+  const before = h.calls.filter((x) => x.cmd === "open_external").length;
+  fireWin("keydown");
+  doc.activeElement = find(c, (n) => n.localName === "input")[0];
+  await deliver(own, { koluxOpen: "https://elsewhere.invalid/?d=loop" });
+  expect(h.calls.filter((x) => x.cmd === "open_external")).toHaveLength(before);
   // The frame is sandboxed without top navigation or popups.
   expect(String(frame.attrs.sandbox)).toBe("allow-scripts allow-forms");
   vi.unstubAllGlobals();
