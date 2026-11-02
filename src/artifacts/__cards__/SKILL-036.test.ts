@@ -126,13 +126,20 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
   const own = {};
   frame.contentWindow = own;
   expect(messageHandlers).toHaveLength(1);
+  // The user is clicking inside the frame: transient activation reaches the frame's ancestors.
+  const activation = { isActive: true };
+  vi.stubGlobal("navigator", { ...globalThis.navigator, userActivation: activation });
   const deliver = async (source: unknown, data: unknown) => {
     messageHandlers[0]({ source, data });
     await settle();
   };
   await deliver({}, { koluxOpen: "https://elsewhere.invalid/" }); // not our frame
   await deliver(own, { somethingElse: 1 });
+  // A page's own script posting the message on load, with no user gesture, opens nothing.
+  activation.isActive = false;
+  await deliver(own, { koluxOpen: "https://elsewhere.invalid/?d=secret" });
   expect(h.calls.filter((x) => x.cmd === "open_external")).toEqual([]);
+  activation.isActive = true;
   for (const m of v.posted) await deliver(own, m.msg);
   expect(h.calls.filter((x) => x.cmd === "open_external").map((x) => x.args)).toEqual([{ url: "https://example.invalid/x?q=1" }, { url: "mailto:someone@example.invalid" }]);
   expect(toasts).toEqual([]);
@@ -142,6 +149,7 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
   expect(toasts).toEqual(["file:///x is not a web or mail link"]);
   // The frame is sandboxed without top navigation or popups.
   expect(String(frame.attrs.sandbox)).toBe("allow-scripts allow-forms");
+  vi.unstubAllGlobals();
 });
 
 test("box 3: Add artifact with a file that cannot be read shows an error toast and the list stays as it was", async () => {

@@ -101,6 +101,27 @@ export function viewerUrl(a: Pick<Artifact, "id" | "page">, windows = navigator.
   return `${base}/${a.id}/${a.page.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** The link a message from the viewer asks to open, or null. Only our own frame may ask, and only
+ * while the user is acting: a click inside the frame counts for its ancestors too (transient
+ * activation reaches every ancestor window), while a page's own script posting on load, or in a
+ * loop, has no activation and opens nothing. A web view without userActivation opens nothing
+ * either, since it cannot tell the two apart. */
+export function viewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, nav: Navigator = navigator): string | null {
+  if (!frameWindow || e.source !== frameWindow) return null;
+  const data = e.data as { koluxOpen?: unknown } | null | undefined;
+  if (typeof data?.koluxOpen !== "string") return null;
+  const activation = (nav as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+  if (!activation?.isActive) return null;
+  return data.koluxOpen;
+}
+
+/** Hands a clicked link from the viewer to the system browser (`open_external` lets only web and mail
+ * links through); a message without a user gesture does nothing. */
+export function openViewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, nav: Navigator = navigator): Promise<unknown> | null {
+  const url = viewerLink(e, frameWindow, nav);
+  return url === null ? null : invoke("open_external", { url });
+}
+
 type Props = {
   onToast: (text: string) => void;
   /** The workspace whose `artifacts/` folder is imported automatically; none when no folder is open. */
@@ -154,11 +175,10 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
     };
   }, [workspace, project, refresh, onToast]);
 
-  // A link clicked inside the viewer: only messages from our own frame count.
+  // A link clicked inside the viewer: only a message from our own frame, while the user is acting.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.source !== frame.current?.contentWindow || typeof e.data?.koluxOpen !== "string") return;
-      invoke("open_external", { url: e.data.koluxOpen }).catch((err) => onToast(String(err)));
+      openViewerLink(e, frame.current?.contentWindow)?.catch((err) => onToast(String(err)));
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
