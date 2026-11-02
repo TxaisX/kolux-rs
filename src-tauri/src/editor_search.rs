@@ -251,7 +251,7 @@ fn wsl_rg_command(distro: &str, linux_root: &str, a: &Ask) -> Command {
 /// EDIT-044: what a search command wrote to its error stream. wsl.exe writes its own messages
 /// (no such distribution, no such command) in UTF-16, ripgrep and git in UTF-8.
 fn stderr_text(bytes: &[u8]) -> String {
-    let utf16 = bytes.len() >= 2 && bytes.len() % 2 == 0 && (bytes.starts_with(&[0xFF, 0xFE]) || (bytes[0] != 0 && bytes[1] == 0));
+    let utf16 = bytes.len() >= 2 && bytes.len().is_multiple_of(2) && (bytes.starts_with(&[0xFF, 0xFE]) || (bytes[0] != 0 && bytes[1] == 0));
     if utf16 {
         let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         return String::from_utf16_lossy(&units).trim_start_matches('\u{FEFF}').to_string();
