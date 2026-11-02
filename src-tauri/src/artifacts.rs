@@ -331,9 +331,21 @@ fn proxied(plan: &crate::resources::app_http::Plan, b: reqwest::ClientBuilder) -
     Ok(if plan.http1 { b.http1_only() } else { b })
 }
 
+/// The most redirects one script fetch follows (`follow_cdn_redirect`).
+const MAX_REDIRECTS: usize = 5;
+
+/// Whether a script fetch follows a redirect to `next`, `hops` requests in: only to an address
+/// `cdn_url` accepts and only for a few hops. The CDNs answer their own documented tags this way
+/// (cdn.tailwindcss.com sends 302 to /3.4.17, unpkg a version range to the exact version), so
+/// refusing every redirect would leave those pages needing the network; a redirect off the list, or
+/// down to plain http, is never followed.
+fn follow_cdn_redirect(next: &str, hops: usize) -> bool {
+    hops <= MAX_REDIRECTS && cdn_url(next)
+}
+
 /// Fetches one CDN script for an entry, within the size cap; None on any failure. Only an address
-/// `cdn_url` accepts is asked for, a redirect is not followed (it could leave the allow-list), and
-/// the body is read a chunk at a time and dropped the moment it passes the cap, so a reply without
+/// `cdn_url` accepts is asked for, a redirect is followed only to another such address
+/// (`follow_cdn_redirect`; a stopped one answers 3xx, which is not a success), and the body is read a chunk at a time and dropped the moment it passes the cap, so a reply without
 /// a Content-Length cannot fill memory for the whole 20 s timeout first.
 pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
     if !cdn_url(url) {
@@ -341,7 +353,13 @@ pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
     }
     // T-323-b (APP-032): through the saved proxy; a setting that cannot be used fetches nothing.
     let plan = crate::resources::app_http::plan_for(app, &url.parse().ok()?).ok()?;
-    let builder = proxied(&plan, reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())).ok()?;
+    let builder = proxied(&plan, reqwest::Client::builder().redirect(reqwest::redirect::Policy::custom(|a| {
+        if follow_cdn_redirect(a.url().as_str(), a.previous().len()) {
+            a.follow()
+        } else {
+            a.stop()
+        }
+    }))).ok()?;
     tauri::async_runtime::block_on(async {
         let client = builder.timeout(std::time::Duration::from_secs(20)).build().ok()?;
         let mut r = client.get(url).send().await.ok()?;
@@ -359,11 +377,23 @@ pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
     })
 }
 
+/// Whether a Windows reparse point is a link to another file: a name surrogate (a symlink or a
+/// junction; IsReparseTagNameSurrogate, bit 29). Any other reparse point is the file itself kept
+/// another way: a OneDrive Files On-Demand placeholder (IO_REPARSE_TAG_CLOUD_*) carries one even
+/// when it is fully on the disk, and so does a deduplicated file. Pure, so it is tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reparse_is_link(tag: u32) -> bool {
+    tag & 0x2000_0000 != 0
+}
+
 /// One source file, opened once and judged by its handle, so what is checked is what is copied: a
 /// link where the file should be is refused at open (O_NOFOLLOW; on Windows the reparse point is
-/// opened itself and refused by its attribute), a folder or device is not a file, and a hard link
-/// to a file elsewhere (a second name for the same data, which no path check can see) is refused
-/// by its link count. The metadata is the handle's (fstat), never a second look at the path.
+/// opened itself and refused when its tag names another file), a folder or device is not a file,
+/// and a hard link to a file elsewhere (a second name for the same data, which no path check can
+/// see) is refused by its link count. The metadata is the handle's (fstat), never a second look at
+/// the path. On Windows a reparse point that is not a link (a OneDrive file) is opened again without
+/// the reparse flag so the cloud filter can bring it down, and read only if that second handle is
+/// the same file as the first (same volume and file index), so a link swapped in between is refused.
 fn open_source(path: &Path, name: &str) -> Result<(fs::File, fs::Metadata), String> {
     let mut opts = fs::File::options();
     opts.read(true);
@@ -378,14 +408,22 @@ fn open_source(path: &Path, name: &str) -> Result<(fs::File, fs::Metadata), Stri
         opts.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = opts.open(path).map_err(|e| format!("could not read {name}: {e}"))?;
-    let md = file.metadata().map_err(|e| format!("could not read {name}: {e}"))?;
     #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if md.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(format!("{name} is a link, not a file"));
+    let file = {
+        let tag = windows_file::reparse_tag(&file).map_err(|e| format!("could not read {name}: {e}"))?;
+        match tag {
+            None => file,
+            Some(tag) if reparse_is_link(tag) => return Err(format!("{name} is a link, not a file")),
+            Some(_) => {
+                let again = fs::File::open(path).map_err(|e| format!("could not read {name}: {e}"))?;
+                if windows_file::identity(&file).is_none() || windows_file::identity(&file) != windows_file::identity(&again) {
+                    return Err(format!("{name} changed while it was being read"));
+                }
+                again
+            }
         }
-    }
+    };
+    let md = file.metadata().map_err(|e| format!("could not read {name}: {e}"))?;
     if !md.is_file() {
         return Err(format!("{name} is not a file"));
     }
@@ -403,15 +441,40 @@ fn links_of(_file: &fs::File, md: &fs::Metadata) -> u64 {
 
 #[cfg(windows)]
 fn links_of(file: &fs::File, _md: &fs::Metadata) -> u64 {
+    windows_file::info(file).map_or(1, |i| i.nNumberOfLinks as u64)
+}
+
+/// What a Windows file handle says about itself.
+#[cfg(windows)]
+mod windows_file {
+    use std::fs;
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
-    // SAFETY: an open handle and a zeroed struct of the documented size, which the call fills.
-    unsafe {
-        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
-        if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) == 0 {
-            return 1;
+    use windows_sys::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO};
+
+    pub fn info(file: &fs::File) -> Option<BY_HANDLE_FILE_INFORMATION> {
+        // SAFETY: an open handle and a zeroed struct of the documented size, which the call fills.
+        unsafe {
+            let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+            (GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0).then_some(info)
         }
-        info.nNumberOfLinks as u64
+    }
+
+    /// The volume and file index: the same pair is the same file, whatever path reached it.
+    pub fn identity(file: &fs::File) -> Option<(u32, u32, u32)> {
+        info(file).map(|i| (i.dwVolumeSerialNumber, i.nFileIndexHigh, i.nFileIndexLow))
+    }
+
+    /// The handle's reparse tag, or None when it is not a reparse point.
+    pub fn reparse_tag(file: &fs::File) -> std::io::Result<Option<u32>> {
+        // SAFETY: an open handle and a zeroed FILE_ATTRIBUTE_TAG_INFO, with its size passed, for the
+        // FileAttributeTagInfo class, which fills exactly that struct.
+        unsafe {
+            let mut tag: FILE_ATTRIBUTE_TAG_INFO = std::mem::zeroed();
+            if GetFileInformationByHandleEx(file.as_raw_handle() as _, FileAttributeTagInfo, &mut tag as *mut _ as *mut core::ffi::c_void, std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0).then_some(tag.ReparseTag))
+        }
     }
 }
 
@@ -486,11 +549,21 @@ impl Library {
     /// A file that is not a page (an image, a document, a PDF) is stored whole, on its own.
     /// A page on a network share gets an "unavailable" entry without being read, and a path this
     /// machine cannot read (a WSL or SSH machine's) a "remote" one. The newest store of an origin
-    /// replaces the old one; an older one is ignored.
-    pub fn add(&self, src: &Path, from: Origin, fetch: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Entry, String> {
+    /// replaces the old one; an older one is ignored, except that a store naming the Claude session
+    /// that wrote the file replaces a newer workspace-scan one (the 3 s scan can reach the file before
+    /// the Write capture does). A scan's refresh of an entry someone else made keeps who made it: its
+    /// source, session and project.
+    pub fn add(&self, src: &Path, mut from: Origin, fetch: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Entry, String> {
         let id = id_of(&from.origin);
-        if let Some(newer) = self.read().into_iter().find(|e| e.id == id && e.added > from.at) {
-            return Ok(newer);
+        if let Some(old) = self.read().into_iter().find(|e| e.id == id) {
+            if old.added > from.at && !(old.source == "workspace" && from.session.is_some()) {
+                return Ok(old);
+            }
+            if from.source == "workspace" && old.source != "workspace" {
+                from.source = if old.source == "claude" { "claude" } else { "hand" };
+                from.session = old.session;
+                from.project = old.project;
+            }
         }
         let name = file_name(src);
         let kind = kind_of(src);
@@ -621,28 +694,33 @@ impl Library {
 /// The folder a workspace keeps its finished artifacts in: `<workspace>/artifacts`.
 pub const WORKSPACE_DIR: &str = "artifacts";
 
-/// Every file directly in `<workspace>/artifacts`, in a stable order, whatever its extension.
+/// The most files one workspace's `artifacts/` folder brings into the library, and the most bytes
+/// of them it keeps there. A cloned repository can hold thousands of small files, or many large
+/// copies of one blob, there; past these the rest is left out and the page says so once.
+pub const MAX_WORKSPACE_FILES: usize = 200;
+pub const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Every file directly in `<workspace>/artifacts`, in a stable order, whatever its extension, and
+/// whether there were more than MAX_WORKSPACE_FILES (only the first that many by name are listed).
 /// Subfolders are not entries: they hold a page's own assets (copied with the page) or a test run's
 /// screenshots, not a second deliverable. The scan never leaves the folder: a link or junction where
 /// the folder should be is not followed (read_dir would follow it; symlink_metadata's is_dir is false
 /// for one, the idiom files::list_templates uses), a linked file inside it is not a file, and each
 /// file's real path has to sit under the workspace's. A dotfile or a half-written download is not an
 /// artifact.
-pub fn workspace_files(workspace: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
+pub fn workspace_files(workspace: &Path) -> (Vec<PathBuf>, bool) {
     let dir = workspace.join(WORKSPACE_DIR);
     if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
-        return out;
+        return (Vec::new(), false);
     }
-    let Ok(real_ws) = fs::canonicalize(workspace) else { return out };
-    for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_file()) && is_workspace_file(&path) && fs::canonicalize(&path).is_ok_and(|real| real.starts_with(&real_ws)) {
-            out.push(path);
-        }
-    }
+    let Ok(real_ws) = fs::canonicalize(workspace) else { return (Vec::new(), false) };
+    let mut out: Vec<PathBuf> = fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|kind| kind.is_file())).map(|e| e.path()).filter(|p| is_workspace_file(p)).collect();
     out.sort();
-    out
+    let over = out.len() > MAX_WORKSPACE_FILES;
+    out.truncate(MAX_WORKSPACE_FILES);
+    // Real paths last, so a folder of thousands of names costs one stat each only for those kept.
+    out.retain(|path| fs::canonicalize(path).is_ok_and(|real| real.starts_with(&real_ws)));
+    (out, over)
 }
 
 fn modified_of(md: &fs::Metadata) -> u64 {
@@ -672,6 +750,13 @@ pub struct Scanned {
 /// removed since, is left alone. `seen` is the caller's memory of files it has judged, so a file
 /// that cannot be kept is reported once and tried again only when it changes.
 pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, seen: &mut HashMap<String, (u64, u64)>) -> Scanned {
+    scan_capped(lib, workspace, project, fetch, seen, MAX_WORKSPACE_BYTES)
+}
+
+/// `scan_workspace` with the byte cap passed in, so a test can reach it without a gigabyte of files.
+/// The cap counts the folder's files the library already holds as well as the ones stored now, so a
+/// later tick does not top the library up past it.
+fn scan_capped(lib: &Library, workspace: &Path, project: Option<String>, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, seen: &mut HashMap<String, (u64, u64)>, max_bytes: u64) -> Scanned {
     let project = project.filter(|p| !p.trim().is_empty()).or_else(|| workspace.file_name().map(|n| n.to_string_lossy().into_owned()));
     let known: HashMap<String, Option<(u64, u64)>> = lib.list().into_iter().map(|e| (e.entry.origin, e.entry.stamp)).collect();
     let removed = {
@@ -679,10 +764,19 @@ pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, 
         lib.removed()
     };
     let mut out = Scanned::default();
-    for file in workspace_files(workspace) {
+    let (files, over) = workspace_files(workspace);
+    if over {
+        out.skipped.push(format!("the artifacts folder holds more than {MAX_WORKSPACE_FILES} files; only the first {MAX_WORKSPACE_FILES} by name are kept"));
+    }
+    let mut kept: u64 = 0;
+    let mut full = false;
+    for file in files {
         let Ok(meta) = fs::metadata(&file) else { continue };
         let stamp = (modified_ms(&file), meta.len());
         let key = file.to_string_lossy().into_owned();
+        if known.contains_key(&key) {
+            kept += stamp.1;
+        }
         if seen.get(&key) == Some(&stamp) {
             continue;
         }
@@ -691,10 +785,24 @@ pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, 
             seen.insert(key, stamp);
             continue;
         }
+        // Over the folder's byte cap: left out, not remembered in `seen`, so it is stored once room is made.
+        let held = if known.contains_key(&key) { kept - stamp.1 } else { kept };
+        if held + stamp.1 > max_bytes {
+            if !full {
+                full = true;
+                out.skipped.push(format!("the artifacts folder holds more than {} MB; the files past that are not kept", max_bytes / (1024 * 1024)));
+            }
+            continue;
+        }
         // Added now: `added` is when the entry was stored, the file's own time lives in its stamp.
         let from = Origin { origin: key.clone(), source: "workspace", project: project.clone(), session: None, at: now_ms() };
         match lib.add(&file, from, fetch) {
-            Ok(_) => out.changed += 1,
+            Ok(_) => {
+                out.changed += 1;
+                if !known.contains_key(&key) {
+                    kept += stamp.1;
+                }
+            }
             Err(e) => {
                 eprintln!("artifacts: could not keep {}: {e}", file.display());
                 out.skipped.push(e);
@@ -1107,9 +1215,10 @@ mod tests {
         fs::write(ws.join("artifacts").join(".DS_Store"), "noise").unwrap();
         fs::write(ws.join("artifacts").join("node_modules").join("c.html"), "<title>C</title>").unwrap();
 
-        let files = workspace_files(&ws);
+        let (files, over) = workspace_files(&ws);
+        assert!(!over);
         assert_eq!(files.len(), 4, "every top-level file; a subfolder is not an entry: {files:?}");
-        assert!(workspace_files(&root.join("missing")).is_empty());
+        assert!(workspace_files(&root.join("missing")).0.is_empty());
 
         let lib = Library::new(root.join("lib"));
         let mut seen = std::collections::HashMap::new();
@@ -1149,7 +1258,7 @@ mod tests {
         fs::create_dir_all(&outside).unwrap();
         fs::write(outside.join("id_rsa"), "SECRET").unwrap();
         std::os::unix::fs::symlink(&outside, ws.join("artifacts")).unwrap();
-        assert!(workspace_files(&ws).is_empty(), "a linked artifacts/ folder is never followed");
+        assert!(workspace_files(&ws).0.is_empty(), "a linked artifacts/ folder is never followed");
         let lib = Library::new(root.join("lib"));
         let mut seen = HashMap::new();
         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen).changed, 0);
@@ -1159,7 +1268,7 @@ mod tests {
         fs::create_dir_all(ws.join("artifacts")).unwrap();
         fs::write(ws.join("artifacts").join("a.txt"), "ok").unwrap();
         std::os::unix::fs::symlink(outside.join("id_rsa"), ws.join("artifacts").join("key.txt")).unwrap();
-        assert_eq!(workspace_files(&ws), vec![ws.join("artifacts").join("a.txt")]);
+        assert_eq!(workspace_files(&ws).0, vec![ws.join("artifacts").join("a.txt")]);
         assert!(open_source(&ws.join("artifacts").join("key.txt"), "key.txt").is_err(), "a link is refused at open, not only by its path");
         let _ = fs::remove_dir_all(&root);
     }
@@ -1334,6 +1443,102 @@ mod tests {
         assert!(!stored.join("img").join("k.png").exists(), "a page's hard-linked asset is left out");
         assert_eq!(fs::read_dir(&stored).unwrap().count(), 1);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cdn_redirect_is_followed_only_to_a_listed_cdn() {
+        // cdn.tailwindcss.com answers 302 to /3.4.17 and unpkg answers 302 from a version range to the exact version.
+        assert!(follow_cdn_redirect("https://cdn.tailwindcss.com/3.4.17", 1));
+        assert!(follow_cdn_redirect("https://unpkg.com/react@18.3.1/x.js", 1));
+        assert!(follow_cdn_redirect("https://unpkg.com/react@18.3.1/x.js", 5));
+        assert!(!follow_cdn_redirect("https://evil.example/x.js", 1), "a redirect off the list is not followed");
+        assert!(!follow_cdn_redirect("http://unpkg.com/x", 1), "nor one down to plain http");
+        assert!(!follow_cdn_redirect("https://unpkg.com/react@18.3.1/x.js", 6), "nor a sixth hop");
+    }
+
+    #[test]
+    fn only_a_name_surrogate_reparse_point_is_a_link() {
+        // IO_REPARSE_TAG_SYMLINK and IO_REPARSE_TAG_MOUNT_POINT (a junction) name another file.
+        assert!(reparse_is_link(0xA000_000C));
+        assert!(reparse_is_link(0xA000_0003));
+        // A OneDrive placeholder (IO_REPARSE_TAG_CLOUD, CLOUD_6) or a deduplicated file is the file itself.
+        assert!(!reparse_is_link(0x9000_001A));
+        assert!(!reparse_is_link(0x9000_601A));
+        assert!(!reparse_is_link(0x8000_0013));
+    }
+
+    #[test]
+    fn a_scan_that_stores_a_file_first_does_not_lose_the_claude_session_that_wrote_it() {
+        let root = temp_dir("scanfirst");
+        let ws = root.join("Project");
+        fs::create_dir_all(ws.join("artifacts")).unwrap();
+        let page = ws.join("artifacts").join("a.html");
+        fs::write(&page, "<title>A</title>").unwrap();
+        let lib = Library::new(root.join("lib"));
+        let mut seen = HashMap::new();
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen).changed, 1);
+        // The Write capture comes in after, with the transcript's earlier time.
+        let key = page.to_string_lossy().into_owned();
+        let from = Origin { origin: key.clone(), source: "claude", project: Some("repo".into()), session: Some("s1".into()), at: 1000 };
+        let e = lib.add(&page, from, &|_| None).unwrap();
+        assert_eq!((e.source.as_str(), e.session.as_deref()), ("claude", Some("s1")));
+        let list = lib.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].entry.source.as_str(), list[0].entry.session.as_deref(), list[0].entry.project.as_deref()), ("claude", Some("s1"), Some("repo")));
+        // A later change picked up by the scan keeps who made the entry.
+        fs::write(&page, "<title>A2</title>").unwrap();
+        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen).changed, 1);
+        let list = lib.list();
+        assert_eq!((list[0].entry.title.as_str(), list[0].entry.source.as_str(), list[0].entry.session.as_deref(), list[0].entry.project.as_deref()), ("A2", "claude", Some("s1"), Some("repo")));
+        // An entry stored before stamps existed is refreshed by the first scan, keeping its source.
+        let hand = ws.join("artifacts").join("b.html");
+        fs::write(&hand, "<title>B</title>").unwrap();
+        let mut old = lib.add(&hand, Origin::hand(&hand), &|_| None).unwrap();
+        old.stamp = None;
+        let mut all: Vec<Entry> = lib.list().into_iter().map(|l| l.entry).collect();
+        all.retain(|x| x.id != old.id);
+        all.push(old);
+        lib.write(&all).unwrap();
+        scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut HashMap::new());
+        let b = lib.list().into_iter().find(|l| l.entry.title == "B").unwrap();
+        assert_eq!(b.entry.source, "hand");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_scan_keeps_at_most_the_file_and_byte_caps() {
+        let root = temp_dir("caps");
+        let ws = root.join("Project");
+        fs::create_dir_all(ws.join("artifacts")).unwrap();
+        for i in 0..MAX_WORKSPACE_FILES + 5 {
+            fs::write(ws.join("artifacts").join(format!("f{i:04}.txt")), "x").unwrap();
+        }
+        let lib = Library::new(root.join("lib"));
+        let mut seen = HashMap::new();
+        let got = scan_workspace(&lib, &ws, None, &|_| None, &mut seen);
+        assert_eq!(got.changed, MAX_WORKSPACE_FILES);
+        assert_eq!(lib.list().len(), MAX_WORKSPACE_FILES);
+        assert_eq!(got.skipped.len(), 1, "one reason for the whole folder: {:?}", got.skipped);
+        assert!(got.skipped[0].contains(&format!("more than {MAX_WORKSPACE_FILES} files")), "{:?}", got.skipped);
+        assert_eq!(scan_workspace(&lib, &ws, None, &|_| None, &mut seen).changed, 0, "the next tick adds nothing more");
+
+        // The byte cap counts what the library already holds from this folder, so later ticks do not top it up.
+        let root2 = temp_dir("bytecap");
+        let ws2 = root2.join("Project");
+        fs::create_dir_all(ws2.join("artifacts")).unwrap();
+        for n in ["a", "b", "c", "d"] {
+            fs::write(ws2.join("artifacts").join(format!("{n}.txt")), "0123456789").unwrap();
+        }
+        let lib2 = Library::new(root2.join("lib"));
+        let mut seen2 = HashMap::new();
+        let got = scan_capped(&lib2, &ws2, None, &|_| None, &mut seen2, 25);
+        assert_eq!(got.changed, 2);
+        assert_eq!(got.skipped.len(), 1, "{:?}", got.skipped);
+        let again = scan_capped(&lib2, &ws2, None, &|_| None, &mut seen2, 25);
+        assert_eq!(again.changed, 0, "the folder is still over the cap");
+        assert_eq!(lib2.list().len(), 2);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&root2);
     }
 
     #[test]
