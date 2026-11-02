@@ -19,7 +19,8 @@ test("the sidebar answers its own width with a container query, not the window",
   expect(css).toContain(".sb-foot .upd .label { display: none; }");
 });
 
-test("session rows can shrink and ellipsize instead of pushing the footer", () => {
+// A session row is a block child (its parents are plain divs and .sb-list is not a flex container), so
+// only the name span inside the flex row needs min-width: 0 to give up width and ellipsize.
+test("session names ellipsize inside their row instead of pushing the footer", () => {
   expect(css).toContain(".sess .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }");
-  expect(css).toContain("width: 100%; min-width: 0; text-align: left;");
 });

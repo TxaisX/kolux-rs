@@ -211,7 +211,7 @@ input { font: inherit; }
 .branch .chev { color: #797979; display: inline-flex; }
 .branch:hover { background: #1f1f1f; }
 .branch.sel { background: var(--row-selected); color: var(--fg); font-weight: 600; }
-.sess { position: relative; display: flex; align-items: center; height: 32px; padding: 0 4px 0 26px; gap: 10px; border-radius: 6px; font-size: 13px; color: var(--fg-row); width: 100%; min-width: 0; text-align: left; white-space: nowrap; }
+.sess { position: relative; display: flex; align-items: center; height: 32px; padding: 0 4px 0 26px; gap: 10px; border-radius: 6px; font-size: 13px; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
 /* PROJ-063: the dot is the strongest live agent state; what needs you is amber, working green, done teal. */
 .sb-list .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-idle); flex: none; }
 .sb-list .dot.live, .sb-list .dot.working { background: var(--dot-live); }
