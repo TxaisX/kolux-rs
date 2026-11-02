@@ -209,7 +209,8 @@ Red first (tests written before the code; fix2-red.log, fix2-red-vitest.log)
     x VIEW-078 the note after a Stop says stopped only for a program that was ended
       TypeError: stopNote is not a function
 
-Green (fix2-green-ports.log, fix2-green-vitest.log, fix2-tsc.log, fix2-win-check.log, fix2-win-clippy.log)
+Green (fix2-green-ports.log, fix2-green-vitest.log, fix2-tsc.log; run again on the committed tree as fix3-green-ports.log,
+  fix3-green-vitest.log, fix3-win-check.log, fix3-win-clippy.log with the same results)
   (cd src-tauri && . ../scripts/test-env.sh && cargo test --lib -- ports:: labels::)
     test result: ok. 29 passed; 0 failed (ports:: 21 = 19 before + 2 new, labels:: 5, browser::ports 3)
     new: view078_stop_a_child_whose_id_changed_hands_between_the_two_table_readings_is_left_alone (the same table twice
@@ -223,8 +224,8 @@ Green (fix2-green-ports.log, fix2-green-vitest.log, fix2-tsc.log, fix2-win-check
   node scripts/plan-check.mjs                       -> plan-check: OK
   node scripts/invoke-contract.mjs                  -> 705 invoke calls against 444 registered commands: OK (no command change;
                                                        ports_stop's return type changed, which the script does not track)
-  cargo check --target x86_64-pc-windows-gnu --all-targets      -> WIN_CHECK_RESULT
-  cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> WIN_CLIPPY_RESULT
+  cargo check --target x86_64-pc-windows-gnu --all-targets      -> Finished `dev` profile, no warning, no error (fix3-win-check.log)
+  cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> Finished `dev` profile, clean (fix3-win-clippy.log)
   No dependency change (license-check not needed).
 
 Residual, named in the ports.rs header and DT-C64: a child the program starts after the fresh parent table is read is
