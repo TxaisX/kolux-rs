@@ -155,11 +155,11 @@ Kolux itself fetches a page's icon, so it keeps this narrow. An icon is accepted
 
 ## The Artifacts tab
 
-The Artifacts tab keeps the pages Claude publishes, the files an agent writes, and everything in the open workspace's own `artifacts/` folder. That folder is read while the tab is open: every file directly inside it, whatever its type, appears in the list by itself within a few seconds, under the project's name, and a file that changes refreshes its entry rather than adding a second one. Subfolders are not entries (they hold a page's own pictures, or a test run's screenshots), and dotfiles and half-written downloads are skipped. A link or junction standing in for the folder, or a linked file inside it, is never followed, so nothing outside the workspace can be pulled in.
+The Artifacts tab keeps the pages Claude publishes, the files an agent writes, and everything in the open workspace's own `artifacts/` folder. That folder is read while the tab is open: every file directly inside it, whatever its type, appears in the list by itself within a few seconds, under the project's name, and a file that changes refreshes its entry rather than adding a second one. Subfolders are not entries (they hold a page's own pictures, or a test run's screenshots), and dotfiles and half-written downloads are skipped. A link or junction standing in for the folder, a linked file inside it, or a file that is a hard link to one elsewhere, is never followed, so nothing outside the workspace can be pulled in. A page's scripts from the listed CDNs are fetched only from those exact hosts.
 
 A video or an audio file plays in the tab; a page or a text file shows in the frame; a picture is shown as one; a PDF or any other document opens in its own app with the Open button. A single file may be up to 100 MB, a page 10 MB; a file the tab cannot keep is named once in a message and is tried again only after it changes.
 
-Remove from library (the × on a row) deletes the stored copy, and the file in the folder is not brought back unless it changes. Adding the same file again by hand restores it.
+Remove from library (the × on a row) deletes the stored copy, and the file in the folder is not brought back unless it changes. Adding the same file again by hand restores it. A link clicked inside a shown page opens in the system browser; a page cannot open the browser by itself without your click.
 
 ## Not available
 

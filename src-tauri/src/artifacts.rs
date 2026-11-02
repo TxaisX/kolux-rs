@@ -1295,7 +1295,7 @@ mod tests {
         let lib = Library::new(root.join("lib"));
         let o = origin.to_string_lossy().into_owned();
         let e = Entry { id: id_of(&o), title: "S".into(), source: "hand".into(), kind: "page".into(), origin: o, project: None, session: None, added: 1, size: 0, page: "share.html".into(), state: "unavailable".into(), stamp: None };
-        lib.write(&[e.clone()]).unwrap();
+        lib.write(std::slice::from_ref(&e)).unwrap();
         lib.remove(&e.id).unwrap();
         assert!(lib.list().is_empty());
         assert!(lib.removed().is_empty(), "an entry never read has no stamp to note, and its origin is not stat'ed");

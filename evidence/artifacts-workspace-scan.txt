@@ -1,5 +1,5 @@
 T-624 Artifacts: import a workspace's artifacts folder automatically, and play media in the tab - evidence
-Date: 2026-10-31 (round 2 after the PR #37 review, same day)
+Date: 2026-10-31 (round 2 after the PR #37 review, same day); round 3 2026-11-02 after the second review
 Lane: lane/artifacts-auto (PR #37) · DT-C65, a DT-C58 follow-on
 Base: 3af39cf3 (origin/main, merged into the branch at 6df949b9)
 
@@ -103,6 +103,88 @@ tsc --noEmit: pass. node scripts/plan-check.mjs: OK. node scripts/invoke-contrac
 cargo check --target x86_64-pc-windows-gnu --all-targets: Finished (5m 52s), no errors.
 cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings: Finished (8m 21s), clean.
 
+What changed (round 3: the second review's three majors and three minors, each failing-first)
+- [major] A CDN script address was matched as a string prefix, and the tailwind entry had no
+  trailing slash, so https://cdn.tailwindcss.com.evil.example/x.js and
+  https://cdn.tailwindcss.com@evil.example/x.js (user name; the host is evil.example) passed the
+  gate and the 3 s scan fetched from any host a cloned page named. Every CDNS entry ends in '/'
+  and cdn_url() parses the address: https only, no user name or password, no explicit port, the
+  host equal to a listed one, the path under the listed path (jsdelivr only /npm/). cdn_scripts and
+  fetch_script both use it. fetch_script's client no longer follows a redirect (Policy::none), and
+  reads the body with chunk() and drops it the moment it passes 5 MB, instead of buffering a
+  Content-Length-less reply for the whole 20 s timeout first.
+- [major] Remove from library stat'ed the origin of every removed entry, on the window's thread,
+  including an "unavailable" entry whose origin is a network share (which the library never reads,
+  DT-R21; a stat there blocks for the share's timeout). Library::remove now notes a tombstone only
+  for an entry whose state is "ok" and whose origin is not on a share; the scan's tombstone prune
+  skips a share path too; artifact_remove is `async fn` + spawn_blocking like artifact_add.
+- [major] Any page in the viewer frame could post {koluxOpen} itself on load, in a loop, and the
+  page handed each to open_external: the system browser or mail client opened with no click.
+  viewerLink() accepts a message only from our own frame and only while
+  navigator.userActivation.isActive (a click inside the sandboxed frame activates its ancestors;
+  a script's own message on load does not; a web view without userActivation opens nothing).
+- [minor] The scan's link and containment checks were path-based and the copy re-opened the path,
+  and a hard link (a second name for the same data, which no path check can see) passed every
+  guard. open_source() opens each source once (O_NOFOLLOW on Unix; FILE_FLAG_OPEN_REPARSE_POINT on
+  Windows, then the handle's FILE_ATTRIBUTE_REPARSE_POINT refuses it), takes length, modified and
+  is_file from the handle (fstat), refuses a link count above one (nlink / nNumberOfLinks), and
+  copies from the handle through take(cap + 1), so a file that grows during the copy is an error,
+  never a cut-short copy. copy_assets does the same for each asset. Cargo.toml gains `libc`
+  (unix only, already in the tree; Cargo.lock gains no crate).
+- [minor] `Range: bytes=0-`, which a browser sends for every media load and after each seek, read
+  the whole file (up to 100 MB) into memory on the web view's thread for each. One ranged answer
+  now carries at most CHUNK (8 MB); Content-Range tells the browser the real length and it asks
+  again from there. A request with no Range header still gets a 200 with the whole file: RFC 9110
+  15.3.7 reserves 206 for a range request, and Chromium and WebKit always send `Range: bytes=0-`
+  for <video>/<audio>, so the no-Range case is not the media path. (The reviewer's "answer 206 to a
+  no-Range media request" part is therefore not taken.)
+- [minor] The main page's policy had no media-src and img-src did not name the artifact origin, so
+  the new <img>, <video> and <audio> viewers were blocked ('self' is http://tauri.localhost).
+  tauri.conf.json and vite's DEV_CSP add exactly `http://kolux-artifact.localhost kolux-artifact:`
+  to img-src and a media-src with only those two; default-src, connect-src and script-src are
+  unchanged (scripts/csp.test.mjs pins that).
+- Bookkeeping: DECISIONS.md DT-C65 (round 3), docs/guide/files-and-browser.md.
+
+Proof, round 3: failing first
+cargo test --lib artifacts, new tests against the round-2 code (with two shims so they compile:
+a const CHUNK and a prefix-matching cdn_url, i.e. the old rule):
+    thread 'artifacts::tests::a_hard_linked_file_is_not_kept_as_an_artifact_or_an_asset' panicked
+      assertion `left == right` failed  left: Scanned { changed: 2, skipped: [] }
+    thread 'artifacts::tests::cdn_addresses_are_judged_by_host_not_by_prefix' panicked at src/artifacts.rs:1195:13
+      (https://cdn.tailwindcss.com.evil.example/x.js passed the prefix rule)
+    thread 'artifacts::tests::one_ranged_answer_is_never_more_than_a_chunk' panicked
+      assertion `left == right` failed: one ranged answer carries at most a chunk; the browser asks again from there
+      left: 8388609  right: 8388608
+    thread 'artifacts::tests::the_remove_command_runs_off_the_window_thread' panicked:
+      artifact_remove must be an async command: it stats the removed file and deletes its stored folder
+    thread 'artifacts::tests::removing_an_entry_the_library_never_read_leaves_its_origin_alone' panicked:
+      an entry never read has no stamp to note, and its origin is not stat'ed
+    test result: FAILED. 15 passed; 5 failed; 0 ignored; 0 measured; 2570 filtered out
+vitest run src/artifacts, before the page fix:
+    FAIL  src/artifacts/viewerLink.test.ts > opens only while the user is acting, and only from our own frame
+      TypeError: viewerLink is not a function
+    FAIL  src/artifacts/viewerLink.test.ts > a koluxOpen posted by a page's own script, with no user gesture, never reaches open_external
+      TypeError: openViewerLink is not a function
+    (and after the page fix, before the card test learnt the gesture: SKILL-036 box 2 failed because
+    its delivered message had no user activation, which is the behaviour the fix adds)
+vitest run scripts/csp, against the old policy:
+    FAIL  scripts/csp.test.mjs > T-624: the main page may show an artifact's picture and play its media ...
+      AssertionError: expected [ ''self'', 'data:', 'blob:', ...(2) ] to deeply equal ArrayContaining{...}
+
+Proof, round 3: passing after
+cargo test --lib artifacts:
+    test artifacts::tests::a_hard_linked_file_is_not_kept_as_an_artifact_or_an_asset ... ok
+    test artifacts::tests::cdn_addresses_are_judged_by_host_not_by_prefix ... ok
+    test artifacts::tests::one_ranged_answer_is_never_more_than_a_chunk ... ok
+    test artifacts::tests::removing_an_entry_the_library_never_read_leaves_its_origin_alone ... ok
+    test artifacts::tests::the_remove_command_runs_off_the_window_thread ... ok
+    test artifacts::tests::a_linked_artifacts_folder_is_not_followed ... ok  (now also: open_source refuses the link at open)
+    test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 2570 filtered out
+vitest run src/artifacts scripts/csp: Test Files 5 passed (5), Tests 20 passed (20).
+tsc --noEmit: pass. node scripts/plan-check.mjs: OK. node scripts/invoke-contract.mjs: OK (706 calls by name against 445 commands).
+cargo check --target x86_64-pc-windows-gnu --all-targets: Finished (6m 15s), no errors.
+cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings: Finished (11m 29s), clean (one lint in a new test, clone to slice, fixed first).
+
 Proof, round 1 (still holds)
 - The round-1 tests cover every top-level file and the dotfile/partial/subfolder exclusions, first
   import, unchanged second scan, refresh of a changed file, a fresh app run not re-adding entries,
@@ -111,7 +193,9 @@ Proof, round 1 (still holds)
 
 Live proof pending (batched)
 This lane has not been launched as a GUI in this pass, so the command has not been exercised through
-the running app. On the first Artifacts open with a workspace that has a top-level artifacts/ file,
+the running app. Still to see live: a workspace PNG and MP4 selected in the tab render and seek
+(the img-src/media-src fix), and a link clicked inside a shown page opens the browser while a page
+that posts koluxOpen on load does not. On the first Artifacts open with a workspace that has a top-level artifacts/ file,
 the file is imported automatically; × on its row keeps it out until the file changes; a video or
 audio entry plays in the tab; a PDF or other document offers Open. The 30 second Kolux ad MP4 in
 the vault is 7.7 MB, well under the 100 MB cap, and its range requests are covered by the scheme
