@@ -4,12 +4,13 @@
 // outside the workspace are listed as external and have no Stop. A failed scan names its problem
 // and keeps the last good list. The tying of a port to a workspace, and every guard a Stop passes
 // (same program as the row, every holder the workspace's own, a known Git worktree that is no home
-// folder), happens in ports.rs; a refusal comes back as the note under the title.
+// folder), happens in ports.rs; a refusal comes back as the note under the title, and a Stop that
+// ended nothing (the program was already gone, or still runs but left the port) says so there too.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { openInBrowser } from "../browser/openIn";
-import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, type PortRow, type PortsView } from "./ports";
+import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, stopNote, type PortRow, type PortsView, type StopOutcome } from "./ports";
 
 type Props = { active: string | null; workspaces: string[] };
 
@@ -50,8 +51,8 @@ export default function PortsItem({ active, workspaces }: Props) {
   if (active === null) return null;
   const rect = open ? button.current?.getBoundingClientRect() : null;
   const stop = (r: PortRow) =>
-    invoke("ports_stop", stopArgs(workspaces, active, r))
-      .then(() => setNote(`Stopped port ${r.port}`))
+    invoke<StopOutcome>("ports_stop", stopArgs(workspaces, active, r))
+      .then((outcome) => setNote(stopNote(r.port, outcome)))
       .catch((err) => setNote(String(err)));
   const openRow = (r: PortRow, e: MouseEvent) => {
     const url = openAddress(r, printed.forPort(r.port, view.rows));

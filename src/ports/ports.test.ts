@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, urlsIn, type PortRow } from "./ports";
+import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, stopNote, urlsIn, type PortRow } from "./ports";
 
 const row = (port: number, addr = "127.0.0.1", external = false, terminal: number | null = 7): PortRow => ({ port, addr, pid: 1, external, started: "", terminal: external ? null : terminal });
 
@@ -32,6 +32,12 @@ test("VIEW-078 a Stop sends back the start time it saw, as text, so a reused pro
   const r: PortRow = { port: 5173, addr: "127.0.0.1", pid: 4242, external: false, started: "133700000000000000", terminal: 7 };
   expect(stopArgs(["C:\\work\\app"], "C:\\work\\app", r)).toEqual({ workspaces: ["C:\\work\\app"], active: "C:\\work\\app", port: 5173, pid: 4242, started: "133700000000000000" });
   expect(typeof stopArgs([], "x", r).started).toBe("string");
+});
+
+test("VIEW-078 the note after a Stop says stopped only for a program that was ended", () => {
+  expect(stopNote(5173, "stopped")).toBe("Stopped port 5173");
+  expect(stopNote(5173, "gone")).toBe("Port 5173 was already gone; nothing was stopped");
+  expect(stopNote(5173, "moved")).toBe("Port 5173 is no longer held by that program; nothing was stopped");
 });
 
 test("VIEW-078 Open uses the printed address, else plain http on the listening address", () => {

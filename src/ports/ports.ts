@@ -58,6 +58,14 @@ export class PrintedUrls {
  * now names another program is refused there. */
 export const stopArgs = (workspaces: string[], active: string, r: PortRow) => ({ workspaces, active, port: r.port, pid: r.pid, started: r.started });
 
+/** What a Stop did, as the back end reports it: the program was ended; it had already ended (success, nothing
+ * ended); it still runs but no longer holds the port (nothing ended). A refusal comes back as an error instead. */
+export type StopOutcome = "stopped" | "gone" | "moved";
+
+/** The note under the title after a Stop: only a program that was ended reads as stopped. */
+export const stopNote = (port: number, outcome: StopOutcome): string =>
+  outcome === "stopped" ? `Stopped port ${port}` : outcome === "gone" ? `Port ${port} was already gone; nothing was stopped` : `Port ${port} is no longer held by that program; nothing was stopped`;
+
 /** The address Open uses: what the dev server printed when known, otherwise plain http on the listening address. */
 export function openAddress(row: PortRow, printed: string | null): string {
   if (printed) return printed;

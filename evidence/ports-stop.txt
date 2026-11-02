@@ -169,3 +169,72 @@ LEFT (live, needs the Windows app), in addition to the five above
      the row shows a Stop; clicking it is refused with "was not started from a terminal of this workspace", process alive
      (hard to force; the unit test stands in).
   7. Stop a dev server with a child (vite + esbuild): both gone, nothing else ended, note "Stopped port 5173".
+
+---------------------------------------------------------------------------------------------------------------------------
+Review fixes, round 2 (PR #60 review, 2026-11-02). Logs in the session scratchpad ports-stop-logs/fix2-*.log.
+
+Findings and what was done
+  major  src-tauri/src/ports.rs:496  "children are chosen from the scan's stale parent table, so a pid reused after the
+         scan is ended as a child"
+    Fixed. end_program no longer takes the scan's parent table. On Windows it holds the program open first, then reads a
+    fresh parent table, walks it with descendants (each child held open as its start time is read, so its pid is pinned
+    from then on), then reads the table a second time while every child is still held and keeps, through the new pure
+    guard confirmed(pid, order, before, after), only a child whose entry is the same in both readings and whose parent is
+    itself kept (the program or a confirmed child). A child that ended between the first reading and its open, whose pid
+    then went to a newcomer, differs in the second reading (the newcomer is newer than the program by construction, so the
+    start-time rule alone could not tell) and is left out with everything under it. The scan's table still serves
+    lineage_ok (a refusal path, never a kill). Header comment and DT-C64 updated: the residual is now a child the program
+    starts after that table is read.
+  minor  src-tauri/src/ports.rs:411  "the scan's start-time read opens every own holder with TERMINATE | SYNCHRONIZE"
+    Fixed. Held::open(pid, access): start_time (every ports_list scan, lineage_ok, the Moved check) opens with
+    PROCESS_QUERY_LIMITED_INFORMATION alone (const READ); end_program opens the program and each child with READ |
+    PROCESS_TERMINATE | PROCESS_SYNCHRONIZE (const STOP). A program the Stop cannot open and that is not already gone is
+    refused with its own reason, "Port N: process P could not be opened; nothing was stopped", no longer the stale text.
+    The round-1 evidence line about start_time ("OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) + GetProcessTimes") is
+    true again; the rights each path uses are named here.
+  minor  src-tauri/src/ports.rs:160  "a program that still runs but no longer holds the port is reported as Stopped"
+    Fixed. stop_target answers Target::Moved when no holder of the port has the row's pid but a non-external row with the
+    same pid and start time sits on another port; ports_stop also asks start_time(pid) live on a Gone answer (a program
+    that rebound to no port at all) and answers Moved when it agrees with the row's. ports_stop now returns an Outcome
+    ("stopped" | "gone" | "moved", a serde snake_case string) instead of (); the command's name and arguments are
+    unchanged. The front end (ports.ts stopNote, PortsItem) shows "Stopped port N" only for "stopped", "Port N was already
+    gone; nothing was stopped" for "gone" and "Port N is no longer held by that program; nothing was stopped" for "moved".
+    The spec rule "stopping a port that already exited counts as success" holds: gone and moved are both Ok, only the note
+    changed. docs/guide/terminals.md, DT-C64 and the PLAN.md T-226 note carry the three notes and the two-reading rule.
+
+Red first (tests written before the code; fix2-red.log, fix2-red-vitest.log)
+  cargo test --lib ports::  -> 5 compile errors: "cannot find function `confirmed`" x4, "no variant ... named `Moved` found
+    for enum `ports::Target`" x1.
+  VITEST_MAX_WORKERS=2 npx vitest run src/ports -> Tests 1 failed | 9 passed:
+    x VIEW-078 the note after a Stop says stopped only for a program that was ended
+      TypeError: stopNote is not a function
+
+Green (fix2-green-ports.log, fix2-green-vitest.log, fix2-tsc.log, fix2-win-check.log, fix2-win-clippy.log)
+  (cd src-tauri && . ../scripts/test-env.sh && cargo test --lib -- ports:: labels::)
+    test result: ok. 29 passed; 0 failed (ports:: 21 = 19 before + 2 new, labels:: 5, browser::ports 3)
+    new: view078_stop_a_child_whose_id_changed_hands_between_the_two_table_readings_is_left_alone (the same table twice
+         confirms [6000, 5000, 5001]; 5001 re-parented to 8000 in the second reading is left out; 5000 gone from the
+         second reading takes 6000 under it along even though 6000's own entry still agrees; an empty second reading
+         confirms nothing)
+         view078_stop_a_program_that_still_runs_but_left_the_port_is_reported_not_stopped (pid 4242 started "1" now on
+         3000 -> Moved; the same pid with start "2" -> Gone; an external row with that pid -> Gone)
+  VITEST_MAX_WORKERS=2 npx vitest run src/ports src/look   -> Test Files 9 passed · Tests 65 passed (64 + 1 new)
+  npx tsc --noEmit                                  -> clean (exit 0)
+  node scripts/plan-check.mjs                       -> plan-check: OK
+  node scripts/invoke-contract.mjs                  -> 705 invoke calls against 444 registered commands: OK (no command change;
+                                                       ports_stop's return type changed, which the script does not track)
+  cargo check --target x86_64-pc-windows-gnu --all-targets      -> WIN_CHECK_RESULT
+  cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> WIN_CLIPPY_RESULT
+  No dependency change (license-check not needed).
+
+Residual, named in the ports.rs header and DT-C64: a child the program starts after the fresh parent table is read is
+left running (it was never read); the next scan shows it. Windows-only code (Held with its two right sets, end_program's
+two table readings, the "could not be opened" refusal) is proven by cargo check and clippy for the Windows target and by
+the pure guards it calls (descendants, confirmed); its live run is on the LEFT list.
+
+LEFT (live, needs the Windows app), in addition to items 1 to 7 above
+  8. Restart a dev server on another port, then Stop its old row from a stale popover -> "is no longer held by that
+     program; nothing was stopped", server alive on the new port. Stop a row whose program has exited -> "was already
+     gone; nothing was stopped".
+  9. A dev server that respawns short-lived workers (nodemon, esbuild): Stop it -> server and its live workers gone, no
+     other program ended (the pid-reuse race itself cannot be forced; the confirmed unit test stands in).

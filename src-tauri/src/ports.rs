@@ -18,10 +18,14 @@
 //! must be at least two folders deep, no home folder or a parent of one, a real Git worktree on
 //! disk and one the project store (or Git, for that project) knows. The cheap checks run first;
 //! Git runs only when the store alone cannot say. The kill holds the program open (Windows never
-//! reuses a pid while a handle is open), ends only the children it really started by the same
-//! start-time rule, never a process a stale parent-id field hangs under it, and waits on the
-//! program's own object. Residual: a child the program starts between the reading and the kill is
-//! left running (it was never read); the next scan shows it.
+//! reuses a pid while a handle is open), reads the parent table only then (the scan's is stale by
+//! the time the guards are through), holds each child as it is read, ends only the children it
+//! really started by the same start-time rule, never a process a stale parent-id field hangs
+//! under it, and never one whose pid changed hands after the table was read (a second table, read
+//! while the children are held, must agree), and waits on the program's own object. Residual: a
+//! child the program starts after that table is read is left running (it was never read); the
+//! next scan shows it. A Stop that ends nothing says so: a program already gone is a success, one
+//! that still runs but left the port is reported as not stopped.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -144,8 +148,23 @@ pub enum Target<'a> {
     /// Nothing holds the port, or the program the user saw has already ended and another now holds
     /// it: success, nothing to end (a newcomer is never ended on the strength of an old row).
     Gone,
+    /// The program the user saw still runs (same pid and start time, on another port) but no longer
+    /// holds this one: nothing to end, and the note must not read as if something was stopped.
+    Moved,
     /// The row to end.
     Row(&'a PortRow),
+}
+
+/// What a Stop did, for the note under the popover's title; sent to the front end as text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    /// The program was ended.
+    Stopped,
+    /// The program had already ended (another may now hold the port): success, nothing was ended.
+    Gone,
+    /// The program still runs but no longer holds the port: nothing was ended.
+    Moved,
 }
 
 fn stale(port: u16, pid: u32) -> String {
@@ -154,11 +173,14 @@ fn stale(port: u16, pid: u32) -> String {
 
 /// The guards a fresh scan answers. Every holder of the port is checked before any kill: a port
 /// also held outside the workspace, by Kolux itself or by a system process is refused whole, and a
-/// row whose pid now names a newer program (its start time changed) is refused as stale.
+/// row whose pid now names a newer program (its start time changed) is refused as stale. A port
+/// the row's program no longer holds ends nothing: `Moved` when the scan still lists that program
+/// (same pid and start time) on another port, `Gone` otherwise.
 pub fn stop_target<'a>(rows: &'a [PortRow], port: u16, pid: u32, started: &str, self_pid: u32) -> Result<Target<'a>, String> {
     let holders: Vec<&PortRow> = rows.iter().filter(|r| r.port == port).collect();
     let Some(target) = holders.iter().copied().find(|r| r.pid == pid) else {
-        return Ok(Target::Gone);
+        let moved = rows.iter().any(|r| !r.external && r.pid == pid && same_start(&[started, &r.started]));
+        return Ok(if moved { Target::Moved } else { Target::Gone });
     };
     if let Some(h) = holders.iter().find(|r| r.external) {
         return Err(format!("Port {port} is held by a process outside this workspace (pid {}); it can only be stopped where it runs", h.pid));
@@ -229,6 +251,26 @@ pub fn descendants(pid: u32, parents: &HashMap<u32, u32>, start: &dyn Fn(u32) ->
     }
     order.reverse();
     order
+}
+
+/// The children of `order` (deepest first, as `descendants` gives them) that a second reading of
+/// the parent table confirms: `before` is the table the tree was walked with, `after` one read
+/// while every child was held open, so a pid in it names the process held. A child whose entry
+/// differs (it ended and a newcomer got its id in between: by construction newer than the
+/// program, so the start-time rule alone cannot tell) is left out with everything under it.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn confirmed(pid: u32, order: Vec<u32>, before: &HashMap<u32, u32>, after: &HashMap<u32, u32>) -> Vec<u32> {
+    let mut ok = std::collections::HashSet::from([pid]);
+    let mut keep: Vec<u32> = Vec::new();
+    for kid in order.into_iter().rev() {
+        let parent = before.get(&kid);
+        if parent == after.get(&kid) && parent.is_some_and(|p| ok.contains(p)) {
+            ok.insert(kid);
+            keep.push(kid);
+        }
+    }
+    keep.reverse();
+    keep
 }
 
 /// How many folders deep `p` is below its root (a drive or `/`): `C:/work/app` is 2, `/srv` is 1.
@@ -350,17 +392,25 @@ fn parent_table() -> HashMap<u32, u32> {
 
 /// A process handle held open across a Stop. Windows never reuses a pid while a handle to the
 /// process object is open, so the program the handle names is the one that is read, ended and
-/// waited for, with no window for a newcomer in between. Query, terminate and wait rights only;
-/// no memory read.
+/// waited for, with no window for a newcomer in between. Opened with the rights the caller
+/// needs: a scan's reading asks for the limited query right alone, a Stop adds terminate and
+/// wait; never a memory read.
 #[cfg(windows)]
 struct Held(windows_sys::Win32::Foundation::HANDLE);
 
+/// The right a start-time reading needs.
+#[cfg(windows)]
+const READ: u32 = windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+
+/// The rights a Stop needs: read the start time, end the process, wait on its object.
+#[cfg(windows)]
+const STOP: u32 = READ | windows_sys::Win32::System::Threading::PROCESS_TERMINATE | windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
+
 #[cfg(windows)]
 impl Held {
-    fn open(pid: u32) -> Option<Held> {
-        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+    fn open(pid: u32, access: u32) -> Option<Held> {
         // SAFETY: a null handle is never kept; the one returned is closed once, in Drop.
-        let p = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
+        let p = unsafe { windows_sys::Win32::System::Threading::OpenProcess(access, 0, pid) };
         (!p.is_null()).then_some(Held(p))
     }
 
@@ -406,10 +456,11 @@ impl Drop for Held {
 }
 
 /// When process `pid` started, as the system's own count, as text; empty when the system will
-/// not say. A limited query right, no memory read; the handle is closed again at once.
+/// not say. The limited query right alone (a program the user may read but not end still gets
+/// its start time), no memory read; the handle is closed again at once.
 #[cfg(windows)]
 fn start_time(pid: u32) -> String {
-    Held::open(pid).map(|h| h.started()).unwrap_or_default()
+    Held::open(pid, READ).map(|h| h.started()).unwrap_or_default()
 }
 
 /// Linux: field 22 of `/proc/<pid>/stat`, the start in clock ticks since boot (a count that moves
@@ -467,17 +518,24 @@ fn still_running(port: u16, pid: u32) -> String {
     format!("Port {port}: process {pid} is still running after the stop")
 }
 
-/// Ends `pid` with the children it really started, once a last start-time reading agrees with the
-/// row's and the one sent back. Windows: the program and each child are held open while they are
-/// read and ended, so no pid can pass to a newcomer in between, the children are chosen by
-/// `descendants` (never by a stale parent-id field, as `taskkill /T` would), ended deepest first,
-/// and the program's own object is waited on. A program that cannot be opened and is already gone
-/// counts as success.
 #[cfg(windows)]
-fn end_program(port: u16, pid: u32, sent: &str, row: &str, parents: &HashMap<u32, u32>) -> Result<(), String> {
+fn unopened(port: u16, pid: u32) -> String {
+    format!("Port {port}: process {pid} could not be opened; nothing was stopped")
+}
+
+/// Ends `pid` with the children it really started, once a last start-time reading agrees with the
+/// row's and the one sent back. Windows: the program is held open first, so no pid can pass to a
+/// newcomer in between; only then is the parent table read (the scan's is stale by now), each
+/// child is held as its start time is read, the children are chosen by `descendants` (never by a
+/// stale parent-id field, as `taskkill /T` would) and a second table read while they are all held
+/// confirms each one (`confirmed`: a pid that changed hands between the two readings is left
+/// out). They are ended deepest first, then the program, and its own object is waited on. A
+/// program that cannot be opened is a refusal unless it is already gone, which counts as success.
+#[cfg(windows)]
+fn end_program(port: u16, pid: u32, sent: &str, row: &str) -> Result<Outcome, String> {
     use std::cell::RefCell;
-    let Some(holder) = Held::open(pid) else {
-        return if crate::procs::alive(pid) == Some(false) { Ok(()) } else { Err(stale(port, pid)) };
+    let Some(holder) = Held::open(pid, STOP) else {
+        return if crate::procs::alive(pid) == Some(false) { Ok(Outcome::Gone) } else { Err(unopened(port, pid)) };
     };
     let third = holder.started();
     if !same_start(&[sent, row, &third]) {
@@ -488,13 +546,15 @@ fn end_program(port: u16, pid: u32, sent: &str, row: &str, parents: &HashMap<u32
         if p == pid {
             return third.clone();
         }
-        let Some(h) = Held::open(p) else { return String::new() };
+        let Some(h) = Held::open(p, STOP) else { return String::new() };
         let s = h.started();
         kids.borrow_mut().insert(p, h);
         s
     };
-    let order = descendants(pid, parents, &start);
+    let fresh = parent_table();
+    let order = descendants(pid, &fresh, &start);
     let kids = kids.into_inner();
+    let order = confirmed(pid, order, &fresh, &parent_table());
     for kid in order {
         if let Some(h) = kids.get(&kid) {
             h.end();
@@ -504,13 +564,13 @@ fn end_program(port: u16, pid: u32, sent: &str, row: &str, parents: &HashMap<u32
     if !holder.gone_within(Duration::from_secs(2)) {
         return Err(still_running(port, pid));
     }
-    Ok(())
+    Ok(Outcome::Stopped)
 }
 
 /// Off Windows the pane's child leads its own process group, which the group signal ends whole;
 /// there is no scan yet (T-285), so no row reaches here.
 #[cfg(not(windows))]
-fn end_program(port: u16, pid: u32, sent: &str, row: &str, _parents: &HashMap<u32, u32>) -> Result<(), String> {
+fn end_program(port: u16, pid: u32, sent: &str, row: &str) -> Result<Outcome, String> {
     if !same_start(&[sent, row, &start_time(pid)]) {
         return Err(stale(port, pid));
     }
@@ -518,15 +578,16 @@ fn end_program(port: u16, pid: u32, sent: &str, row: &str, _parents: &HashMap<u3
     if !crate::procs::wait_gone(&[pid], Duration::from_secs(2)).is_empty() {
         return Err(still_running(port, pid));
     }
-    Ok(())
+    Ok(Outcome::Stopped)
 }
 
 /// VIEW-078: stops the process behind a port with everything it started, once every guard above
 /// passes (`stop_target`, then `lineage_ok` against the scan's own parent table, then
-/// `folder_check`, then a last start-time reading on a held handle). A port that is already gone
-/// counts as success; a program still running after the kill is an error.
+/// `folder_check`, then a last start-time reading on a held handle), and says what it did. A port
+/// that is already gone counts as success (`Gone`); one the program left while it still runs ends
+/// nothing (`Moved`); a program still running after the kill is an error.
 #[tauri::command]
-pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: String, port: u16, pid: u32, started: String) -> Result<(), String> {
+pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: String, port: u16, pid: u32, started: String) -> Result<Outcome, String> {
     use tauri::Manager;
     let t = app.state::<crate::terminal::Terminals>().inner().clone();
     let git = app.state::<crate::git::Git>().inner().clone();
@@ -539,7 +600,9 @@ pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: 
     tauri::async_runtime::spawn_blocking(move || {
         let Scan { rows, parents, sessions } = scan(&t, &workspaces, &active)?;
         let target = match stop_target(&rows, port, pid, &started, std::process::id())? {
-            Target::Gone => return Ok(()),
+            // The program may run on without any port: the same pid with the same start time is it.
+            Target::Gone => return Ok(if same_start(&[&started, &start_time(pid)]) { Outcome::Moved } else { Outcome::Gone }),
+            Target::Moved => return Ok(Outcome::Moved),
             Target::Row(r) => r.clone(),
         };
         // The chain from the program up to the pane's shell must be real, link by link.
@@ -549,7 +612,7 @@ pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: 
         }
         let worktrees_of = |root: &str| git.worktrees(Path::new(root)).map(|v| v.into_iter().map(|w| w.path).collect()).unwrap_or_default();
         folder_check(&active, &candidate_homes(), &|p| Path::new(p).join(".git").exists(), &|p| known_workspace(p, &store_paths, &roots, &worktrees_of))?;
-        end_program(port, pid, &started, &target.started, &parents)
+        end_program(port, pid, &started, &target.started)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -711,6 +774,32 @@ mod tests {
         assert_eq!(descendants(4242, &parents, &starts(&table)), vec![6000, 5000], "the orphan, its child and a child whose start time is withheld are left alone; children end before their parent");
         assert_eq!(descendants(4242, &parents, &starts(&[(5000, "200")])), Vec::<u32>::new(), "no start time for the program itself: nothing of its tree is ended");
         assert_eq!(descendants(4242, &HashMap::from([(5000, 4242), (4242, 5000)]), &starts(&[(4242, "1"), (5000, "2")])), vec![5000], "a parent loop ends");
+    }
+
+    #[test]
+    fn view078_stop_a_child_whose_id_changed_hands_between_the_two_table_readings_is_left_alone() {
+        // The tree was walked with `before`; `after` was read while every child was held open, so
+        // an entry that differs describes a newcomer that got the id in between (its start time is
+        // newer than the program's by construction, so the start-time rule alone cannot catch it).
+        let before = HashMap::from([(5000, 4242), (6000, 5000), (5001, 4242), (4242, 3000)]);
+        let order = vec![6000, 5000, 5001];
+        assert_eq!(confirmed(4242, order.clone(), &before, &before), vec![6000, 5000, 5001], "the same table twice confirms every child, deepest first");
+        let mut reused = before.clone();
+        reused.insert(5001, 8000);
+        assert_eq!(confirmed(4242, order.clone(), &before, &reused), vec![6000, 5000], "5001 ended and a process 8000 started got its id: not ours");
+        let mut ended = before.clone();
+        ended.remove(&5000);
+        assert_eq!(confirmed(4242, order.clone(), &before, &ended), vec![5001], "5000 is gone from the table, and 6000 under it goes with it even though its own entry still agrees");
+        assert_eq!(confirmed(4242, order, &before, &HashMap::new()), Vec::<u32>::new(), "an empty second reading confirms nothing");
+    }
+
+    #[test]
+    fn view078_stop_a_program_that_still_runs_but_left_the_port_is_reported_not_stopped() {
+        // The dev server the row showed on 5173 (pid 4242, started "1") restarted on 3000.
+        let rows = [held(3000, 4242, false, "1")];
+        assert_eq!(stop_target(&rows, 5173, 4242, "1", 9), Ok(Target::Moved), "nothing is ended, and the note must not say the port was stopped");
+        assert_eq!(stop_target(&[held(3000, 4242, false, "2")], 5173, 4242, "1", 9), Ok(Target::Gone), "a newer program with the old pid on another port: the one the user saw is gone");
+        assert_eq!(stop_target(&[held(3000, 4242, true, "")], 5173, 4242, "1", 9), Ok(Target::Gone), "an external row tells nothing about its holder");
     }
 
     #[cfg(target_os = "linux")]
