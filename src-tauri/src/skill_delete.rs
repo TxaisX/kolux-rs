@@ -966,7 +966,12 @@ fn wsl_skill<'a>(places: &'a Places, path: &str) -> Option<Result<WslSkill<'a>, 
         Some(rel) => parent.len() > rel.len() && parent.ends_with(rel),
         None => parent == root.trim_end_matches('/'),
     };
-    match places.wsl_roots.iter().find(|(d, r)| d.eq_ignore_ascii_case(&distro) && under(r)) {
+    // A project folder named whole wins over a `~/` root that merely ends the same way: a skill in
+    // `/home/me/repo/.claude/skills` also ends like `~/.claude/skills`, and the distribution would
+    // rightly call it outside that one.
+    let mine = |(d, _): &&(String, String)| d.eq_ignore_ascii_case(&distro);
+    let exact = places.wsl_roots.iter().filter(mine).find(|(_, r)| !r.starts_with('~') && under(r));
+    match exact.or_else(|| places.wsl_roots.iter().filter(mine).find(|(_, r)| under(r))) {
         Some((_, root)) => Some(Ok(WslSkill { distro, root: root.as_str(), dir: dir.to_string() })),
         None => Some(Err("outside")),
     }
@@ -2811,6 +2816,70 @@ mod tests {
         assert_eq!(got[4], ("deleted", None));
         // A failure stops nothing else: every skill was asked to go once.
         assert_eq!(fake.calls().iter().filter(|c| c.3 == Step::Delete).count(), 5);
+    }
+
+    #[test]
+    fn skill022_wsl_a_workspace_skill_is_checked_and_deleted_against_the_project_root_not_the_home() {
+        // The home roots come first in wsl_roots and `~/.claude/skills` ends the same way as
+        // `/home/me/repo/.claude/skills`: the project root must still be the one handed over.
+        let t = temp("skill022-wsl-ws");
+        let at = wsl_places(&[]);
+        let lint = r"\\wsl.localhost\Ubuntu\home\me\repo\.claude\skills\lint\SKILL.md";
+        let fake = FakeDistro::new(vec![("/home/me/repo/.claude/skills/lint", Step::Check, Ok("OK folder 1700000000"))]);
+        let plan_of = plan_with(&at, &[wsl_pick(lint)], &fake).unwrap();
+        assert_eq!(plan_of[0].blocked, None);
+        assert_eq!(fake.calls(), vec![("Ubuntu".to_string(), "/home/me/repo/.claude/skills".to_string(), "/home/me/repo/.claude/skills/lint".to_string(), Step::Check)]);
+        assert_eq!(run_with(&t.join("app"), &at, &[wsl_pick(lint)], &fake).unwrap()[0].outcome, "deleted");
+        assert!(fake.calls().iter().all(|c| c.1 == "/home/me/repo/.claude/skills"), "{:?}", fake.calls());
+    }
+
+    /// A distribution played by this machine's own `sh` running the real delete script, with HOME
+    /// set to a temp folder (Unix only). Linux paths are the temp folder's own.
+    #[cfg(unix)]
+    struct ShellDistro {
+        home: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl wsl::Runner for ShellDistro {
+        fn run(&self, _distro: &str, _dir: &str, _cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<u8>, String> {
+            panic!("a delete never scans")
+        }
+
+        fn delete(&self, _distro: &str, root: &str, dir: &str, step: Step) -> Result<Vec<u8>, String> {
+            let word = if step == Step::Check { "check" } else { "delete" };
+            let out = std::process::Command::new("sh").env("HOME", &self.home).args(["-c", wsl::DELETE_SCRIPT, "kolux", word, root, dir]).output().map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!("sh ended with {}", out.status));
+            }
+            Ok(out.stdout)
+        }
+    }
+
+    /// The UNC pick of a folder of the temp "distribution", with the change time the script reads.
+    #[cfg(unix)]
+    fn shell_pick(dir: &Path) -> Pick {
+        let secs = std::fs::metadata(dir.join(SKILL_FILE)).unwrap().modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        Pick { path: wsl::unc("Ubuntu", &format!("{}/{SKILL_FILE}", dir.to_str().unwrap())).to_string_lossy().to_string(), updated: Some(secs * 1000) }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skill022_wsl_a_workspace_skill_is_deleted_by_the_real_delete_script() {
+        let t = temp("skill022-wsl-sh-ws");
+        let home = t.join("home");
+        let repo_root = home.join("repo/.claude/skills");
+        let (lint, mine) = (skill(&repo_root, "lint"), skill(&home.join(".claude/skills"), "mine"));
+        let mut at = places(&[], &[]);
+        at.wsl_roots = vec![("Ubuntu".into(), "~/.claude/skills".into()), ("Ubuntu".into(), repo_root.to_str().unwrap().into())];
+        let sh = ShellDistro { home: home.clone() };
+        let picks = [shell_pick(&lint), shell_pick(&mine)];
+        let plan_of = plan_with(&at, &picks, &sh).unwrap();
+        assert_eq!(plan_of.iter().map(|p| p.blocked).collect::<Vec<_>>(), [None, None], "{plan_of:?}");
+        let done = run_with(&t.join("app"), &at, &picks, &sh).unwrap();
+        assert_eq!(done.iter().map(|d| d.outcome).collect::<Vec<_>>(), ["deleted", "deleted"], "{done:?}");
+        assert!(!lint.exists() && !mine.exists());
+        assert_eq!(names(&repo_root), Vec::<String>::new(), "nothing is left beside it");
     }
 
     #[test]
