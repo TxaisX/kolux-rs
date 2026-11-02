@@ -2557,8 +2557,10 @@ mod tests {
     }
 
     /// T-066-e: a program that stands in for an agent's sessions command, by the agent's own program
-    /// name, printing `out` (or sleeping ten seconds when `out` is None), in a folder of its own.
-    fn stand_in(tag: &str, name: &str, out: Option<&str>) -> (std::path::PathBuf, std::path::PathBuf) {
+    /// name, in a folder of its own: it prints `out`; sleeps ten seconds when `out` is None; and when
+    /// `helper` is set it also forks a helper that inherits its output and outlives it by eight seconds
+    /// (an updater or daemon a real list command leaves behind).
+    fn stand_in(tag: &str, name: &str, out: Option<&str>, helper: bool) -> (std::path::PathBuf, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("kolux-rs-t066e-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("w")).unwrap();
@@ -2569,13 +2571,15 @@ mod tests {
                 Some(_) => format!("@type \"{}\"\r\n", fixture.display()),
                 None => "@ping -n 11 127.0.0.1 >nul\r\n".to_string(),
             };
-            (dir.join(format!("{name}.cmd")), format!("@echo off\r\n{body}"))
+            let fork = if helper { "@start /b ping -n 9 127.0.0.1\r\n" } else { "" };
+            (dir.join(format!("{name}.cmd")), format!("@echo off\r\n{body}{fork}"))
         } else {
             let body = match out {
                 Some(_) => format!("cat '{}'\n", fixture.display()),
                 None => "sleep 10\n".to_string(),
             };
-            (dir.join(name), format!("#!/bin/sh\n{body}"))
+            let fork = if helper { "(sleep 8 &)\n" } else { "" };
+            (dir.join(name), format!("#!/bin/sh\n{body}{fork}"))
         };
         std::fs::write(&file, text).unwrap();
         #[cfg(unix)]
@@ -2593,7 +2597,7 @@ mod tests {
     fn t066e_a_lines_sessions_command_gives_the_newest_id_no_other_pane_holds() {
         // Cursor lists newest first.
         let out = format!("ID                                    Title          Updated\n{T066E_A}  Fix the build  1m ago\n{T066E_B}  Older          2d ago\n");
-        let (dir, cursor) = stand_in("lines", "cursor", Some(&out));
+        let (dir, cursor) = stand_in("lines", "cursor", Some(&out), false);
         let src = session_id::source("cursor").unwrap();
         assert_eq!(listed_session(&cursor, src, &dir.join("w"), &[]).as_deref(), Some(T066E_A));
         assert_eq!(listed_session(&cursor, src, &dir.join("w"), &[T066E_A.to_string()]).as_deref(), Some(T066E_B), "the next newest when a pane holds the newest");
@@ -2604,7 +2608,7 @@ mod tests {
     #[test]
     fn t066e_a_json_sessions_command_picks_by_folder_and_time() {
         // The stand-in prints its `.out` file, which is written once the folders it names exist.
-        let (dir, goose) = stand_in("json", "goose", Some(""));
+        let (dir, goose) = stand_in("json", "goose", Some(""), false);
         let here = dir.join("w");
         let other = dir.join("elsewhere");
         let json_path = |p: &std::path::Path| p.display().to_string().replace('\\', "\\\\");
@@ -2622,7 +2626,7 @@ mod tests {
 
     #[test]
     fn t066e_a_sessions_command_that_hangs_or_is_missing_gives_nothing_within_the_wait() {
-        let (dir, hermes) = stand_in("hang", "hermes", None);
+        let (dir, hermes) = stand_in("hang", "hermes", None, false);
         let src = session_id::source("hermes").unwrap();
         let began = Instant::now();
         assert_eq!(listed_session(&hermes, src, &dir.join("w"), &[]), None, "a hanging list gives nothing");
@@ -2633,8 +2637,22 @@ mod tests {
         assert_eq!(listed_session(&missing, src, &dir.join("w"), &[]), None, "a missing program is no session, never an error");
         assert!(began.elapsed() < Duration::from_secs(1));
         // An agent with no sessions command is asked nothing.
-        let (_, copilot) = stand_in("hang", "copilot", Some(&format!("{T066E_A}\n")));
+        let (_, copilot) = stand_in("hang", "copilot", Some(&format!("{T066E_A}\n")), false);
         assert_eq!(listed_session(&copilot, session_id::source("copilot").unwrap(), &dir.join("w"), &[]), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t066e_a_helper_the_list_leaves_behind_holding_its_output_never_holds_the_ask_past_the_wait() {
+        // The command prints its list and exits at once; the helper it forked keeps the pipe open for eight
+        // seconds more. The list it printed is read, and the ask ends at the wait, not when the helper does.
+        let (dir, gemini) = stand_in("helper", "gemini", Some(&format!("{T066E_B}\n{T066E_A}\n")), true);
+        let src = session_id::source("gemini").unwrap();
+        let began = Instant::now();
+        let got = listed_session(&gemini, src, &dir.join("w"), &[]);
+        let took = began.elapsed();
+        assert!(took < LIST_WAIT + Duration::from_secs(2), "the ask ends by the wait, whoever still holds the pipe: {took:?}");
+        assert_eq!(got.as_deref(), Some(T066E_A), "what the command printed before it exited is still its list (gemini lists oldest first)");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2642,7 +2660,7 @@ mod tests {
     fn t066e_the_output_read_is_capped_so_a_chatty_list_cannot_fill_memory() {
         // The first id sits after more than the cap of filler: nothing of it is read.
         let out = format!("{}\n{T066E_A}\n", "x".repeat(LIST_CAP as usize + 1024));
-        let (dir, amp) = stand_in("cap", "amp", Some(&out));
+        let (dir, amp) = stand_in("cap", "amp", Some(&out), false);
         assert_eq!(listed_session(&amp, session_id::source("amp").unwrap(), &dir.join("w"), &[]), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2726,8 +2744,9 @@ pub fn terminal_history(app: AppHandle, pane_key: u32) -> Result<String, String>
     Ok(base64::engine::general_purpose::STANDARD.encode(trim_history(&bytes, HISTORY_KEEP)))
 }
 
-/// T-066-e: how long an agent's sessions command may take before it is given up on (killed), so a
-/// list that hangs never holds up a layout save; and how much of its output is read at most.
+/// T-066-e: how long an agent's sessions command may take, the reading of its output included, before
+/// it is given up on (the command killed if it still runs), so a list that hangs, or a helper it left
+/// behind holding its output, never holds up a layout save; and how much of its output is read at most.
 pub const LIST_WAIT: Duration = Duration::from_secs(5);
 pub const LIST_CAP: u64 = 256 * 1024;
 
@@ -2736,7 +2755,8 @@ pub const LIST_CAP: u64 = 256 * 1024;
 /// other pane holds (`taken`). Any trouble is no session, never an error: a program that is missing
 /// or will not start, a list that takes longer than `LIST_WAIT` (it is killed), a list that
 /// prints more than `LIST_CAP` before its first id (the rest is not read), or no sessions command for
-/// this agent at all.
+/// this agent at all. The whole ask ends within `LIST_WAIT`: what the command printed before it exited
+/// is its list even when a helper it forked (an updater, a daemon) keeps its output open after it.
 pub fn listed_session(program: &std::path::Path, src: &session_id::Source, folder: &std::path::Path, taken: &[String]) -> Option<String> {
     let (args, _) = src.list?;
     let (exe, head) = crate::pty::start_line_on(program, cfg!(windows));
@@ -2749,12 +2769,26 @@ pub fn listed_session(program: &std::path::Path, src: &session_id::Source, folde
     }
     let mut child = cmd.spawn().ok()?;
     let mut out = child.stdout.take()?;
-    // Read on the side, so a chatty list never blocks on a full pipe while the wait below runs out.
-    let reader = std::thread::spawn(move || {
+    // Read on the side, a piece at a time, so a chatty list never blocks on a full pipe while the wait
+    // below runs out, and so the wait bounds the read too: the pipe closes only when every process that
+    // inherited the command's output has gone, and a helper the command forked may never go. The reader
+    // is not waited for; it ends by itself when the pipe closes or when nobody takes its pieces any more.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
         use std::io::Read as _;
-        let mut buf = Vec::new();
-        let _ = (&mut out).take(LIST_CAP).read_to_end(&mut buf);
-        buf
+        let mut left = LIST_CAP;
+        let mut piece = [0u8; 8192];
+        while left > 0 {
+            let room = piece.len().min(left as usize);
+            let n = match out.read(&mut piece[..room]) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            left -= n as u64;
+            if tx.send(piece[..n].to_vec()).is_err() {
+                break;
+            }
+        }
     });
     let began = Instant::now();
     loop {
@@ -2769,12 +2803,16 @@ pub fn listed_session(program: &std::path::Path, src: &session_id::Source, folde
                 }
                 let _ = child.kill();
                 let _ = child.wait();
-                // The reader ends by itself once the pipe closes; it is not waited for.
                 return None;
             }
         }
     }
-    let text = String::from_utf8_lossy(&reader.join().ok()?).into_owned();
+    // The command is done: its output is taken as it arrives, until the pipe closes or the wait runs out.
+    let mut buf = Vec::new();
+    while let Ok(piece) = rx.recv_timeout(LIST_WAIT.saturating_sub(began.elapsed())) {
+        buf.extend_from_slice(&piece);
+    }
+    let text = String::from_utf8_lossy(&buf).into_owned();
     session_id::pick_listed(src.agent, &text, &folder.to_string_lossy(), taken)
 }
 

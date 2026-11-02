@@ -2,7 +2,7 @@
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
 import { sessionOrder } from "../sessions/restoreOrder";
-import { layoutOf, marksOf, panesWantingListedSession, restoreAsks, restoreLayout, reviveSaved, stillThere } from "./layout";
+import { layoutOf, marksOf, panesWantingListedSession, restoreAsks, restoreLayout, reviveSaved, stillThere, withHintedSession, withListedSession } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
 
@@ -161,7 +161,8 @@ test("T-066-e: the panes whose session the agent's own sessions list is asked fo
   const editor = shell(9, "C:\\w\\a", { kind: "editor", path: "C:\\w\\a\\x.md", agentId: "cursor" });
   const nowhere = { ...shell(10, null), agentId: "cursor", program: "cursor" };
   const plain = shell(11, "C:\\w\\a");
-  const want = panesWantingListedSession([shell(1, null), cursor, cursorKnown, claude, codexKnown, goose, gooseFork, chooser, editor, nowhere, plain]);
+  const kiro = { ...shell(12, "C:\\w\\a"), agentId: "kiro", program: "kiro-cli" }; // no sessions command: nothing to ask
+  const want = panesWantingListedSession([shell(1, null), cursor, cursorKnown, claude, codexKnown, goose, gooseFork, chooser, editor, nowhere, plain, kiro]);
   expect(want.asks).toEqual([
     { key: 2, agent: "cursor", folder: "C:\\w\\a" },
     { key: 6, agent: "goose", folder: "C:\\w\\b" },
@@ -170,4 +171,33 @@ test("T-066-e: the panes whose session the agent's own sessions list is asked fo
   // Every id a pane holds, and the session a fork came from (a fork is never resumed as its source).
   expect(want.taken).toEqual(["3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b", "thr_22", "20261013_080000_b2"]);
   expect(panesWantingListedSession([claude, codexKnown, plain])).toEqual({ asks: [], taken: ["thr_22"] });
+});
+
+test("T-066-e (review): a listed id is a guess until the agent names its own: the pane is asked again with its guess left out, a newer listed id replaces it, the agent's exit hint wins over it, and a hook's or hint's id is never replaced", () => {
+  const S1 = "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b";
+  const S2 = "7d1e4a90-2b3c-4d5e-9f01-a2b3c4d5e6f7";
+  const S3 = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const fresh: (Omit<ReturnType<typeof shell>, "program"> & { agentId: string; program: string; session?: string; sessionListed?: boolean })[] = [{ ...shell(2, "C:\\w\\a"), agentId: "cursor", program: "cursor" }, { ...shell(3, "C:\\w\\a"), agentId: "cursor", program: "cursor" }];
+  // The folder's newest older session is put on the pane as a guess (the agent made none yet).
+  const guessed = withListedSession(fresh, 2, S1);
+  expect(guessed[0]).toMatchObject({ session: S1, sessionListed: true });
+  expect(guessed[1].session).toBeUndefined();
+  // Never written down: a restored tab really runs that id, so it is a hook-grade id then.
+  expect(layoutOf(guessed, {}, 2, "C:\\w\\a", {}).panes[0]).not.toHaveProperty("sessionListed");
+  // Asked again: its own guess is left out of its ask (so the same or a newer id can come back) but stays in `taken` for the others.
+  expect(panesWantingListedSession(guessed)).toEqual({ asks: [{ key: 2, agent: "cursor", folder: "C:\\w\\a", own: S1 }, { key: 3, agent: "cursor", folder: "C:\\w\\a" }], taken: [S1] });
+  // A newer listed id (the one the agent created meanwhile) replaces the guess; the same id again changes nothing.
+  expect(withListedSession(guessed, 2, S2)[0]).toMatchObject({ session: S2, sessionListed: true });
+  expect(withListedSession(guessed, 2, S1)[0]).toEqual(guessed[0]);
+  // The agent's own exit hint wins over the guess and settles the pane: not asked again, not replaced by a list.
+  const hinted = withHintedSession(guessed, 2, S3);
+  expect(hinted[0].session).toBe(S3);
+  expect(hinted[0].sessionListed).toBeFalsy();
+  expect(panesWantingListedSession(hinted).asks).toEqual([{ key: 3, agent: "cursor", folder: "C:\\w\\a" }]);
+  expect(withListedSession(hinted, 2, S2)[0].session).toBe(S3);
+  // A hint lands on a pane with no id too, and never over a settled id (a hook's, or an earlier hint).
+  expect(withHintedSession(fresh, 3, S2)[1].session).toBe(S2);
+  expect(withHintedSession(hinted, 2, S1)[0].session).toBe(S3);
+  // Another pane is never touched.
+  expect(withHintedSession(guessed, 3, S3)[0]).toEqual(guessed[0]);
 });

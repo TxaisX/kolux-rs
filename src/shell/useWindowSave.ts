@@ -10,7 +10,7 @@ import { useWindowSync } from "../sessions/windowSync";
 import { LAST_SCREEN_FIELD, OPEN_PAGE_FIELD, lastWriter, saveLayout } from "../settings/general";
 import { saveChanged } from "../settings/saveChanged";
 import { asksBeforeClose } from "../terminal/closing";
-import { LAYOUT_FIELD, layoutOf, panesWantingListedSession, type SavedLayout } from "../terminal/layout";
+import { LAYOUT_FIELD, layoutOf, panesWantingListedSession, withListedSession, type SavedLayout } from "../terminal/layout";
 import { layoutWriter } from "../terminal/layoutSave";
 import { losable, runningAgents, type Losable } from "./closeAsk";
 import { invoke } from "@tauri-apps/api/core";
@@ -105,12 +105,15 @@ export function useWindowSave({ activeDir, activeTab, classic, dirty, focused, p
   // them back, so writing its layout would drop them, even once its own settings read lands (T-597:
   // main.tsx draws the window again with them when the settings answer). A failed write is retried
   // once, then only the durable part is written.
-  // T-066-e (SESS-030, source 2): before the layout goes out, an id-only agent tab with no session id yet is
-  // asked for the one its agent's own sessions command lists for its folder (terminal_listed_session: the
-  // newest one no other pane holds). The id goes on the pane, so the write that follows carries it and a
-  // restart resumes the tab the way a hook-fed one is. One round at a time, the panes in turn, each answer
-  // added to `taken` so two panes never get one session; an id the pane got meanwhile (a hook, the agent's
-  // own exit hint) is never replaced; a pane that got nothing is left alone for LISTED_ASK_AGAIN_MS.
+  // T-066-e (SESS-030, source 2): before the layout goes out, a tab of an agent with a sessions command that
+  // holds no session id yet is asked for the one the command lists for its folder (terminal_listed_session:
+  // the newest one no other pane holds). The id goes on the pane as a listed guess (it may be the folder's
+  // previous session: the tab is asked when it is opened, before its agent has made one), so the write that
+  // follows carries it and a restart resumes the tab the way a hook-fed one is. The pane is asked again (its
+  // own guess left out of its ask) so the session its agent made since replaces the guess, and the id the
+  // agent prints itself when it exits wins over it (useCliBridge). One round at a time, the panes in turn,
+  // each answer added to `taken` so two panes never get one session; an id the agent named itself is never
+  // replaced; a pane is left alone for LISTED_ASK_AGAIN_MS after each ask.
   const askingListed = useRef(false);
   const askedListed = useRef(new Map<number, number>());
   const askListedSessions = (now = Date.now()) => {
@@ -123,10 +126,10 @@ export function useWindowSave({ activeDir, activeTab, classic, dirty, focused, p
     void (async () => {
       for (const a of asks) {
         askedListed.current.set(a.key, Date.now());
-        const id = await invoke<string | null>("terminal_listed_session", { agent: a.agent, folder: a.folder, taken: [...taken] }).catch(() => null);
+        const id = await invoke<string | null>("terminal_listed_session", { agent: a.agent, folder: a.folder, taken: taken.filter((t) => t !== a.own) }).catch(() => null);
         if (!id) continue;
-        taken.push(id);
-        setPanes((ps) => ps.map((p) => (p.key === a.key && !p.session ? { ...p, session: id } : p)));
+        if (!taken.includes(id)) taken.push(id);
+        setPanes((ps) => withListedSession(ps, a.key, id));
       }
     })().finally(() => {
       askingListed.current = false;
