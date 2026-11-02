@@ -13,6 +13,7 @@
 //! at. Each skill is then deleted on its own, all or nothing, under the one lock skill installs and
 //! updates share, and comes back as deleted, skipped, busy, partly removed or failed.
 
+use crate::skills::wsl::{self, Reply, Step};
 use crate::skills::{self, Places, SKILL_FILE};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -942,8 +943,64 @@ fn count_ok(n: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// T-180-b: a skill folder inside a WSL distribution, as a pick names it: the distribution, the
+/// scanned skill folder it sits in (as `Places::wsl_roots` spells it, `~/` for the home) and the
+/// folder itself. None when the pick is not a WSL path, is not a `SKILL.md` right under one of the
+/// project's own distribution's skill folders, or names a folder a shell could misread.
+struct WslSkill<'a> {
+    distro: String,
+    root: &'a str,
+    dir: String,
+}
+
+fn wsl_skill<'a>(places: &'a Places, path: &str) -> Option<Result<WslSkill<'a>, &'static str>> {
+    let (distro, linux) = wsl::split(Path::new(path))?;
+    let Some(dir) = linux.strip_suffix(&format!("/{SKILL_FILE}")) else { return Some(Err("outside")) };
+    let Some((parent, name)) = dir.rsplit_once('/') else { return Some(Err("outside")) };
+    if name.is_empty() || parent.is_empty() || dir.chars().any(char::is_control) {
+        return Some(Err("outside"));
+    }
+    // `~/x` is the distribution's home, whatever it is called: the folder has to end the same way
+    // and have a home in front; a project folder is matched whole.
+    let under = |root: &str| match root.strip_prefix('~') {
+        Some(rel) => parent.len() > rel.len() && parent.ends_with(rel),
+        None => parent == root.trim_end_matches('/'),
+    };
+    match places.wsl_roots.iter().find(|(d, r)| d.eq_ignore_ascii_case(&distro) && under(r)) {
+        Some((_, root)) => Some(Ok(WslSkill { distro, root: root.as_str(), dir: dir.to_string() })),
+        None => Some(Err("outside")),
+    }
+}
+
+/// T-180-b: asks the distribution what `skill` is, and plans the one item that goes.
+fn plan_wsl(pick: &Pick, skill: &WslSkill, runner: &dyn wsl::Runner) -> Result<Planned, String> {
+    let blocked = |why: &'static str| Planned { path: pick.path.clone(), blocked: Some(why), items: vec![], remains: None, dangling: vec![] };
+    let reply = runner.delete(&skill.distro, skill.root, &skill.dir, Step::Check).and_then(|b| wsl::parse_reply(&b)).map_err(|e| format!("WSL {}: {e}", skill.distro))?;
+    let here = skills::plain(&wsl::unc(&skill.distro, &skill.dir));
+    let (kind, updated, remains) = match reply {
+        Reply::Gone => return Ok(blocked("gone")),
+        Reply::Outside => return Ok(blocked("outside")),
+        // A step the distribution could not do is a failure of the whole plan, never a shorter list.
+        Reply::Fail(why) => return Err(format!("WSL {}: {why}", skill.distro)),
+        Reply::Folder { updated } => ("folder", updated, None),
+        Reply::Link { updated, target } => ("link", updated, Some(skills::plain(&wsl::unc(&skill.distro, &target)))),
+    };
+    if updated != pick.updated {
+        return Ok(blocked("changed"));
+    }
+    Ok(Planned { path: pick.path.clone(), blocked: None, items: vec![Item { path: here, kind }], remains, dangling: vec![] })
+}
+
 /// SKILL-022: what deleting `picks` would remove, skill by skill, without changing anything.
+/// Tests only: WSL is unavailable, so a pick inside a distribution fails the plan.
+#[cfg(test)]
 pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
+    plan_with(places, picks, &wsl::Unavailable)
+}
+
+/// SKILL-022: what deleting `picks` would remove, skill by skill, without changing anything. A
+/// pick inside a WSL distribution is asked of that distribution through `runner` (T-180-b).
+pub fn plan_with(places: &Places, picks: &[Pick], runner: &dyn wsl::Runner) -> Result<Vec<Planned>, String> {
     count_ok(picks.len())?;
     let mut found: Vec<PathBuf> = vec![];
     // A root handed in twice (or two roots that are one folder) is read once.
@@ -957,6 +1014,19 @@ pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
         let blocked = |why: &'static str| Planned { path: pick.path.clone(), blocked: Some(why), items: vec![], remains: None, dangling: vec![] };
         if pick.path.starts_with("kolux:") {
             out.push(blocked("bundled"));
+            continue;
+        }
+        if let Some(in_wsl) = wsl_skill(places, &pick.path) {
+            // Inside a distribution: only the project's own distribution's skill folders, and the
+            // distribution itself says what is there. The share path is never opened.
+            match in_wsl {
+                Err(why) => out.push(blocked(why)),
+                Ok(skill) => {
+                    if taken.insert(format!("wsl:{}:{}", skill.distro.to_lowercase(), skill.dir)) {
+                        out.push(plan_wsl(pick, &skill, runner)?);
+                    }
+                }
+            }
             continue;
         }
         let file = PathBuf::from(&pick.path);
@@ -1042,8 +1112,33 @@ pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
     Ok(out)
 }
 
-/// SKILL-022: deletes `picks` skill by skill under the shared lock, each all or nothing.
+/// T-180-b: removes one planned WSL skill inside its distribution. The Windows record (set aside,
+/// then remove) plays no part: the distribution answers OK, GONE or FAIL for the one step.
+fn delete_wsl(places: &Places, p: &Planned, runner: &dyn wsl::Runner) -> Done {
+    let path = p.path.clone();
+    let skill = match wsl_skill(places, &path) {
+        Some(Ok(s)) => s,
+        _ => return Done { path, outcome: "skipped", note: Some("outside".into()) },
+    };
+    match runner.delete(&skill.distro, skill.root, &skill.dir, Step::Delete).and_then(|b| wsl::parse_reply(&b)) {
+        Ok(Reply::Folder { .. } | Reply::Link { .. }) => Done { path, outcome: "deleted", note: None },
+        Ok(Reply::Gone) => Done { path, outcome: "skipped", note: Some("gone".into()) },
+        Ok(Reply::Outside) => Done { path, outcome: "skipped", note: Some("outside".into()) },
+        Ok(Reply::Fail(why)) => Done { path, outcome: "failed", note: Some(why) },
+        Err(e) => Done { path, outcome: "failed", note: Some(e) },
+    }
+}
+
+/// SKILL-022: deletes `picks` skill by skill under the shared lock, each all or nothing. Tests
+/// only: WSL is unavailable.
+#[cfg(test)]
 pub fn run(app_dir: &Path, places: &Places, picks: &[Pick]) -> Result<Vec<Done>, String> {
+    run_with(app_dir, places, picks, &wsl::Unavailable)
+}
+
+/// SKILL-022: deletes `picks` skill by skill under the shared lock, each all or nothing. A skill
+/// inside a WSL distribution is removed by that distribution through `runner` (T-180-b).
+pub fn run_with(app_dir: &Path, places: &Places, picks: &[Pick], runner: &dyn wsl::Runner) -> Result<Vec<Done>, String> {
     count_ok(picks.len())?;
     let every = |outcome: &'static str, note: String| picks.iter().map(|p| Done { path: p.path.clone(), outcome, note: Some(note.clone()) }).collect();
     let _one = match lock(app_dir) {
@@ -1051,7 +1146,7 @@ pub fn run(app_dir: &Path, places: &Places, picks: &[Pick]) -> Result<Vec<Done>,
         Err(LockError::Busy) => return Ok(every("busy", "Another skill operation is under way; try again in a moment".into())),
         Err(LockError::Failed(why)) => return Ok(every("failed", format!("Nothing was deleted: {why}"))),
     };
-    let planned = plan(places, picks)?;
+    let planned = plan_with(places, picks, runner)?;
     let mut out = vec![];
     // AFTER 5: the record an earlier delete left is settled once per request, not once per skill. A
     // stuck one gives every skill the same answer, logged once, with the put-back retries paid once;
@@ -1060,6 +1155,10 @@ pub fn run(app_dir: &Path, places: &Places, picks: &[Pick]) -> Result<Vec<Done>,
     for p in planned {
         if let Some(why) = p.blocked {
             out.push(Done { path: p.path, outcome: "skipped", note: Some(why.into()) });
+            continue;
+        }
+        if wsl::split(Path::new(&p.path)).is_some() {
+            out.push(delete_wsl(places, &p, runner));
             continue;
         }
         let settled = match next.take().unwrap_or_else(|| settle(app_dir, &places.deletable)) {
@@ -1087,7 +1186,7 @@ pub fn run(app_dir: &Path, places: &Places, picks: &[Pick]) -> Result<Vec<Done>,
 /// SKILL-022: the confirmation's facts for the chosen skills; changes nothing.
 #[tauri::command]
 pub async fn skills_delete_plan(workspace: Option<String>, picks: Vec<Pick>) -> Result<Vec<Planned>, String> {
-    tauri::async_runtime::spawn_blocking(move || plan(&skills::places(&skills::Env::current(), workspace.as_deref().map(Path::new)), &picks)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || plan_with(&skills::places(&skills::Env::current(), workspace.as_deref().map(Path::new)), &picks, &wsl::Real)).await.map_err(|e| e.to_string())?
 }
 
 /// SKILL-022: deletes the chosen skills once the user confirmed; one outcome per skill.
@@ -1095,7 +1194,7 @@ pub async fn skills_delete_plan(workspace: Option<String>, picks: Vec<Pick>) -> 
 pub async fn skills_delete(app: tauri::AppHandle, workspace: Option<String>, picks: Vec<Pick>) -> Result<Vec<Done>, String> {
     use tauri::Manager;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || run(&dir, &skills::places(&skills::Env::current(), workspace.as_deref().map(Path::new)), &picks)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || run_with(&dir, &skills::places(&skills::Env::current(), workspace.as_deref().map(Path::new)), &picks, &wsl::Real)).await.map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -1267,7 +1366,7 @@ mod tests {
     }
 
     fn places(deletable: &[&Path], plugin: &[&Path]) -> Places {
-        Places { deletable: deletable.iter().map(|p| p.to_path_buf()).collect(), plugin: plugin.iter().map(|p| p.to_path_buf()).collect() }
+        Places { deletable: deletable.iter().map(|p| p.to_path_buf()).collect(), plugin: plugin.iter().map(|p| p.to_path_buf()).collect(), wsl_roots: vec![] }
     }
 
     #[test]
@@ -2550,5 +2649,192 @@ mod tests {
         let plan_of = plan(&at, &[pick(&link)]).unwrap();
         assert!(plan_of[0].dangling.is_empty());
         assert_eq!(run(&app, &at, &[pick(&link)]).unwrap()[0].outcome, "deleted");
+    }
+
+    // SKILL-022 (T-180-b): skills inside a WSL distribution. The distribution is a fake that answers
+    // the delete script by (folder, step) and records every call; no wsl.exe is run.
+
+    use std::collections::HashMap;
+
+    struct FakeDistro {
+        replies: HashMap<(String, Step), Result<String, String>>,
+        calls: Mutex<Vec<(String, String, String, Step)>>,
+    }
+
+    impl FakeDistro {
+        fn new(replies: Vec<(&str, Step, Result<&str, &str>)>) -> FakeDistro {
+            let replies = replies.into_iter().map(|(dir, step, r)| ((dir.to_string(), step), r.map(|s| format!("KOLUX-WSL-DELETE 1\n{s}\n")).map_err(str::to_string))).collect();
+            FakeDistro { replies, calls: Mutex::new(vec![]) }
+        }
+
+        fn calls(&self) -> Vec<(String, String, String, Step)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl wsl::Runner for FakeDistro {
+        fn run(&self, _distro: &str, _dir: &str, _cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<u8>, String> {
+            panic!("a delete never scans")
+        }
+
+        fn delete(&self, distro: &str, root: &str, dir: &str, step: Step) -> Result<Vec<u8>, String> {
+            self.calls.lock().unwrap().push((distro.into(), root.into(), dir.into(), step));
+            // A folder with no delete-step reply answers the delete as it answered the check.
+            let r = self.replies.get(&(dir.to_string(), step)).or_else(|| self.replies.get(&(dir.to_string(), Step::Check)));
+            r.cloned().unwrap_or_else(|| Ok("KOLUX-WSL-DELETE 1\nGONE\n".into())).map(String::into_bytes)
+        }
+    }
+
+    /// The places of a project in the Ubuntu distribution, plus any Windows-side skill folders.
+    fn wsl_places(deletable: &[&Path]) -> Places {
+        let mut at = places(deletable, &[]);
+        at.wsl_roots = vec![("Ubuntu".into(), "~/.claude/skills".into()), ("Ubuntu".into(), "~/.codex/skills".into()), ("Ubuntu".into(), "/home/me/repo/.claude/skills".into())];
+        at
+    }
+
+    const PDF: &str = r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\pdf\SKILL.md";
+    const PDF_DIR: &str = "/home/me/.claude/skills/pdf";
+    const AT: u64 = 1_700_000_000_000;
+
+    fn wsl_pick(path: &str) -> Pick {
+        Pick { path: path.into(), updated: Some(AT) }
+    }
+
+    #[test]
+    fn skill022_wsl_another_distribution_or_a_path_outside_the_skill_folders_is_refused_without_asking() {
+        let at = wsl_places(&[]);
+        let fake = FakeDistro::new(vec![]);
+        let picks = [
+            wsl_pick(r"\\wsl.localhost\Debian\home\me\.claude\skills\pdf\SKILL.md"), // another distribution
+            wsl_pick(r"\\wsl$\Ubuntu\srv\skills\pdf\SKILL.md"),                       // not a skill folder
+            wsl_pick(r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\pdf\deeper\SKILL.md"), // below a skill, not in the root
+            wsl_pick(r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\SKILL.md"),   // the root itself
+            wsl_pick(r"\\wsl.localhost\Ubuntu\home\me\repo\.claude\skills\lint\notes.md"), // not the skill file
+            wsl_pick(r"\\wsl.localhost\Ubuntu\home\me\.codex\skills\pdf\SKILL.md"), // the distribution says it is not under its home
+        ];
+        let fake_outside = FakeDistro::new(vec![("/home/me/.codex/skills/pdf", Step::Check, Ok("OUTSIDE"))]);
+        let plan_of = plan_with(&at, &picks[..5], &fake).unwrap();
+        assert_eq!(plan_of.iter().map(|p| p.blocked).collect::<Vec<_>>(), vec![Some("outside"); 5]);
+        assert!(plan_of.iter().all(|p| p.items.is_empty() && p.remains.is_none()));
+        assert!(fake.calls().is_empty(), "nothing outside the project's own skill folders is ever asked of WSL: {:?}", fake.calls());
+        let plan_of = plan_with(&at, &picks[5..], &fake_outside).unwrap();
+        assert_eq!(plan_of[0].blocked, Some("outside"));
+        // Running such picks skips them and never deletes.
+        let t = temp("skill022-wsl-a");
+        let done = run_with(&t.join("app"), &at, &picks, &fake_outside).unwrap();
+        assert!(done.iter().all(|d| d.outcome == "skipped" && d.note.as_deref() == Some("outside")), "{done:?}");
+        assert!(fake_outside.calls().iter().all(|c| c.3 == Step::Check), "{:?}", fake_outside.calls());
+    }
+
+    #[test]
+    fn skill022_wsl_a_folder_is_deleted_inside_the_distribution_without_the_windows_record() {
+        let t = temp("skill022-wsl-b");
+        let app = t.join("app");
+        let at = wsl_places(&[]);
+        let fake = FakeDistro::new(vec![(PDF_DIR, Step::Check, Ok("OK folder 1700000000 "))]);
+        let plan_of = plan_with(&at, &[wsl_pick(PDF)], &fake).unwrap();
+        assert_eq!(plan_of[0].blocked, None);
+        assert_eq!(plan_of[0].items, [Item { path: r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\pdf".into(), kind: "folder" }]);
+        assert_eq!((plan_of[0].remains.as_deref(), plan_of[0].dangling.len()), (None, 0));
+        // The plan asks, never deletes.
+        assert_eq!(fake.calls(), vec![("Ubuntu".to_string(), "~/.claude/skills".to_string(), PDF_DIR.to_string(), Step::Check)]);
+        let done = run_with(&app, &at, &[wsl_pick(PDF)], &fake).unwrap();
+        assert_eq!(done, [Done { path: PDF.into(), outcome: "deleted", note: None }]);
+        let calls = fake.calls();
+        assert_eq!(calls.last().map(|c| (c.1.as_str(), c.2.as_str(), c.3)), Some(("~/.claude/skills", PDF_DIR, Step::Delete)));
+        assert_eq!(calls.iter().filter(|c| c.3 == Step::Delete).count(), 1);
+        // No set-aside copy and no delete record: the Windows journal plays no part inside WSL.
+        assert!(!app.join(JOURNAL).exists());
+        // The same pick twice is one delete.
+        let fake = FakeDistro::new(vec![(PDF_DIR, Step::Check, Ok("OK folder 1700000000"))]);
+        assert_eq!(plan_with(&at, &[wsl_pick(PDF), wsl_pick(PDF)], &fake).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn skill022_wsl_deleting_a_link_removes_the_link_and_keeps_the_folder_it_points_at() {
+        let t = temp("skill022-wsl-c");
+        let at = wsl_places(&[]);
+        let target = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "/home/me/dev/pdf");
+        let link = format!("OK link 1700000000 {target}");
+        let fake = FakeDistro::new(vec![(PDF_DIR, Step::Check, Ok(link.as_str()))]);
+        let plan_of = plan_with(&at, &[wsl_pick(PDF)], &fake).unwrap();
+        assert_eq!(plan_of[0].items, [Item { path: r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\pdf".into(), kind: "link" }]);
+        assert_eq!(plan_of[0].remains.as_deref(), Some(r"\\wsl.localhost\Ubuntu\home\me\dev\pdf"));
+        let done = run_with(&t.join("app"), &at, &[wsl_pick(PDF)], &fake).unwrap();
+        assert_eq!(done[0].outcome, "deleted");
+        // Only the link's own path is ever handed to the distribution, never where it points.
+        assert!(fake.calls().iter().all(|c| c.2 == PDF_DIR), "{:?}", fake.calls());
+    }
+
+    #[test]
+    fn skill022_wsl_a_changed_or_gone_skill_is_blocked_and_a_distribution_that_cannot_answer_fails_the_plan() {
+        let at = wsl_places(&[]);
+        let codex = r"\\wsl.localhost\Ubuntu\home\me\.codex\skills\old\SKILL.md";
+        let fake = FakeDistro::new(vec![(PDF_DIR, Step::Check, Ok("OK folder 1600000000")), ("/home/me/.codex/skills/old", Step::Check, Ok("GONE"))]);
+        let plan_of = plan_with(&at, &[wsl_pick(PDF), wsl_pick(codex)], &fake).unwrap();
+        assert_eq!(plan_of.iter().map(|p| p.blocked).collect::<Vec<_>>(), [Some("changed"), Some("gone")]);
+        let down = FakeDistro::new(vec![(PDF_DIR, Step::Check, Err("wsl.exe ended with exit code 1"))]);
+        let e = plan_with(&at, &[wsl_pick(PDF)], &down).unwrap_err();
+        assert!(e.contains("Ubuntu") && e.contains("exit code 1"), "{e}");
+        let garbled = FakeDistro::new(vec![(PDF_DIR, Step::Check, Ok("nonsense"))]);
+        assert!(plan_with(&at, &[wsl_pick(PDF)], &garbled).unwrap_err().contains("could not read"));
+    }
+
+    #[test]
+    fn skill022_wsl_a_failing_command_or_a_garbled_answer_is_a_failure_and_a_skill_gone_meanwhile_is_skipped() {
+        let t = temp("skill022-wsl-d");
+        let at = wsl_places(&[]);
+        let ok = "OK folder 1700000000";
+        let paths = [
+            (r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\one\SKILL.md", "/home/me/.claude/skills/one", Ok("FAIL rm: cannot remove 'one': Permission denied")),
+            (r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\two\SKILL.md", "/home/me/.claude/skills/two", Err("wsl.exe ended with exit code 1")),
+            (r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\three\SKILL.md", "/home/me/.claude/skills/three", Ok("nonsense")),
+            (r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\four\SKILL.md", "/home/me/.claude/skills/four", Ok("GONE")),
+            (r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\five\SKILL.md", "/home/me/.claude/skills/five", Ok(ok)),
+        ];
+        let mut replies = vec![];
+        for (_, dir, at_delete) in &paths {
+            replies.push((*dir, Step::Check, Ok(ok)));
+            replies.push((*dir, Step::Delete, *at_delete));
+        }
+        let fake = FakeDistro::new(replies);
+        let picks: Vec<Pick> = paths.iter().map(|(p, _, _)| wsl_pick(p)).collect();
+        let done = run_with(&t.join("app"), &at, &picks, &fake).unwrap();
+        let got: Vec<(&str, Option<&str>)> = done.iter().map(|d| (d.outcome, d.note.as_deref())).collect();
+        assert_eq!(got[0].0, "failed");
+        assert!(got[0].1.unwrap().contains("Permission denied"), "{got:?}");
+        assert_eq!(got[1].0, "failed");
+        assert!(got[1].1.unwrap().contains("exit code 1"), "{got:?}");
+        assert_eq!(got[2].0, "failed");
+        assert!(got[2].1.unwrap().contains("could not read"), "{got:?}");
+        assert_eq!(got[3], ("skipped", Some("gone")));
+        assert_eq!(got[4], ("deleted", None));
+        // A failure stops nothing else: every skill was asked to go once.
+        assert_eq!(fake.calls().iter().filter(|c| c.3 == Step::Delete).count(), 5);
+    }
+
+    #[test]
+    fn skill022_wsl_windows_and_wsl_skills_go_in_one_request_under_one_lock() {
+        let t = temp("skill022-wsl-e");
+        let (app, home) = (t.join("app"), t.join("home"));
+        let alpha = skill(&home, "alpha");
+        let at = wsl_places(&[&home]);
+        let fake = FakeDistro::new(vec![(PDF_DIR, Step::Check, Ok("OK folder 1700000000"))]);
+        let picks = [pick(&alpha), wsl_pick(PDF), Pick { path: "kolux:orchestration".into(), updated: None }];
+        let plan_of = plan_with(&at, &picks, &fake).unwrap();
+        assert_eq!(plan_of.iter().map(|p| p.blocked).collect::<Vec<_>>(), [None, None, Some("bundled")]);
+        assert_eq!(plan_of[0].items[0].kind, "folder");
+        assert_eq!(plan_of[1].items[0].path, r"\\wsl.localhost\Ubuntu\home\me\.claude\skills\pdf");
+        // While another skill operation holds the lock, the WSL skill is busy too and nothing is asked to go.
+        let held = lock(&app).unwrap();
+        let busy = run_with(&app, &at, &picks, &fake).unwrap();
+        assert!(busy.iter().all(|d| d.outcome == "busy"), "{busy:?}");
+        assert!(fake.calls().iter().all(|c| c.3 == Step::Check));
+        drop(held);
+        let done = run_with(&app, &at, &picks, &fake).unwrap();
+        assert_eq!(done.iter().map(|d| d.outcome).collect::<Vec<_>>(), ["deleted", "deleted", "skipped"]);
+        assert!(!alpha.exists());
+        assert_eq!(fake.calls().iter().filter(|c| c.3 == Step::Delete).count(), 1);
+        assert!(!app.join(JOURNAL).exists());
     }
 }
