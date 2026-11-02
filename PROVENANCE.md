@@ -1076,6 +1076,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-26 · prove T-032-c · this tree's own PlanSheet, TerminalPane and hooks code; claude --help text for --permission-mode as given; no outside source
 > 2026-10-26 · prove T-033-d · this tree's own SourceControlPanel, AllChangesPane, scm status watcher and the T-033-c GIT_TRACE2 method; claude --help text for --permission-mode as given; no outside source
 > 2026-10-26 · close T-234-b and T-323-c · this tree's own editor, browser and settings code only; no outside source
+> 2026-11-02 · pi-prompt (T-122, STAT-021 with STAT-025: the Pi prompt) · public doc: Pi extension declarations https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/extensions/types.ts, read again for BeforeAgentStartEvent (type before_agent_start; a run started by a user message carries messageType user and prompt, the raw user prompt text after expansion; a run started by an extension's custom message carries message instead; the handler may return a result, and Kolux's returns nothing) and the pi.on("before_agent_start") overload; this tree's own pi.rs, more.rs, hooks.rs and status.rs · areas 04 · the event and field names and their meaning only; no code copied
 
 ## 2026-10-30 · Old-app material removed (Txais's request)
 
