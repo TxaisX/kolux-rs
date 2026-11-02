@@ -21,10 +21,16 @@ const MAX_FILE: u64 = 100 * 1024 * 1024;
 const MAX_ASSETS: usize = 100;
 const MAX_ASSET: u64 = 10 * 1024 * 1024;
 const MAX_TOTAL: u64 = 50 * 1024 * 1024;
-/// Script hosts whose files are fetched into an entry so it still runs offline (SKILL-035).
-const CDNS: [&str; 5] = ["https://cdnjs.cloudflare.com/", "https://cdn.jsdelivr.net/npm/", "https://unpkg.com/", "https://cdn.tailwindcss.com", "https://code.jquery.com/"];
+/// Script hosts whose files are fetched into an entry so it still runs offline (SKILL-035). Each
+/// ends in '/'; `cdn_url` judges a parsed address against them, never a string prefix.
+const CDNS: [&str; 5] = ["https://cdnjs.cloudflare.com/", "https://cdn.jsdelivr.net/npm/", "https://unpkg.com/", "https://cdn.tailwindcss.com/", "https://code.jquery.com/"];
 const MAX_SCRIPTS: usize = 16;
 const MAX_SCRIPT: usize = 5 * 1024 * 1024;
+/// The most one ranged answer carries. A browser asks `bytes=0-` for every media load and after each
+/// seek, then often drops the connection once it has the header, so a 100 MB clip is not read into
+/// memory on the web view's thread for each; Content-Range tells it the real length and it asks
+/// again from where the answer ended.
+const CHUNK: u64 = 8 * 1024 * 1024;
 
 /// Where a page came from: a file added by hand, or a Claude publish (one entry per URL).
 pub struct Origin {
@@ -257,7 +263,20 @@ fn inside(base: &Path, rel: &str) -> Option<PathBuf> {
     Some(p)
 }
 
-/// The spans of script src values that point at an allow-listed CDN.
+/// Whether `url` is a script on one of CDNS: https, no user name before the host, exactly that
+/// host, and a path under the listed one. A look-alike host (cdn.tailwindcss.com.evil.example), a
+/// user name that makes the real host another (cdn.tailwindcss.com@evil.example), plain http and
+/// a jsdelivr path outside /npm/ are not, so the scan never fetches from a host outside the list.
+pub fn cdn_url(url: &str) -> bool {
+    let Ok(u) = tauri::Url::parse(url.trim()) else { return false };
+    if u.scheme() != "https" || !u.username().is_empty() || u.password().is_some() || u.port().is_some() {
+        return false;
+    }
+    let Some(host) = u.host_str() else { return false };
+    CDNS.iter().filter_map(|c| tauri::Url::parse(c).ok()).any(|c| c.host_str() == Some(host) && u.path().starts_with(c.path()))
+}
+
+/// The spans of script src values that point at an allow-listed CDN (`cdn_url`).
 pub fn cdn_scripts(html: &str) -> Vec<(usize, usize)> {
     let low = html.to_ascii_lowercase();
     let b = html.as_bytes();
@@ -277,7 +296,7 @@ pub fn cdn_scripts(html: &str) -> Vec<(usize, usize)> {
         while i < close && (if let Some(q) = q { b[i] != q } else { !b[i].is_ascii_whitespace() }) {
             i += 1;
         }
-        if CDNS.iter().any(|c| low[start..i].starts_with(c)) {
+        if cdn_url(&unescape(&html[start..i])) {
             out.push((start, i));
         }
     }
@@ -312,23 +331,101 @@ fn proxied(plan: &crate::resources::app_http::Plan, b: reqwest::ClientBuilder) -
     Ok(if plan.http1 { b.http1_only() } else { b })
 }
 
-/// Fetches one CDN script for an entry, within the size cap; None on any failure.
+/// Fetches one CDN script for an entry, within the size cap; None on any failure. Only an address
+/// `cdn_url` accepts is asked for, a redirect is not followed (it could leave the allow-list), and
+/// the body is read a chunk at a time and dropped the moment it passes the cap, so a reply without
+/// a Content-Length cannot fill memory for the whole 20 s timeout first.
 pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
-    if !CDNS.iter().any(|c| url.starts_with(c)) {
+    if !cdn_url(url) {
         return None;
     }
     // T-323-b (APP-032): through the saved proxy; a setting that cannot be used fetches nothing.
     let plan = crate::resources::app_http::plan_for(app, &url.parse().ok()?).ok()?;
-    let builder = proxied(&plan, reqwest::Client::builder()).ok()?;
+    let builder = proxied(&plan, reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())).ok()?;
     tauri::async_runtime::block_on(async {
         let client = builder.timeout(std::time::Duration::from_secs(20)).build().ok()?;
-        let r = client.get(url).send().await.ok()?;
+        let mut r = client.get(url).send().await.ok()?;
         if !r.status().is_success() || r.content_length().is_some_and(|n| n > MAX_SCRIPT as u64) {
             return None;
         }
-        let body = r.bytes().await.ok()?;
-        (body.len() <= MAX_SCRIPT).then(|| body.to_vec())
+        let mut body = Vec::new();
+        while let Some(chunk) = r.chunk().await.ok()? {
+            if body.len() + chunk.len() > MAX_SCRIPT {
+                return None;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Some(body)
     })
+}
+
+/// One source file, opened once and judged by its handle, so what is checked is what is copied: a
+/// link where the file should be is refused at open (O_NOFOLLOW; on Windows the reparse point is
+/// opened itself and refused by its attribute), a folder or device is not a file, and a hard link
+/// to a file elsewhere (a second name for the same data, which no path check can see) is refused
+/// by its link count. The metadata is the handle's (fstat), never a second look at the path.
+fn open_source(path: &Path, name: &str) -> Result<(fs::File, fs::Metadata), String> {
+    let mut opts = fs::File::options();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = opts.open(path).map_err(|e| format!("could not read {name}: {e}"))?;
+    let md = file.metadata().map_err(|e| format!("could not read {name}: {e}"))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if md.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(format!("{name} is a link, not a file"));
+        }
+    }
+    if !md.is_file() {
+        return Err(format!("{name} is not a file"));
+    }
+    if links_of(&file, &md) > 1 {
+        return Err(format!("{name} is a hard link to another file, so it is not kept"));
+    }
+    Ok((file, md))
+}
+
+#[cfg(unix)]
+fn links_of(_file: &fs::File, md: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    md.nlink()
+}
+
+#[cfg(windows)]
+fn links_of(file: &fs::File, _md: &fs::Metadata) -> u64 {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    // SAFETY: an open handle and a zeroed struct of the documented size, which the call fills.
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) == 0 {
+            return 1;
+        }
+        info.nNumberOfLinks as u64
+    }
+}
+
+/// Copies at most `cap` bytes of `file` into `to` and returns how many; a file that grew past the
+/// cap after its length was read is an error, never a cut-short copy.
+fn copy_capped(file: &mut fs::File, to: &Path, cap: u64, name: &str) -> Result<u64, String> {
+    let mut dest = fs::File::create(to).map_err(|e| e.to_string())?;
+    let n = std::io::copy(&mut file.by_ref().take(cap + 1), &mut dest).map_err(|e| format!("could not read {name}: {e}"))?;
+    if n > cap {
+        drop(dest);
+        let _ = fs::remove_file(to);
+        return Err(format!("{name} is larger than {} MB", cap / (1024 * 1024)));
+    }
+    Ok(n)
 }
 
 impl Library {
@@ -401,18 +498,23 @@ impl Library {
         if !src.is_absolute() {
             entry.state = "remote".into();
         } else if !on_network_share(src) {
-            let len = fs::metadata(src).map_err(|e| format!("could not read {name}: {e}"))?.len();
+            let (mut file, md) = open_source(src, &name)?;
+            let len = md.len();
             let cap = if kind == "page" { MAX_PAGE } else { MAX_FILE };
             if len > cap {
                 return Err(format!("{name} is larger than {} MB", cap / (1024 * 1024)));
             }
-            entry.stamp = Some((modified_ms(src), len));
+            entry.stamp = Some((modified_of(&md), len));
             let tmp = self.dir.join(format!(".new-{id}"));
             let _ = fs::remove_dir_all(&tmp);
             fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
             let mut size = len;
             if kind == "page" {
-                let html = fs::read(src).map_err(|e| format!("could not read {name}: {e}"))?;
+                let mut html = Vec::with_capacity(len as usize);
+                file.by_ref().take(MAX_PAGE + 1).read_to_end(&mut html).map_err(|e| format!("could not read {name}: {e}"))?;
+                if html.len() as u64 > MAX_PAGE {
+                    return Err(format!("{name} is larger than {} MB", MAX_PAGE / (1024 * 1024)));
+                }
                 let text = String::from_utf8_lossy(&html);
                 if let Some(t) = title_of(&text) {
                     entry.title = t;
@@ -421,7 +523,7 @@ impl Library {
                 let page = vendor_scripts(&text, &tmp, fetch, &mut size);
                 fs::write(tmp.join(&name), page.as_ref().map_or(&html[..], |p| p.as_bytes())).map_err(|e| e.to_string())?;
             } else {
-                fs::copy(src, tmp.join(&name)).map_err(|e| format!("could not read {name}: {e}"))?;
+                copy_capped(&mut file, &tmp.join(&name), MAX_FILE, &name)?;
             }
             entry.size = size;
             let dest = self.dir.join(&id);
@@ -439,7 +541,9 @@ impl Library {
         Ok(entry)
     }
 
-    /// Copies what the page points to; returns the stored size. Nothing outside the page's folder.
+    /// Copies what the page points to; returns the stored size. Nothing outside the page's folder,
+    /// and each asset is opened once and copied from that handle (`open_source`), so a link put in
+    /// its place after the path was checked is not followed.
     fn copy_assets(&self, src: &Path, html: &str, page: &str, tmp: &Path, mut total: u64) -> u64 {
         let Some(folder) = src.parent().and_then(|p| fs::canonicalize(p).ok()) else { return total };
         let mut seen = std::collections::HashSet::from([page.to_string()]);
@@ -450,20 +554,26 @@ impl Library {
             let Ok(real) = fs::canonicalize(folder.join(&r)) else { continue };
             let Ok(rel) = real.strip_prefix(&folder) else { continue }; // outside the page's own folder
             let rel = rel.to_string_lossy().replace('\\', "/");
-            let Ok(md) = fs::metadata(&real) else { continue };
-            if !md.is_file() || md.len() > MAX_ASSET || total + md.len() > MAX_TOTAL || !seen.insert(rel.clone()) {
+            let Ok((mut file, md)) = open_source(&real, &rel) else { continue };
+            if md.len() > MAX_ASSET || total + md.len() > MAX_TOTAL || !seen.insert(rel.clone()) {
                 continue;
             }
             let Some(to) = inside(tmp, &rel) else { continue };
-            if to.parent().is_some_and(|p| fs::create_dir_all(p).is_ok()) && fs::copy(&real, &to).is_ok() {
-                total += md.len();
+            if to.parent().is_some_and(|p| fs::create_dir_all(p).is_ok()) {
+                if let Ok(n) = copy_capped(&mut file, &to, MAX_ASSET, &rel) {
+                    total += n;
+                }
             }
         }
         total
     }
 
     /// Drops the entry and its stored copy. When its origin is a file that is still there, the scan
-    /// is told not to bring that exact file back (REMOVED); a URL origin leaves no such note.
+    /// is told not to bring that exact file back (REMOVED); a URL origin leaves no such note. Only
+    /// an entry the library read ("ok") is looked at again: an "unavailable" one sits on a network
+    /// share, which the library never touches (DT-R21; a stat there can block for the share's
+    /// timeout), and a "remote" one is on a machine this one cannot read; neither has a stamp to
+    /// note, and the scan never imports from either.
     pub fn remove(&self, id: &str) -> Result<(), String> {
         let _g = self.lock.lock();
         let mut list = self.read();
@@ -475,9 +585,9 @@ impl Library {
         }
         let mut removed = self.removed();
         let mut noted = false;
-        for e in gone {
+        for e in gone.into_iter().filter(|e| e.state == "ok") {
             let path = Path::new(&e.origin);
-            if path.is_absolute() {
+            if path.is_absolute() && !on_network_share(path) {
                 if let Some(meta) = fs::metadata(path).ok().filter(|m| m.is_file()) {
                     removed.insert(e.origin.clone(), (modified_ms(path), meta.len()));
                     noted = true;
@@ -535,13 +645,12 @@ pub fn workspace_files(workspace: &Path) -> Vec<PathBuf> {
     out
 }
 
+fn modified_of(md: &fs::Metadata) -> u64 {
+    md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 fn modified_ms(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    fs::metadata(path).map(|m| modified_of(&m)).unwrap_or(0)
 }
 
 /// Last (modified, size) seen for each workspace file, so the page's 3 s scan does not re-add a file
@@ -593,8 +702,9 @@ pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, 
         }
         seen.insert(key, stamp);
     }
-    // A removed file that is gone from the folder needs no note any more.
-    let gone: Vec<String> = removed.keys().filter(|k| !Path::new(k).is_file()).cloned().collect();
+    // A removed file that is gone from the folder needs no note any more. A note never names a share
+    // (remove skips them), and one that somehow does is left alone rather than stat'ed every tick.
+    let gone: Vec<String> = removed.keys().filter(|k| !on_network_share(Path::new(k)) && !Path::new(k).is_file()).cloned().collect();
     if !gone.is_empty() {
         let _g = lib.lock.lock();
         lib.forget_removed(&gone);
@@ -726,7 +836,10 @@ pub fn serve(lib: &Library, req: &tauri::http::Request<Vec<u8>>) -> tauri::http:
     };
     let total = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
     let wants_range = !kind.starts_with("text/html");
-    let range = wants_range.then(|| req.headers().get("range").and_then(|v| v.to_str().ok()).and_then(|v| parse_range(v, total))).flatten();
+    let range = wants_range
+        .then(|| req.headers().get("range").and_then(|v| v.to_str().ok()).and_then(|v| parse_range(v, total)))
+        .flatten()
+        .map(|(start, end)| (start, end.min(start + CHUNK - 1)));
     let (mut body, status, content_range) = match range.and_then(|(start, end)| read_range(&file, start, end).map(|b| (start, end, b))) {
         Some((start, end, b)) => (b, 206, Some(format!("bytes {start}-{end}/{total}"))),
         None => (fs::read(&file).unwrap_or_default(), 200, None),
@@ -764,9 +877,12 @@ pub async fn artifact_add(app: tauri::AppHandle, path: String) -> Result<Entry, 
     tauri::async_runtime::spawn_blocking(move || app.state::<Library>().add(Path::new(&path), Origin::hand(Path::new(&path)), &|u| fetch_script(&app, u))).await.map_err(|e| e.to_string())?
 }
 
+/// Off the window's thread like `artifact_add`: the remove stats the file it leaves a note for and
+/// deletes the stored folder, which on a slow disk is not the window's wait.
 #[tauri::command]
-pub fn artifact_remove(lib: tauri::State<'_, Library>, id: String) -> Result<(), String> {
-    lib.remove(&id)
+pub async fn artifact_remove(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Library>().remove(&id)).await.map_err(|e| e.to_string())?
 }
 
 /// Opens a web or mail link in the system's own handler; nothing else is let through, and no more than a
@@ -1044,6 +1160,7 @@ mod tests {
         fs::write(ws.join("artifacts").join("a.txt"), "ok").unwrap();
         std::os::unix::fs::symlink(outside.join("id_rsa"), ws.join("artifacts").join("key.txt")).unwrap();
         assert_eq!(workspace_files(&ws), vec![ws.join("artifacts").join("a.txt")]);
+        assert!(open_source(&ws.join("artifacts").join("key.txt"), "key.txt").is_err(), "a link is refused at open, not only by its path");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1166,5 +1283,84 @@ mod tests {
         let e = lib.add(Path::new(remote), o, &|_| panic!("a remote page is never read")).unwrap();
         assert_eq!((e.state.as_str(), e.size), ("remote", 0));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removing_an_entry_the_library_never_read_leaves_its_origin_alone() {
+        // An "unavailable" entry sits on a network share the library never reads (DT-R21). An existing
+        // local file stands in for the share here, so a stat of it would succeed and leave a note.
+        let root = temp_dir("unavail");
+        let origin = root.join("share.html");
+        fs::write(&origin, "<title>S</title>").unwrap();
+        let lib = Library::new(root.join("lib"));
+        let o = origin.to_string_lossy().into_owned();
+        let e = Entry { id: id_of(&o), title: "S".into(), source: "hand".into(), kind: "page".into(), origin: o, project: None, session: None, added: 1, size: 0, page: "share.html".into(), state: "unavailable".into(), stamp: None };
+        lib.write(&[e.clone()]).unwrap();
+        lib.remove(&e.id).unwrap();
+        assert!(lib.list().is_empty());
+        assert!(lib.removed().is_empty(), "an entry never read has no stamp to note, and its origin is not stat'ed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cdn_addresses_are_judged_by_host_not_by_prefix() {
+        for ok in ["https://cdn.tailwindcss.com/3.4.1", "https://cdn.tailwindcss.com", "https://CDN.jsdelivr.net/npm/a@1/a.js", "https://unpkg.com/b@2", "https://cdnjs.cloudflare.com/ajax/libs/x/1/x.js", "https://code.jquery.com/jquery-3.7.1.min.js"] {
+            assert!(cdn_url(ok), "{ok}");
+        }
+        for bad in ["https://cdn.tailwindcss.com.evil.example/x.js", "https://cdn.tailwindcss.com@evil.example/x.js", "https://user:pw@cdn.tailwindcss.com/x.js", "http://unpkg.com/x", "https://cdn.jsdelivr.net/gh/x", "https://unpkg.com:8443/x", "https://evil.example/https://unpkg.com/x", "//unpkg.com/x", "unpkg.com/x"] {
+            assert!(!cdn_url(bad), "{bad}");
+        }
+        let html = "<script src=\"https://cdn.tailwindcss.com.evil.example/x.js\"></script><script src=\"https://cdn.tailwindcss.com@evil.example/x.js\"></script><script src=\"http://unpkg.com/x\"></script><script src=\"https://cdn.jsdelivr.net/gh/x\"></script><script src=\"https://cdn.tailwindcss.com/3.4\"></script>";
+        let spans: Vec<&str> = cdn_scripts(html).into_iter().map(|(a, b)| &html[a..b]).collect();
+        assert_eq!(spans, ["https://cdn.tailwindcss.com/3.4"], "a look-alike host, a user name before the host, plain http and a jsdelivr path outside /npm/ are not CDN scripts");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_linked_file_is_not_kept_as_an_artifact_or_an_asset() {
+        let root = temp_dir("hardlink");
+        let ws = root.join("Project");
+        fs::create_dir_all(ws.join("artifacts").join("img")).unwrap();
+        fs::write(root.join("id_rsa"), "SECRET").unwrap();
+        fs::hard_link(root.join("id_rsa"), ws.join("artifacts").join("key.txt")).unwrap();
+        fs::hard_link(root.join("id_rsa"), ws.join("artifacts").join("img").join("k.png")).unwrap();
+        fs::write(ws.join("artifacts").join("site.html"), "<title>Site</title><img src=\"img/k.png\">").unwrap();
+        let lib = Library::new(root.join("lib"));
+        let got = scan_workspace(&lib, &ws, None, &|_| None, &mut HashMap::new());
+        assert_eq!(got, Scanned { changed: 1, skipped: vec!["key.txt is a hard link to another file, so it is not kept".into()] });
+        let list = lib.list();
+        assert_eq!(list.len(), 1);
+        let stored = root.join("lib").join(&list[0].entry.id);
+        assert!(!stored.join("img").join("k.png").exists(), "a page's hard-linked asset is left out");
+        assert_eq!(fs::read_dir(&stored).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_ranged_answer_is_never_more_than_a_chunk() {
+        let root = temp_dir("chunk");
+        let lib = Library::new(root.join("lib"));
+        let big = root.join("big.mp4");
+        fs::File::create(&big).unwrap().set_len(CHUNK + 1).unwrap();
+        let e = lib.add(&big, Origin::hand(&big), &|_| None).unwrap();
+        let uri = format!("http://kolux-artifact.localhost/{}/big.mp4", e.id);
+        // A browser's first ask for a clip, and its ask after every seek, is open-ended.
+        let open = tauri::http::Request::builder().uri(&uri).header("range", "bytes=0-").body(Vec::new()).unwrap();
+        let r = serve(&lib, &open);
+        assert_eq!(r.status(), 206);
+        assert_eq!(r.body().len() as u64, CHUNK, "one ranged answer carries at most a chunk; the browser asks again from there");
+        assert_eq!(r.headers().get("content-range").and_then(|v| v.to_str().ok()), Some(format!("bytes 0-{}/{}", CHUNK - 1, CHUNK + 1).as_str()));
+        let rest = tauri::http::Request::builder().uri(&uri).header("range", format!("bytes={CHUNK}-")).body(Vec::new()).unwrap();
+        let r = serve(&lib, &rest);
+        assert_eq!((r.status().as_u16(), r.body().len()), (206, 1));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_remove_command_runs_off_the_window_thread() {
+        let src = include_str!("artifacts.rs");
+        let src = &src[..src.find("#[cfg(test)]").unwrap()];
+        let at = src.find("pub async fn artifact_remove(").expect("artifact_remove must be an async command: it stats the removed file and deletes its stored folder");
+        assert!(src[at..at + 400].contains("spawn_blocking"), "the remove runs on a blocking worker");
     }
 }
