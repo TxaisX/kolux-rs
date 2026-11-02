@@ -384,9 +384,16 @@ fn stat_021_pi_events_drive_the_dot() {
     assert_eq!((e["hook_event_name"].as_str(), e[MARK].as_str(), e["prompt"].as_str()), (Some("UserPromptSubmit"), Some("pi"), Some("fix the\nparser")));
     assert_eq!(state(&mut s, &mut m, "/pi/before_agent_start", json!({"hook_event_name":"before_agent_start","messageType":"user","prompt":"fix the\nparser"})), Some("working"));
     assert_eq!(s.history.back().and_then(|h| h.prompt.as_deref()), Some("fix the parser"), "folded to one line");
-    assert_eq!(state(&mut s, &mut m, "/pi/agent_start", json!({"hook_event_name":"agent_start"})), Some("working"));
+    // The agent_start Pi fires right after it is not reported (stat_021_pi_extension_reports_one_run_start_and_a_whole_prompt),
+    // so tool steps keep the turn and the run's done line carries the prompt.
+    assert_eq!(state(&mut s, &mut m, "/pi/tool_execution_start", json!({"hook_event_name":"tool_execution_start","tool_name":"bash"})), Some("working"));
     assert_eq!(state(&mut s, &mut m, "/pi/agent_settled", json!({"hook_event_name":"agent_settled","aborted":false})), Some("done"));
-    assert_eq!(s.history.back().and_then(|h| h.prompt.as_deref()), Some("fix the parser"), "the prompt survives agent_start and labels the done");
+    assert_eq!(s.history.back().and_then(|h| h.prompt.as_deref()), Some("fix the parser"), "the prompt labels the done");
+    // A run Pi starts without before_agent_start is reported by agent_start alone: a new turn with no
+    // prompt, whose history line never carries the last turn's prompt.
+    assert_eq!(state(&mut s, &mut m, "/pi/agent_start", json!({"hook_event_name":"agent_start"})), Some("working"));
+    assert_eq!(s.history.back().map(|h| (h.state, h.prompt.as_deref())), Some(("working", None)), "no line with the stale prompt");
+    assert_eq!(state(&mut s, &mut m, "/pi/agent_settled", json!({"hook_event_name":"agent_settled","aborted":false})), Some("done"));
     // A run an extension starts with a custom message has no user prompt; a long prompt is cut at 16000.
     assert_eq!(state(&mut s, &mut m, "/pi/before_agent_start", json!({"hook_event_name":"before_agent_start","messageType":"custom","message":{"customType":"x"}})), Some("working"));
     assert_eq!(s.history.back().and_then(|h| h.prompt.as_deref()), None);
@@ -411,7 +418,8 @@ fn stat_021_pi_extension_is_koluxs_own_file() {
         assert!(text.contains(&format!("\"{e}\"")), "{e} is observed");
     }
     // STAT-025: only the prompt's text goes, cut at 16000 as the status rules keep it; nothing else of the run.
-    assert!(text.contains("before_agent_start: (e) => ({ prompt: typeof e?.prompt === \"string\" ? e.prompt.slice(0, 16000) : undefined }),"), "the prompt field");
+    // Cut by whole characters, one past the limit so the status rules mark the cut, and never a lone surrogate (JSON the listener rejects).
+    assert!(text.contains("before_agent_start: (e) => ({ prompt: typeof e?.prompt === \"string\" ? Array.from(e.prompt).slice(0, 16001).join(\"\").replace(/\\p{Cs}/gu, \"\\uFFFD\") : undefined }),"), "the prompt field");
     assert!(home.join(SCRIPT_DIR_FOR_TESTS).join(super::pi::SCRIPT).is_file(), "the script the extension runs is written");
     assert!(!super::pi::install(&home, &file).unwrap(), "unchanged: not rewritten");
     assert_eq!(super::pi::inspect(&home, &file).0, "installed");
@@ -455,6 +463,46 @@ fn stat_021_pi_titles_come_from_the_kolux_extension_alone() {
     fs::write(dir.join("run.mjs"), r#"process.env.KOLUX_PANE_KEY='1';process.env.KOLUX_HOOK_IDENTITY='x';const m=await import('./ext.mjs');const on={};let name;const titles=[];m.default({on:(n,h)=>{on[n]=h},getSessionName:()=>name});const ctx={cwd:'C:\\work\\my-app',ui:{setTitle:(t)=>titles.push(t)}};on.session_start({},ctx);name='Fix\nparser';on.session_info_changed({},ctx);console.log(JSON.stringify(titles));"#).unwrap();
     let out = std::process::Command::new("node").arg(dir.join("run.mjs")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[\"\u{3c0} - Fix parser - my-app\"]", "no title before Pi names the session; then session name and folder: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// STAT-021 with STAT-025: the generated extension, run under node against a stand-in Pi with a
+/// stand-in shell that keeps each report's body, sends one report per run start (agent_start is not
+/// sent after before_agent_start, so no two reports race; it is sent for a run without one), and a
+/// long prompt arrives as JSON the listener reads, cut by whole characters with the cut marked.
+#[cfg(unix)]
+#[test]
+fn stat_021_pi_extension_reports_one_run_start_and_a_whole_prompt() {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(node) = std::process::Command::new("node").arg("--version").output() else { return };
+    if !node.status.success() {
+        return;
+    }
+    let dir = scratch("pi-send");
+    let out = dir.join("out");
+    fs::create_dir_all(&out).unwrap();
+    let shell = dir.join("shell.sh");
+    // The extension runs `ComSpec /d /c <script> <event>` with the body on stdin.
+    fs::write(&shell, format!("#!/bin/sh\ncat > '{}/'\"$4.$$\"\n", out.display())).unwrap();
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(dir.join("ext.mjs"), super::pi::extension("/home/me/.kolux-rs/agent-hooks/pi.cmd")).unwrap();
+    // UTF-16 unit 16000 falls inside the emoji, and a lone surrogate sits near the start.
+    let run = r#"process.env.KOLUX_PANE_KEY='1';process.env.KOLUX_HOOK_IDENTITY='x';process.env.ComSpec=process.argv[2];const m=await import('./ext.mjs');const on={};m.default({on:(n,h)=>{on[n]=h},getSessionName:()=>undefined});const ctx={cwd:'/w/app',ui:{setTitle(){}}};const prompt='a\udc00'+'a'.repeat(15997)+'\u{1F600}'+'b'.repeat(4000);on.before_agent_start({type:'before_agent_start',messageType:'user',prompt},ctx);on.agent_start({type:'agent_start'},ctx);on.tool_execution_start({toolName:'bash'},ctx);on.agent_settled({aborted:false},ctx);on.agent_start({type:'agent_start'},ctx);"#;
+    fs::write(dir.join("run.mjs"), run).unwrap();
+    let ran = std::process::Command::new("node").arg(dir.join("run.mjs")).arg(&shell).output().unwrap();
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    let mut sent: Vec<(String, Vec<u8>)> = fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), fs::read(&p).unwrap())).collect();
+    sent.sort();
+    let names: Vec<&str> = sent.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["agent_settled", "agent_start", "before_agent_start", "tool_execution_start"], "one agent_start: the run without a before_agent_start");
+    let body = &sent.iter().find(|(n, _)| n == "before_agent_start").unwrap().1;
+    let body: Value = serde_json::from_slice(body).expect("the listener reads the body (no lone surrogate)");
+    assert_eq!(body["hook_event_name"], "before_agent_start");
+    let (mut s, mut m) = (Session::default(), Memory::default());
+    assert_eq!(state(&mut s, &mut m, "/pi/before_agent_start", body), Some("working"));
+    let shown = s.history.back().and_then(|h| h.prompt.clone()).unwrap();
+    let chars: Vec<char> = shown.chars().collect();
+    assert_eq!(chars.len(), 16001, "16000 characters and the mark");
+    assert_eq!((chars[1], chars[15999], chars[16000]), ('\u{fffd}', '\u{1F600}', '\u{2026}'), "the lone surrogate is replaced, the emoji kept whole, the cut marked");
 }
 
 /// Kolux's old eight-event Cursor file, built from a fresh install's command plus the three permission events.

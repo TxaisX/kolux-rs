@@ -9,8 +9,9 @@
 //! Kolux writes its own file there, `kolux-rs.ts`, apart from the user's own extensions: it runs
 //! Kolux's hook script with the event name and a small JSON body, only inside a Kolux pane. A file
 //! of that name Kolux did not write is never touched; taking the hooks away deletes only Kolux's.
-//! STAT-025: the prompt that began the run is the one text that goes along (cut at 16000, the
-//! status rules' own limit); the card and its history name the turn by it.
+//! STAT-025: the prompt that began the run is the one text that goes along (cut by whole characters
+//! just past 16000, so the status rules' own limit marks the cut); the card and its history name the
+//! turn by it. One report per run start: the agent_start right after a before_agent_start is held back.
 //! Titles: the extension names the tab `π - <session name> - <folder>` through Pi's `ctx.ui.setTitle`
 //! once the session has a name (`pi.getSessionName`, `session_info_changed`); nothing else sets it.
 //! Not built here: Pi has no documented event for its own dialogs (approval forwarding is OMP's,
@@ -70,8 +71,9 @@ pub fn extension(script_path: &str) -> String {
         "  };",
         "  const fields = {",
         "    session_start: (e) => ({ reason: e?.reason }),",
-        "    // The run's prompt (a user-started run has one), cut as the status rules keep it; nothing else of the run.",
-        "    before_agent_start: (e) => ({ prompt: typeof e?.prompt === \"string\" ? e.prompt.slice(0, 16000) : undefined }),",
+        "    // The run's prompt (a user-started run has one); nothing else of the run. Cut by whole characters, one",
+        "    // past the status rules' limit so they mark the cut, and a lone surrogate (JSON Kolux rejects) replaced.",
+        "    before_agent_start: (e) => ({ prompt: typeof e?.prompt === \"string\" ? Array.from(e.prompt).slice(0, 16001).join(\"\").replace(/\\p{Cs}/gu, \"\\uFFFD\") : undefined }),",
         "    agent_start: () => ({}),",
         "    tool_execution_start: (e) => ({ tool_name: e?.toolName }),",
         "    tool_execution_end: (e) => ({ tool_name: e?.toolName, is_error: e?.isError === true }),",
@@ -88,7 +90,17 @@ pub fn extension(script_path: &str) -> String {
         "      ctx.ui.setTitle(dir ? `π - ${name} - ${dir}` : `π - ${name}`);",
         "    } catch {}",
         "  };",
-        "  for (const name of EVENTS) pi.on(name, (e, ctx) => { send(name, fields[name](e)); if (TITLE_EVENTS.includes(name)) retitle(ctx); });",
+        "  // One report per run start: before_agent_start carries the prompt, so the agent_start Pi fires right",
+        "  // after it is not sent (two reports from two processes could land in either order); a run Pi starts",
+        "  // without a before_agent_start is reported by its agent_start.",
+        "  let announced = false;",
+        "  for (const name of EVENTS) pi.on(name, (e, ctx) => {",
+        "    const skip = name === \"agent_start\" && announced;",
+        "    if (name === \"before_agent_start\") announced = true;",
+        "    else if (name === \"agent_start\" || name === \"agent_settled\") announced = false;",
+        "    if (!skip) send(name, fields[name](e));",
+        "    if (TITLE_EVENTS.includes(name)) retitle(ctx);",
+        "  });",
         "  try { pi.on(\"session_info_changed\", (_e, ctx) => retitle(ctx)); } catch {}",
         "}",
         "",
@@ -152,10 +164,9 @@ pub fn event(name: &str, event: &Value) -> Option<(&'static str, Option<&'static
     let tool = |n: Option<String>| json!({ "tool_name": n, "tool_input": Value::Null });
     let (name, out) = match name {
         "before_agent_start" => ("UserPromptSubmit", json!({ "prompt": event.get("prompt").and_then(Value::as_str).filter(|s| !s.is_empty()) })),
-        // Pi fires this right after before_agent_start, whose prompt names the turn: a second
-        // UserPromptSubmit would take the prompt away, so this only keeps the turn working. The
-        // two reports are separate processes, so either order leaves the same card.
-        "agent_start" => ("PostToolUse", json!({})),
+        // The extension sends this only for a run Pi started without a before_agent_start (it
+        // holds back the one that follows it): a new turn, with no prompt to show.
+        "agent_start" => ("UserPromptSubmit", json!({})),
         "tool_execution_start" => ("PreToolUse", tool(tool_name)),
         "tool_execution_end" => ("PostToolUse", tool(tool_name)),
         "agent_settled" => ("Stop", json!({})),
