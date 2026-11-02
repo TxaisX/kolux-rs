@@ -34,7 +34,7 @@ Changes
   holder under the printing terminal; stopArgs builds what a Stop sends (started as a string).
 - src/ports/PortsItem.tsx: records each output chunk under its terminal id; Stop sends stopArgs. Cadence untouched.
 - src/look/cardPorts.test.ts: the row helper gains the two fields. cardPorts.ts itself is unchanged.
-- DECISIONS.md DT-C64, docs/guide/terminals.md "Ports in the status bar", settings.md status bar items list,
+- DECISIONS.md DT-C67, docs/guide/terminals.md "Ports in the status bar", settings.md status bar items list,
   feature-index.md T-226 row, PLAN.md T-226 note.
 
 Red first (tests written before the code)
@@ -133,7 +133,7 @@ Findings and what was done
     Left as is, per the finding's second option. The store catches every Git-listed worktree on the sidebar's next PROJ-041
     scan (5 s) and Kolux-made ones at creation; in that window a Stop is refused on the safe side ("not a workspace of a
     project Kolux knows"). Asking Git for every project on a store miss would also spawn one git per project for a folder
-    under none of them, which the existing test forbids ("a folder under no project asks nothing"). DT-C64 wording kept.
+    under none of them, which the existing test forbids ("a folder under no project asks nothing"). DT-C67 wording kept.
 
 Red first (tests written before the code; fix-red.log)
   cargo test --lib ports::  -> 13 compile errors: "cannot find function `lineage_ok`" x7, `descendants` x3, `stat_start` x2,
@@ -160,7 +160,7 @@ Green (fix-green-ports.log, fix-win-check.log, fix-win-clippy.log)
   cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> clean, clippy exit 0 (fix-win-clippy.log)
   No dependency change (license-check not needed).
 
-Residual, named in the ports.rs header and DT-C64: a child the program starts between the reading and the kill is left
+Residual, named in the ports.rs header and DT-C67: a child the program starts between the reading and the kill is left
 running (it was never read); the next scan shows it. Windows-only code (Held, end_program) is proven by cargo check and
 clippy for the Windows target and by the pure guards it calls; its live run is on the LEFT list below.
 
@@ -183,7 +183,7 @@ Findings and what was done
     itself kept (the program or a confirmed child). A child that ended between the first reading and its open, whose pid
     then went to a newcomer, differs in the second reading (the newcomer is newer than the program by construction, so the
     start-time rule alone could not tell) and is left out with everything under it. The scan's table still serves
-    lineage_ok (a refusal path, never a kill). Header comment and DT-C64 updated: the residual is now a child the program
+    lineage_ok (a refusal path, never a kill). Header comment and DT-C67 updated: the residual is now a child the program
     starts after that table is read.
   minor  src-tauri/src/ports.rs:411  "the scan's start-time read opens every own holder with TERMINATE | SYNCHRONIZE"
     Fixed. Held::open(pid, access): start_time (every ports_list scan, lineage_ok, the Moved check) opens with
@@ -200,7 +200,7 @@ Findings and what was done
     unchanged. The front end (ports.ts stopNote, PortsItem) shows "Stopped port N" only for "stopped", "Port N was already
     gone; nothing was stopped" for "gone" and "Port N is no longer held by that program; nothing was stopped" for "moved".
     The spec rule "stopping a port that already exited counts as success" holds: gone and moved are both Ok, only the note
-    changed. docs/guide/terminals.md, DT-C64 and the PLAN.md T-226 note carry the three notes and the two-reading rule.
+    changed. docs/guide/terminals.md, DT-C67 and the PLAN.md T-226 note carry the three notes and the two-reading rule.
 
 Red first (tests written before the code; fix2-red.log, fix2-red-vitest.log)
   cargo test --lib ports::  -> 5 compile errors: "cannot find function `confirmed`" x4, "no variant ... named `Moved` found
@@ -228,7 +228,7 @@ Green (fix2-green-ports.log, fix2-green-vitest.log, fix2-tsc.log; run again on t
   cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> Finished `dev` profile, clean (fix3-win-clippy.log)
   No dependency change (license-check not needed).
 
-Residual, named in the ports.rs header and DT-C64: a child the program starts after the fresh parent table is read is
+Residual, named in the ports.rs header and DT-C67: a child the program starts after the fresh parent table is read is
 left running (it was never read); the next scan shows it. Windows-only code (Held with its two right sets, end_program's
 two table readings, the "could not be opened" refusal) is proven by cargo check and clippy for the Windows target and by
 the pure guards it calls (descendants, confirmed); its live run is on the LEFT list.
@@ -239,3 +239,18 @@ LEFT (live, needs the Windows app), in addition to items 1 to 7 above
      gone; nothing was stopped".
   9. A dev server that respawns short-lived workers (nodemon, esbuild): Stop it -> server and its live workers gone, no
      other program ended (the pid-reuse race itself cannot be forced; the confirmed unit test stands in).
+
+Round 3 review fix (2026-11-02)
+  minor  DECISIONS.md:656  "DT-C64 is also used by open PR #38 (lane/video-skill), which took it first"
+    Fixed: this branch's row is now DT-C67, and every mention of it moved with it (PLAN.md T-226 note, this file's
+    lines 37, 136, 163, 186, 203, 231; the ports.rs header and docs/guide never named the number). The round-1 entry
+    above keeps its wording as the record of that round. Next free number checked across origin/main and every open
+    lane5/* and lane/* branch:
+      git fetch origin; git grep -h -o "DT-C[0-9]*" $(git for-each-ref --format='%(refname)' refs/remotes/origin) -- DECISIONS.md | sort -uV | tail -4
+        -> DT-C63 DT-C64 DT-C65 DT-C66   (DT-C64 lane/video-skill #38, DT-C65 lane/artifacts-auto #37, DT-C66 lane5/T-180-b)
+      git grep -l "DT-C67" $(git for-each-ref ... refs/remotes/origin) -- .   -> no match before this commit
+    node scripts/plan-check.mjs   -> plan-check: OK
+    git grep -h -o "DT-C6[47]" origin/lane5/ports-stop -- DECISIONS.md PLAN.md evidence/ports-stop.txt
+      -> only DT-C67 left, apart from the round-1 record line ("DT-C64 collides with PR #38's DT-C64")
+  Docs-only change: no code, test, Tauri command or dependency changed, so the cargo, vitest, Windows check and clippy
+  results above stand.
