@@ -1,0 +1,644 @@
+{
+ "T-025-d-rest": {
+  "id": "T-025-d-rest",
+  "status": "stale-already-done",
+  "reason": "Moot, not provable: the kit seat row this proof would show was deleted by T-568 \"Remove starter kits entirely\" (origin/main commit e5aeccaf, 2026-10-28: src/kits/KitStrip.tsx, src/kits/run.ts, src/kits/run.test.ts and src-tauri/src/kits.rs removed; no KitStrip/useKits/src/kits reference remains in src/). The underlying limit/sign-in stop causes still reach the window from the status hooks (more.rs:212 kolux_cause limit; src/board/paneStatus.test.ts), so the PLAN line should be dropped or re-pointed at the Board card, which is bookkeeping, not a build or a live run.",
+  "cards": [
+   "SKILL-011"
+  ],
+  "effort": "S"
+ },
+ "T-025-e": {
+  "id": "T-025-e",
+  "status": "needs-txais-decision",
+  "reason": "The mirror half is on main (src-tauri/src/agent_hooks/codex_mirror.rs, 118 lines, wired by hooks.rs install_codex_mirroring; 4 t025e tests per evidence/T-025-e.txt); the rest is a real Codex session proof that PLAN.md:44 and evidence/T-025-e.txt record as Txais's call because it needs Kolux's entries in his own ~/.codex/hooks.json, and no Codex-signed-in test account exists (evidence/T-043-c.txt:3 used only a stand-in codex.exe). Once he names an account and a home (a scratch USERPROFILE/CODEX_HOME as T-025-d did would avoid the real ~/.codex), the remainder is a live Windows run; nothing of it can be built or proven in this container.",
+  "cards": [
+   "STAT-008"
+  ],
+  "effort": "M"
+ },
+ "T-043-f": {
+  "id": "T-043-f",
+  "status": "needs-mac-or-linux-desktop",
+  "reason": "src-tauri/src/keychain.rs:11 says it outright: no `security`-backed keychain and no wiring into sign_in (grep finds no keychain:: caller outside the module); the two Claude Code keychain entry names exist only on a real Mac install (DT-C18, DECISIONS.md:583) and a guessed name could overwrite the user's own Claude login, and DT-C41 (DECISIONS.md:628) parks it as Windows-only. A Linux stand-in for `security` would prove nothing about the real entry names, so nothing is honestly buildable here.",
+  "cards": [
+   "ACCT-005",
+   "CLI-014"
+  ],
+  "effort": "M"
+ },
+ "T-058-b-rest": {
+  "id": "T-058-b-rest",
+  "status": "needs-live-windows",
+  "reason": "No code is involved: the leg is a real Claude Code pane started with --dangerously-skip-permissions in test account A, recording whether Kolux's protected-command ask still appears (evidence/T-058-b.txt last RESULT line). scripts/prove/live-common.mjs:65-66 refuses a skipping flag unless opts.allowSkip is set and every remote is a scratch bare repo, and scripts/prove/live-SAFE-009.mjs:15 already runs such a leg under that rule, so the prove lane can run it on the Windows PC by copying evidence/prove/T-058-b-live.mjs with allowSkip: true.",
+  "cards": [
+   "SAFE-004"
+  ],
+  "effort": "S"
+ },
+ "T-062-b": {
+  "id": "T-062-b",
+  "status": "partly-buildable-here",
+  "reason": "The WSL path rules are pure logic that main lacks: editor_search.rs:193 rg_command always runs `rg` with current_dir(root) (never inside the distribution), files.rs change detection (stamp_of at :324) keys on the path text so a WSL path and its drive alias count as two files, and scm_watch.rs:323 unwatchable() only has the GetDriveType network check. The acceptance (an Ubuntu distro through wsl.localhost) needs a Windows PC with WSL, which DT-C41 records this PC does not have; DT-C41's \"needs Mac/Linux\" label on this line is a mislabel.",
+  "buildable_scope": "(1) src-tauri/src/editor_search.rs: add `fn wsl_root(root:&Path)->Option<(String,String)>` (distro via projects::wsl_distro_of, Linux path from the UNC tail with backslashes flipped, both `\\\\wsl$\\` and `\\\\wsl.localhost\\` forms) and `fn wsl_rg_command(distro,&linux_root,a:&Ask)->Command` building `wsl.exe -d <distro> --cd <linux_root> -- rg <the same flags as rg_command>`; search_gen picks it when wsl_root is Some; hits stay `./relative` so the existing root join maps them back. Tests in editor_search tests: argv for `\\\\wsl.localhost\\Ubuntu\\home\\me\\p` and `\\\\wsl$\\Ubuntu\\x y` (spaces), a non-WSL root still yields plain rg. (2) src-tauri/src/fsops.rs: `pub fn file_key(path:&str)->String` that maps `\\\\wsl.localhost\\<d>\\mnt\\<x>\\\u2026` and `\\\\wsl$\\<d>\\mnt\\<x>\\\u2026` to the drive form `<X>:\\\u2026` case-folded, folds `wsl$`/`wsl.localhost` together, and keeps everything after a non-/mnt distro root case-sensitive; use it in files.rs wherever two open tabs are matched to one file (the T-603 second-tab line-ending rule and the stamp map). Tests: alias pairs equal, `/home/Me` != `/home/me`, `C:\\A` == `c:\\a`. (3) scm_watch.rs: a test that `unwatchable` reasons a `\\\\wsl.localhost\\` root is polled (network drive) on Windows and a doc line saying the 4 s poll is the capacity fallback; no new watcher (notify is refused, T-033-b). Prove with `cargo test --manifest-path src-tauri/Cargo.toml editor_search fsops scm_watch` on Linux; the Ubuntu click-through stays live.",
+  "cards": [
+   "EDIT-044"
+  ],
+  "effort": "M"
+ },
+ "T-066-e": {
+  "id": "T-066-e",
+  "status": "partly-buildable-here",
+  "reason": "Source 1 is already wired on main (terminal.rs:1119 reads session_id::hint_session at exit; src/projects/useCliBridge.ts:63-67 puts payload.session on the pane), but source 2 is not: terminal_session_id.rs:15 carries `#![allow(dead_code)]` because SOURCES.list / pick_listed have no caller and lib.rs registers no sessions-command command. The per-agent fixture comparison, parser tightening and the continue-form check need each agent installed with a real signed-in session, which only Txais's PC has.",
+  "buildable_scope": "src-tauri/src/terminal.rs: add `pub fn listed_session(program:&Path, src:&session_id::Source, folder:&Path, taken:&[String])->Result<Option<String>,String>` that spawns `program` with `src.list` args in `folder` (stdin null, stdout piped, stderr null), waits at most 5 s (try_wait loop, kill on overrun), caps stdout at 256 KB, and returns session_id::pick_listed; then `#[tauri::command] terminal_listed_session(agent:String, folder:String, taken:Vec<String>)` that resolves the program through agents.rs names (e.g. \"vibe\" for mistral-vibe) and returns Ok(None) when the agent has no list source or no program is found; register it next to terminal_forget_history at lib.rs:569 and drop the allow(dead_code). Tests (cargo test --manifest-path src-tauri/Cargo.toml terminal::session_id listed_session): a temp dir holding an executable sh stand-in named `cursor` printing the Lines fixture gives the newest id not in `taken`; a `goose` stand-in printing the Json fixture picks by folder and time; a stand-in that sleeps 10 s returns Ok(None) within ~5 s; a missing program returns Ok(None), never Err. Front end: src/shell/useWindowSave.ts:67 layout writer: before writing, for every pane whose agent has a list source and no `session`, invoke terminal_listed_session with the other panes' ids and set `session` (never-twice); add a pure helper `panesWantingListedSession(panes)` in src/terminal/layout.ts and a vitest (VITEST_MAX_WORKERS=2 npx vitest run src/terminal/layout.test.ts) that a pane with a session or a hook-fed agent (claude, codex) is skipped and `taken` holds the others' ids. Live remainder: steps 1-4 of evidence/T-066-d.txt per installed agent.",
+  "cards": [
+   "SESS-030"
+  ],
+  "effort": "M"
+ },
+ "T-120-c": {
+  "id": "T-120-c",
+  "status": "needs-external-source",
+  "reason": "vendors.rs:145 ends an Antigravity turn only on `fullyIdle` and nothing on main reads a transcriptPath (grep finds no transcriptPath/transcript_path in agent_hooks or hooks.rs); the transcript format is absent from antigravity.google/docs/hooks (evidence/T-120-b.txt), the 2026-10-12 field-names permission covers only Claude Code and Codex session files, and Antigravity is installed neither here nor on the build PC (evidence/T-066-d.txt). The same real run must also settle which Windows shell runs the hook command, so a sample transcript (field names only, recorded in PROVENANCE.md) is the prerequisite.",
+  "cards": [
+   "STAT-010"
+  ],
+  "effort": "M"
+ },
+ "T-121": {
+  "id": "T-121",
+  "status": "needs-external-source",
+  "reason": "Everything buildable from public docs is on main: more.rs (Cursor 5 events :27, Droid 7 events without PermissionRequest :31, Command Code hooks :51-52/:443/:594, Kimi marked TOML block with the is_rate_limit guess at :212) and hermes.rs (config.yaml shell-hook blocks, Txais's \"let Hermes ask\"), tested in more_tests.rs, hermes_tests.rs and tests.rs:47/2102-2147; what stays open (Droid PermissionRequest absent from Factory's hooks reference, Kimi StopFailure error field names, Hermes plugins.enabled format) has no public source per evidence/T-121.txt batch 5, and the live proof is a Windows run. PR #44 (lane/vendors, mergeable=false/dirty, base 8e482af1 with no merge base to main) is an older parallel build that adds a second file src-tauri/src/agent_hooks/vendors_more.rs duplicating more.rs/hermes.rs with superseded choices (Droid PermissionRequest installed, Hermes as a plugin folder) and leaves the same items open, so it covers none of the remainder.",
+  "cards": [
+   "STAT-012",
+   "STAT-013",
+   "STAT-014",
+   "STAT-015",
+   "STAT-016"
+  ],
+  "effort": "M"
+ },
+ "T-121-b": {
+  "id": "T-121-b",
+  "status": "needs-external-source",
+  "reason": "The hook half is on main (more.rs:170-178 normalises PreToolUse/PostToolUse/Stop with a neutral reply; the shared script at hooks.rs:949-950 exits when KOLUX_PANE_KEY or KOLUX_HOOK_IDENTITY is empty, so a stripped environment reports nothing today), but the transcript format, the banner and idle-prompt screen text and whether Command Code really strips the variables have no public reference (evidence/T-121.txt batch 5 recheck, PR #44's own evidence/T-121.txt:38 says the same), and Command Code is not installed here. A reader written without a sample would be guesswork; a real run or a sample transcript (field names only) unblocks it.",
+  "cards": [
+   "STAT-014"
+  ],
+  "effort": "M"
+ },
+ "T-122": {
+  "id": "T-122",
+  "status": "needs-external-source",
+  "reason": "Built and on main: Copilot (more.rs:355-420, own kolux-rs.json), Grok (grok.rs, 531 lines, removed at quit via the lib.rs exit path), Devin (devin.rs + jsonc.rs), Pi status and titles (pi.rs:1-40, evidence/T-122-titles.txt); what is left (MiMo Code hook or plugin API, OMP's extension API, a Pi permission/dialog event) has no public source per evidence/T-122.txt LEFT OPEN and pi.rs:13-14, and the live proof needs Windows. PR #44 does not cover it either: its evidence/T-122.txt:9-11 leaves MiMo and OMP open and its Pi half lacks the titles main already has, while its vendors_more.rs would duplicate grok.rs/devin.rs/pi.rs and conflicts with main (mergeable=false).",
+  "cards": [
+   "STAT-017",
+   "STAT-018",
+   "STAT-019",
+   "STAT-020",
+   "STAT-021"
+  ],
+  "effort": "M"
+ },
+ "T-123-e": {
+  "id": "T-123-e",
+  "status": "needs-live-windows",
+  "reason": "The code path is already on main (src-tauri/src/status.rs:342 and :471 read last_assistant_message on every Stop; evidence/T-123-b.txt records Codex's public hook source carrying the field, text or null). The only open question is whether Txais's installed Codex version sends it, which the PLAN line says needs a real Codex session no builder may start; only a NO would revive a rollout reader (CODEX_HOME from the pane's launch env, bounded sessions walk).",
+  "cards": [
+   "STAT-025"
+  ],
+  "effort": "S"
+ },
+ "T-124-d": {
+  "id": "T-124-d",
+  "status": "buildable-here",
+  "reason": "The PLAN blocker ('in neither the spec nor public docs') is stale: Gemini CLI's public settings reference (geminicli.com/docs/cli/settings, same text in the repo's docs/cli/settings.md) documents ui.dynamicWindowTitle as 'Update the terminal window title with current status icons (Ready: \u25c7, Action Required: \u270b, Working: \u2726)' (on by default). Today src/terminal/status.ts:91 titleState knows only braille, quarter-circle, \u2733 and words, and src/status/titleOwner.ts:29 MARKERS knows only \u2733 and \u03c0, so a hooks-off Gemini pane with '\u270b ...' in its title never reads needs-you (STAT-033 box 1).",
+  "buildable_scope": "(1) src/terminal/status.ts titleState: before the word rules add \u270b (U+270B) \u2192 \"permission\", \u2726 (U+2726) \u2192 \"working\", \u25c7 (U+25C7) \u2192 \"done\"; add the words 'action required' to the permission regex. (2) src/status/titleOwner.ts: add a MARKERS row [/^[\u25c7\u270b\u2726](?=\\s|$)/u, [\"gemini\"]] and put \u25c7\u270b\u2726 in LEADING_GLYPHS so 'Gemini - task' after the glyph still names the agent; a Gemini glyph plus a Claude name stays UNKNOWN. (3) Tests: src/terminal/status.test.ts (next to lines 117-120: '\u270b Gemini - needs approval' \u2192 permission, '\u2726 Gemini - thinking' \u2192 working, '\u25c7 Gemini' \u2192 done, a path title still null) and src/status/titleOwner.test.ts (glyph credits gemini; glyph + 'Claude Code' conflicts). (4) Append a dated PROVENANCE.md line citing the public settings page (behavior only). Proof: cd <wt> && VITEST_MAX_WORKERS=2 npx vitest run src/terminal/status.test.ts src/status/titleOwner.test.ts; the live box (hooks off, real Gemini, trigger a permission) stays on the Windows live-proof batch.",
+  "cards": [
+   "STAT-033"
+  ],
+  "effort": "S"
+ },
+ "T-128-b": {
+  "id": "T-128-b",
+  "status": "partly-buildable-here",
+  "reason": "DT-C41 parked this as 'needs Mac/Linux', but this container IS Linux: the Unix path (src-tauri/src/foreground.rs:125 front(pid, group) fed by src-tauri/src/pty.rs:566 foreground_group \u2192 portable-pty 0.9 process_group_leader) compiles here (Linux test binaries built 2026-10-31 in src-tauri/target/debug/deps), /dev/ptmx exists, and I verified PTY job control in this container with bash -i: the foreground pgrp moved to a sleep job and returned to the shell after Ctrl-Z. The only existing tests (foreground.rs:241-300) are table-driven or Windows-only, so the Unix branch has never been checked. The app-level acceptance run (pane header following Ctrl-Z) still needs a Mac/Linux desktop.",
+  "buildable_scope": "Add #[cfg(unix)] tests in src-tauri/src/foreground.rs (or a pty_foreground_tests.rs beside pty.rs): spawn PtySession::spawn(CommandBuilder for `bash --norc --noprofile -i`, 80x24) in a temp dir holding an executable sh script named `claude` (sleep 30); write \"<tmp>/claude\\n\", poll front(session.pid(), session.foreground_group()) for up to 3 s and assert Front::Agent(\"claude\") (credited_agent reads /proc/<pgrp>/cmdline, program_stem \u2192 'claude', agents.rs:708 credited_name); write 0x1A (Ctrl-Z) and assert Front::Shell within 2 s (ACCT-050 'suspended with Ctrl-Z does not count'); a second case starts \"<tmp>/claude &\" and asserts Front::Shell (a background job is never the foreground agent); clean up with `kill %1` / session.kill(). Also assert foreground_group() == Some(pid) right after start (shell owns the pane). Proof: CARGO_TARGET_DIR=/home/user/kolux-rs/src-tauri/target CARGO_BUILD_JOBS=2 cargo test --manifest-path <wt>/src-tauri/Cargo.toml acct_050 -- --test-threads=1. Tick the Linux half of the line and leave 'desktop acceptance run on macOS/Linux' as the DT-C41 remainder.",
+  "cards": [
+   "ACCT-050"
+  ],
+  "effort": "S"
+ },
+ "T-137-b": {
+  "id": "T-137-b",
+  "status": "needs-external-source",
+  "reason": "DT-C42 keeps Grok parked 'waiting on a public source'; PROVENANCE.md:520 (2026-10-12) and a re-check today of docs.x.ai/build/cli/reference find no usage, credits or billing command and no session-file location (only `grok login`, `grok logout` 'clear cached credentials', `grok sessions`), and xAI's FAQ 'Usage & Limits' describes the web Settings \u2192 Usage page only. Every USAGE-018 rule (percentage vs credit numbers, weekly vs monthly pair, signed-out vs damaged file) depends on a reply shape nothing public gives.",
+  "cards": [
+   "USAGE-018"
+  ],
+  "effort": "M"
+ },
+ "T-139-c": {
+  "id": "T-139-c",
+  "status": "needs-external-source",
+  "reason": "Same blocker as T-137-b (DT-C42, PROVENANCE.md:520, re-checked today): the Grok CLI reference documents no credit figures and no on-disk session file, so 'Kolux reads the Grok CLI's own session from disk' and the weekly/monthly figures cannot be built without guessing. The sign-in half the card can show is already on main (src/settings/GrokCard.tsx connection 'cli' | 'key' | 'none', ACCT-008/015).",
+  "cards": [
+   "ACCT-027"
+  ],
+  "effort": "M"
+ },
+ "T-145-c": {
+  "id": "T-145-c",
+  "status": "needs-txais-decision",
+  "reason": "evidence/T-145-c-live-proof.txt (2026-10-25, Windows 11 26300) measured the pseudoconsole pass-through flag as a no-op on the inbox ConPTY (bytes identical, OSC 10/11 still dropped), so no crate fork can deliver the card; what it needs is a packaging call: ship Microsoft's MIT conpty.dll + OpenConsole.exe beside the app (portable-pty already prefers a conpty.dll next to the executable), a licence line, a build-time fetch and a tauri.conf.json resource entry (none exists today), then a live Windows run to see whether that build forwards OSC 10/11. Nothing can be proven in this container.",
+  "cards": [
+   "TERM-098"
+  ],
+  "effort": "M"
+ },
+ "T-167-b": {
+  "id": "T-167-b",
+  "status": "partly-buildable-here",
+  "reason": "evidence/T-167-b-win.txt built the Windows STAT-030 parts; the line's remainders split three ways: two are cross-platform code provable here (the restart cause wording, a process start-time guard), the macOS/Linux hook script is writable and testable here but parked by DT-C41, and the restore-flow / reattached-terminal checks are live Windows proof.",
+  "buildable_scope": "(1) Restart cause: src/terminal/notify.ts:6 StopInfo cause gains \"restart\" with CAUSE text 'restart this terminal'; src/status/restored.ts:39 emits { cause: \"restart\", detail: RESTART_TEXT } instead of cause \"error\" (today the Board chip and the stopped notification read 'the AI hit an error' for an upgrade); check src/terminal/status.ts:35 stoppedLabel and src/board/chip.ts take the new cause; tests in src/terminal/notify.test.ts (stopLine / notes for cause restart never say error) and src/status/restored.test.ts. Proof: VITEST_MAX_WORKERS=2 npx vitest run src/terminal/notify.test.ts src/status/restored.test.ts src/board. (2) Start-time guard: src-tauri/src/procs.rs gains started_at(pid) -> Option<u64> (Linux: /proc/<pid>/stat field 22; macOS: `ps -o lstart=`; Windows: GetProcessTimes creation time, compile-only here); src-tauri/src/agent_hooks/saved.rs Row gains pid_started (serde default) recorded in note() and keep_living_children treats a pid whose start time differs from the saved one as dead (a reused id no longer keeps child rows). Tests: a t167b_* test that records a spawned `sleep` child, kills it, and feeds a fake alive=true with a different start time \u2192 children cleared; the older-save round-trip test keeps passing. Proof: cargo test --manifest-path <wt>/src-tauri/Cargo.toml t167b. (3) Optional, parked by DT-C41: a POSIX hook script (hooks.rs:31 writes only claude.cmd/codex.cmd; script() at :936 is batch) using `curl -s -m 1.5 --connect-timeout 0.5` and exiting 0 silently without KOLUX_PANE_KEY, with a Linux test running it under `sh` against a closed port and asserting exit 0, no output, under 2 s. Remainder for the live batch: scratch-profile restore (unconfirmed mark, no approve buttons), child row kept/dropped by the shell's liveness, hookVersion 0 \u2192 blocked restart row.",
+  "cards": [
+   "STAT-006",
+   "STAT-030",
+   "STAT-037"
+  ],
+  "effort": "M"
+ },
+ "T-171-d": {
+  "id": "T-171-d",
+  "status": "needs-txais-decision",
+  "reason": "The card moves secrets: the old shared-home Codex sign-in and MCP sign-ins, which COMPAT.md 5.4 lists as 'Sign in again' and which the T-213 importer never carries by design (src-tauri/src/import.rs allow-list, OD-19; its registry test marks xaiApiKey notCarried). The former managed-account list's record shape is in no allowed source (COMPAT.md section 5 names categories only) and Txais's own profile holds 'managed account lists (0)' (COMPAT.md line ~1078), so even a profile-shape read on his PC would find no record to learn from. Txais should confirm the sensible reading: the sign-in/session moves are cut per COMPAT 5.4, the account-list carry is moot, and the line closes as cut; only then could a small slice (the non-secret Compat items: Claude connection mode, opt-out choice, Gemini credentials choice, MiniMax non-secret settings) be added to the allow-list if COMPAT names their old keys.",
+  "cards": [
+   "ACCT-026"
+  ],
+  "effort": "S"
+ },
+ "T-180-b": {
+  "id": "T-180-b",
+  "status": "buildable-here",
+  "reason": "The PLAN blocker ('needs the WSL skill scan, which the Skills page does not run yet') is stale: T-243-b (PLAN.md:271, merged 2026-10-19) added src-tauri/src/skills/wsl.rs with a swappable `Runner` trait (wsl.rs:19, test fake `Unavailable` at :25, real wsl.exe runner at :39) and scan_wsl at skills.rs:617 listing WSL skills under UNC paths with ids 'wsl:<distro>:<path>' (skills.rs:631). Today src-tauri/src/skill_delete.rs:946 plan() marks any such pick 'outside' (its parent is not under places.deletable, skills.rs:723-735 filters Kind::Skills only) so a WSL skill can be listed but never deleted. Caveat for the coordinator: OD-12 (confirmed DT-C31) says Kolux does not scan skill folders inside WSL; T-243-b already departed from that, and this line only follows the merged scan.",
+  "buildable_scope": "(1) src-tauri/src/skills/wsl.rs: a second script constant DELETE_SCRIPT (`rm -rf` on a folder, `rm` on a link so the target stays, printing 'KOLUX-WSL-DELETE 1' + 'OK|GONE|FAIL <reason>') and a Runner method delete(distro, path) (Real runs `wsl.exe -d <distro> --exec sh -c DELETE_SCRIPT kolux <path>`, hidden, non-zero exit = Err). (2) skills.rs Places gains wsl_roots: Vec<(distro, linux skill root)> for the selected project's distribution (wsl_spots at :171). (3) skill_delete.rs plan(): a pick whose path wsl::split()s to (distro, path) is blocked 'outside' when distro != the project's distro or the path is not under a wsl_roots entry of that distro; otherwise planned with item kind folder|link and remains for links. run(): executes the delete through the Runner under the same OpLock; a FAIL line, garbled answer or non-zero exit \u2192 outcome 'failed' with the reason, GONE \u2192 'skipped'; the Windows journal/set-aside path is not used for WSL items. (4) src/skills/skills.ts canDelete allows wsl: rows of the current project's distro. Tests: cargo tests with a fake Runner (skill022_wsl_*: other distro refused, path outside roots refused, link delete never follows, FAIL/garbled = failed, OK = deleted, mixed Windows+WSL picks in one request) and vitest src/skills for eligibility. Proof: CARGO_TARGET_DIR=... cargo test --manifest-path <wt>/src-tauri/Cargo.toml skill022; VITEST_MAX_WORKERS=2 npx vitest run src/skills. No real wsl.exe is needed; the Real runner stays live-proof on Windows with a distro installed (none on Txais's PC per DT-C41).",
+  "cards": [
+   "SKILL-022"
+  ],
+  "effort": "M"
+ },
+ "T-191-c": {
+  "id": "T-191-c",
+  "status": "needs-external-source",
+  "reason": "src-tauri/src/orchestration/teams.rs:3-12 records the blocker and it still holds: Claude Code's public agent-teams page documents split panes only through tmux or iTerm2's it2, with no host-terminal interface and no list of the tmux commands/variables it issues; the host-neutral half (tmux command parser, placement, split/close events, saved_mode at teams.rs:446) is built with 16+ tests. Also saved_mode forces in-process on Windows and WSL, so native panes can only ever be proven on a macOS/Linux desktop with Claude Code installed (STATE-history.md:3587, same blocker as T-255).",
+  "cards": [
+   "ORCH-042"
+  ],
+  "effort": "L"
+ },
+ "T-193-b": {
+  "id": "T-193-b",
+  "status": "partly-buildable-here",
+  "reason": "Main has no Hermes/OpenClaw automation code at all (src-tauri/src/automations.rs and src/automations/model.ts carry only Kolux's own rows; 'hermes' on main is only the status-hook adapter src-tauri/src/agent_hooks/hermes.rs). Neither tool is installed here, but both are public packages a builder can install in this container (PyPI hermes-agent 0.19.0, npm openclaw 2026.10.9) and their official docs now name enough: Hermes `hermes cron create|list|pause|resume|run|remove|edit`, jobs in ~/.hermes/cron/jobs.json with named fields (name, schedule, prompt, enabled, next_run_at, last_run_at, last_status, paused_reason, workdir, timezone...), run output in ~/.hermes/cron/output/{job_id}/{timestamp}.md; OpenClaw `openclaw cron list --json` (documented fields: status = disabled|running|ok|error|skipped|idle, enabled, state.runningAtMs, state.lastRunStatus, agentId, effectiveAgentId), enable/disable/rm/run, jobs in a SQLite store and every cron command needs a running Gateway. The two acceptance boxes (a Hermes job created from Kolux shows in the list; an OpenClaw job paused from Kolux is reported paused by OpenClaw) still need the tools on Txais's PC, so that remainder is needs-live-windows. Not touched by PR #44 (lane/vendors: Hermes status hooks only, zero 'cron' hunks).",
+  "buildable_scope": "Rust: new src-tauri/src/automations/external.rs (mod in automations.rs): (1) a `Probe` trait (list/run/pause/resume/remove/create/edit per tool) with the real implementation spawning `hermes` / `openclaw` found on PATH, each probe under a timeout, at most N at a time (semaphore), held back while Kolux's own automation work is busy (reuse the busy signal automations.rs already has), results cached and reloaded only on Refresh; a missing program yields a `warning` row ('hermes was not found on the PATH'), never an error that stops the Kolux list. (2) Defensive parsers `hermes_jobs(&str)` over jobs.json and `openclaw_jobs(&str)` over `cron list --json` (unknown fields ignored, a bad record skipped, a bad file = empty list + warning). (3) Hermes history: read only files under <hermes home>/cron/output/<job_id>/ (path checked to stay inside that folder) and split each run document into titled sections on its '## ' headings. (4) `automations_list` gains rows with `source: \"hermes\" | \"openclaw\"`, `local: true`, and an `actions` set (hermes: run, edit, delete, create, pause, resume; openclaw: run, delete, pause, resume; no edit). Proof: cargo test automations::external with fixture texts (field names from the official docs, plus real output captured from a scratch install of both tools if the builder gets them running; record the observed field names in PROVENANCE.md section 5 like the T-136-b precedent), stand-in `hermes`/`openclaw` scripts on a temp PATH for spawn, timeout, hang (the Kolux list still returns) and concurrency tests. TS: src/automations/model.ts rows with `source` are excluded from the agent filter and from Kolux-only actions; AutomationsPage shows 'runs on this computer', a pause/resume switch and no Edit on OpenClaw rows; AutomationDialog's Kolux/Hermes switch: Hermes needs a cron timetable and hides agent, session reuse, event trigger and precheck. Proof: vitest src/automations (model.test.ts, AutomationDialog.test.ts, AutomationsPage.test.ts), tsc 0, clippy -D warnings, plan-check.",
+  "cards": [
+   "AUTO-025"
+  ],
+  "effort": "L"
+ },
+ "T-199-d": {
+  "id": "T-199-d",
+  "status": "needs-live-windows",
+  "reason": "What is left of APP-061 is the packaged app's terminal smoke (start the installed kolux hidden in a throwaway profile with its own terminal service, draw coloured output, clipboard round trip, 16 panes without leaving WebGL, WSL when present) and the acceptance box 'a build whose panes fall back from GPU drawing reports a failure': all of it needs the Windows installer, WebView2 and a GPU, none of which exist here. The CLI half already gates the release (scripts/release.mjs:71-92 smokeCli/smokeMigration, called at 321-323) and scripts/evidence/smoke.mjs is the CDP harness to adapt. PR #46 (lane/release) does not add a terminal smoke (its scripts/release.mjs has no terminal or GPU step). The only container-writable piece is a release.mjs gate that fails on a smoke report whose pane renderer is not webgl, which is pointless until the driver exists on the PC.",
+  "cards": [
+   "APP-061"
+  ],
+  "effort": "M"
+ },
+ "T-201-d": {
+  "id": "T-201-d",
+  "status": "needs-external-source",
+  "reason": "Re-checked 2026-11-01: docs.trae.ai has IDE, plugin, WSL, SSH and changelog pages and no CLI page; https://www.trae.ai/cli returns an empty page; a domain-restricted search finds no TRAE CLI install page; the only hits are third-party (a ClawHub listing, and github.com/3Spiders/trae-agent, a different project whose binary is trae-cli). agents.rs:883 still records the gap and the test sess_017_every_catalogue_agent_but_trae_links_to_its_own_page (src-tauri/src/agents.rs:1012-1015) keeps the Trae exception. When an official page exists the work is one `\"trae\" => Some(url)` arm in install_page (agents.rs:881+) and dropping the `id != \"trae\"` exception (S).",
+  "cards": [
+   "SESS-017"
+  ],
+  "effort": "S"
+ },
+ "T-206-c": {
+  "id": "T-206-c",
+  "status": "stale-already-done",
+  "reason": "Nothing can be built: commit e5aeccaf (Txais, 2026-10-28, 'T-568 Remove starter kits entirely') deleted src-tauri/src/kits.rs, src/kits/** and every kit command from lib.rs, so no kit entry point exists on any workspace; and remote, SSH and remote-runtime workspaces are dropped with area 18 (DECISIONS.md rows SESS-047, TERM-128, SKILL-033). SKILL-015's remaining box ('open a remote workspace \u2192 no kit entry point') is vacuously true. Close the line with a DECISIONS row citing T-568 and area 18. Doc gap for the coordinator: T-568 has no line in PLAN.md, PLAN-done.md, STATE.md or DECISIONS.md (grep finds it only in git history), and SKILL-011..015 are still ticked as built under T-206/T-206-b in PLAN-done.md:405-406 although the code is gone.",
+  "cards": [
+   "SKILL-015"
+  ],
+  "effort": "S"
+ },
+ "T-213-b": {
+  "id": "T-213-b",
+  "status": "needs-live-windows",
+  "reason": "Half is already on main: fixture-folder tests over a temp directory and a .smoke-only seam exist (src-tauri/src/import.rs:653 t213_app004_a_seeded_setting_carries_under_its_current_name_and_a_second_launch_changes_nothing, :675 a_value_already_saved_here_wins, :948 t199_app061_migrate_check_carries_into_a_throwaway_profile_and_only_once, :960 refuses_the_installed_profile; scripts/release.mjs:81-92 smokeMigration runs `kolux profile migrate` under KOLUX_USER_DATA_PATH=<scratch>/kolux.smoke). The other half, the project, repo and worktree records, stays blocked here: import.rs:19-20 says no allowed source describes the former data file's record shape, and COMPAT.md 5.1 gives key counts only (kolux-data.json: repos 3, projects 2, worktree records 14). LOOP.md section 0 does allow reading Txais's own %APPDATA%\\kolux profile data (field names, 'project lists' named) to build the importer, the way T-136-b read the log shapes (PROVENANCE.md section 5, 2026-10-12), but that file is on his PC, not in this container. Once a field-names-only read is recorded in PROVENANCE section 5, the parsers and fixtures are buildable here (M).",
+  "cards": [
+   "APP-004"
+  ],
+  "effort": "M"
+ },
+ "T-222-b": {
+  "id": "T-222-b",
+  "status": "needs-mac-or-linux-desktop",
+  "reason": "TERM-081 is macOS-only (Option as Alt per active keyboard layout, left-only/right-only Option, Option+B/F/D as word movement; acceptance boxes on a German layout). The preference plumbing already exists and is tested (src/terminal/inputPrefs.ts optionAsAlt/optionIsMeta, inputPrefs.test.ts:62-68), but layout detection and both acceptance boxes need a Mac; DT-C41 (DECISIONS.md:628) parks the macOS parts of T-222.",
+  "cards": [
+   "TERM-081"
+  ],
+  "effort": "M"
+ },
+ "T-234-b-rest": {
+  "id": "T-234-b-rest",
+  "status": "needs-txais-decision",
+  "reason": "No code is possible or needed: a GFM pipe table has no column widths to save, and the rich view already lays columns out equal (src/editor/editor-extras.css `.md-rich table.md-table { table-layout: fixed; width: 100% }`). The strike is already recorded as DT-COLUMN-WIDTH (DECISIONS.md:641) and the line closes only when Txais confirms it.",
+  "cards": [
+   "EDIT-013"
+  ],
+  "effort": "S"
+ },
+ "T-235-b": {
+  "id": "T-235-b",
+  "status": "partly-buildable-here",
+  "reason": "Two things are left (evidence/T-235-b.txt last line): the CI check tab (EDIT-030) and JPX images in PDFs. JPX needs pdf.js's wasm decoder and src/editor/pdfFiles.ts:17 sets `useWasm: false` on purpose (no wasm, no fetch), so JPX is a Txais call (allow a bundled wasm decoder or strike the case), not buildable under the current policy. The CI check tab was waiting on 'the Checks panel's data'; on main the Checks panel (src/scm/ChecksPanel.tsx, T-229-a) has check runs only (PrCheck id/name/status/conclusion/url/run_id, src-tauri/src/pull_requests.rs:132-142 and checks_of at :315) plus a failed-log read (src-tauri/src/pr_review.rs:501 scm_check_log \u2192 `gh run view <run> --log-failed`); there are no steps or annotations anywhere. Both come from public GitHub REST through the same gh_json path, so the tab and its data are buildable and provable here; only the live open of a real failing check remains for Windows.",
+  "buildable_scope": "Rust (src-tauri/src/pull_requests.rs + pr_review.rs): `CheckStep {number, name, status, conclusion}` and `CheckAnnotation {path, start_line, end_line, level, title, message}` with pure `steps_of(&Value)` (from GET /repos/{o}/{r}/actions/jobs/{job_id}, field `steps[]`) and `annotations_of(&Value)` (from GET /repos/{o}/{r}/check-runs/{id}/annotations); `read_check_detail(gh, host, repo, check_id, job_id)`; a `#[tauri::command(async)] scm_check_detail(worktree, link, check_id)` next to scm_check_log, using pr_review.rs:66 run_id_of for the job id (a link without a job gives steps = [] and annotations only). Tests: invented JSON fixtures like the existing checks_of tests, including an empty steps array, a missing conclusion while running, and an annotation with a path that climbs out of the tree. TS: add pane kind \"check\" to src/terminal/layout.ts:15 PaneKind, src/App.tsx:66 Pane.kind, src/keys/keyScopes.ts:6 KeySurface and the Grid.tsx:154 icon; new src/scm/CheckPane.tsx (steps with their status, annotations as rows, 'Copy card' putting the whole card text on the clipboard, 'Fix with AI'); src/terminal/paneActions.ts `openCheck(check)` beside openPreview (:235) keyed by `${cwd}::check:${check.id}`: a pure `findCheckPane(panes, cwd, id)` so a second open focuses the existing tab and two checks with the same name never share one (dedupe by id, never by name); tab header shows the check's name and no path (src/terminal/tabName.tsx + tabs.ts tabMenu: no copy-path item for kind \"check\"); annotation click \u2192 onOpenFile(path, line) only when a pure `insideWorktree(cwd, path)` says so (relative paths joined, `..` and absolute paths outside refused, the row then disabled with a reason); Fix with AI enabled only when the check failed and the PR is open (reuse src/tasks/prModel.ts:230 fixBlocker plus a `pr.state` open check; prompt from src/scm/review.ts:41 fixPrompt with the scm_check_log text); ChecksPanel.tsx rows get 'Open' \u2192 openCheck. Proof: vitest for findCheckPane, insideWorktree, the card text and the Fix with AI gate, a render test of CheckPane with invented data (src/scm/*.test.ts), tsc 0; cargo test pull_requests:: pr_review::; clippy -D warnings; plan-check.",
+  "cards": [
+   "EDIT-030",
+   "EDIT-022"
+  ],
+  "effort": "M"
+ },
+ "T-248-c-rest": {
+  "id": "T-248-c-rest",
+  "status": "partly-buildable-here",
+  "reason": "APP-010 is buildable: main's sidebar footer (src/projects/ProjectsPanel.tsx:2506-2527) has a gear for the workspaces folder, a routing button, HelpMenu (src/onboarding/HelpMenu.tsx \u2192 HelpSheet.tsx lists Getting Started, Explore Kolux, Onboarding, Milestones and the tours only) and a bare 'Check for updates' button; the card's Settings entry and the Help group's Docs, Changelog, GitHub, Keyboard Shortcuts, Send Feedback, Copy terminal diagnostics and Restart Kolux are missing, and no code or test mentions APP-010. The three T-248-c patches have landed on main (browser_preview.rs:118 clear_grants called from lib.rs:474; scopesFor used in src/keys/useWindowKeys.ts:70 after the App split), so nothing is left to apply. Not covered by PR #43 or #45: a two-dot diff against main touches ProjectsPanel.tsx by 2 lines and HelpSheet.tsx/HelpMenu.tsx by none. The live proofs (Ctrl+Tab with a real terminal in WebView2 and on a Mac, Ctrl+Tab while a native browser child webview holds focus, a floating-terminal link opening in the panel, a reload clearing an allowed preview folder) stay needs-live-windows (one on a Mac).",
+  "buildable_scope": "src/onboarding/HelpSheet.tsx grows a 'Settings' item (openSettings from src/settings/pages.ts) and a Help group: Docs, Changelog, GitHub \u2192 invoke('open_external') with fixed addresses (GitHub https://github.com/TxaisX/kolux-rs per DT-R40, Changelog its /releases page, Docs the repo's docs folder on GitHub until a docs site exists; log the three under Decisions made for Txais); Milestones and Onboarding (already there); Keyboard Shortcuts \u2192 openSettings('shortcuts'); Send Feedback \u2192 the feedback state's open action (src/feedback/model.ts reduce / the FeedbackDialog host in src/shell/window/Hosts.tsx:55); Copy terminal diagnostics \u2192 a new app-wide `diag_summary` command in src-tauri/src/diag.rs built from the same scrubbed facts diag_bundle (:241) uses, no pane needed, no home-folder paths (reuse the scrubber terminal_diagnostics at terminal.rs:1879 applies), onto the clipboard; Check for Updates \u2192 requestUpdateCheck (src/update/UpdateCenter); Restart Kolux \u2192 a new `app_restart` command in src-tauri/src/lifecycle.rs: lifecycle::save_point(app, 0) then `crate::procs::hand_off(true); app.restart()` exactly as update.rs:427 does (mirror the source-string test at update.rs:578 so a restart never skips the hand-off), the sheet showing a 'Restarting\u2026' state and ignoring a second click. Keep the sheet lazy (lazy/pages). Put the item list in a pure `helpItems(ctx)` in src/onboarding/helpItems.ts. Proof: vitest src/onboarding/helpItems.test.ts (every APP-010 name present in order; Docs/Changelog/GitHub go to open_external with https addresses; Restart shows the restarting state and fires once) and a diag test that the summary text contains no USERPROFILE/HOME path and no secret-looking value; cargo test diag:: lifecycle::; tsc 0; clippy -D warnings; plan-check.",
+  "cards": [
+   "APP-010",
+   "APP-013",
+   "APP-015"
+  ],
+  "effort": "M"
+ },
+ "T-254-b": {
+  "id": "T-254-b",
+  "status": "needs-mac-or-linux-desktop",
+  "reason": "ACCT-052 is the macOS login wrapper plus a session check re-done by later panes; both acceptance boxes read a protected folder on macOS. Main has only the macOS/Linux login-shell environment read (src-tauri/src/terminal.rs:968-970 login_env), no wrapper and no session check, and nothing about them can be proven on Linux without a Mac desktop session (TCC privacy prompts). DT-C41 (DECISIONS.md:628) parks the macOS part of T-254.",
+  "cards": [
+   "ACCT-052"
+  ],
+  "effort": "M"
+ },
+ "T-255": {
+  "id": "T-255",
+  "status": "needs-mac-or-linux-desktop",
+  "cards": [
+   "ORCH-042"
+  ],
+  "effort": "XL",
+  "reason": "The host-neutral half is built and tested (src-tauri/src/orchestration/teams.rs: parse, Team::place, decide, Teams::ended, saved_mode; 16 tests, evidence/T-255.txt) but nothing installs the tmux stand-in, sets TMUX/TMUX_PANE or rewrites a teammate's Claude launch, and the lane left it open because Claude Code's public agent-teams doc names only tmux/iTerm2 and documents no host interface (teams.rs:4-12), so the stand-in would be built blind. Even if coded, saved_mode (teams.rs:446-449) and cli.rs:485-490 force in-process on Windows and WSL, so the only place to prove 'three teammates stack beside the leader' is a Mac or Linux desktop running Claude Code agent teams, which this workflow does not have."
+ },
+ "T-260-d-rest": {
+  "id": "T-260-d-rest",
+  "status": "needs-mac-or-linux-desktop",
+  "cards": [
+   "VIEW-111"
+  ],
+  "effort": "S",
+  "reason": "The code is on main: notifications.rs:249-282 first_run_welcome shows one welcome on a Mac that never answered and records notifications.welcomeAnswered only when the system showed it within 30 s; welcome_step is unit-tested at notifications.rs:319 (view111_only_a_mac_that_never_answered_is_asked_once), which is the Windows/Linux 'never prompted' box. The only open box ('fresh Mac profile \u2192 one prompt; restart \u2192 none') is a live run on a Mac build."
+ },
+ "T-263-c": {
+  "id": "T-263-c",
+  "status": "needs-txais-decision",
+  "cards": [
+   "USAGE-026",
+   "USAGE-027"
+  ],
+  "effort": "XL",
+  "reason": "Every reading in both cards needs a network call carrying a stored sign-in, key or cookie, and that transport is the T-547 blocker: provider_usage.rs:266-274 transport() returns NetFail::NotMade('checking with the provider is not switched on in this build') because writing the client was refused by the session safety classifier and would need the privacy audit (scripts/privacy-audit.test.mjs) widened, which the coordinator brief forbids (evidence/T-547.txt 'NOT BUILT'); DT-C32 asked for a security-auditor review before any such merge. On top of that, evidence/T-547-survey.txt finds no public quota service for Gemini, Antigravity or Kimi Code and MiniMax publishes no reply format, so even with transport the Gemini/Antigravity half is an external-source gap. Only the commands and key storage exist (lib.rs:805-808)."
+ },
+ "T-265-b": {
+  "id": "T-265-b",
+  "status": "needs-live-windows",
+  "cards": [
+   "SET-059"
+  ],
+  "effort": "S",
+  "reason": "The whole feature is on main and unit-proven: src/projects/cache.ts (cacheMinutes, cacheDue over idle Claude panes, cacheShown with 'last' under a minute and 'gone' at zero), src/projects/CacheTimer.tsx (red Clock icon with the CACHE_GONE tooltip at zero), mounted at ProjectsPanel.tsx:1703 and switched on AgentsPage.tsx:228; src/projects/cache.test.ts holds 4 tests covering default-off, 5/60 lengths, only idle Claude panes, the shortest of two, yellow/red phases and the Agents switch. What is left is exactly the plan line's live proof: a real Claude agent going idle on the installed Windows build (STATE.md:248 notes live checks may not launch agent CLIs)."
+ },
+ "T-289-b": {
+  "id": "T-289-b",
+  "status": "needs-txais-decision",
+  "cards": [
+   "TERM-096"
+  ],
+  "effort": "M",
+  "reason": "A printed task-N has nothing to open: the window still has no view of orchestration tasks (src/tasks/TasksPage.tsx is GitHub issues/PRs per VIEW-010/GIT-043; src/tower and src/floor show panes and lanes, not tasks; src/orchestration holds only workerSetup.ts), and the Runs view such a link would open is a DECISIONS default skip (VIEW-030 and ORCH-045 at DECISIONS.md:84,95; DT-13 at :505) that only Txais can revive (STATE-history.md:3645). The link plumbing is ready once a view exists: tabs.ts:55 handlesIn (term-N regex) and TerminalPane.tsx:504-510 findHandle, so after a decision this is a small extension plus a target view."
+ },
+ "T-300": {
+  "id": "T-300",
+  "status": "partly-buildable-here",
+  "cards": [
+   "SET-041",
+   "SET-016"
+  ],
+  "effort": "S",
+  "reason": "The three blockers named on the plan line are gone: T-301 built the chooser at the bottom of Settings > Appearance (AppearancePage.tsx:589 mounts AppLookCard), app_look.rs draws Classic/Watercolor/Blue from the owner's own mark at run time (7 tests) and sets the window/taskbar icon on each pick (app_look.rs:93), the real tray icon exists (Cargo.toml:30-32 tray feature, T-248-d) and close-to-tray is T-324. Two gaps remain that cargo can prove: tray.rs:597-606 icon() paints from app.default_window_icon() and ignores the saved appIcon, so after 'Pick Blue' the taskbar turns blue but the tray stays Classic and app_look::apply never asks the tray to repaint; and SET-041's 'macOS menu bar icon on by default' has no switch (has_tray(Os::Mac) is unconditional, tray.rs:33). The owner's three real icon files (design/icon has only kolux-icon.svg; app_look.rs:4-7 says the run-time variants stand in until they land) and 'Pick Blue \u2192 taskbar turns blue without a restart' stay with Txais and the live Windows run.",
+  "buildable_scope": "(1) src-tauri/src/tray.rs: make real::icon() read the saved settings (Store, as app_look::apply_saved does) and apply app_look::variant(app_look::icon_choice(&settings), base.rgba(), base.width()) before paint(); add a pure helper tray_pixels(choice, rgba, w, h, dot, dev) -> Vec<u8> = paint(&variant(choice, rgba, w), w, h, dot, dev) and call it from icon() and set_icon(). (2) src-tauri/src/app_look.rs apply(): after the window loop call crate::tray::set_icon(app, <current dot state>) (expose a tray::repaint(app) that re-reads the attention model so the dot is kept) so a pick repaints the tray at once. (3) Optional, same files: a settings key menuBarIcon (absent = on) read only on macOS: has_tray(Os::Mac, &settings) false when saved false, Windows ignores it; wire where the tray is built. Tests (cargo test --manifest-path src-tauri/Cargo.toml tray app_look, CARGO_BUILD_JOBS=2): tray_pixels with IconChoice::Blue equals paint(variant(Blue)) and differs from paint(base) while alpha matches byte for byte; Classic equals today's output; the dot and DEV corner are still painted on a Blue icon; has_tray(Mac, {menuBarIcon:false}) is false, has_tray(Windows, {menuBarIcon:false}) is true. Then cargo clippy -- -D warnings and node scripts/plan-check.mjs."
+ },
+ "T-316-b": {
+  "id": "T-316-b",
+  "status": "partly-buildable-here",
+  "cards": [
+   "EDIT-006",
+   "EDIT-018",
+   "EDIT-024"
+  ],
+  "effort": "M",
+  "reason": "Two of the three pieces are complete on main: the minimap (src/editor/minimap.ts + EditorPane.tsx, 6 tests) and the PDF export, whose patches have landed (lib.rs:749-750 registers browser::pdf::browser_export_pdf and browser_pick_pdf_path via browser.rs:84 #[path = \"browser_pdf.rs\"]; PreviewPane.tsx:162-180 exportPdf and the menu item at :215). The notebook model and Cells view are built (notebook.ts, NotebookView.tsx, 14 tests) but NotebookView.tsx:4 and :96 say 'Running a cell is not available here': the EDIT-024 Python run with its trust prompt was skipped by a lane brief, not by a Txais decision (no DECISIONS row names Jupyter or Python). python3 exists in this container, so a per-cell interpreter run and the trust gate can be written and proven with cargo and vitest; only 'trust prompt shows and output appears under the cell in the app' is live.",
+  "buildable_scope": "Rust: new src-tauri/src/notebook_run.rs (mod + three commands in lib.rs). notebook_trusted(path) -> bool and notebook_trust(path) store absolute paths under Store key 'notebooks.trusted' (state.rs get/set at :78/:99, JSON list). notebook_run_cell(path, index) -> RunResult { outputs: Vec<serde_json::Value>, execution_count: u32 }: refuse with an error when the path is not trusted; read the .ipynb, take cells[index].source (lines joined), find the interpreter with files::find_program('python3' then 'python', on Windows 'py') and fail with a plain 'No Python found' when none; run `<python> -I -` with the source on stdin, cwd = the notebook's folder, a 60 s cap (kill on timeout, as browser_cli.rs does) and a 1 MB output cap; stdout -> {\"output_type\":\"stream\",\"name\":\"stdout\",\"text\":[lines]}, stderr/non-zero exit -> {\"output_type\":\"error\",\"ename\":\"Error\",\"evalue\":last line,\"traceback\":[lines]}; never write the file from Rust (the page saves). Record the per-cell fresh interpreter (no kernel state between cells) under 'Decisions made for Txais'. cargo tests (cargo test --manifest-path src-tauri/Cargo.toml notebook_run, CARGO_BUILD_JOBS=2; each skips with a note when find_program('python3') is None): a print cell yields one stdout stream; a raising cell yields an error output with the message; an untrusted path is refused before any process starts; a 2 MB print is capped; a sleep(120) cell is killed at the cap. TS: src/editor/notebook.ts gains withOutputs(nb, at, outputs, count) (replaces outputs and execution_count of that code cell, keeps every other field) ; NotebookView.tsx gets a Run button on code cells (hidden when readOnly) whose handler asks invoke('notebook_trusted'); when false shows a confirm dialog 'Trust this notebook? Running its cells runs code on this computer.' and on decline returns without any invoke or onText; on accept invoke('notebook_trust'), onText(serialize(nb)) (the save), invoke('notebook_run_cell'), then onText(serialize(withOutputs(...))). vitest (cd <wt> && VITEST_MAX_WORKERS=2 npx vitest run src/editor/notebook.test.ts src/editor/notebookRun.test.ts): withOutputs keeps unknown fields and other cells; a declined trust never calls run or writes; an accepted run writes the stream output and bumps execution_count; the view model calls trust \u2192 save \u2192 run in that order. Also tsc --noEmit and node scripts/plan-check.mjs."
+ },
+ "T-324-b-rest": {
+  "id": "T-324-b-rest",
+  "status": "needs-live-windows",
+  "cards": [
+   "APP-014",
+   "APP-019",
+   "APP-022",
+   "APP-032",
+   "APP-038"
+  ],
+  "effort": "S",
+  "reason": "Every patch the line waited on has landed on main: lib.rs:47 mod edit_menu, :329 edit_menu::install, :520 edit_menu_ready, and src/shell/window/Hosts.tsx:92 mounts EditMenuHost (APP-014, edit_menu.rs with 7 tests, src/editmenu 12 tests); lib.rs:921 registers lifecycle::open_files_take and App.tsx:128-136 drains it on 'open-files' and at start (APP-019, lifecycle.rs:342 markdown_paths tests at :940-946); lib.rs:953 calls lifecycle::note_session_end (session_end at lifecycle.rs:515). What remains is only what the line itself marks live or Mac: launch with KOLUX_RENDERER_HEAP_MB, an update check through a real proxy, feedback images pasted into the issue page, double-clicking a .md with the app closed and one with spaces, the Windows spelling suggestions in the right-click menu, the crash-report bundle on the clipboard, and the Mac Open-with event; the 'file arrives before a workspace is chosen' question (paneActions.ts:235-245 opens the preview with cwd = activeDir, null at first start) is explicitly left to the live proof by the plan line."
+ },
+ "T-325-b": {
+  "id": "T-325-b",
+  "status": "needs-external-source",
+  "cards": [
+   "CHAT-007",
+   "CHAT-002"
+  ],
+  "effort": "M",
+  "reason": "omp is done and Grok's home folders are built (chat.rs:804-816 HOME_KEYS and homes('grok') with GROK_HOME then ~/.grok, tested at :1664-1665), but chat.rs:17-19 and SUPPORTED at :39 (and CHAT_AGENTS at src/chat/model.ts:40) leave Grok out because xAI's public docs name only ~/.grok/sessions/ and describe no session-file format (evidence/T-325-b.txt:4-8), so the wrapper-tag, start-up-row and reasoning-summary rules cannot be written from a public source; DT-C42 keeps Grok parked. It unblocks either when xAI publishes the format or if Txais extends the T-136-b style allowance (field names only of his own files) to Grok, which would be a decision for him."
+ },
+ "T-337": {
+  "id": "T-337",
+  "status": "needs-live-windows",
+  "cards": [
+   "ONB-026"
+  ],
+  "effort": "M",
+  "reason": "The card's first acceptance box is 'replacement tiles are recorded from Kolux RS itself', which needs the installed app running on Windows to capture (the Linux container cannot launch it); nothing on main hosts feature tiles yet (no component references ONB-026 or poster frames; Wizard.tsx:75 'onb-tiles' is the wizard's agent tiles and Demo.tsx/demos.ts are ONB-025's synthetic frame demos), and the spec names no Kolux RS screen for the tiles, so where they live is a question for Txais alongside the recordings. Building an empty tile grid with captions here would ship a shell with no media behind it."
+ },
+ "T-547": {
+  "id": "T-547",
+  "status": "partly-buildable-here",
+  "reason": "Everything but the network transport is on main and registered (src-tauri/src/resources/provider_usage.rs; lib.rs:805-808 provider_keys/provider_key_set/provider_key_forget/provider_usage_check; src/settings/ProviderUsage.tsx), but provider_usage.rs:266-276 `transport()` returns `NotSwitchedOn`, so every Check now answers 'checking with the provider is not switched on in this build'. Txais already said yes (DT-C32); the only blockers recorded were a tool-level refusal in one session and a lane brief that forbade touching the privacy audit, neither a Txais decision. reqwest 0.13 (native-tls) is already a dependency (src-tauri/Cargo.toml:56) and artifacts.rs:272-290 shows the proxied client + block_on pattern; the privacy audit (scripts/privacy-audit.test.mjs:28-58) is a per-file allow-list. Only the check with a real Moonshot key stays live (Windows, Txais's key). Caveat: a builder may hit the same safety-classifier refusal when writing a client that sends a stored key; if so, stop and say so rather than weaken the audit.",
+  "buildable_scope": "Build: (1) new file src-tauri/src/resources/provider_net.rs holding the ONE client: `reqwest::Client::builder()` through `crate::resources::app_http` proxied() as artifacts.rs:272-289 does, `.redirect(Policy::none())`, `.timeout(10 s)`; `get(url, key)` re-runs provider_usage.rs's address check (https, default port, no user info, host on HOSTS) before sending, sets `Authorization: Bearer <key>` as a sensitive header, reads the body with a cap (e.g. 64 KB, stream and stop), maps connect/timeout -> NetFail::Offline-equivalent, 401/403 -> BadKey, 429 -> RateLimited, other -> Failed with NO provider text, key or URL in the message; wrap in `tauri::async_runtime::block_on` inside the existing spawn_blocking at provider_usage.rs:320. (2) provider_usage.rs:266 `transport()` returns that client; delete NotSwitchedOn and the 'not switched on' sentence in ProviderUsage.tsx. (3) scripts/privacy-audit.test.mjs: add `src-tauri/src/resources/provider_net.rs` to ONE_CLIENT (\"reqwest::Client::builder(\") with a PINNED count of 1 and extend the 'second client fails' test to that file. (4) src/settings/privacy.ts OUTBOUND gains { to: 'Kimi (api.moonshot.ai) and MiniMax (www.minimax.io)', when: 'only when you press Check now in Settings > AI connections with a key you added' }; src/settings/privacy.test.ts asserts it. Prove: `cargo test --manifest-path src-tauri/Cargo.toml provider_usage` (existing 7 t547_* fixture tests keep passing; add tests in provider_net.rs `mod tests` that stand up a std::net::TcpListener on 127.0.0.1 and, through a cfg(test)-only constructor that skips the https check, show a 302 is NOT followed, a 15 s stall maps to Offline within ~10 s, a 1 MB body is cut at the cap, and the error strings never contain the key); `cargo clippy --all-targets -D warnings`; `VITEST_MAX_WORKERS=2 npx vitest run scripts/privacy-audit.test.mjs src/settings/privacy.test.ts src/settings/ProviderUsage.test.ts`. Before the PR merges, run /security-review on the diff (DT-C32 asks for a security-auditor review). Leave live: paste a real Moonshot key on Windows, Check now shows 'Balance $x'; a wrong key shows 'The key was refused'.",
+  "cards": [
+   "USAGE-027",
+   "ACCT-006",
+   "OD-01",
+   "DT-C32"
+  ],
+  "effort": "M"
+ },
+ "T-548-b": {
+  "id": "T-548-b",
+  "status": "partly-buildable-here",
+  "reason": "The Codex half is complete on main (lib.rs:779 codex_usage_of; src/usage/paneFigures.ts; meter.ts:61 codexOf; plan.ts codexBy; tower.ts:93; UsageReadout.tsx:67-70; Grid.tsx:18; Pane.tsx:22). For the Claude half, main has the hooks side (hooks.rs:490 limits_key, :498 keep_limits, :616 limits_of, test row_548_b at :1972) and terminal.rs:1667/1760 spawn_account answering a Claude pane's account, so the T-547 dependency is gone: per-folder status-line reports are the figures' source, no network read is needed. Still missing on main: hooks.rs has no `claude_usage_of(config_dir)` (only claude_usage at :610; lib.rs:538 registers only that); terminal.rs:1738-1741 resolves the `account` argument for Codex only (wait_home), so a restored Claude pane always takes claude_accounts::active_dir (:745) instead of its own folder; and no window surface reads another Claude account's windows (meter.ts has no claudeOf, plan.ts no claudeBy). The two-account live proof stays on Windows.",
+  "buildable_scope": "Build: (1) src-tauri/src/hooks.rs: `#[tauri::command] pub fn claude_usage_of(store, config_dir: Option<String>) -> Result<Vec<Limit>, String>` = limits_of(&store, config_dir.as_deref()) beside claude_usage (:610); register in lib.rs next to hooks::claude_usage (:538). Test: extend hooks::tests::row_548_b (:1972) to call it for the default, two folders and an unknown folder. (2) src-tauri/src/claude_accounts.rs: `pub fn dir_of(store, id) -> Option<String>` (load().find(id).config_dir, is_dir), and terminal.rs:1738-1760: when `account` names a Claude account (program credited 'claude'), pass dir_of(id) to claude_accounts::pane_env instead of active_dir, and spawn_account answers that id; a Claude account id no longer listed is an error like Codex's wait_home. Test: terminal::tests t548b_a_restored_claude_pane_starts_on_its_own_account (mirror :2538-2547). (3) Window: src/usage/plan.ts gains `claudeBy: Record<accountKey, ClaudeLimit[]>`, `claudeActive?: string|null`, `publishClaudeFor(id, limits|null)`, `publishClaudeActive(id)`; meter.ts gains `claudeOf(agent, paneAccount, active, claude, by)` mirroring codexOf (:61-72); paneFigures.ts gains `useClaudePaneFigures(panes, active)` that invokes `claude_usage_of` with each other account's config_dir (from the claude_accounts list) on the same 5-minute/focus cadence as useCodexPaneFigures (:26) and on each `claude-usage` event; UsageReadout.tsx:68-70 HeaderUsage, src/shell/window/Grid.tsx:156 tab ring, Pane.tsx Board card gauge, the Agents footer and tower.ts:66-93 usageByAccount read the pane's own account's windows via claudeOf; App.tsx publishes claudeActive from the accounts list (AccountSwitcher.tsx:53 already derives it). Tests: src/usage/meter.test.ts (claudeOf per account), src/usage/paneFigures.test.ts (one reader per other Claude account, dropped when no pane needs it), src/tower/tower.test.ts (a Claude account with read figures shows its own 5-hour/Weekly and is not 'elsewhere'). Prove: `cargo test --manifest-path src-tauri/Cargo.toml -- hooks::tests::row_548_b terminal::tests::t548b`, clippy -D warnings, `VITEST_MAX_WORKERS=2 npx vitest run src/usage src/tower src/switcher src/terminal/UsageReadout.test.ts`, tsc. Leave live: two managed Claude accounts, a pane on each shows its own figures (steps in evidence/T-548-b.txt and T-548-b-spawn.txt).",
+  "cards": [
+   "USAGE-021",
+   "ACCT-036",
+   "ACCT-005",
+   "OD-11"
+  ],
+  "effort": "L"
+ },
+ "T-551-b": {
+  "id": "T-551-b",
+  "status": "needs-txais-decision",
+  "reason": "The PLAN line itself requires Txais's in-session yes before a real Codex session is started, and the run (edit, commit attempt, package install under `--sandbox workspace-write --ask-for-approval never`, confirmed flags in evidence/T-551.txt from codex-cli 0.156.1) is a live Windows run with his signed-in Codex. There is no code to write; the deliverables are evidence/raw/ and evidence/T-551-b.txt from that run.",
+  "cards": [
+   "SESS-Yolo (DT-C46)"
+  ],
+  "effort": "S"
+ },
+ "T-566": {
+  "id": "T-566",
+  "status": "partly-buildable-here",
+  "reason": "The pane side is on main (src/terminal/TerminalPane.tsx:1483 `data-key={number}`, chip from first paint; src/terminal/__cards__/TERM-107.test.ts). The recorded follow-up (STATE.md:112-114) is not: scripts/prove/live-T-544.mjs back() (:290-299) still calls dismissTip() and dismissFirstRun() BEFORE paneStates() (:281-282), and dismissFirstRun (live-common.mjs:253-270) presses Escape when a dialog has no Close-setup button, which reaches the focused pane and clears the chip (the exact cause found in evidence/T-566.txt); paneStates still matches panes to keys by sidebar-row title, not the new data-key. The three-relaunch run (B-9, docs/live-proofs-windows.md:196-210) and TERM-107 boxes 1-2 need Windows.",
+  "buildable_scope": "Build: (1) scripts/prove/pane-states.mjs exporting `paneStates(document, TERM)` = the reader from live-T-544.mjs:282, with `key: p.dataset.key ?? row?.dataset.pane ?? null` (data-key first, sidebar row as fallback) and `restored` from `.status.restored`. (2) live-T-544.mjs back(): wait for the pane and its input field (:293-294) and sleep, read `paneStates()` ONCE into a local before `dismissTip()`/`dismissFirstRun()` (move :291-292 after the read), log that snapshot at :298, and keep a second read after the dismissals labelled 'after dialogs' so the Escape effect is visible; evalJs the exported function via `(${paneStates.toString()})(document, ${JSON.stringify(TERM)})` as :224 already does for domRows. Prove: scripts/prove/pane-states.test.mjs (vite.config.ts:27 includes scripts/**/*.test.mjs; no jsdom is installed, so pass a hand-rolled stub document whose querySelectorAll returns objects with getAttribute/dataset/querySelector/offsetParent): a pane with data-key='7' reports key '7' with no sidebar row; a pane without data-key falls back to its row's data-pane; a hidden pane (offsetParent null) is skipped; `node --check scripts/prove/live-T-544.mjs`. Run `VITEST_MAX_WORKERS=2 npx vitest run scripts/prove/pane-states.test.mjs`. Leave live: B-9's three relaunches with a Tip open on one of them, every restored pane shows its chip and data-key values match the saved layout keys.",
+  "cards": [
+   "TERM-107",
+   "APP-052"
+  ],
+  "effort": "S"
+ },
+ "T-567": {
+  "id": "T-567",
+  "status": "needs-live-windows",
+  "reason": "SUBAGENT-418 case D (chat Deny -> Interrupted) passed in run 2 and failed run 1 only because no chat card existed before the Agents screen was first opened (STATE-history.md:3693, live-prover-13 on main 9acd3c86); the task is to re-prove it with a real Claude on an installed build carrying that fix (MERGE 425). It is a pure live run with the installed app and Txais's Claude account; nothing to write here and no spec card to tick (418 is a merge row, not a card).",
+  "cards": [],
+  "effort": "S"
+ },
+ "T-621": {
+  "id": "T-621",
+  "status": "needs-live-windows",
+  "reason": "The fix is on main: src/styles.css:72 (.topbar grid minmax(max-content,1fr) auto minmax(max-content,1fr)), :81 (.switcher width: max-content), :99 (@media max-width:1365px columns max-content auto minmax(0,1fr)) and src/chrome/topBarLayout.test.ts guard it; evidence/T-621.txt proves the geometry in Chromium at 900/1000/1100/1280/1365/1366/1400/1600/1920 (covered [] and outside [] at every width) and re-runs the T-620 drag proof (Tower -> onScreen tower, 277/277 drags). Only the Windows check remains: drag the installed app from 1920 to 900 px and click Tower at each width. PR #43 edits styles.css for the sidebar only, no overlap.",
+  "cards": [
+   "VIEW-002"
+  ],
+  "effort": "S"
+ },
+ "T-594": {
+  "id": "T-594",
+  "status": "needs-live-windows",
+  "reason": "Both halves of the cycle-2 code are on main: src-tauri/src/cli_register.rs (path_at_start :157ff, path_at_uninstall :198, UNINSTALL_PATH_FLAG :139, uninstall_main :246), lib.rs:243 path_at_start_now, main.rs:10-11 `--uninstall-path`, src-tauri/installer-hooks.nsh KOLUX_PATH_APP_REMOVE :235-243 inserted by NSIS_HOOK_PREUNINSTALL :258, six t594 tests (evidence/T-594.txt). The add half PASSED live on 0.1.3 on 2026-10-31 (evidence/live-A-1-T-594.txt: 1,815-char Path gained `<install>\\bin` once, `kolux --version` 0.1.3 in a new terminal, a second install did not double it; docs/live-proofs-results-2026-10-31.md A-1). The uninstall half, D-1 (docs/live-proofs-windows.md:389-390: uninstall /S, the saved Path loses exactly the Kolux RS entry), is still to run; CLI-007 box 1 is ticked and box 2 is struck (DT-C61), so nothing else blocks the tick.",
+  "cards": [
+   "CLI-007",
+   "DT-C55"
+  ],
+  "effort": "S"
+ },
+ "T-608": {
+  "id": "T-608",
+  "status": "partly-buildable-here",
+  "reason": "The code is on main (src/onboarding/hooksOn.ts, Wizard/Guides consent line and one-time card, src/board/chip.ts paneStatus, App.tsx statusOf at :90/:112/:183/:185, src/board/paneStatus.test.ts, T-608b's Stopped Inbox group guarded by src/inbox/guideGroups.test.ts). Live: A-2 (consent line on a fresh profile) PASSED 2026-10-31 (docs/live-proofs-results-2026-10-31.md); the one-time card on an old profile, C-2 (a hand-started Claude needs you on Board/Tower/Inbox/strip/bell/sidebar, docs/live-proofs-windows.md:251) and T-608b's stopped rows need Windows with a real Claude. One recorded follow-up is buildable and untouched: STATE.md:204-207, the guide still describes the pre-DT-C52 default (docs/guide/settings.md:181 'Agent status hooks | Off until you turn it on', :187 'Until the switch is on...', :193 'One master switch... off until you turn it on'; docs/guide/getting-started.md:12-13 step 2 says nothing about the consent line, :39 Tips omits that the one-time hooks card takes the launch's one card, Guides.tsx:516-523).",
+  "buildable_scope": "Build: docs/guide/settings.md:181 -> 'On by default: the first-run guide (or a one-time card) shows the line \"Kolux will add its status hooks to each AI's settings, so it can show you which one needs you.\" with the switch on; turn it off here or there'; :187 and :193 reworded the same way (nothing is written before the line has been shown; off removes Kolux's entries, as today). docs/guide/getting-started.md:12-13: step 2 'Connect an AI' row gains the consent line and its switch (on; Continue records it, Back does not); :39: 'A launch that shows the one-time status-hooks card shows no tip.' Prove with a vitest in the pattern of src/inbox/guideGroups.test.ts: src/onboarding/hooksGuide.test.ts imports docs/guide/settings.md?raw and docs/guide/getting-started.md?raw, asserts both contain HOOKS_LINE from src/onboarding/hooksOn.ts:13 (so the guide and the app never drift), asserts the Agents table row for `agentStatusHooks` matches /on by default|starts on/i and no longer matches /Off until you turn it on/; run `VITEST_MAX_WORKERS=2 npx vitest run src/onboarding/hooksGuide.test.ts src/inbox/guideGroups.test.ts`. Leave live: the one-time card on an old profile; C-2; T-608b's Stopped rows and Ctrl+J skipping a blocked pane.",
+  "cards": [
+   "STAT-002",
+   "STAT-004",
+   "STAT-050",
+   "DT-C52"
+  ],
+  "effort": "S"
+ },
+ "T-609": {
+  "id": "T-609",
+  "status": "needs-live-windows",
+  "reason": "Both parts are on main: src/board/review.ts + ChipRow.tsx (Review changes on a Done card), src/inbox/InboxView.tsx detail actions, the App wiring, and src/look/cardChanges.ts with cards.ts PRESETS.default including 'changes' (count from scm_status, 10 s cache, refresh on finish/focus); evidence/T-609.txt and T-609b.txt record the tests (60 files / 328 tests after). What is left is C-3 (docs/live-proofs-windows.md:260: an agent finishes, Review changes from the Board Done card and the Inbox Done today row opens All Changes in the pane's cell) and the fresh-profile card line '1 agent \u00b7 Working \u00b7 3 changed files'. The STATE.md:222-224 ponytail (a count-only background command instead of the foreground scm_status read) is optional and not part of this task's tick.",
+  "cards": [
+   "EDIT-029",
+   "PROJ-062",
+   "VIEW-001"
+  ],
+  "effort": "S"
+ },
+ "T-610": {
+  "id": "T-610",
+  "status": "partly-buildable-here",
+  "reason": "The palette reach is on main (src/chrome/reach.ts SCREEN_OF/screenRows, TopBar.tsx SCREEN_IDS, actions.ts 'Show Workspace Statuses', reach.test.ts), COMPAT.md:845 and :988 were updated and docs/guide has no 'workspace board' left. One item from evidence/T-610.txt STILL OPEN is not: DT-08 (DECISIONS.md:500) says Floor is reachable from the palette AND the View menu, but src-tauri/src/menu.rs:135 SCREENS lists only Agents/Board/Terminals (so the View > Workspace View menu has neither Floor nor the switcher's fourth screen Tower) and src/chrome/chromeItems.ts:88-90 menuScreen maps only those three ids, so a 'screen.floor' click would do nothing. The palette rows (B-2, docs/live-proofs-windows.md:125) need the Windows run.",
+  "buildable_scope": "Build: src-tauri/src/menu.rs:135 SCREENS gains (\"screen.tower\",\"Tower\",\"tower\") and (\"screen.floor\",\"Floor\",\"floor\") (keep the first three in order; Floor last, with its accelerator looked up as `view.floor` so VIEW-013's compat id shows beside it); update the doc comment ('the switcher screens plus Floor, DT-08'). src/chrome/chromeItems.ts:88-90 menuScreen returns Screen and maps screen.tower -> 'tower', screen.floor -> 'floor'. Prove: menu.rs:551-558 t054 test ids become [screen.agents, screen.board, screen.terminals, screen.tower, screen.floor] with ticked for 'tower' and 'floor' (and still none for 'inbox'); src/chrome/chromeItems.test.ts: menuScreen('screen.floor') === 'floor', menuScreen('screen.tower') === 'tower', unknown -> null; src/chrome/reach.test.ts gains 'Floor is in the View menu too (DT-08)' by asserting menuScreen covers SCREEN_OF's floor. Run `cargo test --manifest-path src-tauri/Cargo.toml menu::`, clippy -D warnings, `VITEST_MAX_WORKERS=2 npx vitest run src/chrome`, tsc, `node scripts/plan-check.mjs`. Leave live: B-2, the five palette rows (Show Floor/Space/Workspace Statuses/Artifacts/Skills) each open their page.",
+  "cards": [
+   "VIEW-013",
+   "VIEW-002",
+   "PROJ-085",
+   "DT-08"
+  ],
+  "effort": "S"
+ },
+ "T-611": {
+  "id": "T-611",
+  "status": "needs-live-windows",
+  "reason": "Everything the line asks for is on main and green: src/keys/commands.ts (commandRows, windowCommand, renameTarget, forceReload/reloadAsk), the palette wiring at src/terminal/paneActions.ts:358, the window key switch at src/keys/useWindowKeys.ts:384, the rename hand-off at src/shell/window/Sidebar.tsx:61 and src/projects/ProjectsPanel.tsx:947, NOT_ROUTED empty at src/settings/shortcutRows.ts:41, sidebar.ports.toggle gone from src/keys/actions.ts with COMPAT.md:832/855/1029 and DECISIONS.md DT-C53 updated; `VITEST_MAX_WORKERS=2 npx vitest run src/keys/commands.test.ts src/keys/keymap.test.ts src/settings/shortcutRows.test.ts ...` passes on 3af39cf3 (9 files, 74 tests). No open PR covers or conflicts with it: PR #42 (lane/ports) touches no src/keys or COMPAT file and does not re-register sidebar.ports.toggle; PR #43's only ProjectsPanel.tsx hunk is the update button (lines 2520-2525), not the rename effect. The only remainder is the live run docs/live-proofs-windows.md 'B-3 \u00b7 T-611' (five palette steps: Show Floor, Show Checks, Rename worktree with the sidebar open and collapsed, Show Inbox under Terminal first), which docs/live-proofs-results-2026-10-31.md:57 still lists under 'Still to run (blocked)'; the one untested piece, ProjectsPanel's rename effect, has no render harness (the panel is ~2,500 lines) and is exactly what B-3 step 4 proves, so a vitest for it is not worth building here.",
+  "cards": [
+   "DT-C53",
+   "PROJ-059",
+   "VIEW-057",
+   "GIT-029",
+   "APP-009",
+   "VIEW-079"
+  ],
+  "effort": "S",
+  "buildable_scope": "Nothing to build in this container. The tick needs B-3 run on the Windows PC and its result written into docs/live-proofs-results-2026-10-31.md; then tick PLAN.md:532. Do not touch the STATE.md:115 status-hooks follow-up (2) from here (see T-612)."
+ },
+ "T-612": {
+  "id": "T-612",
+  "status": "partly-buildable-here",
+  "reason": "The code is on main and green: src/onboarding/useWizard.ts:70-85 (pickFolder; wizardSession with no workspace hands over to Add Project and starts the chosen agent in the folder picked), src/onboarding/Guides.tsx:381-408 (window-level capture-phase tipEscape that closes the Tip without taking the key), plus the cycle-2 T-612b follow-ups (src/keys/commands.ts forceReload/reloadAsk, src/board/chip.ts ringsBell/hooksMuted, src/launch/PlusMenu.tsx programWord, src/status/useAgentStatus.ts mute); useWizard.test.ts, tipEscape.test.ts, tipView.test.ts, paneStatus.test.ts, lateHook.test.ts and PlusMenu.test.ts pass on 3af39cf3. No open PR touches these files (PR #45 changes only HelpMenu.tsx/HelpSheet.tsx). Two non-live remainders are recorded but unbuilt: (1) STATE.md:204 says docs/guide/getting-started.md was not updated, and lines 12-14 still describe 'Try with sample data' / 'Choose a kit' / 'Start kit' screens that T-568 removed and never say that 'Open a session' asks for a folder when there is no workspace; (2) spec/16-onboarding.md ONB-005 (rule 'with no agent or no workspace it does nothing and onboarding stays on screen', acceptance box 2) is now contradicted for the no-workspace case, and evidence/T-612.txt says the spec line wants the amendment, but no 'Needs Txais' line or DECISIONS.md row records it (grep ONB-005 finds only a 2026-10-12 history line). The live remainders need Windows: docs/live-proofs-windows.md A-3 (not in the results table, not run) and B-9's T-612 box (palette+Tip Escape; Escape in a working Claude pane closes the Tip and interrupts Claude), plus T-612b's three live checks. Note for the coordinator: STATE.md:115 follow-up (2) (status-hooks: the Tip must stop the Escape in capture) contradicts what main deliberately does (Guides.tsx:391-394, tipEscape.test.ts asserts the press is neither prevented nor stopped, product-ux review round 1) and what the coordinator's B-9 step expects; it is superseded, not a Txais decision, and should not be built.",
+  "cards": [
+   "F08-onboarding-look-misc.2",
+   "ONB-004",
+   "ONB-005",
+   "ONB-010",
+   "ONB-027"
+  ],
+  "effort": "S",
+  "buildable_scope": "Buildable part (S, docs + record only, no app code): (a) docs/guide/getting-started.md rows 12-14: replace the step-3 'Pick a folder, or use sample data | Try with sample data' and step-4 'Choose a kit ... Start kit' rows with what the wizard does since T-568/T-612 (step 3 'Your work': Pick a folder, or Continue; step 4 'Open a session': starts the first offered agent in the project in front, or, with no project yet, closes setup and opens Add Project, and the agent starts in the folder picked), and add one sentence under 'Tips' (line 39) that Escape closes a Tip from wherever the keyboard is. Prove it with a new src/onboarding/guideGettingStarted.test.ts modelled on src/inbox/guideGroups.test.ts (import '../../docs/guide/getting-started.md?raw'): assert the step table no longer contains 'sample data', 'kit' or 'Start kit', does contain 'Add Project' and 'Pick a folder', and that the Tips section mentions Escape; run `VITEST_MAX_WORKERS=2 npx vitest run src/onboarding/guideGettingStarted.test.ts src/onboarding/useWizard.test.ts`. The guide has no `<!-- html -->` marker, so scripts/docs/build.mjs --check is unaffected. (b) Record the ONB-005 amendment: one DECISIONS.md section-2 'confirm' row (T-612: 'Just open a session' with no workspace opens Add Project instead of doing nothing; with an agent missing but a workspace present it still does nothing) and a matching 'Needs Txais' line in STATE.md; do not edit spec/16-onboarding.md (LOOP.md section 2 forbids rewriting cards). Everything else (A-3, B-9's T-612 box, T-612b's Ctrl+Shift+R ask, Gemini naming, late Stop hook) is live Windows only."
+ },
+ "SESS-025": {
+  "id": "SESS-025",
+  "cards": [
+   "SESS-025"
+  ],
+  "status": "needs-live-windows",
+  "effort": "M",
+  "reason": "Box 1's first half (\"each agent writes its handoff note before editing anything\") is the real agent's behaviour, so it needs a Pair launch with a signed-in Claude on Windows (live doc C-4). Kolux's half is already on main and proven: src/launch/launchActions.ts:113-116 calls handoff_note_prepare before agent_start_line, src-tauri/src/projects.rs:2501 prepare_handoff with test projects.rs:3157 sess025_handoff_note_is_made_once_and_never_overwritten, and the shown prompt is brief + task with the rules cut (seats.test.ts:107, src/launch/__cards__/SESS-025.test.ts, TerminalPane.tsx:1547 withoutRules); evidence/cards-SESS-025.txt. No open PR touches it. Groundwork a builder can write here (cannot run here): a `c4` named check in scripts/prove/live-checks.mjs for the installed-build harness that launches Pair over CDP, then polls `<project>/.kolux/handoffs/*.md` byte size and each worktree's `git status --porcelain` every 250 ms and logs which changed first, and reads the pane title/Board card text to assert none of the rules words (alongside, handoff note, documentation) appear; that turns C-4 from a File Explorer walk into one command whose log is the evidence."
+ },
+ "STAT-001": {
+  "id": "STAT-001",
+  "cards": [
+   "STAT-001"
+  ],
+  "status": "needs-live-windows",
+  "effort": "M",
+  "reason": "Box 3 needs Codex CLI and Gemini CLI signed in on a fresh machine (live doc A-5); the status words come from the real agents' hook posts. Main already has both installers and the event mapping: src-tauri/src/agent_hooks/mod.rs plan() with Gemini/Codex rows (tests.rs:41, :1046, the Gemini settings-file merge at tests.rs:2073), Codex trust in hooks.rs:1245-1330, and the states proven through the real scripts in src-tauri/tests/cards_04.rs:143 stat001_box2 and :164 stat008_box2 (evidence/cards-STAT-001.txt, live Claude PASS 2026-10-27). PR #44 (lane/vendors) only adds src-tauri/src/agent_hooks/vendors_more.rs for Cursor, Copilot, Grok, Devin, Pi and Hermes, so it does not cover Codex or Gemini. Groundwork: (1) an `a5pre` check in scripts/prove/live-installed.mjs that needs no sign-in: after the fresh-home first run with the hooks switch on, assert the scratch home's Codex hooks.json and Gemini settings.json carry Kolux's entries (the condition for \"no manual setup\"); (2) an `a5` check that, with the CLIs signed in, starts a Codex pane and a Gemini pane over CDP, sends a prompt and a permission-needing prompt, and records the pane header word timeline the way scripts/prove/live-STAT-001.mjs does (paneWord), asserting working within ~1 s, needs you, then done. The tick itself stays with Txais's signed-in run."
+ },
+ "STAT-008": {
+  "id": "STAT-008",
+  "cards": [
+   "STAT-008"
+  ],
+  "status": "needs-live-windows",
+  "effort": "S",
+  "reason": "Box 1 (\"no hook-trust question\") is Codex's own behaviour on reading the trust table, so it needs Codex signed in on a fresh profile (live doc A-4). Kolux's side is on main: hooks.rs:1245 codex_listing asks `codex app-server` hooks/list (DT-C3), hooks.rs:1293 apply_trust writes `[hooks.state.\"<key>\"] trusted_hash`, test hooks.rs:1695 trust_entries_come_from_codex_listing, scratch-home listing in evidence/T-025-b-trust.txt; evidence/cards-STAT-008.txt leaves box 1 REAL-AGENT. No open PR touches Codex trust. Groundwork that needs no sign-in: an `a4pre` check in scripts/prove/live-installed.mjs that, after a Codex pane starts in the fresh scratch home, runs `codex app-server` hooks/list against that CODEX_HOME and asserts every Kolux entry's currentHash equals the trusted_hash in config.toml and that Kolux's groups sit after the user's; a mismatch there is exactly what would make Codex ask, so it is caught before Txais spends his Codex sign-in. Also add a step to A-4 to copy config.toml and hooks.json into the evidence folder when it passes."
+ },
+ "USAGE-021": {
+  "id": "USAGE-021",
+  "cards": [
+   "USAGE-021"
+  ],
+  "status": "needs-external-source",
+  "effort": "L",
+  "reason": "Box 3 needs the Claude usage service to answer with a slow-down and a retry time, and Kolux asks no usage service at all: DECISIONS.md DT-C14 (the service's address, request and reply are not public documentation and the clean-room rule forbids learning them from the old app); the T-547 network transport is also still a BLOCKER (PLAN.md:468; src-tauri/src/resources/provider_usage.rs:266-276 transport() is NotSwitchedOn, and even that is Kimi/MiniMax, not Claude). spec/06 lines 233-243 and docs/live-proofs-windows.md both record the box as not runnable. No open PR touches it. Nothing honest can be built here for this box; a `Reading::SlowDown{until}` arm on the provider_usage.rs:155 Fetch trait with a 429 + Retry-After fixture test (capped at one day, refresh overrides) would be real code but would not exercise Claude's figures and must not tick the box. If Txais wants the card to pass as written, the alternative is a DECISIONS.md strike line (`strikes USAGE-021 box 3 ... confirmed by Txais <date>`, scripts/plan-check.mjs:8-10), which is his call."
+ },
+ "SAFE-004": {
+  "id": "SAFE-004",
+  "cards": [
+   "SAFE-004"
+  ],
+  "status": "needs-txais-decision",
+  "effort": "S",
+  "reason": "Box 3 is deliberately open: DECISIONS.md DT-C59 (Txais, 2026-10-31) keeps the safe default (never type the review feedback into Claude's plan prompt, where an Enter would pick Yes); the 3-second fallback was merged as 112f40d2 and reverted in 03188c30 (evidence/cycle3-merge.txt section 3; the spec's cited evidence/cycle3-SAFE-004.txt is absent on main). src/terminal/planReview.ts on main waits for the pane to leave the ask and sends nothing otherwise (lines 94-119); boxes 1-2 are proven (evidence/cards-SAFE-004.txt, live PASS 2026-10-27). Building the box would contradict DT-C59; no open PR touches it. The only way to make the card pass without reversing the decision is a confirmed strike line in DECISIONS.md (`strikes SAFE-004 box 3` + `confirmed by Txais YYYY-MM-DD`, which scripts/plan-check.mjs:8-10 and parseStrikes honour); that record needs Txais's word, not code."
+ },
+ "EDIT-044": {
+  "id": "EDIT-044",
+  "cards": [
+   "EDIT-044"
+  ],
+  "status": "needs-live-windows",
+  "effort": "L",
+  "reason": "Both boxes need Windows with an Ubuntu WSL distribution reached through \\\\wsl.localhost (live doc B-8) and the Windows Recycle Bin for box 2; evidence/cards-EDIT-044.txt records that Txais's PC has no WSL distribution (`wsl.exe -l -v`: none installed), and PLAN.md:70 T-062-b also names that gap. Linux cannot form a UNC path, so nothing here exercises the boxes. Main has the T-062-a pieces: src-tauri/src/fsops.rs:97 is_wsl (test :604), :116 a WSL delete is permanent and flagged (`Gone { permanent }` :106-126), projects.rs:425-444 wsl_distro_of / wsl_path with tests :5074. The T-062-b rules (search inside the distro, watcher retry, alias dedupe) are unbuilt but are not what the boxes ask. No open PR touches it. Small groundwork: a fsops.rs unit test that a delete request for `\\\\wsl.localhost\\Ubuntu\\...` returns permanent:true and never calls the trash path (today only is_wsl is asserted), and a B-8 note telling Txais `wsl --install -d Ubuntu` is the one-time setup the item needs."
+ },
+ "SET-004": {
+  "id": "SET-004",
+  "cards": [
+   "SET-004"
+  ],
+  "status": "needs-live-windows",
+  "effort": "M",
+  "reason": "Box 1 asks for a 60 fps recording of the real startup with no light frame, which is a screen on Windows. The pieces are on main and tested: index.html's first script applies the cached look, src-tauri/tauri.conf.json:22 visible:false, src/main.tsx:58-60 shows the window two frames after the first draw, src/settings/__cards__/SET-004-006.test.ts (evidence/cards-SET-004.txt). scripts/prove/live-SET-004.mjs already recorded a CDP screencast of a hidden dev app: 76 frames, 0 light, first frame Cobalt (PASS 2026-10-27), but a page screencast of a hidden dev window is not the screen, so the box was left open (live doc C-10). No open PR touches it (#45 changes first-load chunks only). Groundwork: port live-SET-004.mjs onto scripts/prove/live-installed.mjs (save Dark/Cobalt/Georgia through Settings with PROVE_HOME=keep, relaunch via the WMI start in live-T-544.mjs) and add an OS-level capture: a PowerShell loop using System.Drawing CopyFromScreen on the Kolux window rect every ~16 ms from before launch until the page reports complete, then assert no frame's mean luma exceeds 128 and the first non-black frame is within tolerance of #030406; the log replaces Game Bar plus frame stepping and is the evidence for C-10."
+ },
+ "APP-070": {
+  "id": "APP-070",
+  "cards": [
+   "APP-070"
+  ],
+  "status": "needs-live-windows",
+  "effort": "M",
+  "reason": "Box 1 needs a network monitor on the running app (docs/live-proofs-results-2026-10-31.md: PASS so far over a 3-minute session, only msedgewebview2.exe left loopback, which Settings > Privacy names per DT-C25; the integrator wants the watch to span the agent items of Part C before ticking). Box 2 needs request contents inspected while a marker is typed. Main: scripts/privacy-audit.test.mjs fails the build on any network client outside src/settings/privacy.ts OUTBOUND; src/settings/privacy.test.ts; T-064-b's live snapshots (PLAN-done.md:143). No open PR touches it (PR #44 carries a vendors privacy-audit patch but adds no client). Groundwork: (a) a `c13` sampler in scripts/prove/live-installed.mjs that runs beside every other check: `Get-NetTCPConnection -OwningProcess` for kolux-rs.exe and its msedgewebview2.exe children every 2 s, remote hosts resolved and compared with the OUTBOUND list, failing on any other host, so box 1 becomes a by-product of the whole run; (b) for box 2, start the installed app with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--proxy-server=127.0.0.1:<port> (live-T-544.mjs already sets that variable) pointing at a small logging CONNECT proxy in the script, type the marker in a terminal and the editor, trigger an update check, and assert the marker appears in no proxied host or request line; this covers the WebView2 side without a MITM tool, while the Rust updater's one GET of latest.json (update.rs) is covered by the static audit. The tick stays with Txais's run."
+ },
+ "APP-025": {
+  "id": "APP-025",
+  "cards": [
+   "APP-025"
+  ],
+  "status": "needs-live-windows",
+  "effort": "M",
+  "reason": "Box 2 needs an older release installed, a newer signed release downloaded by the real updater, a plain quit and a relaunch (live doc D-2; results doc says D-1, D-2 and D-3 are one sequence because NSIS cannot step a version down). Main has the path: src-tauri/src/update.rs:458 install_on_quit wired at lib.rs:984, with unit tests for the service-stop ordering (update.rs:533, :564) and the skipped-install diag (:483); release builds ignore the test feed (update.rs:509), so a local feed cannot stand in (evidence/cards-APP-025.txt). Tags v0.1.1-v0.1.5 exist, so the older/newer pair is available. PR #46 (lane/release) changes signature refusals, installer identity and settings repair, not the install-on-quit path, so it does not cover the box, but it should be rebased and landed before D-2 so the proof is on the shipping updater. Groundwork: a `d2` script in scripts/prove/live-installed.mjs: `uninstall.exe /S`, install the previous release `/S`, launch via the WMI start (outside the harness job), wait for the ready pop-up in the DOM (the selector from src/update/__cards__/APP-024-027.test.ts), quit over CDP window close, wait for the installer process to end, read `(Get-Item \"$env:LOCALAPPDATA\\Kolux RS\\kolux-rs.exe\").VersionInfo.ProductVersion`, relaunch and read Help > About; one command instead of a 30-minute watch."
+ },
+ "APP-048": {
+  "id": "APP-048",
+  "cards": [
+   "APP-048"
+  ],
+  "status": "partly-buildable-here",
+  "effort": "M",
+  "reason": "The tick itself is live (D-3: a real update from the previous Kolux RS release with the same projects, layout, sessions and settings after; docs/live-proofs-windows.md fixes \"previous release\" as the last RS release and leaves the 0.15.0 profile import to T-213-b, a separate Txais decision; evidence/cards-APP-048.txt). But an upgrade-regression test can be built and proven here: today the only cross-launch proof is a same-version reopen (state.rs:445 t075_a_settings_layout_and_kv_rows_round_trip_through_a_reopen), so a profile written by the previous release is never opened by current code in any test. No open PR touches it.",
+  "buildable_scope": "Build a frozen profile fixture with the previous release's own code and prove the current Store reads it back unchanged. (1) In a throwaway worktree at tag v0.1.4 (git worktree add --detach <SCRATCH>/wt-v014 v0.1.4; CARGO_TARGET_DIR shared, CARGO_BUILD_JOBS=2), add a temporary #[test] that opens a Store in a temp dir, patches settings (theme, mode, appFont, uiLook, a project list) and writes savedLayout with two workspaces, three panes and open editor tabs, then copy that dir's settings.json and the sqlite file into src-tauri/tests/fixtures/profile-v0.1.4/ on the build branch (no secrets; a scripts/profile-fixture.md note records the commands). (2) Add src-tauri/tests/cards_19.rs::app048_box2_a_profile_written_by_the_previous_release_reads_back_identical: copy the fixture to a temp dir, Store::open (state.rs:33), assert settings (after without_retired, state.rs:199), savedLayout and the kv rows equal a committed JSON snapshot, and that no settings.json.tmp or fallback notice appears. (3) Assert the fixture's version is one release behind Cargo.toml's and fail with a plain message when a release bumps without refreshing the fixture (keeps the test honest across releases). Prove with: cargo test --manifest-path src-tauri/Cargo.toml --test cards_19 app048_box2. The spec box stays unticked; D-3 remains the live tick, now with a regression net under it."
+ },
+ "APP-052": {
+  "id": "APP-052",
+  "cards": [
+   "APP-052"
+  ],
+  "status": "stale-already-done",
+  "effort": "S",
+  "reason": "Both boxes were already proven on the installed NSIS build (06242e15) by scripts/prove/live-T-544.mjs on 2026-10-28, started through WMI outside the harness job so the terminal service survives the quit: evidence/T-544.txt lines 38, 57, 66 (b1: three quit-and-relaunch rounds, the marker back each time, '2 terminals taken back', the service still running after every quit), lines 68-79 (b2: the one service tied to the install killed, relaunch shows the earlier output and '\u2500\u2500 restored after a restart \u00b7 the shell below is new \u2500\u2500'), ITEM-RESULT b1 PASS / b2 PASS / RESULT: PASS (lines 95-98); PLAN.md:94 T-544 records the pass. The code is on main (terminal.rs generation and reattach, pty_link.rs:443 wanted() links the service in release builds, T-075 at PLAN-done.md:80). Only the spec ticks (spec/19-app-lifecycle.md:279-281), evidence/cards-APP-052.txt's 'ownership stays with T-544' note and the live doc's B-9 rows were never updated. If the integrator wants the proof on the current release rather than the trial build, `node scripts/prove/live-T-544.mjs` against the installed 0.1.5 is one command, not a manual B-9."
+ },
+ "CLI-011": {
+  "id": "CLI-011",
+  "cards": [
+   "CLI-011"
+  ],
+  "status": "partly-buildable-here",
+  "effort": "S",
+  "reason": "The tick (a minimised real window coming to the front, live doc B-5) needs Windows. The code is on main: src-tauri/src/cli/mod.rs:1019-1027 'app.open' calls ctx.front, which at mod.rs:3630-3634 does unminimize, show, set_focus (all queued to the event-loop thread in order, tauri-runtime-wry lib.rs:2105/2240; tao 0.37.1 window.rs:139-150 falls back to the SendInput Alt trick at :1514 when SetForegroundWindow is refused); the client at mod.rs:231 sends first and launches only when unreachable. Two gaps a builder can close here: no unit test asserts that 'app.open' asks for the front (every dispatch test stubs `front: &|| Ok(())`, e.g. mod.rs:7543), and unlike the second-launch road (lifecycle.rs:253-271 forward_to: allow_foreground(pid) then raise_by_pid verified with GetForegroundWindow), `kolux open` never grants the running app the foreground and never reports whether the window actually came forward, so a refused SetForegroundWindow leaves the window restored behind the terminal with only a taskbar flash, and B-5 can only be judged by eye.",
+  "buildable_scope": "(1) cli/mod.rs test cli011_box2_app_open_asks_the_window_forward: dispatch 'app.open' with a counting `front` closure, assert exactly one call and `started` absent/false; a `front` that errs makes the request fail. (2) Make `kolux open` self-reporting like forward_to: in cli::open (mod.rs:231), before the first send read the startup file's pid (cli::FILE, written at mod.rs:3602) and call lifecycle::allow_foreground(pid) (make lifecycle's two helpers pub(crate) for the cli module; lifecycle.rs:164, :204); after the app answers, call raise_by_pid(pid, RAISE_TRIES, sleep) and put `raised: bool` into the JSON result, with cli/text.rs:369 saying 'its window is in front' only when raised is true and 'restored, but Windows kept another window in front' otherwise. Tests: a cli::open unit test with injected send/launch/grant/raise closures proving the grant happens before the send and `raised` carries through; cargo test --manifest-path src-tauri/Cargo.toml cli011, plus cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-gnu for the Windows arm (target installed here). Then B-5 is `kolux open --json` printing \"raised\": true, and the tick is a one-line read of that log on Txais's PC."
+ }
+}

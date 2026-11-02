@@ -1,0 +1,92 @@
+=== T-124-d
+  [a2b] build : outcome=pr-opened pr=53
+  [a2b] review r1: verdict=approve grade=A- serious=[] minors=3
+  [a2b] fix r1: fixed=2 not_fixed=1
+  [a2b] review r2: verdict=approve grade=A- serious=[] minors=1
+=== bookkeeping
+  [a2b] build : outcome=pr-opened pr=54
+  [a2b] review r1: verdict=approve grade=A- serious=[] minors=2
+  [a2b] fix r1: fixed=2 not_fixed=0
+  [a2b] review r2: verdict=approve grade=A- serious=[] minors=0
+=== guide-hooks-wizard
+  [a2b] build : outcome=pr-opened pr=55
+  [a2b] review r1: verdict=approve grade=A- serious=[] minors=2
+  [a2b] fix r1: fixed=2 not_fixed=0
+  [a2b] review r2: verdict=approve grade=A- serious=[] minors=1
+=== T-610
+  [a2b] build : outcome=pr-opened pr=56
+  [a2b] review r1: verdict=approve grade=A- serious=[] minors=3
+  [a2b] fix r1: fixed=3 not_fixed=0
+  [a2b] review r2: verdict=approve grade=A- serious=[] minors=1
+=== T-566
+  [a2b] build : outcome=pr-opened pr=57
+  [a2b] review r1: verdict=approve grade=A- serious=[] minors=0
+=== CLI-011
+  [a2b] build : outcome=pr-opened pr=58
+  [a2b] review r1: verdict=approve grade=B+ serious=[] minors=3
+  [a2b] fix r1: fixed=3 not_fixed=0
+  [a2b] review r2: verdict=approve grade=A- serious=[] minors=0
+=== T-128-b
+  [a2b] build : outcome=pr-opened pr=59
+  [a2b] review r1: verdict=approve grade=A- serious=[] minors=2
+  [a2b] fix r1: fixed=2 not_fixed=0
+  [a2b] review r2: verdict=approve grade=A- serious=[] minors=0
+=== T-300
+  [a2b] build : outcome=blocked pr=None
+=== T-066-e
+  [a2b] build : outcome=pr-opened pr=61
+  [a2b] review r1: verdict=changes-needed grade=B- serious=['The list is asked at tab open, before the agent has a session, and tha', "`reader.join()` blocks on a helper that inherits the list command's st"] minors=1
+  [a2b] fix r1: fixed=3 not_fixed=0
+  [a2b] review r2: verdict=approve grade=B+ serious=[] minors=2
+=== T-062-b
+  [a2b] build : NO RESULT (failed)
+=== T-167-b
+  [a2b] build : NO RESULT (failed)
+=== APP-048
+  [a2b] build : NO RESULT (failed)
+=== T-235-b
+  [a2b] build : NO RESULT (failed)
+=== T-248-c-rest
+  [a2b] build : NO RESULT (failed)
+=== T-548-b
+  [a2b] build : NO RESULT (failed)
+=== T-547
+  [a2b] build : NO RESULT (failed)
+=== T-316-b
+  [a2b] build : NO RESULT (failed)
+=== T-193-b
+  [a2b] build : NO RESULT (failed)
+=== pr37
+  [9c0] build : outcome=blocked pr=37
+  [b82] build : outcome=pr-updated pr=None
+  [b82] security r1: verdict=changes-needed grade=B- serious=['CDN allow-list is a string prefix; the tailwind entry has no trailing ', 'Any artifact page can pop the system browser or mail client to an arbi'] minors=3
+  [b82] review r1: verdict=changes-needed grade=B+ serious=["Remove from library now stats the origin on the window's thread, inclu"] minors=0
+  [b82] fix r1: PR #37 (lane/artifacts-auto) round 3: all six findings addressed, pushed as thre
+  [b82] review r2: NO RESULT (failed)
+=== pr38
+  [9c0] build : outcome=pr-updated pr=38
+  [9c0] review r1: verdict=approve grade=A- serious=[] minors=2
+  [9c0] fix r1: fixed=5 not_fixed=0
+  [9c0] review r2: verdict=approve grade=A- serious=[] minors=1
+=== ports-stop
+  [9c0] build : outcome=pr-opened pr=60
+  [9c0] review r1: verdict=approve grade=A- serious=[] minors=3
+  [9c0] security r1: verdict=changes-needed grade=B+ serious=['A stale parent pid can tie a stranger to a pane, and a Stop then ends '] minors=3
+  [9c0] fix r1: fixed=5 not_fixed=2
+  [9c0] security r2: verdict=changes-needed grade=B serious=["Children are chosen from the scan's stale parent table, so a pid reuse"] minors=1
+  [9c0] review r2: verdict=approve grade=A- serious=[] minors=1
+  [9c0] fix r2: NO RESULT (failed)
+  [9c0] review r3: NO RESULT (failed)
+  [9c0] security r3: NO RESULT (failed)
+=== pr43
+  [9c0] build : outcome=pr-updated pr=43
+  [9c0] review r1: verdict=approve grade=A- serious=[] minors=1
+  [9c0] fix r1: fixed=0 not_fixed=1
+  [9c0] review r2: verdict=approve grade=A- serious=[] minors=0
+=== pi-prompt
+  [9c0] build : outcome=pr-opened pr=62
+  [9c0] review r1: verdict=approve grade=B+ serious=[] minors=2
+  [9c0] fix r1: NO RESULT (failed)
+  [9c0] review r2: NO RESULT (failed)
+=== release-followups
+  [9c0] build : NO RESULT (failed)

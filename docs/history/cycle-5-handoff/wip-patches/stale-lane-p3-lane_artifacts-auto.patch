@@ -1,0 +1,648 @@
+diff --git a/src-tauri/src/artifacts.rs b/src-tauri/src/artifacts.rs
+index 2239f38c..397b5a0d 100644
+--- a/src-tauri/src/artifacts.rs
++++ b/src-tauri/src/artifacts.rs
+@@ -331,21 +331,9 @@ fn proxied(plan: &crate::resources::app_http::Plan, b: reqwest::ClientBuilder) -
+     Ok(if plan.http1 { b.http1_only() } else { b })
+ }
+ 
+-/// The most redirects one script fetch follows (`follow_cdn_redirect`).
+-const MAX_REDIRECTS: usize = 5;
+-
+-/// Whether a script fetch follows a redirect to `next`, `hops` requests in: only to an address
+-/// `cdn_url` accepts and only for a few hops. The CDNs answer their own documented tags this way
+-/// (cdn.tailwindcss.com sends 302 to /3.4.17, unpkg a version range to the exact version), so
+-/// refusing every redirect would leave those pages needing the network; a redirect off the list, or
+-/// down to plain http, is never followed.
+-fn follow_cdn_redirect(next: &str, hops: usize) -> bool {
+-    hops <= MAX_REDIRECTS && cdn_url(next)
+-}
+-
+ /// Fetches one CDN script for an entry, within the size cap; None on any failure. Only an address
+-/// `cdn_url` accepts is asked for, a redirect is followed only to another such address
+-/// (`follow_cdn_redirect`; a stopped one answers 3xx, which is not a success), and the body is read a chunk at a time and dropped the moment it passes the cap, so a reply without
++/// `cdn_url` accepts is asked for, a redirect is not followed (it could leave the allow-list), and
++/// the body is read a chunk at a time and dropped the moment it passes the cap, so a reply without
+ /// a Content-Length cannot fill memory for the whole 20 s timeout first.
+ pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
+     if !cdn_url(url) {
+@@ -353,13 +341,7 @@ pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
+     }
+     // T-323-b (APP-032): through the saved proxy; a setting that cannot be used fetches nothing.
+     let plan = crate::resources::app_http::plan_for(app, &url.parse().ok()?).ok()?;
+-    let builder = proxied(&plan, reqwest::Client::builder().redirect(reqwest::redirect::Policy::custom(|a| {
+-        if follow_cdn_redirect(a.url().as_str(), a.previous().len()) {
+-            a.follow()
+-        } else {
+-            a.stop()
+-        }
+-    }))).ok()?;
++    let builder = proxied(&plan, reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())).ok()?;
+     tauri::async_runtime::block_on(async {
+         let client = builder.timeout(std::time::Duration::from_secs(20)).build().ok()?;
+         let mut r = client.get(url).send().await.ok()?;
+@@ -377,23 +359,11 @@ pub fn fetch_script(app: &tauri::AppHandle, url: &str) -> Option<Vec<u8>> {
+     })
+ }
+ 
+-/// Whether a Windows reparse point is a link to another file: a name surrogate (a symlink or a
+-/// junction; IsReparseTagNameSurrogate, bit 29). Any other reparse point is the file itself kept
+-/// another way: a OneDrive Files On-Demand placeholder (IO_REPARSE_TAG_CLOUD_*) carries one even
+-/// when it is fully on the disk, and so does a deduplicated file. Pure, so it is tested everywhere.
+-#[cfg_attr(not(windows), allow(dead_code))]
+-fn reparse_is_link(tag: u32) -> bool {
+-    tag & 0x2000_0000 != 0
+-}
+-
+ /// One source file, opened once and judged by its handle, so what is checked is what is copied: a
+ /// link where the file should be is refused at open (O_NOFOLLOW; on Windows the reparse point is
+-/// opened itself and refused when its tag names another file), a folder or device is not a file,
+-/// and a hard link to a file elsewhere (a second name for the same data, which no path check can
+-/// see) is refused by its link count. The metadata is the handle's (fstat), never a second look at
+-/// the path. On Windows a reparse point that is not a link (a OneDrive file) is opened again without
+-/// the reparse flag so the cloud filter can bring it down, and read only if that second handle is
+-/// the same file as the first (same volume and file index), so a link swapped in between is refused.
++/// opened itself and refused by its attribute), a folder or device is not a file, and a hard link
++/// to a file elsewhere (a second name for the same data, which no path check can see) is refused
++/// by its link count. The metadata is the handle's (fstat), never a second look at the path.
+ fn open_source(path: &Path, name: &str) -> Result<(fs::File, fs::Metadata), String> {
+     let mut opts = fs::File::options();
+     opts.read(true);
+@@ -408,22 +378,14 @@ fn open_source(path: &Path, name: &str) -> Result<(fs::File, fs::Metadata), Stri
+         opts.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+     }
+     let file = opts.open(path).map_err(|e| format!("could not read {name}: {e}"))?;
++    let md = file.metadata().map_err(|e| format!("could not read {name}: {e}"))?;
+     #[cfg(windows)]
+-    let file = {
+-        let tag = windows_file::reparse_tag(&file).map_err(|e| format!("could not read {name}: {e}"))?;
+-        match tag {
+-            None => file,
+-            Some(tag) if reparse_is_link(tag) => return Err(format!("{name} is a link, not a file")),
+-            Some(_) => {
+-                let again = fs::File::open(path).map_err(|e| format!("could not read {name}: {e}"))?;
+-                if windows_file::identity(&file).is_none() || windows_file::identity(&file) != windows_file::identity(&again) {
+-                    return Err(format!("{name} changed while it was being read"));
+-                }
+-                again
+-            }
++    {
++        use std::os::windows::fs::MetadataExt;
++        if md.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
++            return Err(format!("{name} is a link, not a file"));
+         }
+-    };
+-    let md = file.metadata().map_err(|e| format!("could not read {name}: {e}"))?;
++    }
+     if !md.is_file() {
+         return Err(format!("{name} is not a file"));
+     }
+@@ -441,40 +403,15 @@ fn links_of(_file: &fs::File, md: &fs::Metadata) -> u64 {
+ 
+ #[cfg(windows)]
+ fn links_of(file: &fs::File, _md: &fs::Metadata) -> u64 {
+-    windows_file::info(file).map_or(1, |i| i.nNumberOfLinks as u64)
+-}
+-
+-/// What a Windows file handle says about itself.
+-#[cfg(windows)]
+-mod windows_file {
+-    use std::fs;
+     use std::os::windows::io::AsRawHandle;
+-    use windows_sys::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO};
+-
+-    pub fn info(file: &fs::File) -> Option<BY_HANDLE_FILE_INFORMATION> {
+-        // SAFETY: an open handle and a zeroed struct of the documented size, which the call fills.
+-        unsafe {
+-            let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+-            (GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0).then_some(info)
+-        }
+-    }
+-
+-    /// The volume and file index: the same pair is the same file, whatever path reached it.
+-    pub fn identity(file: &fs::File) -> Option<(u32, u32, u32)> {
+-        info(file).map(|i| (i.dwVolumeSerialNumber, i.nFileIndexHigh, i.nFileIndexLow))
+-    }
+-
+-    /// The handle's reparse tag, or None when it is not a reparse point.
+-    pub fn reparse_tag(file: &fs::File) -> std::io::Result<Option<u32>> {
+-        // SAFETY: an open handle and a zeroed FILE_ATTRIBUTE_TAG_INFO, with its size passed, for the
+-        // FileAttributeTagInfo class, which fills exactly that struct.
+-        unsafe {
+-            let mut tag: FILE_ATTRIBUTE_TAG_INFO = std::mem::zeroed();
+-            if GetFileInformationByHandleEx(file.as_raw_handle() as _, FileAttributeTagInfo, &mut tag as *mut _ as *mut core::ffi::c_void, std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32) == 0 {
+-                return Err(std::io::Error::last_os_error());
+-            }
+-            Ok((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0).then_some(tag.ReparseTag))
++    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
++    // SAFETY: an open handle and a zeroed struct of the documented size, which the call fills.
++    unsafe {
++        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
++        if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) == 0 {
++            return 1;
+         }
++        info.nNumberOfLinks as u64
+     }
+ }
+ 
+@@ -549,21 +486,11 @@ impl Library {
+     /// A file that is not a page (an image, a document, a PDF) is stored whole, on its own.
+     /// A page on a network share gets an "unavailable" entry without being read, and a path this
+     /// machine cannot read (a WSL or SSH machine's) a "remote" one. The newest store of an origin
+-    /// replaces the old one; an older one is ignored, except that a store naming the Claude session
+-    /// that wrote the file replaces a newer workspace-scan one (the 3 s scan can reach the file before
+-    /// the Write capture does). A scan's refresh of an entry someone else made keeps who made it: its
+-    /// source, session and project.
+-    pub fn add(&self, src: &Path, mut from: Origin, fetch: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Entry, String> {
++    /// replaces the old one; an older one is ignored.
++    pub fn add(&self, src: &Path, from: Origin, fetch: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Entry, String> {
+         let id = id_of(&from.origin);
+-        if let Some(old) = self.read().into_iter().find(|e| e.id == id) {
+-            if old.added > from.at && !(old.source == "workspace" && from.session.is_some()) {
+-                return Ok(old);
+-            }
+-            if from.source == "workspace" && old.source != "workspace" {
+-                from.source = if old.source == "claude" { "claude" } else { "hand" };
+-                from.session = old.session;
+-                from.project = old.project;
+-            }
++        if let Some(newer) = self.read().into_iter().find(|e| e.id == id && e.added > from.at) {
++            return Ok(newer);
+         }
+         let name = file_name(src);
+         let kind = kind_of(src);
+@@ -694,33 +621,28 @@ impl Library {
+ /// The folder a workspace keeps its finished artifacts in: `<workspace>/artifacts`.
+ pub const WORKSPACE_DIR: &str = "artifacts";
+ 
+-/// The most files one workspace's `artifacts/` folder brings into the library, and the most bytes
+-/// of them it keeps there. A cloned repository can hold thousands of small files, or many large
+-/// copies of one blob, there; past these the rest is left out and the page says so once.
+-pub const MAX_WORKSPACE_FILES: usize = 200;
+-pub const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024 * 1024;
+-
+-/// Every file directly in `<workspace>/artifacts`, in a stable order, whatever its extension, and
+-/// whether there were more than MAX_WORKSPACE_FILES (only the first that many by name are listed).
++/// Every file directly in `<workspace>/artifacts`, in a stable order, whatever its extension.
+ /// Subfolders are not entries: they hold a page's own assets (copied with the page) or a test run's
+ /// screenshots, not a second deliverable. The scan never leaves the folder: a link or junction where
+ /// the folder should be is not followed (read_dir would follow it; symlink_metadata's is_dir is false
+ /// for one, the idiom files::list_templates uses), a linked file inside it is not a file, and each
+ /// file's real path has to sit under the workspace's. A dotfile or a half-written download is not an
+ /// artifact.
+-pub fn workspace_files(workspace: &Path) -> (Vec<PathBuf>, bool) {
++pub fn workspace_files(workspace: &Path) -> Vec<PathBuf> {
++    let mut out = Vec::new();
+     let dir = workspace.join(WORKSPACE_DIR);
+     if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+-        return (Vec::new(), false);
++        return out;
++    }
++    let Ok(real_ws) = fs::canonicalize(workspace) else { return out };
++    for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
++        let path = entry.path();
++        if entry.file_type().is_ok_and(|kind| kind.is_file()) && is_workspace_file(&path) && fs::canonicalize(&path).is_ok_and(|real| real.starts_with(&real_ws)) {
++            out.push(path);
++        }
+     }
+-    let Ok(real_ws) = fs::canonicalize(workspace) else { return (Vec::new(), false) };
+-    let mut out: Vec<PathBuf> = fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|kind| kind.is_file())).map(|e| e.path()).filter(|p| is_workspace_file(p)).collect();
+     out.sort();
+-    let over = out.len() > MAX_WORKSPACE_FILES;
+-    out.truncate(MAX_WORKSPACE_FILES);
+-    // Real paths last, so a folder of thousands of names costs one stat each only for those kept.
+-    out.retain(|path| fs::canonicalize(path).is_ok_and(|real| real.starts_with(&real_ws)));
+-    (out, over)
++    out
+ }
+ 
+ fn modified_of(md: &fs::Metadata) -> u64 {
+@@ -750,13 +672,6 @@ pub struct Scanned {
+ /// removed since, is left alone. `seen` is the caller's memory of files it has judged, so a file
+ /// that cannot be kept is reported once and tried again only when it changes.
+ pub fn scan_workspace(lib: &Library, workspace: &Path, project: Option<String>, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, seen: &mut HashMap<String, (u64, u64)>) -> Scanned {
+-    scan_capped(lib, workspace, project, fetch, seen, MAX_WORKSPACE_BYTES)
+-}
+-
+-/// `scan_workspace` with the byte cap passed in, so a test can reach it without a gigabyte of files.
+-/// The cap counts the folder's files the library already holds as well as the ones stored now, so a
+-/// later tick does not top the library up past it.
+-fn scan_capped(lib: &Library, workspace: &Path, project: Option<String>, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, seen: &mut HashMap<String, (u64, u64)>, max_bytes: u64) -> Scanned {
+     let project = project.filter(|p| !p.trim().is_empty()).or_else(|| workspace.file_name().map(|n| n.to_string_lossy().into_owned()));
+     let known: HashMap<String, Option<(u64, u64)>> = lib.list().into_iter().map(|e| (e.entry.origin, e.entry.stamp)).collect();
+     let removed = {
+@@ -764,19 +679,10 @@ fn scan_capped(lib: &Library, workspace: &Path, project: Option<String>, fetch:
+         lib.removed()
+     };
+     let mut out = Scanned::default();
+-    let (files, over) = workspace_files(workspace);
+-    if over {
+-        out.skipped.push(format!("the artifacts folder holds more than {MAX_WORKSPACE_FILES} files; only the first {MAX_WORKSPACE_FILES} by name are kept"));
+-    }
+-    let mut kept: u64 = 0;
+-    let mut full = false;
+-    for file in files {
++    for file in workspace_files(workspace) {
+         let Ok(meta) = fs::metadata(&file) else { continue };
+         let stamp = (modified_ms(&file), meta.len());
+         let key = file.to_string_lossy().into_owned();
+-        if known.contains_key(&key) {
+-            kept += stamp.1;
+-        }
+         if seen.get(&key) == Some(&stamp) {
+             continue;
+         }
+@@ -785,24 +691,10 @@ fn scan_capped(lib: &Library, workspace: &Path, project: Option<String>, fetch:
+             seen.insert(key, stamp);
+             continue;
+         }
+-        // Over the folder's byte cap: left out, not remembered in `seen`, so it is stored once room is made.
+-        let held = if known.contains_key(&key) { kept - stamp.1 } else { kept };
+-        if held + stamp.1 > max_bytes {
+-            if !full {
+-                full = true;
+-                out.skipped.push(format!("the artifacts folder holds more than {} MB; the files past that are not kept", max_bytes / (1024 * 1024)));
+-            }
+-            continue;
+-        }
+         // Added now: `added` is when the entry was stored, the file's own time lives in its stamp.
+         let from = Origin { origin: key.clone(), source: "workspace", project: project.clone(), session: None, at: now_ms() };
+         match lib.add(&file, from, fetch) {
+-            Ok(_) => {
+-                out.changed += 1;
+-                if !known.contains_key(&key) {
+-                    kept += stamp.1;
+-                }
+-            }
++            Ok(_) => out.changed += 1,
+             Err(e) => {
+                 eprintln!("artifacts: could not keep {}: {e}", file.display());
+                 out.skipped.push(e);
+@@ -1215,10 +1107,9 @@ mod tests {
+         fs::write(ws.join("artifacts").join(".DS_Store"), "noise").unwrap();
+         fs::write(ws.join("artifacts").join("node_modules").join("c.html"), "<title>C</title>").unwrap();
+ 
+-        let (files, over) = workspace_files(&ws);
+-        assert!(!over);
++        let files = workspace_files(&ws);
+         assert_eq!(files.len(), 4, "every top-level file; a subfolder is not an entry: {files:?}");
+-        assert!(workspace_files(&root.join("missing")).0.is_empty());
++        assert!(workspace_files(&root.join("missing")).is_empty());
+ 
+         let lib = Library::new(root.join("lib"));
+         let mut seen = std::collections::HashMap::new();
+@@ -1258,7 +1149,7 @@ mod tests {
+         fs::create_dir_all(&outside).unwrap();
+         fs::write(outside.join("id_rsa"), "SECRET").unwrap();
+         std::os::unix::fs::symlink(&outside, ws.join("artifacts")).unwrap();
+-        assert!(workspace_files(&ws).0.is_empty(), "a linked artifacts/ folder is never followed");
++        assert!(workspace_files(&ws).is_empty(), "a linked artifacts/ folder is never followed");
+         let lib = Library::new(root.join("lib"));
+         let mut seen = HashMap::new();
+         assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen).changed, 0);
+@@ -1268,7 +1159,7 @@ mod tests {
+         fs::create_dir_all(ws.join("artifacts")).unwrap();
+         fs::write(ws.join("artifacts").join("a.txt"), "ok").unwrap();
+         std::os::unix::fs::symlink(outside.join("id_rsa"), ws.join("artifacts").join("key.txt")).unwrap();
+-        assert_eq!(workspace_files(&ws).0, vec![ws.join("artifacts").join("a.txt")]);
++        assert_eq!(workspace_files(&ws), vec![ws.join("artifacts").join("a.txt")]);
+         assert!(open_source(&ws.join("artifacts").join("key.txt"), "key.txt").is_err(), "a link is refused at open, not only by its path");
+         let _ = fs::remove_dir_all(&root);
+     }
+@@ -1445,102 +1336,6 @@ mod tests {
+         let _ = fs::remove_dir_all(&root);
+     }
+ 
+-    #[test]
+-    fn a_cdn_redirect_is_followed_only_to_a_listed_cdn() {
+-        // cdn.tailwindcss.com answers 302 to /3.4.17 and unpkg answers 302 from a version range to the exact version.
+-        assert!(follow_cdn_redirect("https://cdn.tailwindcss.com/3.4.17", 1));
+-        assert!(follow_cdn_redirect("https://unpkg.com/react@18.3.1/x.js", 1));
+-        assert!(follow_cdn_redirect("https://unpkg.com/react@18.3.1/x.js", 5));
+-        assert!(!follow_cdn_redirect("https://evil.example/x.js", 1), "a redirect off the list is not followed");
+-        assert!(!follow_cdn_redirect("http://unpkg.com/x", 1), "nor one down to plain http");
+-        assert!(!follow_cdn_redirect("https://unpkg.com/react@18.3.1/x.js", 6), "nor a sixth hop");
+-    }
+-
+-    #[test]
+-    fn only_a_name_surrogate_reparse_point_is_a_link() {
+-        // IO_REPARSE_TAG_SYMLINK and IO_REPARSE_TAG_MOUNT_POINT (a junction) name another file.
+-        assert!(reparse_is_link(0xA000_000C));
+-        assert!(reparse_is_link(0xA000_0003));
+-        // A OneDrive placeholder (IO_REPARSE_TAG_CLOUD, CLOUD_6) or a deduplicated file is the file itself.
+-        assert!(!reparse_is_link(0x9000_001A));
+-        assert!(!reparse_is_link(0x9000_601A));
+-        assert!(!reparse_is_link(0x8000_0013));
+-    }
+-
+-    #[test]
+-    fn a_scan_that_stores_a_file_first_does_not_lose_the_claude_session_that_wrote_it() {
+-        let root = temp_dir("scanfirst");
+-        let ws = root.join("Project");
+-        fs::create_dir_all(ws.join("artifacts")).unwrap();
+-        let page = ws.join("artifacts").join("a.html");
+-        fs::write(&page, "<title>A</title>").unwrap();
+-        let lib = Library::new(root.join("lib"));
+-        let mut seen = HashMap::new();
+-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen).changed, 1);
+-        // The Write capture comes in after, with the transcript's earlier time.
+-        let key = page.to_string_lossy().into_owned();
+-        let from = Origin { origin: key.clone(), source: "claude", project: Some("repo".into()), session: Some("s1".into()), at: 1000 };
+-        let e = lib.add(&page, from, &|_| None).unwrap();
+-        assert_eq!((e.source.as_str(), e.session.as_deref()), ("claude", Some("s1")));
+-        let list = lib.list();
+-        assert_eq!(list.len(), 1);
+-        assert_eq!((list[0].entry.source.as_str(), list[0].entry.session.as_deref(), list[0].entry.project.as_deref()), ("claude", Some("s1"), Some("repo")));
+-        // A later change picked up by the scan keeps who made the entry.
+-        fs::write(&page, "<title>A2</title>").unwrap();
+-        assert_eq!(scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut seen).changed, 1);
+-        let list = lib.list();
+-        assert_eq!((list[0].entry.title.as_str(), list[0].entry.source.as_str(), list[0].entry.session.as_deref(), list[0].entry.project.as_deref()), ("A2", "claude", Some("s1"), Some("repo")));
+-        // An entry stored before stamps existed is refreshed by the first scan, keeping its source.
+-        let hand = ws.join("artifacts").join("b.html");
+-        fs::write(&hand, "<title>B</title>").unwrap();
+-        let mut old = lib.add(&hand, Origin::hand(&hand), &|_| None).unwrap();
+-        old.stamp = None;
+-        let mut all: Vec<Entry> = lib.list().into_iter().map(|l| l.entry).collect();
+-        all.retain(|x| x.id != old.id);
+-        all.push(old);
+-        lib.write(&all).unwrap();
+-        scan_workspace(&lib, &ws, Some("Project".into()), &|_| None, &mut HashMap::new());
+-        let b = lib.list().into_iter().find(|l| l.entry.title == "B").unwrap();
+-        assert_eq!(b.entry.source, "hand");
+-        let _ = fs::remove_dir_all(&root);
+-    }
+-
+-    #[test]
+-    fn one_scan_keeps_at_most_the_file_and_byte_caps() {
+-        let root = temp_dir("caps");
+-        let ws = root.join("Project");
+-        fs::create_dir_all(ws.join("artifacts")).unwrap();
+-        for i in 0..MAX_WORKSPACE_FILES + 5 {
+-            fs::write(ws.join("artifacts").join(format!("f{i:04}.txt")), "x").unwrap();
+-        }
+-        let lib = Library::new(root.join("lib"));
+-        let mut seen = HashMap::new();
+-        let got = scan_workspace(&lib, &ws, None, &|_| None, &mut seen);
+-        assert_eq!(got.changed, MAX_WORKSPACE_FILES);
+-        assert_eq!(lib.list().len(), MAX_WORKSPACE_FILES);
+-        assert_eq!(got.skipped.len(), 1, "one reason for the whole folder: {:?}", got.skipped);
+-        assert!(got.skipped[0].contains(&format!("more than {MAX_WORKSPACE_FILES} files")), "{:?}", got.skipped);
+-        assert_eq!(scan_workspace(&lib, &ws, None, &|_| None, &mut seen).changed, 0, "the next tick adds nothing more");
+-
+-        // The byte cap counts what the library already holds from this folder, so later ticks do not top it up.
+-        let root2 = temp_dir("bytecap");
+-        let ws2 = root2.join("Project");
+-        fs::create_dir_all(ws2.join("artifacts")).unwrap();
+-        for n in ["a", "b", "c", "d"] {
+-            fs::write(ws2.join("artifacts").join(format!("{n}.txt")), "0123456789").unwrap();
+-        }
+-        let lib2 = Library::new(root2.join("lib"));
+-        let mut seen2 = HashMap::new();
+-        let got = scan_capped(&lib2, &ws2, None, &|_| None, &mut seen2, 25);
+-        assert_eq!(got.changed, 2);
+-        assert_eq!(got.skipped.len(), 1, "{:?}", got.skipped);
+-        let again = scan_capped(&lib2, &ws2, None, &|_| None, &mut seen2, 25);
+-        assert_eq!(again.changed, 0, "the folder is still over the cap");
+-        assert_eq!(lib2.list().len(), 2);
+-        let _ = fs::remove_dir_all(&root);
+-        let _ = fs::remove_dir_all(&root2);
+-    }
+-
+     #[test]
+     fn one_ranged_answer_is_never_more_than_a_chunk() {
+         let root = temp_dir("chunk");
+diff --git a/src/artifacts/ArtifactsPage.tsx b/src/artifacts/ArtifactsPage.tsx
+index 3451911c..d00e8b8f 100644
+--- a/src/artifacts/ArtifactsPage.tsx
++++ b/src/artifacts/ArtifactsPage.tsx
+@@ -101,33 +101,24 @@ export function viewerUrl(a: Pick<Artifact, "id" | "page">, windows = navigator.
+   return `${base}/${a.id}/${a.page.split("/").map(encodeURIComponent).join("/")}`;
+ }
+ 
+-/** Where the focus has been: whether the viewer frame holds it now, when it last took it from
+- * Kolux's own window, and when the user last pressed a pointer or key in Kolux's own window
+- * (performance.now() times). A click inside the frame reaches none of Kolux's listeners. */
+-export type FrameFocus = { frameFocused: boolean; frameFocusedAt: number; ownInputAt: number };
+-
+ /** The link a message from the viewer asks to open, or null. Only our own frame may ask, and only
+- * for a click made inside it: the user's activation has to be live (a click inside the frame counts
+- * for its ancestors too), the frame has to hold the focus, and it has to have taken the focus after
+- * the user's last input in Kolux itself. Activation alone is not enough: a row click in the list
+- * activates Kolux's own window for a few seconds, which is long enough for the picked page to load
+- * and post, and so does a later click or key press anywhere in Kolux. A page's own script posting on
+- * load, or in a loop, therefore opens nothing; nor does any message in a web view without
+- * userActivation, since it cannot tell the cases apart. */
+-export function viewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, focus: FrameFocus, nav: Navigator = navigator): string | null {
++ * while the user is acting: a click inside the frame counts for its ancestors too (transient
++ * activation reaches every ancestor window), while a page's own script posting on load, or in a
++ * loop, has no activation and opens nothing. A web view without userActivation opens nothing
++ * either, since it cannot tell the two apart. */
++export function viewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, nav: Navigator = navigator): string | null {
+   if (!frameWindow || e.source !== frameWindow) return null;
+   const data = e.data as { koluxOpen?: unknown } | null | undefined;
+   if (typeof data?.koluxOpen !== "string") return null;
+   const activation = (nav as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+   if (!activation?.isActive) return null;
+-  if (!focus.frameFocused || !(focus.frameFocusedAt > focus.ownInputAt)) return null;
+   return data.koluxOpen;
+ }
+ 
+ /** Hands a clicked link from the viewer to the system browser (`open_external` lets only web and mail
+- * links through); a message that does not come from a click inside the frame does nothing. */
+-export function openViewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, focus: FrameFocus, nav: Navigator = navigator): Promise<unknown> | null {
+-  const url = viewerLink(e, frameWindow, focus, nav);
++ * links through); a message without a user gesture does nothing. */
++export function openViewerLink(e: Pick<MessageEvent, "data" | "source">, frameWindow: Window | null | undefined, nav: Navigator = navigator): Promise<unknown> | null {
++  const url = viewerLink(e, frameWindow, nav);
+   return url === null ? null : invoke("open_external", { url });
+ }
+ 
+@@ -184,35 +175,13 @@ export default function ArtifactsPage({ onToast, workspace, project }: Props) {
+     };
+   }, [workspace, project, refresh, onToast]);
+ 
+-  // A link clicked inside the viewer: only a message from our own frame, for a click inside it.
+-  // Kolux's own pointer and key presses are noted in the capture phase (a click inside the frame
+-  // never reaches them), and so is the moment the frame takes the focus from Kolux's window
+-  // (clicking into a frame blurs the window and makes the frame element the active one).
+-  const ownInputAt = useRef(0);
+-  const frameFocusedAt = useRef(0);
++  // A link clicked inside the viewer: only a message from our own frame, while the user is acting.
+   useEffect(() => {
+-    const own = () => void (ownInputAt.current = performance.now());
+-    const focusMoved = () => {
+-      if (frame.current && document.activeElement === frame.current) frameFocusedAt.current = performance.now();
+-    };
+-    const onBlur = () => {
+-      focusMoved();
+-      // Some web views move the active element just after the blur.
+-      window.setTimeout(focusMoved, 0);
+-    };
+     const onMessage = (e: MessageEvent) => {
+-      const focused = !!frame.current && document.activeElement === frame.current;
+-      openViewerLink(e, frame.current?.contentWindow, { frameFocused: focused, frameFocusedAt: frameFocusedAt.current, ownInputAt: ownInputAt.current })?.catch((err) => onToast(String(err)));
++      openViewerLink(e, frame.current?.contentWindow)?.catch((err) => onToast(String(err)));
+     };
+-    const inputs = ["pointerdown", "mousedown", "keydown", "touchend"] as const;
+-    for (const t of inputs) window.addEventListener(t, own, true);
+-    window.addEventListener("blur", onBlur);
+     window.addEventListener("message", onMessage);
+-    return () => {
+-      for (const t of inputs) window.removeEventListener(t, own, true);
+-      window.removeEventListener("blur", onBlur);
+-      window.removeEventListener("message", onMessage);
+-    };
++    return () => window.removeEventListener("message", onMessage);
+   }, []);
+ 
+   const shown = useMemo(() => group((list ?? []).filter((a) => matches(a.title, query))), [list, query]);
+diff --git a/src/artifacts/__cards__/SKILL-036.test.ts b/src/artifacts/__cards__/SKILL-036.test.ts
+index 23b59718..048a3387 100644
+--- a/src/artifacts/__cards__/SKILL-036.test.ts
++++ b/src/artifacts/__cards__/SKILL-036.test.ts
+@@ -28,25 +28,18 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => Promise.resolve(h.pick
+ 
+ let doc: FakeDocument;
+ let messageHandlers: ((e: unknown) => void)[] = [];
+-/** The other listeners the page puts on its window (pointerdown, keydown, blur and so on), by type. */
+-let winHandlers: Record<string, ((e: unknown) => void)[]> = {};
+-const fireWin = (t: string) => (winHandlers[t] ?? []).forEach((fn) => fn({ type: t }));
+ let unmount: () => Promise<void> = async () => {};
+ beforeEach(() => {
+   const dom = installDom();
+   doc = dom.doc;
+   messageHandlers = [];
+-  winHandlers = {};
+   Object.assign(dom.win, {
+     setInterval,
+     clearInterval,
+     setTimeout,
+     clearTimeout,
+-    addEventListener: (t: string, fn: (e: unknown) => void) => void (t === "message" ? messageHandlers.push(fn) : (winHandlers[t] ??= []).push(fn)),
+-    removeEventListener: (t: string, fn: (e: unknown) => void) => {
+-      if (t === "message") messageHandlers = messageHandlers.filter((f) => f !== fn);
+-      else winHandlers[t] = (winHandlers[t] ?? []).filter((f) => f !== fn);
+-    },
++    addEventListener: (t: string, fn: (e: unknown) => void) => void (t === "message" && messageHandlers.push(fn)),
++    removeEventListener: (t: string, fn: (e: unknown) => void) => void (messageHandlers = messageHandlers.filter((f) => f !== fn || t !== "message")),
+   });
+   h.lib = [];
+   h.picks = [];
+@@ -127,16 +120,13 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
+   // In the library page: the message from its own frame becomes open_external; Kolux itself navigates nowhere.
+   h.lib = [{ id: replay.id, title: "Viewed", added: 1 }];
+   const c = await page();
+-  // The row click reaches Kolux's own window first (its pointerdown), and leaves the focus on the row.
+-  fireWin("pointerdown");
+-  doc.activeElement = rows(c)[0];
+   await click(c, rows(c)[0]);
+   await until(() => find(c, (n) => n.localName === "iframe").length === 1);
+   const frame = find(c, (n) => n.localName === "iframe")[0] as FakeNode & { contentWindow?: unknown };
+   const own = {};
+   frame.contentWindow = own;
+   expect(messageHandlers).toHaveLength(1);
+-  // The row click left Kolux's window with live activation (it lasts a few seconds).
++  // The user is clicking inside the frame: transient activation reaches the frame's ancestors.
+   const activation = { isActive: true };
+   vi.stubGlobal("navigator", { ...globalThis.navigator, userActivation: activation });
+   const deliver = async (source: unknown, data: unknown) => {
+@@ -145,16 +135,10 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
+   };
+   await deliver({}, { koluxOpen: "https://elsewhere.invalid/" }); // not our frame
+   await deliver(own, { somethingElse: 1 });
+-  // The page's own script posts on load, right after the row click: the activation is the row
+-  // click's, the focus is on the row, so nothing opens.
+-  await deliver(own, { koluxOpen: "https://elsewhere.invalid/?d=load" });
+-  // Nor with no activation at all.
++  // A page's own script posting the message on load, with no user gesture, opens nothing.
+   activation.isActive = false;
+   await deliver(own, { koluxOpen: "https://elsewhere.invalid/?d=secret" });
+   expect(h.calls.filter((x) => x.cmd === "open_external")).toEqual([]);
+-  // The user clicks into the frame: Kolux's window loses the focus to it, and the click inside is live activation.
+-  doc.activeElement = frame;
+-  fireWin("blur");
+   activation.isActive = true;
+   for (const m of v.posted) await deliver(own, m.msg);
+   expect(h.calls.filter((x) => x.cmd === "open_external").map((x) => x.args)).toEqual([{ url: "https://example.invalid/x?q=1" }, { url: "mailto:someone@example.invalid" }]);
+@@ -163,13 +147,6 @@ test("box 2: a clicked link leaves the viewer as a message, and the page hands i
+   h.openError = "file:///x is not a web or mail link";
+   await deliver(own, { koluxOpen: "file:///x" });
+   expect(toasts).toEqual(["file:///x is not a web or mail link"]);
+-  // Back in Kolux: typing in the search box (a key press in Kolux's own window) moves the focus out
+-  // of the frame, and a page posting in a loop opens nothing more, though activation is live again.
+-  const before = h.calls.filter((x) => x.cmd === "open_external").length;
+-  fireWin("keydown");
+-  doc.activeElement = find(c, (n) => n.localName === "input")[0];
+-  await deliver(own, { koluxOpen: "https://elsewhere.invalid/?d=loop" });
+-  expect(h.calls.filter((x) => x.cmd === "open_external")).toHaveLength(before);
+   // The frame is sandboxed without top navigation or popups.
+   expect(String(frame.attrs.sandbox)).toBe("allow-scripts allow-forms");
+   vi.unstubAllGlobals();
+diff --git a/src/artifacts/viewerLink.test.ts b/src/artifacts/viewerLink.test.ts
+index c6aa7670..6a0fda39 100644
+--- a/src/artifacts/viewerLink.test.ts
++++ b/src/artifacts/viewerLink.test.ts
+@@ -1,11 +1,9 @@
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+ // A page in the viewer frame runs its own script, and the frame's sandbox lets it post to the app
+-// (link_script needs that). The app opens a koluxOpen message in the system browser only for a click
+-// made inside the frame: the user's activation has to be live, the frame has to hold the focus, and
+-// it has to have taken it after the user's last click or key press in Kolux itself. A row click in
+-// the list gives Kolux's own window activation for a few seconds, so activation alone would let a
+-// page that posts on load open the browser just by being picked.
++// (link_script needs that). The app opens a koluxOpen message in the system browser only while the
++// user is acting: a click inside the frame counts for its ancestors too, a script posting on load
++// or in a loop does not. Without that, any imported page could pop the browser or the mail client.
+ const invoke = vi.fn(async (..._a: unknown[]) => null);
+ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+@@ -16,37 +14,24 @@ import { openViewerLink, viewerLink } from "./ArtifactsPage";
+ const frame = { name: "artifact-a" } as unknown as Window;
+ const msg = (over: Partial<{ data: unknown; source: unknown }>) => ({ data: { koluxOpen: "https://example.com/" }, source: frame, ...over }) as MessageEvent;
+ const nav = (isActive: boolean | undefined) => (isActive === undefined ? {} : { userActivation: { isActive } }) as Navigator;
+-/** The user clicked into the frame after their last input in Kolux. */
+-const inFrame = { frameFocused: true, frameFocusedAt: 200, ownInputAt: 100 };
+ 
+ afterEach(() => invoke.mockClear());
+ 
+ describe("a link clicked inside the viewer (SKILL-036)", () => {
+   it("opens only while the user is acting, and only from our own frame", () => {
+-    expect(viewerLink(msg({}), frame, inFrame, nav(true))).toBe("https://example.com/");
+-    expect(viewerLink(msg({}), frame, inFrame, nav(false))).toBeNull();
+-    expect(viewerLink(msg({}), frame, inFrame, nav(undefined))).toBeNull();
+-    expect(viewerLink(msg({ source: {} }), frame, inFrame, nav(true))).toBeNull();
+-    expect(viewerLink(msg({}), null, inFrame, nav(true))).toBeNull();
+-    expect(viewerLink(msg({ data: { koluxOpen: 5 } }), frame, inFrame, nav(true))).toBeNull();
+-    expect(viewerLink(msg({ data: null }), frame, inFrame, nav(true))).toBeNull();
++    expect(viewerLink(msg({}), frame, nav(true))).toBe("https://example.com/");
++    expect(viewerLink(msg({}), frame, nav(false))).toBeNull();
++    expect(viewerLink(msg({}), frame, nav(undefined))).toBeNull();
++    expect(viewerLink(msg({ source: {} }), frame, nav(true))).toBeNull();
++    expect(viewerLink(msg({}), null, nav(true))).toBeNull();
++    expect(viewerLink(msg({ data: { koluxOpen: 5 } }), frame, nav(true))).toBeNull();
++    expect(viewerLink(msg({ data: null }), frame, nav(true))).toBeNull();
+   });
+ 
+-  it("a row click in Kolux gives activation but is not a click on the page's link", () => {
+-    // The user just clicked the row (Kolux's own input, now) and the page posted on load: the focus
+-    // is on the row, not the frame.
+-    expect(viewerLink(msg({}), frame, { frameFocused: false, frameFocusedAt: 0, ownInputAt: 300 }, nav(true))).toBeNull();
+-    // The frame kept the focus from an earlier click, but the user has since clicked or typed in Kolux.
+-    expect(viewerLink(msg({}), frame, { frameFocused: true, frameFocusedAt: 200, ownInputAt: 300 }, nav(true))).toBeNull();
+-    // The user clicked into the frame after their last input in Kolux.
+-    expect(viewerLink(msg({}), frame, { frameFocused: true, frameFocusedAt: 400, ownInputAt: 300 }, nav(true))).toBe("https://example.com/");
+-  });
+-
+-  it("a koluxOpen posted by a page's own script, with no click inside the frame, never reaches open_external", async () => {
+-    await openViewerLink(msg({}), frame, inFrame, nav(false));
+-    await openViewerLink(msg({}), frame, { frameFocused: false, frameFocusedAt: 0, ownInputAt: 300 }, nav(true));
++  it("a koluxOpen posted by a page's own script, with no user gesture, never reaches open_external", async () => {
++    await openViewerLink(msg({}), frame, nav(false));
+     expect(invoke).not.toHaveBeenCalled();
+-    await openViewerLink(msg({}), frame, inFrame, nav(true));
++    await openViewerLink(msg({}), frame, nav(true));
+     expect(invoke).toHaveBeenCalledWith("open_external", { url: "https://example.com/" });
+   });
+ });

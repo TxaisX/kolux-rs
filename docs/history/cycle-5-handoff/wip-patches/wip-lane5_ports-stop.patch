@@ -1,0 +1,467 @@
+diff --git a/DECISIONS.md b/DECISIONS.md
+index 52787956..13b67941 100644
+--- a/DECISIONS.md
++++ b/DECISIONS.md
+@@ -653,4 +653,4 @@ loop takes these as written; Txais may flip any of them like an open decision.
+ | DT-C59 | Keep the safe default for SAFE-004 box 3: never type the review feedback into Claude's plan prompt (Txais, 2026-10-31) | A lane built the card's 3-second fallback (type the feedback when the pane's status never updates) and it reached main; after seeing the risk, Txais chose the safe default again, so that code was reverted and the box stays open. The rule stands: Request changes dismisses the plan prompt, waits for the pane to leave it, and while the pane is still asking it sends nothing, because an Enter there would pick the menu's default, Yes. The 3-second version stays on branch lane3/p0-gaps for a future decision and is not merged. | The card asks for the fallback; DT-C50 (2026-10-28) recorded the opposite default, and Txais confirmed it again in session once the cost was named. | 2026-10-31 (Txais, in session) |
+ | DT-C60 | The two GitHub-Actions release boxes cannot be run from this machine (DT-C54, Txais, 2026-10-31) | DT-C54 recorded that GitHub CI is not used and that releases ship from this PC (DT-R40). APP-059 box 1 and APP-060 box 1 both ask for a release run on GitHub's runners, which no longer exists in this project's workflow, so they can never be ticked here whatever the code does. They are struck rather than left open so the P0 scoreboard stops counting an untestable box as an unfinished one: strikes APP-060 box 1. The boxes stay in the spec as the description of the old workflow. | confirmed by Txais 2026-10-31 |
+ | DT-C61 | Three acceptance boxes need a machine this project does not run on (Txais, 2026-10-31) | These boxes name hardware or an installation that cannot exist on the Windows PC the project is built and proved on: CLI-007 box 2 needs an older kolux registered machine-wide and the old app was deleted on 2026-10-31, EDIT-053 box 2 needs Linux and its execute bit, and TERM-030 box 2 needs a Mac and Cmd+Shift+J. Each is struck rather than ticked, because none of them has been shown to work: strikes CLI-007 box 2, strikes EDIT-053 box 2 and strikes TERM-030 box 2. The Windows halves of all three cards are ticked with evidence and are not affected. Leaving them open made 228/228 unreachable for reasons no code change can fix; they can be un-struck on the day such a machine is available. | confirmed by Txais 2026-10-31 |
+-| DT-C64 | VIEW-078 what a Stop in the Ports popover may end (ports-stop, replacing PR #42) | A Stop ends only the program the row showed: the process id and its start time must agree on the row, in a fresh scan and once more right before the kill, or it is refused as stale ("process N now belongs to another program"). Every holder of the port is checked before anything is ended: a port also held outside the workspace, by Kolux itself or by a system process is refused whole. The workspace folder must be at least two folders deep, no home folder (USERPROFILE, HOMEDRIVE+HOMEPATH, HOME, the terminals' home) and no parent of one, a Git worktree on disk and a workspace the project store lists (or, failing that, one Git lists for the project whose folder holds it; Git is asked only then, for that one project). The cheap checks run first. The chain from the program up to the pane's shell must be real link by link: Windows keeps a dead parent's id on its orphans and reuses ids, so a stranger can read as a pane's child; a link whose parent started later than its child, or whose start time the system withholds, refuses the stop ("process N was not started from a terminal of this workspace"). The kill holds the program open (Windows never reuses a pid while a handle is open), reads the third start time from that handle, ends only the children the same rule confirms (never a process a stale parent-id field hangs under the program, as `taskkill /T` would), deepest first, then the program, and waits up to two seconds on the program's own object; one that is not gone is reported. Residual: a child the program starts between the reading and the kill is left running (it was never read). The start-time guard is strict on every platform, so a scan that lands without start times (T-285) refuses every Stop rather than guessing; Linux reads them from /proc already. A port already gone, or now held by a program the user never saw, counts as success and ends nothing. The kept rule stays: only a program started from a Kolux pane in the workspace gets a Stop at all. A printed address labels a port only when the terminal that printed it started the holder. The scan itself is unchanged (netstat, pane ancestry, 12 external rows, 10 s cadence closed): no per-scan memory reads of other processes. | Ending a process is the one thing in the popover that cannot be undone, so a stale row, a reused pid or a window whose workspace list points at a home folder must never end a stranger. PR #42 built these guards on a branch with no common ancestor with main; only the guards were ported, onto main's scan. | 2026-11-01 (lane5/ports-stop) |
++| DT-C64 | VIEW-078 what a Stop in the Ports popover may end (ports-stop, replacing PR #42) | A Stop ends only the program the row showed: the process id and its start time must agree on the row, in a fresh scan and once more right before the kill, or it is refused as stale ("process N now belongs to another program"). Every holder of the port is checked before anything is ended: a port also held outside the workspace, by Kolux itself or by a system process is refused whole. The workspace folder must be at least two folders deep, no home folder (USERPROFILE, HOMEDRIVE+HOMEPATH, HOME, the terminals' home) and no parent of one, a Git worktree on disk and a workspace the project store lists (or, failing that, one Git lists for the project whose folder holds it; Git is asked only then, for that one project). The cheap checks run first. The chain from the program up to the pane's shell must be real link by link: Windows keeps a dead parent's id on its orphans and reuses ids, so a stranger can read as a pane's child; a link whose parent started later than its child, or whose start time the system withholds, refuses the stop ("process N was not started from a terminal of this workspace"). The kill holds the program open (Windows never reuses a pid while a handle is open; a program that cannot be opened is refused, "process N could not be opened", unless it is already gone), reads the third start time from that handle, reads the parent table only then (the scan's is stale by the time the guards are through), holds each child as its start time is read, ends only the children the same rule confirms (never a process a stale parent-id field hangs under the program, as `taskkill /T` would) and that a second table, read while they are all held, still lists under the same parent (a child whose pid changed hands between the two readings is newer than the program by construction, so only the second reading can tell; it is left out with everything under it), deepest first, then the program, and waits up to two seconds on the program's own object; one that is not gone is reported. A scan's own start-time readings open a process with the limited query right alone; only the kill asks for terminate and wait. Residual: a child the program starts after that table is read is left running (it was never read). The start-time guard is strict on every platform, so a scan that lands without start times (T-285) refuses every Stop rather than guessing; Linux reads them from /proc already. A Stop that ends nothing says so: a port already gone, or now held by a program the user never saw, counts as success ("Port N was already gone; nothing was stopped"); a program that still runs with the same pid and start time but no longer holds the port ends nothing and is reported as not stopped ("Port N is no longer held by that program; nothing was stopped"), never as "Stopped". The kept rule stays: only a program started from a Kolux pane in the workspace gets a Stop at all. A printed address labels a port only when the terminal that printed it started the holder. The scan itself is unchanged (netstat, pane ancestry, 12 external rows, 10 s cadence closed): no per-scan memory reads of other processes. | Ending a process is the one thing in the popover that cannot be undone, so a stale row, a reused pid or a window whose workspace list points at a home folder must never end a stranger. PR #42 built these guards on a branch with no common ancestor with main; only the guards were ported, onto main's scan. | 2026-11-01 (lane5/ports-stop) |
+diff --git a/PLAN.md b/PLAN.md
+index 53b6ad81..3a1d2bb0 100644
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -249,7 +249,7 @@ foundations every later card stands on; the cards they touch are finished in the
+ - [x] T-223-b · the rest of T-223's cards: Windows terminals behave natively (the Windows search path for new terminals and the rest of that card), core lane; needs T-223 · done 2026-10-20 (lane/core from 26e88cb2; evidence/T-223-b.txt: a new terminal's PATH is the machine then the user Path read from the registry at every start, expanded, so a folder added in Windows settings reaches the next pane without a restart and a dev run's own folders stay out; an unreadable registry keeps the last good read, before that the inherited PATH; PowerShell panes switch the console to UTF-8 first (evidence/core-T-223-b-shell_marks.rs.patch, sessions lane file), cmd already had chcp 65001, the chosen shell already won (built earlier); 3 pty tests + 1 shell_marks test; live proof pending (batched))
+ - [x] T-224-b · the rest of T-224's cards: the palette finding pull requests by number or title with their check state from the Checks panel's data, never an older cached PR for one the host reports unlinked (after T-229-c's poller and Checks panel); the Explorer toolbar with the repo name, refresh, expand and collapse all, the compact name filter keeping matches and their folders, live update on disk changes, a per-worktree dotfiles toggle and the add-project row when empty, and the row menus (check each against what T-094-a/b/b2 and T-236 built); search in files from the right sidebar (Mod+Shift+F, sidebar.search.toggle) with results grouped by file, a folder-scoped search and explained errors (with T-146-b's Search tab) · PALETTE PART DONE 2026-10-20 (lane/repo from ece31cd1; evidence/T-224-b.txt: src/scm/prSearch.ts + usePrRows.ts, 6 vitest tests, PR rows by number or title with check state, unlinked or removed PR dropped at once; needs evidence/repo-T-224-b-App.tsx.patch and -ProjectsPanel.tsx.patch; live proof pending (batched)); EXPLORER PART DONE 2026-10-20 (lane/repo from 992cb5a6; evidence/T-224-b.txt second piece: checked against T-236-b and found the toolbar, name filter, dotfiles switch, live refresh and search view already built; added expand all, a spinning refresh that is off while it runs, Windows path compare without case on whole folder names, Collapse and Copy as file on the row menus and the add-project row when empty (new explorerBar.ts, AddProjectRow.tsx); vitest src/editor src/scm src/sessions 595/595, tsc 0, no Rust; needs evidence/repo-T-224-b-explorer-Explorer.tsx.patch then -explorer-App.tsx.patch; live proof pending (batched)); a separate Search tab on the right sidebar strip is T-146-g, and only the include pattern (not the query) is pre-filled from a folder
+ - [x] T-225-b · VIEW-062 [compat] Source Control: changed files list · VIEW-063 Open a changed file's diff · VIEW-064 Commit box with saved drafts and AI message · VIEW-065 One main git button that changes with the state · VIEW-070 Create or link a pull request from the sidebar · the rest after T-225-a: a windowed long list, a dismissable huge-repo warning, expandable submodules, active-worktree-first refresh with backoff, a refresh on push or upstream change, an older status never overwriting a newer one (last good kept), the editing vs staged vs branch-compare highlight rules; the changed-file context menu and tooltips kept on unavailable icons; the lint-step summary, details toggle, submodule-only Stage All, the box disabled during conflicts, generation defaults saved per repo or for all; every rule of the main git button card; the stack map, the fork-owner manual link, AI controls hidden when off, blocked-with-reason · done 2026-10-19 (lane/repo from 2f7d15db; evidence/T-225-b.txt: new src/scm/rules.ts with 23 vitest tests for the windowed list, huge-repo warning, submodule rows, refresh order and backoff, never-older status, last-good status, highlight rules, split-click and unavailable-icon rules, lint-step summary, submodule-only Stage All, conflict-disabled box, generation defaults, the main-button rules, stack map, fork-owner link, AI-hidden and blocked-with-reason; the panel uses the status guard, last-good status, mainStep, commitBox and failureSummary; the rest of the on-screen wiring is in kolux-rs-after.md; src/scm 89/89; live proof pending (batched))
+-- [x] T-226 · VIEW-071 Git history in the sidebar · VIEW-074 Start a pull request from Checks · VIEW-078 Ports in the status bar · done 2026-10-19 (lane/repo from e7712bfb; evidence/T-226.txt: cargo ports:: 5, vitest src/scm src/ports 116 passed; patches repo-T-226-lib.rs.patch + repo-T-226-statusbar.patch for the Ports item; live proof pending (batched)); AI draft button built in the composer (fix-repo row 76); linked-PR/fork lookup wired in the composer (fix-repo row 76 rest: prFind.ts calls scm_pr_find; GitHub and GitHub Enterprise only, other providers get a neutral note); ports-stop (lane5/ports-stop, 2026-11-01, replaces PR #42; evidence/ports-stop.txt): a Stop is refused for a reused pid (start time read three times), a second holder outside the workspace, Kolux itself or a system pid, a home folder or its parents, a folder that is no Git worktree or no workspace the store or Git knows, or a program whose chain up to the pane's shell is not real (stale parent ids); the kill holds the program open and ends only the children it really started; waits for the program to be gone; a printed address binds to the terminal that printed it (DT-C64); live proof pending)
++- [x] T-226 · VIEW-071 Git history in the sidebar · VIEW-074 Start a pull request from Checks · VIEW-078 Ports in the status bar · done 2026-10-19 (lane/repo from e7712bfb; evidence/T-226.txt: cargo ports:: 5, vitest src/scm src/ports 116 passed; patches repo-T-226-lib.rs.patch + repo-T-226-statusbar.patch for the Ports item; live proof pending (batched)); AI draft button built in the composer (fix-repo row 76); linked-PR/fork lookup wired in the composer (fix-repo row 76 rest: prFind.ts calls scm_pr_find; GitHub and GitHub Enterprise only, other providers get a neutral note); ports-stop (lane5/ports-stop, 2026-11-01, replaces PR #42; evidence/ports-stop.txt): a Stop is refused for a reused pid (start time read three times), a second holder outside the workspace, Kolux itself or a system pid, a home folder or its parents, a folder that is no Git worktree or no workspace the store or Git knows, or a program whose chain up to the pane's shell is not real (stale parent ids); the kill holds the program open, reads the parent table only then and ends only the children it really started and a second reading confirms; waits for the program to be gone; a Stop that ended nothing says so (already gone / no longer held by that program); a printed address binds to the terminal that printed it (DT-C64); live proof pending)
+ - [x] T-227-d · the rest of T-227-c's cards: the other agents offered for writing commit messages (Codex, Amp, Kimi, Copilot, Pi, Cursor, Antigravity and a custom command, with T-228-c's choice of writer), conflicted files kept out of the combined diff with a note (needs the diff view, T-033), and line totals that give up cleanly on an enormous branch · done 2026-10-19 (lane/repo from a968b101; evidence/T-227-d.txt: line totals give up past 20,000 files, the other writers through T-228-d, conflicted files left out of the message diff with a note; the combined-changes tab's own list is the editor lane's file; live proof pending (batched))
+ - [x] T-228-d · the rest of T-228-c's cards: picking another agent, a model (listed from the installed CLI) and a thinking effort for commit messages (with T-227-d's other writers), renaming a placeholder branch after the work, the one-click flow from unfinished work to a pull request with its progress notice, and a live create against a real GitHub test repository Txais sets up (T-228-a was proved with a stand-in gh only) · done 2026-10-19 (lane/repo from a968b101; evidence/T-228-d.txt: writer picker with model and effort, branch naming, one-click flow with its notice; the live GitHub create still needs Txais's test repository; live proof pending (batched))
+ - [x] T-229-d · the rest of T-229-c's cards: AI-drafted pull request title and description, the Checks panel with CI results and Fix with AI, reading and answering review comments, and the lookup's fork / renamed-branch / by-number fallbacks · done 2026-10-19 (lane/repo from 2f7d15db; evidence/T-229-d.txt: new src-tauri/src/pr_review.rs (12 tests; needs the lib.rs patch) with the lookup fallbacks, rerun and failing-log calls, AI pull request prompt and parsing, review thread reading and comment actions with blank-guard; a neutral check no longer counts as passed; new src/scm/review.ts (11 vitest tests) and grouped, capped checks in the panel; the AI button, Fix with AI picker and comments screen are in kolux-rs-after.md; cargo scm 87/87, src/scm 100/100; live proof pending (batched))
+diff --git a/docs/guide/terminals.md b/docs/guide/terminals.md
+index c24a0801..b6d3bf5a 100644
+--- a/docs/guide/terminals.md
++++ b/docs/guide/terminals.md
+@@ -177,8 +177,8 @@ The **Ports** item in the status bar counts the ports the active workspace is li
+ 
+ Stop ends the program behind the port with the programs it started, but only when it is sure what it ends:
+ 
+-- The program must be the one the row showed. If that process has already ended, the stop counts as done and ends nothing, even when a new program has since taken the port. If the process id now belongs to a different program, the stop is refused: "process N now belongs to another program; nothing was stopped". Kolux keeps the program open while it ends it, so its id cannot pass to a newcomer in between.
+-- The program must really descend from a terminal of this workspace. Windows keeps a dead parent's id on the programs it left behind and hands ids out again, so a leftover dev server from a closed editor can look like a child of a Kolux pane; Kolux checks every step of the chain (a parent is never younger than its child) and refuses one that fails: "process N was not started from a terminal of this workspace; nothing was stopped". The same check picks which children end with the program: only the ones it really started, never a stranger that happens to carry its id as parent.
++- The program must be the one the row showed. If that process has already ended, the stop counts as done and ends nothing, even when a new program has since taken the port: "Port N was already gone; nothing was stopped". If the program still runs but no longer holds the port (a dev server that restarted on another port), nothing is ended either and the note says so: "Port N is no longer held by that program; nothing was stopped". If the process id now belongs to a different program, the stop is refused: "process N now belongs to another program; nothing was stopped". Kolux keeps the program open while it ends it, so its id cannot pass to a newcomer in between; a program Kolux is not allowed to open is refused ("process N could not be opened; nothing was stopped").
++- The program must really descend from a terminal of this workspace. Windows keeps a dead parent's id on the programs it left behind and hands ids out again, so a leftover dev server from a closed editor can look like a child of a Kolux pane; Kolux checks every step of the chain (a parent is never younger than its child) and refuses one that fails: "process N was not started from a terminal of this workspace; nothing was stopped". The same check picks which children end with the program: only the ones it really started, never a stranger that happens to carry its id as parent. Kolux looks the children up only once it holds the program open, keeps each child open while it checks it, and checks the list a second time before ending anything, so a short-lived worker whose id went to another program in the meantime is left alone.
+ - Every program holding the port must belong to the workspace. A port also held by a program outside it, by Kolux itself or by a system process is refused as a whole.
+ - The workspace folder must be a real Git worktree that Kolux knows (a project folder or one of its worktrees), at least two folders deep. A home folder, or a folder above one, is never a place Kolux stops programs in.
+ - After the stop, Kolux waits up to two seconds for the program to be gone and tells you if it is still running.
+diff --git a/evidence/ports-stop.txt b/evidence/ports-stop.txt
+index f9e04da1..a697f800 100644
+--- a/evidence/ports-stop.txt
++++ b/evidence/ports-stop.txt
+@@ -169,3 +169,72 @@ LEFT (live, needs the Windows app), in addition to the five above
+      the row shows a Stop; clicking it is refused with "was not started from a terminal of this workspace", process alive
+      (hard to force; the unit test stands in).
+   7. Stop a dev server with a child (vite + esbuild): both gone, nothing else ended, note "Stopped port 5173".
++
++---------------------------------------------------------------------------------------------------------------------------
++Review fixes, round 2 (PR #60 review, 2026-11-02). Logs in the session scratchpad ports-stop-logs/fix2-*.log.
++
++Findings and what was done
++  major  src-tauri/src/ports.rs:496  "children are chosen from the scan's stale parent table, so a pid reused after the
++         scan is ended as a child"
++    Fixed. end_program no longer takes the scan's parent table. On Windows it holds the program open first, then reads a
++    fresh parent table, walks it with descendants (each child held open as its start time is read, so its pid is pinned
++    from then on), then reads the table a second time while every child is still held and keeps, through the new pure
++    guard confirmed(pid, order, before, after), only a child whose entry is the same in both readings and whose parent is
++    itself kept (the program or a confirmed child). A child that ended between the first reading and its open, whose pid
++    then went to a newcomer, differs in the second reading (the newcomer is newer than the program by construction, so the
++    start-time rule alone could not tell) and is left out with everything under it. The scan's table still serves
++    lineage_ok (a refusal path, never a kill). Header comment and DT-C64 updated: the residual is now a child the program
++    starts after that table is read.
++  minor  src-tauri/src/ports.rs:411  "the scan's start-time read opens every own holder with TERMINATE | SYNCHRONIZE"
++    Fixed. Held::open(pid, access): start_time (every ports_list scan, lineage_ok, the Moved check) opens with
++    PROCESS_QUERY_LIMITED_INFORMATION alone (const READ); end_program opens the program and each child with READ |
++    PROCESS_TERMINATE | PROCESS_SYNCHRONIZE (const STOP). A program the Stop cannot open and that is not already gone is
++    refused with its own reason, "Port N: process P could not be opened; nothing was stopped", no longer the stale text.
++    The round-1 evidence line about start_time ("OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) + GetProcessTimes") is
++    true again; the rights each path uses are named here.
++  minor  src-tauri/src/ports.rs:160  "a program that still runs but no longer holds the port is reported as Stopped"
++    Fixed. stop_target answers Target::Moved when no holder of the port has the row's pid but a non-external row with the
++    same pid and start time sits on another port; ports_stop also asks start_time(pid) live on a Gone answer (a program
++    that rebound to no port at all) and answers Moved when it agrees with the row's. ports_stop now returns an Outcome
++    ("stopped" | "gone" | "moved", a serde snake_case string) instead of (); the command's name and arguments are
++    unchanged. The front end (ports.ts stopNote, PortsItem) shows "Stopped port N" only for "stopped", "Port N was already
++    gone; nothing was stopped" for "gone" and "Port N is no longer held by that program; nothing was stopped" for "moved".
++    The spec rule "stopping a port that already exited counts as success" holds: gone and moved are both Ok, only the note
++    changed. docs/guide/terminals.md, DT-C64 and the PLAN.md T-226 note carry the three notes and the two-reading rule.
++
++Red first (tests written before the code; fix2-red.log, fix2-red-vitest.log)
++  cargo test --lib ports::  -> 5 compile errors: "cannot find function `confirmed`" x4, "no variant ... named `Moved` found
++    for enum `ports::Target`" x1.
++  VITEST_MAX_WORKERS=2 npx vitest run src/ports -> Tests 1 failed | 9 passed:
++    x VIEW-078 the note after a Stop says stopped only for a program that was ended
++      TypeError: stopNote is not a function
++
++Green (fix2-green-ports.log, fix2-green-vitest.log, fix2-tsc.log, fix2-win-check.log, fix2-win-clippy.log)
++  (cd src-tauri && . ../scripts/test-env.sh && cargo test --lib -- ports:: labels::)
++    test result: ok. 29 passed; 0 failed (ports:: 21 = 19 before + 2 new, labels:: 5, browser::ports 3)
++    new: view078_stop_a_child_whose_id_changed_hands_between_the_two_table_readings_is_left_alone (the same table twice
++         confirms [6000, 5000, 5001]; 5001 re-parented to 8000 in the second reading is left out; 5000 gone from the
++         second reading takes 6000 under it along even though 6000's own entry still agrees; an empty second reading
++         confirms nothing)
++         view078_stop_a_program_that_still_runs_but_left_the_port_is_reported_not_stopped (pid 4242 started "1" now on
++         3000 -> Moved; the same pid with start "2" -> Gone; an external row with that pid -> Gone)
++  VITEST_MAX_WORKERS=2 npx vitest run src/ports src/look   -> Test Files 9 passed · Tests 65 passed (64 + 1 new)
++  npx tsc --noEmit                                  -> clean (exit 0)
++  node scripts/plan-check.mjs                       -> plan-check: OK
++  node scripts/invoke-contract.mjs                  -> 705 invoke calls against 444 registered commands: OK (no command change;
++                                                       ports_stop's return type changed, which the script does not track)
++  cargo check --target x86_64-pc-windows-gnu --all-targets      -> WIN_CHECK_RESULT
++  cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings -> WIN_CLIPPY_RESULT
++  No dependency change (license-check not needed).
++
++Residual, named in the ports.rs header and DT-C64: a child the program starts after the fresh parent table is read is
++left running (it was never read); the next scan shows it. Windows-only code (Held with its two right sets, end_program's
++two table readings, the "could not be opened" refusal) is proven by cargo check and clippy for the Windows target and by
++the pure guards it calls (descendants, confirmed); its live run is on the LEFT list.
++
++LEFT (live, needs the Windows app), in addition to items 1 to 7 above
++  8. Restart a dev server on another port, then Stop its old row from a stale popover -> "is no longer held by that
++     program; nothing was stopped", server alive on the new port. Stop a row whose program has exited -> "was already
++     gone; nothing was stopped".
++  9. A dev server that respawns short-lived workers (nodemon, esbuild): Stop it -> server and its live workers gone, no
++     other program ended (the pid-reuse race itself cannot be forced; the confirmed unit test stands in).
+diff --git a/src-tauri/src/ports.rs b/src-tauri/src/ports.rs
+index 9a442398..cadcc633 100644
+--- a/src-tauri/src/ports.rs
++++ b/src-tauri/src/ports.rs
+@@ -18,10 +18,14 @@
+ //! must be at least two folders deep, no home folder or a parent of one, a real Git worktree on
+ //! disk and one the project store (or Git, for that project) knows. The cheap checks run first;
+ //! Git runs only when the store alone cannot say. The kill holds the program open (Windows never
+-//! reuses a pid while a handle is open), ends only the children it really started by the same
+-//! start-time rule, never a process a stale parent-id field hangs under it, and waits on the
+-//! program's own object. Residual: a child the program starts between the reading and the kill is
+-//! left running (it was never read); the next scan shows it.
++//! reuses a pid while a handle is open), reads the parent table only then (the scan's is stale by
++//! the time the guards are through), holds each child as it is read, ends only the children it
++//! really started by the same start-time rule, never a process a stale parent-id field hangs
++//! under it, and never one whose pid changed hands after the table was read (a second table, read
++//! while the children are held, must agree), and waits on the program's own object. Residual: a
++//! child the program starts after that table is read is left running (it was never read); the
++//! next scan shows it. A Stop that ends nothing says so: a program already gone is a success, one
++//! that still runs but left the port is reported as not stopped.
+ 
+ use serde::Serialize;
+ use std::collections::HashMap;
+@@ -144,21 +148,39 @@ pub enum Target<'a> {
+     /// Nothing holds the port, or the program the user saw has already ended and another now holds
+     /// it: success, nothing to end (a newcomer is never ended on the strength of an old row).
+     Gone,
++    /// The program the user saw still runs (same pid and start time, on another port) but no longer
++    /// holds this one: nothing to end, and the note must not read as if something was stopped.
++    Moved,
+     /// The row to end.
+     Row(&'a PortRow),
+ }
+ 
++/// What a Stop did, for the note under the popover's title; sent to the front end as text.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub enum Outcome {
++    /// The program was ended.
++    Stopped,
++    /// The program had already ended (another may now hold the port): success, nothing was ended.
++    Gone,
++    /// The program still runs but no longer holds the port: nothing was ended.
++    Moved,
++}
++
+ fn stale(port: u16, pid: u32) -> String {
+     format!("Port {port}: process {pid} now belongs to another program; nothing was stopped")
+ }
+ 
+ /// The guards a fresh scan answers. Every holder of the port is checked before any kill: a port
+ /// also held outside the workspace, by Kolux itself or by a system process is refused whole, and a
+-/// row whose pid now names a newer program (its start time changed) is refused as stale.
++/// row whose pid now names a newer program (its start time changed) is refused as stale. A port
++/// the row's program no longer holds ends nothing: `Moved` when the scan still lists that program
++/// (same pid and start time) on another port, `Gone` otherwise.
+ pub fn stop_target<'a>(rows: &'a [PortRow], port: u16, pid: u32, started: &str, self_pid: u32) -> Result<Target<'a>, String> {
+     let holders: Vec<&PortRow> = rows.iter().filter(|r| r.port == port).collect();
+     let Some(target) = holders.iter().copied().find(|r| r.pid == pid) else {
+-        return Ok(Target::Gone);
++        let moved = rows.iter().any(|r| !r.external && r.pid == pid && same_start(&[started, &r.started]));
++        return Ok(if moved { Target::Moved } else { Target::Gone });
+     };
+     if let Some(h) = holders.iter().find(|r| r.external) {
+         return Err(format!("Port {port} is held by a process outside this workspace (pid {}); it can only be stopped where it runs", h.pid));
+@@ -231,6 +253,26 @@ pub fn descendants(pid: u32, parents: &HashMap<u32, u32>, start: &dyn Fn(u32) ->
+     order
+ }
+ 
++/// The children of `order` (deepest first, as `descendants` gives them) that a second reading of
++/// the parent table confirms: `before` is the table the tree was walked with, `after` one read
++/// while every child was held open, so a pid in it names the process held. A child whose entry
++/// differs (it ended and a newcomer got its id in between: by construction newer than the
++/// program, so the start-time rule alone cannot tell) is left out with everything under it.
++#[cfg_attr(not(windows), allow(dead_code))]
++pub fn confirmed(pid: u32, order: Vec<u32>, before: &HashMap<u32, u32>, after: &HashMap<u32, u32>) -> Vec<u32> {
++    let mut ok = std::collections::HashSet::from([pid]);
++    let mut keep: Vec<u32> = Vec::new();
++    for kid in order.into_iter().rev() {
++        let parent = before.get(&kid);
++        if parent == after.get(&kid) && parent.is_some_and(|p| ok.contains(p)) {
++            ok.insert(kid);
++            keep.push(kid);
++        }
++    }
++    keep.reverse();
++    keep
++}
++
+ /// How many folders deep `p` is below its root (a drive or `/`): `C:/work/app` is 2, `/srv` is 1.
+ pub fn depth(p: &str) -> usize {
+     norm(p).split('/').filter(|s| !s.is_empty() && !(s.len() == 2 && s.ends_with(':'))).count()
+@@ -350,17 +392,25 @@ fn parent_table() -> HashMap<u32, u32> {
+ 
+ /// A process handle held open across a Stop. Windows never reuses a pid while a handle to the
+ /// process object is open, so the program the handle names is the one that is read, ended and
+-/// waited for, with no window for a newcomer in between. Query, terminate and wait rights only;
+-/// no memory read.
++/// waited for, with no window for a newcomer in between. Opened with the rights the caller
++/// needs: a scan's reading asks for the limited query right alone, a Stop adds terminate and
++/// wait; never a memory read.
+ #[cfg(windows)]
+ struct Held(windows_sys::Win32::Foundation::HANDLE);
+ 
++/// The right a start-time reading needs.
++#[cfg(windows)]
++const READ: u32 = windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
++
++/// The rights a Stop needs: read the start time, end the process, wait on its object.
++#[cfg(windows)]
++const STOP: u32 = READ | windows_sys::Win32::System::Threading::PROCESS_TERMINATE | windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
++
+ #[cfg(windows)]
+ impl Held {
+-    fn open(pid: u32) -> Option<Held> {
+-        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
++    fn open(pid: u32, access: u32) -> Option<Held> {
+         // SAFETY: a null handle is never kept; the one returned is closed once, in Drop.
+-        let p = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
++        let p = unsafe { windows_sys::Win32::System::Threading::OpenProcess(access, 0, pid) };
+         (!p.is_null()).then_some(Held(p))
+     }
+ 
+@@ -406,10 +456,11 @@ impl Drop for Held {
+ }
+ 
+ /// When process `pid` started, as the system's own count, as text; empty when the system will
+-/// not say. A limited query right, no memory read; the handle is closed again at once.
++/// not say. The limited query right alone (a program the user may read but not end still gets
++/// its start time), no memory read; the handle is closed again at once.
+ #[cfg(windows)]
+ fn start_time(pid: u32) -> String {
+-    Held::open(pid).map(|h| h.started()).unwrap_or_default()
++    Held::open(pid, READ).map(|h| h.started()).unwrap_or_default()
+ }
+ 
+ /// Linux: field 22 of `/proc/<pid>/stat`, the start in clock ticks since boot (a count that moves
+@@ -467,17 +518,24 @@ fn still_running(port: u16, pid: u32) -> String {
+     format!("Port {port}: process {pid} is still running after the stop")
+ }
+ 
++#[cfg(windows)]
++fn unopened(port: u16, pid: u32) -> String {
++    format!("Port {port}: process {pid} could not be opened; nothing was stopped")
++}
++
+ /// Ends `pid` with the children it really started, once a last start-time reading agrees with the
+-/// row's and the one sent back. Windows: the program and each child are held open while they are
+-/// read and ended, so no pid can pass to a newcomer in between, the children are chosen by
+-/// `descendants` (never by a stale parent-id field, as `taskkill /T` would), ended deepest first,
+-/// and the program's own object is waited on. A program that cannot be opened and is already gone
+-/// counts as success.
++/// row's and the one sent back. Windows: the program is held open first, so no pid can pass to a
++/// newcomer in between; only then is the parent table read (the scan's is stale by now), each
++/// child is held as its start time is read, the children are chosen by `descendants` (never by a
++/// stale parent-id field, as `taskkill /T` would) and a second table read while they are all held
++/// confirms each one (`confirmed`: a pid that changed hands between the two readings is left
++/// out). They are ended deepest first, then the program, and its own object is waited on. A
++/// program that cannot be opened is a refusal unless it is already gone, which counts as success.
+ #[cfg(windows)]
+-fn end_program(port: u16, pid: u32, sent: &str, row: &str, parents: &HashMap<u32, u32>) -> Result<(), String> {
++fn end_program(port: u16, pid: u32, sent: &str, row: &str) -> Result<Outcome, String> {
+     use std::cell::RefCell;
+-    let Some(holder) = Held::open(pid) else {
+-        return if crate::procs::alive(pid) == Some(false) { Ok(()) } else { Err(stale(port, pid)) };
++    let Some(holder) = Held::open(pid, STOP) else {
++        return if crate::procs::alive(pid) == Some(false) { Ok(Outcome::Gone) } else { Err(unopened(port, pid)) };
+     };
+     let third = holder.started();
+     if !same_start(&[sent, row, &third]) {
+@@ -488,13 +546,15 @@ fn end_program(port: u16, pid: u32, sent: &str, row: &str, parents: &HashMap<u32
+         if p == pid {
+             return third.clone();
+         }
+-        let Some(h) = Held::open(p) else { return String::new() };
++        let Some(h) = Held::open(p, STOP) else { return String::new() };
+         let s = h.started();
+         kids.borrow_mut().insert(p, h);
+         s
+     };
+-    let order = descendants(pid, parents, &start);
++    let fresh = parent_table();
++    let order = descendants(pid, &fresh, &start);
+     let kids = kids.into_inner();
++    let order = confirmed(pid, order, &fresh, &parent_table());
+     for kid in order {
+         if let Some(h) = kids.get(&kid) {
+             h.end();
+@@ -504,13 +564,13 @@ fn end_program(port: u16, pid: u32, sent: &str, row: &str, parents: &HashMap<u32
+     if !holder.gone_within(Duration::from_secs(2)) {
+         return Err(still_running(port, pid));
+     }
+-    Ok(())
++    Ok(Outcome::Stopped)
+ }
+ 
+ /// Off Windows the pane's child leads its own process group, which the group signal ends whole;
+ /// there is no scan yet (T-285), so no row reaches here.
+ #[cfg(not(windows))]
+-fn end_program(port: u16, pid: u32, sent: &str, row: &str, _parents: &HashMap<u32, u32>) -> Result<(), String> {
++fn end_program(port: u16, pid: u32, sent: &str, row: &str) -> Result<Outcome, String> {
+     if !same_start(&[sent, row, &start_time(pid)]) {
+         return Err(stale(port, pid));
+     }
+@@ -518,15 +578,16 @@ fn end_program(port: u16, pid: u32, sent: &str, row: &str, _parents: &HashMap<u3
+     if !crate::procs::wait_gone(&[pid], Duration::from_secs(2)).is_empty() {
+         return Err(still_running(port, pid));
+     }
+-    Ok(())
++    Ok(Outcome::Stopped)
+ }
+ 
+ /// VIEW-078: stops the process behind a port with everything it started, once every guard above
+ /// passes (`stop_target`, then `lineage_ok` against the scan's own parent table, then
+-/// `folder_check`, then a last start-time reading on a held handle). A port that is already gone
+-/// counts as success; a program still running after the kill is an error.
++/// `folder_check`, then a last start-time reading on a held handle), and says what it did. A port
++/// that is already gone counts as success (`Gone`); one the program left while it still runs ends
++/// nothing (`Moved`); a program still running after the kill is an error.
+ #[tauri::command]
+-pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: String, port: u16, pid: u32, started: String) -> Result<(), String> {
++pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: String, port: u16, pid: u32, started: String) -> Result<Outcome, String> {
+     use tauri::Manager;
+     let t = app.state::<crate::terminal::Terminals>().inner().clone();
+     let git = app.state::<crate::git::Git>().inner().clone();
+@@ -539,7 +600,9 @@ pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active:
+     tauri::async_runtime::spawn_blocking(move || {
+         let Scan { rows, parents, sessions } = scan(&t, &workspaces, &active)?;
+         let target = match stop_target(&rows, port, pid, &started, std::process::id())? {
+-            Target::Gone => return Ok(()),
++            // The program may run on without any port: the same pid with the same start time is it.
++            Target::Gone => return Ok(if same_start(&[&started, &start_time(pid)]) { Outcome::Moved } else { Outcome::Gone }),
++            Target::Moved => return Ok(Outcome::Moved),
+             Target::Row(r) => r.clone(),
+         };
+         // The chain from the program up to the pane's shell must be real, link by link.
+@@ -549,7 +612,7 @@ pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active:
+         }
+         let worktrees_of = |root: &str| git.worktrees(Path::new(root)).map(|v| v.into_iter().map(|w| w.path).collect()).unwrap_or_default();
+         folder_check(&active, &candidate_homes(), &|p| Path::new(p).join(".git").exists(), &|p| known_workspace(p, &store_paths, &roots, &worktrees_of))?;
+-        end_program(port, pid, &started, &target.started, &parents)
++        end_program(port, pid, &started, &target.started)
+     })
+     .await
+     .map_err(|e| e.to_string())?
+@@ -713,6 +776,32 @@ mod tests {
+         assert_eq!(descendants(4242, &HashMap::from([(5000, 4242), (4242, 5000)]), &starts(&[(4242, "1"), (5000, "2")])), vec![5000], "a parent loop ends");
+     }
+ 
++    #[test]
++    fn view078_stop_a_child_whose_id_changed_hands_between_the_two_table_readings_is_left_alone() {
++        // The tree was walked with `before`; `after` was read while every child was held open, so
++        // an entry that differs describes a newcomer that got the id in between (its start time is
++        // newer than the program's by construction, so the start-time rule alone cannot catch it).
++        let before = HashMap::from([(5000, 4242), (6000, 5000), (5001, 4242), (4242, 3000)]);
++        let order = vec![6000, 5000, 5001];
++        assert_eq!(confirmed(4242, order.clone(), &before, &before), vec![6000, 5000, 5001], "the same table twice confirms every child, deepest first");
++        let mut reused = before.clone();
++        reused.insert(5001, 8000);
++        assert_eq!(confirmed(4242, order.clone(), &before, &reused), vec![6000, 5000], "5001 ended and a process 8000 started got its id: not ours");
++        let mut ended = before.clone();
++        ended.remove(&5000);
++        assert_eq!(confirmed(4242, order.clone(), &before, &ended), vec![5001], "5000 is gone from the table, and 6000 under it goes with it even though its own entry still agrees");
++        assert_eq!(confirmed(4242, order, &before, &HashMap::new()), Vec::<u32>::new(), "an empty second reading confirms nothing");
++    }
++
++    #[test]
++    fn view078_stop_a_program_that_still_runs_but_left_the_port_is_reported_not_stopped() {
++        // The dev server the row showed on 5173 (pid 4242, started "1") restarted on 3000.
++        let rows = [held(3000, 4242, false, "1")];
++        assert_eq!(stop_target(&rows, 5173, 4242, "1", 9), Ok(Target::Moved), "nothing is ended, and the note must not say the port was stopped");
++        assert_eq!(stop_target(&[held(3000, 4242, false, "2")], 5173, 4242, "1", 9), Ok(Target::Gone), "a newer program with the old pid on another port: the one the user saw is gone");
++        assert_eq!(stop_target(&[held(3000, 4242, true, "")], 5173, 4242, "1", 9), Ok(Target::Gone), "an external row tells nothing about its holder");
++    }
++
+     #[cfg(target_os = "linux")]
+     #[test]
+     fn view078_stop_linux_reads_a_start_time_from_proc_so_the_same_rule_holds_there() {
+diff --git a/src/ports/PortsItem.tsx b/src/ports/PortsItem.tsx
+index e31cd630..07ede400 100644
+--- a/src/ports/PortsItem.tsx
++++ b/src/ports/PortsItem.tsx
+@@ -4,12 +4,13 @@
+ // outside the workspace are listed as external and have no Stop. A failed scan names its problem
+ // and keeps the last good list. The tying of a port to a workspace, and every guard a Stop passes
+ // (same program as the row, every holder the workspace's own, a known Git worktree that is no home
+-// folder), happens in ports.rs; a refusal comes back as the note under the title.
++// folder), happens in ports.rs; a refusal comes back as the note under the title, and a Stop that
++// ended nothing (the program was already gone, or still runs but left the port) says so there too.
+ import { invoke } from "@tauri-apps/api/core";
+ import { listen } from "@tauri-apps/api/event";
+ import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+ import { openInBrowser } from "../browser/openIn";
+-import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, type PortRow, type PortsView } from "./ports";
++import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, stopNote, type PortRow, type PortsView, type StopOutcome } from "./ports";
+ 
+ type Props = { active: string | null; workspaces: string[] };
+ 
+@@ -50,8 +51,8 @@ export default function PortsItem({ active, workspaces }: Props) {
+   if (active === null) return null;
+   const rect = open ? button.current?.getBoundingClientRect() : null;
+   const stop = (r: PortRow) =>
+-    invoke("ports_stop", stopArgs(workspaces, active, r))
+-      .then(() => setNote(`Stopped port ${r.port}`))
++    invoke<StopOutcome>("ports_stop", stopArgs(workspaces, active, r))
++      .then((outcome) => setNote(stopNote(r.port, outcome)))
+       .catch((err) => setNote(String(err)));
+   const openRow = (r: PortRow, e: MouseEvent) => {
+     const url = openAddress(r, printed.forPort(r.port, view.rows));
+diff --git a/src/ports/ports.test.ts b/src/ports/ports.test.ts
+index c650dd4d..0820ae44 100644
+--- a/src/ports/ports.test.ts
++++ b/src/ports/ports.test.ts
+@@ -1,5 +1,5 @@
+ import { expect, test } from "vitest";
+-import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, urlsIn, type PortRow } from "./ports";
++import { PrintedUrls, afterScan, decodeOutput, openAddress, openWhere, ownCount, stopArgs, stopNote, urlsIn, type PortRow } from "./ports";
+ 
+ const row = (port: number, addr = "127.0.0.1", external = false, terminal: number | null = 7): PortRow => ({ port, addr, pid: 1, external, started: "", terminal: external ? null : terminal });
+ 
+@@ -34,6 +34,12 @@ test("VIEW-078 a Stop sends back the start time it saw, as text, so a reused pro
+   expect(typeof stopArgs([], "x", r).started).toBe("string");
+ });
+ 
++test("VIEW-078 the note after a Stop says stopped only for a program that was ended", () => {
++  expect(stopNote(5173, "stopped")).toBe("Stopped port 5173");
++  expect(stopNote(5173, "gone")).toBe("Port 5173 was already gone; nothing was stopped");
++  expect(stopNote(5173, "moved")).toBe("Port 5173 is no longer held by that program; nothing was stopped");
++});
++
+ test("VIEW-078 Open uses the printed address, else plain http on the listening address", () => {
+   expect(openAddress(row(5173), "http://localhost:5173/")).toBe("http://localhost:5173/");
+   expect(openAddress(row(8080, "0.0.0.0"), null)).toBe("http://localhost:8080");
+diff --git a/src/ports/ports.ts b/src/ports/ports.ts
+index ae1e0c4d..737faedc 100644
+--- a/src/ports/ports.ts
++++ b/src/ports/ports.ts
+@@ -58,6 +58,14 @@ export class PrintedUrls {
+  * now names another program is refused there. */
+ export const stopArgs = (workspaces: string[], active: string, r: PortRow) => ({ workspaces, active, port: r.port, pid: r.pid, started: r.started });
+ 
++/** What a Stop did, as the back end reports it: the program was ended; it had already ended (success, nothing
++ * ended); it still runs but no longer holds the port (nothing ended). A refusal comes back as an error instead. */
++export type StopOutcome = "stopped" | "gone" | "moved";
++
++/** The note under the title after a Stop: only a program that was ended reads as stopped. */
++export const stopNote = (port: number, outcome: StopOutcome): string =>
++  outcome === "stopped" ? `Stopped port ${port}` : outcome === "gone" ? `Port ${port} was already gone; nothing was stopped` : `Port ${port} is no longer held by that program; nothing was stopped`;
++
+ /** The address Open uses: what the dev server printed when known, otherwise plain http on the listening address. */
+ export function openAddress(row: PortRow, printed: string | null): string {
+   if (printed) return printed;

@@ -1,0 +1,3 @@
+src/editor/richCodeColourTime.test.ts > code colour time > colours a c block at the size cap in well under a second
+src/editor/richCodeColourTime.test.ts > code colour time > colours a cpp block at the size cap in well under a second
+src/settings/__cards__/SET-006-link.test.ts > SET-006 box 3: a link to Shortcuts / terminal-first opens the Shortcuts page, waits until the section is drawn, then scrolls it into view
