@@ -11,11 +11,17 @@
 //!
 //! A Stop ends a program, so it is licensed strictly (ports-stop, from PR #42): the row the user
 //! saw must still be the same program (its pid and start time agree three times: on the row, in a
-//! fresh scan and right before the kill), every holder of the port must be the workspace's own,
-//! Kolux itself and system processes are never ended, and the workspace folder must be at least
-//! two folders deep, no home folder or a parent of one, a real Git worktree on disk and one the
-//! project store (or Git, for that project) knows. The cheap checks run first; Git runs only when
-//! the store alone cannot say. After the kill the stop waits for the program to be gone.
+//! fresh scan and right before the kill), the chain from the program up to the pane's shell must
+//! be real (no link older than its parent: Windows keeps a dead parent's id on its orphans and
+//! reuses ids, so a stranger can read as a pane's child), every holder of the port must be the
+//! workspace's own, Kolux itself and system processes are never ended, and the workspace folder
+//! must be at least two folders deep, no home folder or a parent of one, a real Git worktree on
+//! disk and one the project store (or Git, for that project) knows. The cheap checks run first;
+//! Git runs only when the store alone cannot say. The kill holds the program open (Windows never
+//! reuses a pid while a handle is open), ends only the children it really started by the same
+//! start-time rule, never a process a stale parent-id field hangs under it, and waits on the
+//! program's own object. Residual: a child the program starts between the reading and the kill is
+//! left running (it was never read); the next scan shows it.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -168,14 +174,61 @@ pub fn stop_target<'a>(rows: &'a [PortRow], port: u16, pid: u32, started: &str, 
 }
 
 /// True when every reading of a process's start time agrees, so the pid still names the program
-/// the user saw. On Windows a reading the system withheld never agrees: a Stop must know what it ends.
+/// the user saw. A reading the system withheld never agrees, on every platform: a Stop must know
+/// what it ends, so a scan that lands without start times refuses every Stop instead of guessing.
 pub fn same_start(readings: &[&str]) -> bool {
-    same_start_on(readings, cfg!(windows))
+    let first = readings.first().copied().unwrap_or("");
+    !first.is_empty() && readings.iter().all(|r| *r == first)
 }
 
-fn same_start_on(readings: &[&str], strict: bool) -> bool {
-    let first = readings.first().copied().unwrap_or("");
-    readings.iter().all(|r| *r == first) && (!strict || !first.is_empty())
+/// A start time as the system's count, when it was read at all.
+fn tick(start: &dyn Fn(u32) -> String, pid: u32) -> Option<u64> {
+    start(pid).parse().ok()
+}
+
+/// Whether the chain the scan tied from `pid` up to the pane's `shell` is real: every link's parent
+/// must have started no later than its child, and every start time must be present. Windows keeps a
+/// dead parent's id on its orphans and reuses ids, so an orphan can read as a child of a pane; it
+/// is always older than the pane's process that got the id, so this refuses it.
+pub fn lineage_ok(pid: u32, shell: u32, parents: &HashMap<u32, u32>, start: &dyn Fn(u32) -> String) -> bool {
+    let mut at = pid;
+    let Some(mut at_start) = tick(start, at) else { return false };
+    for _ in 0..64 {
+        if at == shell {
+            return true;
+        }
+        let Some(&parent) = parents.get(&at) else { return false };
+        let Some(parent_start) = tick(start, parent) else { return false };
+        if parent_start > at_start {
+            return false;
+        }
+        (at, at_start) = (parent, parent_start);
+    }
+    false
+}
+
+/// The processes `pid` really started, deepest first, so a Stop ends children before their parent.
+/// A child's parent-id field can be stale too (its real parent died and `pid` got the id), so only a
+/// child that started no earlier than its parent counts, and one whose start time is withheld is
+/// left alone with everything under it. Without a start time for `pid` itself nothing counts.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn descendants(pid: u32, parents: &HashMap<u32, u32>, start: &dyn Fn(u32) -> String) -> Vec<u32> {
+    let mut order: Vec<u32> = Vec::new();
+    let Some(root_start) = tick(start, pid) else { return order };
+    let mut queue = vec![(pid, root_start)];
+    let mut seen = std::collections::HashSet::from([pid]);
+    while let Some((parent, parent_start)) = queue.pop() {
+        let mut kids: Vec<u32> = parents.iter().filter(|(c, p)| **p == parent && seen.insert(**c)).map(|(c, _)| *c).collect();
+        kids.sort_unstable();
+        for kid in kids {
+            if let Some(kid_start) = tick(start, kid).filter(|s| *s >= parent_start) {
+                order.push(kid);
+                queue.push((kid, kid_start));
+            }
+        }
+    }
+    order.reverse();
+    order
 }
 
 /// How many folders deep `p` is below its root (a drive or `/`): `C:/work/app` is 2, `/srv` is 1.
@@ -295,39 +348,107 @@ fn parent_table() -> HashMap<u32, u32> {
     HashMap::new()
 }
 
-/// When process `pid` started, as the system's own count (100 ns ticks since 1601), as text; empty
-/// when the system will not say. A limited query right, no memory read.
+/// A process handle held open across a Stop. Windows never reuses a pid while a handle to the
+/// process object is open, so the program the handle names is the one that is read, ended and
+/// waited for, with no window for a newcomer in between. Query, terminate and wait rights only;
+/// no memory read.
 #[cfg(windows)]
-fn start_time(pid: u32) -> String {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
-    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    // SAFETY: the handle is checked before use and closed once; the four FILETIMEs are zeroed
-    // out-parameters GetProcessTimes fills, read only after it reports success.
-    unsafe {
-        let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if p.is_null() {
-            return String::new();
+struct Held(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Held {
+    fn open(pid: u32) -> Option<Held> {
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+        // SAFETY: a null handle is never kept; the one returned is closed once, in Drop.
+        let p = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
+        (!p.is_null()).then_some(Held(p))
+    }
+
+    /// When the process started, as the system's own count (100 ns ticks since 1601), as text;
+    /// empty when the system will not say.
+    fn started(&self) -> String {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::GetProcessTimes;
+        // SAFETY: the handle is open for as long as self lives; the four FILETIMEs are zeroed
+        // out-parameters GetProcessTimes fills, read only after it reports success.
+        unsafe {
+            let mut times: [FILETIME; 4] = std::mem::zeroed();
+            let [c, e, k, u] = &mut times;
+            if GetProcessTimes(self.0, c, e, k, u) == 0 {
+                return String::new();
+            }
+            ((u64::from(c.dwHighDateTime) << 32) | u64::from(c.dwLowDateTime)).to_string()
         }
-        let mut times: [FILETIME; 4] = std::mem::zeroed();
-        let [c, e, k, u] = &mut times;
-        let ok = GetProcessTimes(p, c, e, k, u) != 0;
-        CloseHandle(p);
-        if !ok {
-            return String::new();
-        }
-        ((u64::from(c.dwHighDateTime) << 32) | u64::from(c.dwLowDateTime)).to_string()
+    }
+
+    /// Ends the process (what `taskkill /F` does), with no console window.
+    fn end(&self) {
+        // SAFETY: the handle is open and was opened with the terminate right.
+        unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.0, 1) };
+    }
+
+    /// Whether the process is gone within `wait`: the process object itself is waited on, so a
+    /// reused pid can never read as "still running".
+    fn gone_within(&self, wait: Duration) -> bool {
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        // SAFETY: the handle is open and was opened with the synchronize right.
+        unsafe { WaitForSingleObject(self.0, wait.as_millis().min(u128::from(u32::MAX)) as u32) == WAIT_OBJECT_0 }
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(windows)]
+impl Drop for Held {
+    fn drop(&mut self) {
+        // SAFETY: the handle was opened by `open` and is closed exactly here.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// When process `pid` started, as the system's own count, as text; empty when the system will
+/// not say. A limited query right, no memory read; the handle is closed again at once.
+#[cfg(windows)]
+fn start_time(pid: u32) -> String {
+    Held::open(pid).map(|h| h.started()).unwrap_or_default()
+}
+
+/// Linux: field 22 of `/proc/<pid>/stat`, the start in clock ticks since boot (a count that moves
+/// only with a reboot, like the Windows one), so the same three-reading rule holds here once a
+/// scan does (T-285). The command name, field 2, is in parentheses and may hold spaces and
+/// parentheses of its own, so the fields are counted from its closing one.
+#[cfg(target_os = "linux")]
+fn stat_start(stat: &str) -> Option<&str> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    rest.split_whitespace().nth(19)
+}
+
+#[cfg(target_os = "linux")]
+fn start_time(pid: u32) -> String {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|s| stat_start(&s).map(String::from)).unwrap_or_default()
+}
+
+// ponytail: macOS keeps start times too (`ps -o lstart= -p <pid>`); until T-285 brings its scan
+// there is no row to stop, and the strict `same_start` refuses every Stop the day a scan lands
+// without them.
+#[cfg(not(any(windows, target_os = "linux")))]
 fn start_time(_pid: u32) -> String {
     String::new()
 }
 
-fn scan(terminals: &crate::terminal::Terminals, workspaces: &[String], active: &str) -> Result<Vec<PortRow>, String> {
+/// What one scan read: the rows, the parent table they were tied with and the terminals as
+/// (id, shell pid, folder), so a Stop checks the lineage against the very table the scan used.
+struct Scan {
+    rows: Vec<PortRow>,
+    parents: HashMap<u32, u32>,
+    sessions: Vec<(u32, u32, String)>,
+}
+
+fn scan(terminals: &crate::terminal::Terminals, workspaces: &[String], active: &str) -> Result<Scan, String> {
     let listeners = scan_listeners()?;
     let sessions: Vec<(u32, u32, String)> = terminals.list().into_iter().filter_map(|(id, pid, dir)| Some((id, pid?, dir?))).collect();
-    Ok(rows_for(&listeners, &parent_table(), &sessions, workspaces, active, &start_time))
+    let parents = parent_table();
+    let rows = rows_for(&listeners, &parents, &sessions, workspaces, active, &start_time);
+    Ok(Scan { rows, parents, sessions })
 }
 
 /// VIEW-078: the listening ports for the active workspace (own first, then external). A failed
@@ -335,12 +456,75 @@ fn scan(terminals: &crate::terminal::Terminals, workspaces: &[String], active: &
 #[tauri::command]
 pub async fn ports_list(terminals: tauri::State<'_, crate::terminal::Terminals>, workspaces: Vec<String>, active: String) -> Result<Vec<PortRow>, String> {
     let t = terminals.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || scan(&t, &workspaces, &active).map(cap_external)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || scan(&t, &workspaces, &active).map(|s| cap_external(s.rows))).await.map_err(|e| e.to_string())?
+}
+
+fn stranger(port: u16, pid: u32) -> String {
+    format!("Port {port}: process {pid} was not started from a terminal of this workspace; nothing was stopped")
+}
+
+fn still_running(port: u16, pid: u32) -> String {
+    format!("Port {port}: process {pid} is still running after the stop")
+}
+
+/// Ends `pid` with the children it really started, once a last start-time reading agrees with the
+/// row's and the one sent back. Windows: the program and each child are held open while they are
+/// read and ended, so no pid can pass to a newcomer in between, the children are chosen by
+/// `descendants` (never by a stale parent-id field, as `taskkill /T` would), ended deepest first,
+/// and the program's own object is waited on. A program that cannot be opened and is already gone
+/// counts as success.
+#[cfg(windows)]
+fn end_program(port: u16, pid: u32, sent: &str, row: &str, parents: &HashMap<u32, u32>) -> Result<(), String> {
+    use std::cell::RefCell;
+    let Some(holder) = Held::open(pid) else {
+        return if crate::procs::alive(pid) == Some(false) { Ok(()) } else { Err(stale(port, pid)) };
+    };
+    let third = holder.started();
+    if !same_start(&[sent, row, &third]) {
+        return Err(stale(port, pid));
+    }
+    let kids: RefCell<HashMap<u32, Held>> = RefCell::new(HashMap::new());
+    let start = |p: u32| -> String {
+        if p == pid {
+            return third.clone();
+        }
+        let Some(h) = Held::open(p) else { return String::new() };
+        let s = h.started();
+        kids.borrow_mut().insert(p, h);
+        s
+    };
+    let order = descendants(pid, parents, &start);
+    let kids = kids.into_inner();
+    for kid in order {
+        if let Some(h) = kids.get(&kid) {
+            h.end();
+        }
+    }
+    holder.end();
+    if !holder.gone_within(Duration::from_secs(2)) {
+        return Err(still_running(port, pid));
+    }
+    Ok(())
+}
+
+/// Off Windows the pane's child leads its own process group, which the group signal ends whole;
+/// there is no scan yet (T-285), so no row reaches here.
+#[cfg(not(windows))]
+fn end_program(port: u16, pid: u32, sent: &str, row: &str, _parents: &HashMap<u32, u32>) -> Result<(), String> {
+    if !same_start(&[sent, row, &start_time(pid)]) {
+        return Err(stale(port, pid));
+    }
+    crate::procs::kill_tree(pid);
+    if !crate::procs::wait_gone(&[pid], Duration::from_secs(2)).is_empty() {
+        return Err(still_running(port, pid));
+    }
+    Ok(())
 }
 
 /// VIEW-078: stops the process behind a port with everything it started, once every guard above
-/// passes (`stop_target`, then `folder_check`, then a last start-time reading). A port that is
-/// already gone counts as success; a program still running after the kill is an error.
+/// passes (`stop_target`, then `lineage_ok` against the scan's own parent table, then
+/// `folder_check`, then a last start-time reading on a held handle). A port that is already gone
+/// counts as success; a program still running after the kill is an error.
 #[tauri::command]
 pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: String, port: u16, pid: u32, started: String) -> Result<(), String> {
     use tauri::Manager;
@@ -353,22 +537,19 @@ pub async fn ports_stop(app: tauri::AppHandle, workspaces: Vec<String>, active: 
         store_workspaces(&s)
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let rows = scan(&t, &workspaces, &active)?;
+        let Scan { rows, parents, sessions } = scan(&t, &workspaces, &active)?;
         let target = match stop_target(&rows, port, pid, &started, std::process::id())? {
             Target::Gone => return Ok(()),
             Target::Row(r) => r.clone(),
         };
+        // The chain from the program up to the pane's shell must be real, link by link.
+        let shell = target.terminal.and_then(|id| sessions.iter().find(|(i, _, _)| *i == id).map(|(_, shell, _)| *shell));
+        if !shell.is_some_and(|shell| lineage_ok(pid, shell, &parents, &start_time)) {
+            return Err(stranger(port, pid));
+        }
         let worktrees_of = |root: &str| git.worktrees(Path::new(root)).map(|v| v.into_iter().map(|w| w.path).collect()).unwrap_or_default();
         folder_check(&active, &candidate_homes(), &|p| Path::new(p).join(".git").exists(), &|p| known_workspace(p, &store_paths, &roots, &worktrees_of))?;
-        // The third reading, right before the kill: the pid must still be the program the user saw.
-        if !same_start(&[&started, &target.started, &start_time(pid)]) {
-            return Err(stale(port, pid));
-        }
-        crate::procs::kill_tree(pid);
-        if !crate::procs::wait_gone(&[pid], Duration::from_secs(2)).is_empty() {
-            return Err(format!("Port {port}: process {pid} is still running after the stop"));
-        }
-        Ok(())
+        end_program(port, pid, &started, &target.started, &parents)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -498,10 +679,49 @@ mod tests {
         let err = stop_target(&rows, 5173, 4242, "100", 9).unwrap_err();
         assert!(err.contains("another program"), "{err}");
         assert!(matches!(stop_target(&rows, 5173, 4242, "200", 9), Ok(Target::Row(r)) if r.pid == 4242));
-        assert!(same_start_on(&["5", "5", "5"], true));
-        assert!(!same_start_on(&["5", "5", "6"], true));
-        assert!(!same_start_on(&["", "", ""], true), "a start time the system withheld never confirms a pid");
-        assert!(same_start_on(&["", "", ""], false), "where the system keeps no start times the guard is off");
+        assert!(same_start(&["5", "5", "5"]));
+        assert!(!same_start(&["5", "5", "6"]));
+        assert!(!same_start(&["", "", ""]), "a start time the system withheld never confirms a pid, on every platform: a scan without start times refuses every Stop");
+    }
+
+    fn starts<'a>(table: &'a [(u32, &'a str)]) -> impl Fn(u32) -> String + 'a {
+        move |pid| table.iter().find(|(p, _)| *p == pid).map(|(_, s)| (*s).to_string()).unwrap_or_default()
+    }
+
+    #[test]
+    fn view078_stop_a_holder_older_than_its_parent_is_a_stranger_on_a_reused_parent_pid() {
+        // The chain the scan tied: 4242 -> 4000 -> 3000 (the pane's shell). Windows keeps a dead
+        // parent's id on its orphans and reuses ids, so the chain is real only when no link is older
+        // than its parent.
+        let parents = HashMap::from([(4242, 4000), (4000, 3000), (3000, 1)]);
+        assert!(lineage_ok(4242, 3000, &parents, &starts(&[(3000, "900"), (4000, "950"), (4242, "1000")])));
+        assert!(!lineage_ok(4242, 3000, &parents, &starts(&[(3000, "900"), (4000, "950"), (4242, "100")])), "an orphan left by an editor closed long ago, tied by a reused parent id: not ours");
+        assert!(!lineage_ok(4242, 3000, &parents, &starts(&[(3000, "900"), (4000, "100"), (4242, "1000")])), "a stale link anywhere in the chain breaks it");
+        assert!(!lineage_ok(4242, 3000, &parents, &starts(&[(3000, "900"), (4242, "1000")])), "a start time the system withholds never confirms a link");
+        assert!(lineage_ok(3000, 3000, &parents, &starts(&[(3000, "900")])), "the shell itself holding a port has nothing to prove but its own start time");
+        assert!(!lineage_ok(4242, 7777, &parents, &starts(&[(3000, "900"), (4000, "950"), (4242, "1000")])), "a chain that never reaches the shell");
+        assert!(!lineage_ok(4242, 3000, &HashMap::from([(4242, 4000), (4000, 4242)]), &starts(&[(4000, "950"), (4242, "1000")])), "a parent loop ends");
+    }
+
+    #[test]
+    fn view078_stop_ends_only_the_children_the_program_really_started_deepest_first() {
+        // 4242 started 5000 (which started 6000) and 5001 is an orphan whose dead parent had id 4242.
+        let parents = HashMap::from([(5000, 4242), (6000, 5000), (5001, 4242), (5002, 5001), (7000, 4242), (4242, 3000)]);
+        let table = [(4242, "150"), (5000, "200"), (6000, "300"), (5001, "50"), (5002, "60"), (7000, "")];
+        assert_eq!(descendants(4242, &parents, &starts(&table)), vec![6000, 5000], "the orphan, its child and a child whose start time is withheld are left alone; children end before their parent");
+        assert_eq!(descendants(4242, &parents, &starts(&[(5000, "200")])), Vec::<u32>::new(), "no start time for the program itself: nothing of its tree is ended");
+        assert_eq!(descendants(4242, &HashMap::from([(5000, 4242), (4242, 5000)]), &starts(&[(4242, "1"), (5000, "2")])), vec![5000], "a parent loop ends");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn view078_stop_linux_reads_a_start_time_from_proc_so_the_same_rule_holds_there() {
+        let stat = "14410 (my (cat) tool) R 14404 14410 14404 0 -1 4194304 84 0 0 0 0 0 0 0 20 0 1 0 1524164 2928640 364 0";
+        assert_eq!(stat_start(stat), Some("1524164"), "field 22, after a command name that may hold spaces and parentheses");
+        assert_eq!(stat_start("1 (init) S 0"), None);
+        let own = start_time(std::process::id());
+        assert!(own.parse::<u64>().is_ok(), "this process's own start time: {own:?}");
+        assert_eq!(start_time(u32::MAX), "", "a process that does not exist has no start time");
     }
 
     #[test]
