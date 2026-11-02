@@ -425,7 +425,7 @@ fn open_source(path: &Path, name: &str) -> Result<(fs::File, fs::Metadata), Stri
     };
     let md = file.metadata().map_err(|e| format!("could not read {name}: {e}"))?;
     if !md.is_file() {
-        return Err(format!("{name} is not a file"));
+        return Err(format!("could not read {name}: it is not a file"));
     }
     if links_of(&file, &md) > 1 {
         return Err(format!("{name} is a hard link to another file, so it is not kept"));
