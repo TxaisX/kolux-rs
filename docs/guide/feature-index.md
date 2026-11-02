@@ -229,6 +229,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-094-c | Quick Open finds a file by name with Mod+P. | [Files and browser](files-and-browser.md) |
 | T-095-a | An Artifacts library page keeps pages and views them offline. | [Files and browser](files-and-browser.md) |
 | T-095-b | Pages Claude publishes are kept in Kolux automatically. | [Files and browser](files-and-browser.md) |
+| T-624 | The workspace's artifacts folder is imported by itself; video and audio play in the tab. | [Files and browser](files-and-browser.md) |
 | T-096-a | The Shortcuts page lists every command with its keys and flags clashes. | [Settings](settings.md) |
 | T-096-b | Record, add, disable or reset any shortcut. | [Settings](settings.md) |
 | T-097 | The kolux open command starts the app or brings it to the front. | [Command line](command-line.md) |

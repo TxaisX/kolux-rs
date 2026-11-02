@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { extText, group, matches, section, sizeText, view, viewerUrl } from "./ArtifactsPage";
+import { describe, expect, it, vi } from "vitest";
+import { extText, group, matches, newlySkipped, section, sizeText, ticker, view, viewerUrl } from "./ArtifactsPage";
 import type { Artifact } from "./ArtifactsPage";
+
+const nodeFs = (globalThis as unknown as { process: { getBuiltinModule(name: string): { readFileSync(p: URL, enc: string): string } } }).process.getBuiltinModule("node:fs");
+const pageSource = nodeFs.readFileSync(new URL("./ArtifactsPage.tsx", import.meta.url), "utf8");
 
 const art = (over: Partial<Artifact>): Artifact => ({
   id: "a", title: "t", source: "claude", origin: "G:\\Dev\\minecraft\\shot.png", kind: "image",
@@ -40,14 +43,47 @@ describe("Artifacts library (SKILL-036)", () => {
     expect(section(art({ project: "minecraft" }))).toBe("minecraft");
   });
 
-  it("shows a page or text in the frame, an image as a picture, and the rest in its own app", () => {
+  it("shows a page or text in the frame, an image as a picture, media as a player, and a PDF or the rest in its own app", () => {
     expect(view(undefined)).toBe("frame");
     expect(view("page")).toBe("frame");
     expect(view("text")).toBe("frame");
     expect(view("image")).toBe("image");
+    expect(view("video")).toBe("video");
+    expect(view("audio")).toBe("audio");
+    // A PDF is not shown in a frame: a sandboxed frame cannot run the PDF viewer, and an unsandboxed
+    // one would follow a link inside the PDF in-app, so it opens in its own app like a document.
     expect(view("pdf")).toBe("app");
     expect(view("other")).toBe("app");
     expect(extText("shot.png")).toBe("PNG");
+    expect(extText("clip.mp4")).toBe("MP4");
     expect(extText("no-extension")).toBe("");
+  });
+
+  it("every viewer frame on the page is sandboxed", () => {
+    const frames = pageSource.match(/<iframe[\s\S]*?>/g) ?? [];
+    expect(frames.length).toBeGreaterThan(0);
+    for (const f of frames) expect(f, f).toMatch(/\ssandbox=/);
+  });
+
+  it("a scan tick that finds the last scan still running does nothing", async () => {
+    let done!: () => void;
+    const run = vi.fn(() => new Promise<void>((r) => (done = r)));
+    const tick = ticker(run);
+    tick();
+    tick();
+    expect(run).toHaveBeenCalledTimes(1);
+    done();
+    await Promise.resolve();
+    await Promise.resolve();
+    tick();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("a file the scan could not keep is told once, not every three seconds", () => {
+    const told = new Set<string>();
+    expect(newlySkipped(["clip.mkv is larger than 100 MB"], told)).toEqual(["clip.mkv is larger than 100 MB"]);
+    expect(newlySkipped(["clip.mkv is larger than 100 MB"], told)).toEqual([]);
+    expect(newlySkipped(["clip.mkv is larger than 100 MB", "could not read x.bin: denied"], told)).toEqual(["could not read x.bin: denied"]);
+    expect(newlySkipped([], told)).toEqual([]);
   });
 });

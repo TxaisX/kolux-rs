@@ -876,6 +876,7 @@ pub fn run() {
             files::dir_ignored,
             files::path_kind,
             artifacts::artifacts_list,
+            artifacts::artifacts_scan,
             artifacts::artifact_add,
             artifacts::artifact_remove,
             artifacts::open_external,

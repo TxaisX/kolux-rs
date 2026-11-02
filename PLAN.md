@@ -538,3 +538,6 @@ No new features. Each task names the audit finding it closes; done means its tes
 - [x] T-615 · "Discard N changes?" only discards in the workspace it was asked in (F04-projects-scm.3) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-615.txt
 - [x] T-616 · Renaming a file onto another file's name in different capitals is refused (R04-projects-files.1) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-616.txt
 - [x] T-617 · Saving through a link writes the real file and keeps the link (R04-projects-files.4) · workspaces lane · DONE 2026-10-30 (lane/workspaces): evidence/T-617.txt
+
+### artifacts lane
+- [x] T-624 · Txais 2026-10-31: every top-level file in the open workspace's `artifacts/` folder lands in the Artifacts tab by itself (polled while the tab is open), video and audio play in the tab and the scheme serves byte ranges; a linked `artifacts/` folder is never followed, a removed entry stays removed until the file changes, a file the scan cannot keep is named once, and the scan runs off the window's thread (DT-C58 follow-on, DT-C65) · DONE 2026-10-31 (lane/artifacts-auto, PR #37): evidence/artifacts-workspace-scan.txt; live proof pending (batched)
